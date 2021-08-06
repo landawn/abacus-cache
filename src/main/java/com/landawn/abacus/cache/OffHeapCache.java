@@ -246,7 +246,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                         // ignore
 
                         if (logger.isWarnEnabled()) {
-                            logger.warn(ExceptionUtil.getMessage(e));
+                            logger.warn(ExceptionUtil.getErrorMessage(e));
                         }
                     }
                 }
