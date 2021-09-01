@@ -25,7 +25,7 @@ compile 'com.landawn:abacus-cache:0.8'
 Please refer to [Wiki](https://github.com/landawn/abacus-cache/wiki)
 
 
-## Also See: [abacus-common](https://github.com/landawn/abacus-common), [abacus-jdbc](https://github.com/landawn/abacus-jdbc), [abacus-da](https://github.com/landawn/abacus-da).
+## Also See: [abacus-common](https://github.com/landawn/abacus-common), [abacus-jdbc](https://github.com/landawn/abacus-jdbc).
 
 
 ## Recommended Java programming libraries/frameworks:
