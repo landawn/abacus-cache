@@ -65,7 +65,6 @@ import sun.misc.Unsafe;
  * @param <V> the value type
  * @since 0.8
  */
-@SuppressWarnings("restriction")
 @SuppressFBWarnings({ "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "JLM_JSR166_UTILCONCURRENT_MONITORENTER" })
 public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
