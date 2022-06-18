@@ -10,7 +10,6 @@ import java.util.Arrays;
 import java.util.List;
 
 import com.landawn.abacus.cache.JRedis;
-import com.landawn.abacus.core.Seid;
 
 import junit.framework.TestCase;
 
