@@ -21,9 +21,9 @@ import com.landawn.abacus.type.TypeFactory;
 import com.landawn.abacus.util.Profiler.MultiLoopsStatistics;
 
 /**
- * 
+ *
  * @since 0.8
- * 
+ *
  * @author Haiyang Li
  */
 public class OffHeapCacheTest {
@@ -142,7 +142,7 @@ public class OffHeapCacheTest {
         sb.toString();
         Objectory.recycle(sb);
 
-        String longFirstName = StringUtil.repeat(N.uuid(), 100);
+        String longFirstName = Strings.repeat(N.uuid(), 100);
 
         Profiler.run(16, 100, 1, new Throwables.Runnable<Exception>() {
             @Override

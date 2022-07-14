@@ -20,7 +20,7 @@ import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolableWrapper;
 import com.landawn.abacus.util.ClassUtil;
 import com.landawn.abacus.util.Numbers;
-import com.landawn.abacus.util.StringUtil;
+import com.landawn.abacus.util.Strings;
 import com.landawn.abacus.util.TypeAttrParser;
 
 /**
@@ -64,7 +64,7 @@ public final class CacheFactory {
     }
 
     /**
-     * 
+     *
      * @param <K>
      * @param <V>
      * @param defaultLiveTime
@@ -142,7 +142,7 @@ public final class CacheFactory {
             } else if (parameters.length == 3) {
                 return new DistributedCache<>(new SpyMemcached<V>(url, Numbers.toLong(parameters[2])), parameters[1]);
             } else {
-                throw new IllegalArgumentException("Unsupported parameters: " + StringUtil.join(parameters));
+                throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
         } else if (DistributedCacheClient.REDIS.equalsIgnoreCase(className)) {
             if (parameters.length == 1) {
@@ -152,7 +152,7 @@ public final class CacheFactory {
             } else if (parameters.length == 3) {
                 return new DistributedCache<>(new JRedis<V>(url, Numbers.toLong(parameters[2])), parameters[1]);
             } else {
-                throw new IllegalArgumentException("Unsupported parameters: " + StringUtil.join(parameters));
+                throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
         } else {
             cls = ClassUtil.forClass(className);
