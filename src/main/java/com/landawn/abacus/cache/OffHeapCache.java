@@ -116,7 +116,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     private static final ScheduledExecutorService scheduledExecutor;
     static {
         final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(IOUtil.CPU_CORES);
-        executor.setRemoveOnCancelPolicy(true);
+        // executor.setRemoveOnCancelPolicy(true);
         scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
 
