@@ -34,7 +34,7 @@ import com.landawn.abacus.util.u.Optional;
 public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     protected static final AsyncExecutor asyncExecutor = new AsyncExecutor(//
-            N.max(16, IOUtil.CPU_CORES * 2), // coreThreadPoolSize
+            N.max(64, IOUtil.CPU_CORES * 8), // coreThreadPoolSize
             N.max(128, IOUtil.CPU_CORES * 16), // maxThreadPoolSize
             180L, TimeUnit.SECONDS);
 
