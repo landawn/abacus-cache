@@ -17,7 +17,7 @@ package com.landawn.abacus.cache;
 import java.util.Set;
 
 import com.github.benmanes.caffeine.cache.Cache;
-import com.landawn.abacus.util.N;
+import com.landawn.abacus.util.Numbers;
 
 /**
  *
@@ -98,7 +98,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     public int size() {
         assertNotClosed();
 
-        return N.toIntExact(cacheImpl.estimatedSize());
+        return Numbers.toIntExact(cacheImpl.estimatedSize());
     }
 
     /**
