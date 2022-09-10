@@ -27,7 +27,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
 
     private final String serverUrl;
 
-    public AbstractDistributedCacheClient(String serverUrl) {
+    protected AbstractDistributedCacheClient(String serverUrl) {
         this.serverUrl = serverUrl;
     }
 

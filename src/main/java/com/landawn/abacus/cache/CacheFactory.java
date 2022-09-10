@@ -136,21 +136,21 @@ public final class CacheFactory {
 
         if (DistributedCacheClient.MEMCACHED.equalsIgnoreCase(className)) {
             if (parameters.length == 1) {
-                return new DistributedCache<>(new SpyMemcached<V>(url, DEFAULT_TIMEOUT));
+                return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT));
             } else if (parameters.length == 2) {
-                return new DistributedCache<>(new SpyMemcached<V>(url, DEFAULT_TIMEOUT), parameters[1]);
+                return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
-                return new DistributedCache<>(new SpyMemcached<V>(url, Numbers.toLong(parameters[2])), parameters[1]);
+                return new DistributedCache<>(new SpyMemcached<>(url, Numbers.toLong(parameters[2])), parameters[1]);
             } else {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
         } else if (DistributedCacheClient.REDIS.equalsIgnoreCase(className)) {
             if (parameters.length == 1) {
-                return new DistributedCache<>(new JRedis<V>(url, DEFAULT_TIMEOUT));
+                return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT));
             } else if (parameters.length == 2) {
-                return new DistributedCache<>(new JRedis<V>(url, DEFAULT_TIMEOUT), parameters[1]);
+                return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
-                return new DistributedCache<>(new JRedis<V>(url, Numbers.toLong(parameters[2])), parameters[1]);
+                return new DistributedCache<>(new JRedis<>(url, Numbers.toLong(parameters[2])), parameters[1]);
             } else {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
