@@ -4,7 +4,7 @@
 
 	<groupId>com.landawn</groupId>
 	<artifactId>abacus-cache</artifactId>
-	<version>0.8.4</version>
+	<version>0.8.5</version>
 	<packaging>jar</packaging>
 
 	<name>abacus-cache</name>
@@ -21,7 +21,7 @@
 		<dependency>
 			<groupId>com.landawn</groupId>
 			<artifactId>abacus-common</artifactId>
-			<version>3.5.1</version>
+			<version>3.5.2</version>
 			<scope>provided</scope>
 		</dependency>
 
