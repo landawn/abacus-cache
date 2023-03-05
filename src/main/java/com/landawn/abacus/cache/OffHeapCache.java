@@ -54,7 +54,7 @@ import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Objectory;
 import com.landawn.abacus.util.Throwables;
 
-import sun.misc.Unsafe;
+import sun.misc.Unsafe; //NOSONAR
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
@@ -122,78 +122,78 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
     private ScheduledFuture<?> scheduleFuture;
 
-    private final long _capacityB;
+    private final long _capacityB; //NOSONAR
 
-    private final long _startPtr;
+    private final long _startPtr; //NOSONAR
 
-    private final Segment[] _segments;
+    private final Segment[] _segments; //NOSONAR
 
-    private final BitSet _segmentBitSet = new BitSet();
+    private final BitSet _segmentBitSet = new BitSet(); //NOSONAR
 
-    private final Map<Integer, Deque<Segment>> _segmentQueueMap = new ConcurrentHashMap<>();
+    private final Map<Integer, Deque<Segment>> _segmentQueueMap = new ConcurrentHashMap<>(); //NOSONAR
 
     /** The queue 256. */
-    private final Deque<Segment> _queue256 = new LinkedList<>();
+    private final Deque<Segment> _queue256 = new LinkedList<>(); //NOSONAR
 
     /** The queue 384. */
-    private final Deque<Segment> _queue384 = new LinkedList<>();
+    private final Deque<Segment> _queue384 = new LinkedList<>(); //NOSONAR
 
     /** The queue 512. */
-    private final Deque<Segment> _queue512 = new LinkedList<>();
+    private final Deque<Segment> _queue512 = new LinkedList<>(); //NOSONAR
 
     /** The queue 640. */
-    private final Deque<Segment> _queue640 = new LinkedList<>();
+    private final Deque<Segment> _queue640 = new LinkedList<>(); //NOSONAR
 
     /** The queue 768. */
-    private final Deque<Segment> _queue768 = new LinkedList<>();
+    private final Deque<Segment> _queue768 = new LinkedList<>(); //NOSONAR
 
     /** The queue 896. */
-    private final Deque<Segment> _queue896 = new LinkedList<>();
+    private final Deque<Segment> _queue896 = new LinkedList<>(); //NOSONAR
 
     /** The queue 1024. */
-    private final Deque<Segment> _queue1024 = new LinkedList<>();
+    private final Deque<Segment> _queue1024 = new LinkedList<>(); //NOSONAR
 
     /** The queue 1280. */
-    private final Deque<Segment> _queue1280 = new LinkedList<>();
+    private final Deque<Segment> _queue1280 = new LinkedList<>(); //NOSONAR
 
     /** The queue 1536. */
-    private final Deque<Segment> _queue1536 = new LinkedList<>();
+    private final Deque<Segment> _queue1536 = new LinkedList<>(); //NOSONAR
 
     /** The queue 1792. */
-    private final Deque<Segment> _queue1792 = new LinkedList<>();
+    private final Deque<Segment> _queue1792 = new LinkedList<>(); //NOSONAR
 
     /** The queue 2048. */
-    private final Deque<Segment> _queue2048 = new LinkedList<>();
+    private final Deque<Segment> _queue2048 = new LinkedList<>(); //NOSONAR
 
     /** The queue 2560. */
-    private final Deque<Segment> _queue2560 = new LinkedList<>();
+    private final Deque<Segment> _queue2560 = new LinkedList<>(); //NOSONAR
 
     /** The queue 3072. */
-    private final Deque<Segment> _queue3072 = new LinkedList<>();
+    private final Deque<Segment> _queue3072 = new LinkedList<>(); //NOSONAR
 
     /** The queue 3584. */
-    private final Deque<Segment> _queue3584 = new LinkedList<>();
+    private final Deque<Segment> _queue3584 = new LinkedList<>(); //NOSONAR
 
     /** The queue 4096. */
-    private final Deque<Segment> _queue4096 = new LinkedList<>();
+    private final Deque<Segment> _queue4096 = new LinkedList<>(); //NOSONAR
 
     /** The queue 5120. */
-    private final Deque<Segment> _queue5120 = new LinkedList<>();
+    private final Deque<Segment> _queue5120 = new LinkedList<>(); //NOSONAR
 
     /** The queue 6144. */
-    private final Deque<Segment> _queue6144 = new LinkedList<>();
+    private final Deque<Segment> _queue6144 = new LinkedList<>(); //NOSONAR
 
     /** The queue 7168. */
-    private final Deque<Segment> _queue7168 = new LinkedList<>();
+    private final Deque<Segment> _queue7168 = new LinkedList<>(); //NOSONAR
 
     /** The queue 8192. */
-    private final Deque<Segment> _queue8192 = new LinkedList<>();
+    private final Deque<Segment> _queue8192 = new LinkedList<>(); //NOSONAR
 
-    private final AsyncExecutor _asyncExecutor = new AsyncExecutor();
+    private final AsyncExecutor _asyncExecutor = new AsyncExecutor(); //NOSONAR
 
-    private final AtomicInteger _activeVacationTaskCount = new AtomicInteger();
+    private final AtomicInteger _activeVacationTaskCount = new AtomicInteger(); //NOSONAR
 
-    private final KeyedObjectPool<K, Wrapper<V>> _pool;
+    private final KeyedObjectPool<K, Wrapper<V>> _pool; //NOSONAR
 
     /**
      * The memory with the specified size of MB will be allocated at application start up.
@@ -349,7 +349,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 if (isOK == false) {
                     availableSegment.release();
 
-                    return false;
+                    return false; //NOSONAR
                 }
             }
 
@@ -384,7 +384,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                         if (isOK == false) {
                             availableSegment.release();
 
-                            return false;
+                            return false; //NOSONAR
                         }
                     }
 
@@ -693,7 +693,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param <T>
      */
-    private static abstract class Wrapper<T> extends AbstractPoolable {
+    private abstract static class Wrapper<T> extends AbstractPoolable {
 
         /** The type. */
         final Type<T> type;
@@ -770,11 +770,11 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 // it's destroyed after read from memory. dirty data may be read.
                 if (type.isPrimitiveByteArray()) {
-                    return this.segment == null ? null : (T) bytes;
+                    return (T) bytes;
                 } else if (type.isByteBuffer()) {
-                    return this.segment == null ? null : (T) ByteBufferType.valueOf(bytes);
+                    return (T) ByteBufferType.valueOf(bytes);
                 } else {
-                    return this.segment == null ? null : parser.deserialize(type.clazz(), new ByteArrayInputStream(bytes));
+                    return parser.deserialize(type.clazz(), new ByteArrayInputStream(bytes));
                 }
             }
         }
@@ -825,9 +825,9 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         T read() {
             synchronized (this) {
-                final List<Map.Entry<Long, Segment>> segments = this.segments;
+                final List<Map.Entry<Long, Segment>> localSegments = this.segments;
 
-                if (N.isNullOrEmpty(segments)) {
+                if (N.isNullOrEmpty(localSegments)) {
                     return null;
                 }
 
@@ -835,7 +835,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 int size = this.size;
                 int destOffset = BYTE_ARRAY_BASE;
 
-                for (Map.Entry<Long, Segment> entry : segments) {
+                for (Map.Entry<Long, Segment> entry : localSegments) {
                     final long startPtr = entry.getKey();
                     final Segment segment = entry.getValue();
                     final int sizeToCopy = size > segment.sizeOfBlock ? segment.sizeOfBlock : size;

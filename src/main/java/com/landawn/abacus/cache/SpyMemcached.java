@@ -377,9 +377,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     protected <R> R resultOf(Future<R> future) {
         try {
             return future.get();
-        } catch (InterruptedException e) {
-            throw N.toRuntimeException(e);
-        } catch (ExecutionException e) {
+        } catch (InterruptedException | ExecutionException e) {
             throw N.toRuntimeException(e);
         }
     }
