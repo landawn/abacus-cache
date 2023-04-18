@@ -32,6 +32,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     private boolean isClosed = false;
 
+    /**
+     * 
+     *
+     * @param cache 
+     */
     public CaffeineCache(Cache<K, V> cache) {
         this.cacheImpl = cache;
     }
@@ -89,11 +94,22 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
         return get(k).isPresent();
     }
 
+    /**
+     * 
+     *
+     * @return 
+     * @throws UnsupportedOperationException 
+     */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * 
+     *
+     * @return 
+     */
     @Override
     public int size() {
         assertNotClosed();

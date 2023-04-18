@@ -31,6 +31,11 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     private boolean isClosed = false;
 
+    /**
+     * 
+     *
+     * @param cache 
+     */
     public Ehcache(Cache<K, V> cache) {
         this.cacheImpl = cache;
     }
@@ -88,11 +93,23 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
         return cacheImpl.containsKey(k);
     }
 
+    /**
+     * 
+     *
+     * @return 
+     * @throws UnsupportedOperationException 
+     */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * 
+     *
+     * @return 
+     * @throws UnsupportedOperationException 
+     */
     @Override
     public int size() throws UnsupportedOperationException {
         throw new UnsupportedOperationException();

@@ -45,10 +45,21 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     private MemcachedClient mc;
 
+    /**
+     * 
+     *
+     * @param serverUrl 
+     */
     public SpyMemcached(final String serverUrl) {
         this(serverUrl, DEFAULT_TIMEOUT);
     }
 
+    /**
+     * 
+     *
+     * @param serverUrl 
+     * @param timeout 
+     */
     public SpyMemcached(final String serverUrl, final long timeout) {
         super(serverUrl);
 

@@ -32,10 +32,18 @@ public class KryoTranscoder<T> implements Transcoder<T> {
 
     private final int maxSize;
 
+    /**
+     * 
+     */
     public KryoTranscoder() {
         this(CachedData.MAX_SIZE);
     }
 
+    /**
+     * 
+     *
+     * @param maxSize 
+     */
     public KryoTranscoder(int maxSize) {
         this.maxSize = maxSize;
     }

@@ -31,6 +31,11 @@ public interface DistributedCacheClient<T> {
 
     public static final String REDIS = "Redis";
 
+    /**
+     * 
+     *
+     * @return 
+     */
     String serverUrl();
 
     /**

@@ -133,11 +133,23 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         return get(k) != null;
     }
 
+    /**
+     * 
+     *
+     * @return 
+     * @throws UnsupportedOperationException 
+     */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * 
+     *
+     * @return 
+     * @throws UnsupportedOperationException 
+     */
     @Override
     public int size() throws UnsupportedOperationException {
         throw new UnsupportedOperationException();

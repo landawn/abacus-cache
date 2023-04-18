@@ -31,16 +31,37 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     private final KeyedObjectPool<K, PoolableWrapper<V>> pool;
 
+    /**
+     * 
+     *
+     * @param capacity 
+     * @param evictDelay 
+     */
     public LocalCache(final int capacity, final long evictDelay) {
         this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
+    /**
+     * 
+     *
+     * @param capacity 
+     * @param evictDelay 
+     * @param defaultLiveTime 
+     * @param defaultMaxIdleTime 
+     */
     public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         pool = PoolFactory.createKeyedObjectPool(capacity, evictDelay);
     }
 
+    /**
+     * 
+     *
+     * @param defaultLiveTime 
+     * @param defaultMaxIdleTime 
+     * @param pool 
+     */
     public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
@@ -92,11 +113,21 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
         return pool.containsKey(key);
     }
 
+    /**
+     * 
+     *
+     * @return 
+     */
     @Override
     public Set<K> keySet() {
         return pool.keySet();
     }
 
+    /**
+     * 
+     *
+     * @return 
+     */
     @Override
     public int size() {
         return pool.size();

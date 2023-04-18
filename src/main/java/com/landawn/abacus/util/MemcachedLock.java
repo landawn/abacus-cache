@@ -33,6 +33,11 @@ public final class MemcachedLock<K, V> {
 
     private final SpyMemcached<V> mc;
 
+    /**
+     * 
+     *
+     * @param serverUrl 
+     */
     public MemcachedLock(String serverUrl) {
         mc = new SpyMemcached<>(serverUrl);
     }
@@ -107,6 +112,11 @@ public final class MemcachedLock<K, V> {
         return N.stringOf(target);
     }
 
+    /**
+     * 
+     *
+     * @return 
+     */
     public SpyMemcached<V> client() {
         return mc;
     }

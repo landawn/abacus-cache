@@ -40,10 +40,21 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     private final BinaryShardedJedis jedis;
 
+    /**
+     * 
+     *
+     * @param serverUrl 
+     */
     public JRedis(String serverUrl) {
         this(serverUrl, DEFAULT_TIMEOUT);
     }
 
+    /**
+     * 
+     *
+     * @param serverUrl 
+     * @param timeout 
+     */
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);
 

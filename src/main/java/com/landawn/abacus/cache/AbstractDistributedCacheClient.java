@@ -31,6 +31,11 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
         this.serverUrl = serverUrl;
     }
 
+    /**
+     * 
+     *
+     * @return 
+     */
     @Override
     public String serverUrl() {
         return serverUrl;
@@ -39,8 +44,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
     /**
      * Gets the bulk.
      *
-     * @param keys
-     * @return
+     * @param keys 
+     * @return 
+     * @throws UnsupportedOperationException 
      */
     @Override
     public Map<String, T> getBulk(String... keys) throws UnsupportedOperationException {
@@ -50,8 +56,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
     /**
      * Gets the bulk.
      *
-     * @param keys
-     * @return
+     * @param keys 
+     * @return 
+     * @throws UnsupportedOperationException 
      */
     @Override
     public Map<String, T> getBulk(Collection<String> keys) throws UnsupportedOperationException {
@@ -60,6 +67,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
 
     /**
      * Flush all.
+     *
+     * @throws UnsupportedOperationException 
      */
     @Override
     public void flushAll() throws UnsupportedOperationException {

@@ -613,11 +613,21 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         return _pool.containsKey(k);
     }
 
+    /**
+     * 
+     *
+     * @return 
+     */
     @Override
     public Set<K> keySet() {
         return _pool.keySet();
     }
 
+    /**
+     * 
+     *
+     * @return 
+     */
     @Override
     public int size() {
         return _pool.size();

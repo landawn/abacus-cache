@@ -133,6 +133,11 @@ public interface Cache<K, V> extends Closeable {
      */
     Set<K> keySet();
 
+    /**
+     * 
+     *
+     * @return 
+     */
     int size();
 
     /**
