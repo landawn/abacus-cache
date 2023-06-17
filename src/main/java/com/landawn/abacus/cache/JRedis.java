@@ -34,6 +34,7 @@ import redis.clients.jedis.JedisShardInfo;
  * @param <T>
  * @since 0.8
  */
+@SuppressWarnings("deprecation")
 public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     private static final KryoParser kryoParser = ParserFactory.createKryoParser();
@@ -41,19 +42,19 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     private final BinaryShardedJedis jedis;
 
     /**
-     * 
      *
-     * @param serverUrl 
+     *
+     * @param serverUrl
      */
     public JRedis(String serverUrl) {
         this(serverUrl, DEFAULT_TIMEOUT);
     }
 
     /**
-     * 
      *
-     * @param serverUrl 
-     * @param timeout 
+     *
+     * @param serverUrl
+     * @param timeout
      */
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);
