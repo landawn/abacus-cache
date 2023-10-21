@@ -35,7 +35,7 @@ public class SpyMemcachedTest extends TestCase {
         for (int i = 0; i < loops; i++) {
             account = createAccount();
 
-            String key = N.base64Encode(Seid.of("id", i).toString().getBytes());
+            String key = Strings.base64Encode(Seid.of("id", i).toString().getBytes());
             keyList.add(key);
 
             client.set(key, account, exp);
@@ -69,7 +69,7 @@ public class SpyMemcachedTest extends TestCase {
                 accounts[k] = createAccount();
             }
 
-            String key = N.base64Encode(Seid.of("id", i).toString().getBytes());
+            String key = Strings.base64Encode(Seid.of("id", i).toString().getBytes());
             keyList.add(key);
 
             client.set(key, accounts, exp);
@@ -107,7 +107,7 @@ public class SpyMemcachedTest extends TestCase {
                 a[k][4] = null;
             }
 
-            String key = N.base64Encode(Seid.of("id", i).toString().getBytes());
+            String key = Strings.base64Encode(Seid.of("id", i).toString().getBytes());
             keyList.add(key);
 
             client.set(key, a, exp);
@@ -134,7 +134,7 @@ public class SpyMemcachedTest extends TestCase {
 
     public static Account createAccount(String firstName, String lastName) {
         Account account = new Account();
-        account.setGui(N.uuid());
+        account.setGui(Strings.uuid());
         account.setFirstName(firstName);
         account.setMiddleName(MIDDLE_NAME);
         account.setLastName(lastName);

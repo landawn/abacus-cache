@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.landawn.abacus.util.N;
+import com.landawn.abacus.util.Strings;
 
 /**
  *
@@ -49,7 +50,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     private boolean isClosed = false;
 
     protected DistributedCache(DistributedCacheClient<V> dcc) {
-        this(dcc, N.EMPTY_STRING, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
+        this(dcc, Strings.EMPTY_STRING, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
     }
 
     protected DistributedCache(DistributedCacheClient<V> dcc, String keyPrefix) {
@@ -57,7 +58,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     protected DistributedCache(DistributedCacheClient<V> dcc, String keyPrefix, int maxFailedNumForRetry, long retryDelay) {
-        this.keyPrefix = N.isNullOrEmpty(keyPrefix) ? N.EMPTY_STRING : keyPrefix;
+        this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY_STRING : keyPrefix;
         this.dcc = dcc;
         this.maxFailedNumForRetry = maxFailedNumForRetry;
         this.retryDelay = retryDelay;
@@ -134,10 +135,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @return 
-     * @throws UnsupportedOperationException 
+     *
+     * @return
+     * @throws UnsupportedOperationException
      */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
@@ -145,10 +146,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @return 
-     * @throws UnsupportedOperationException 
+     *
+     * @return
+     * @throws UnsupportedOperationException
      */
     @Override
     public int size() throws UnsupportedOperationException {
@@ -195,7 +196,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return
      */
     protected String generateKey(K k) {
-        return N.isNullOrEmpty(keyPrefix) ? N.base64Encode(N.stringOf(k).getBytes()) : (keyPrefix + N.base64Encode(N.stringOf(k).getBytes()));
+        return Strings.isEmpty(keyPrefix) ? Strings.base64Encode(N.stringOf(k).getBytes()) : (keyPrefix + Strings.base64Encode(N.stringOf(k).getBytes()));
     }
 
     /**

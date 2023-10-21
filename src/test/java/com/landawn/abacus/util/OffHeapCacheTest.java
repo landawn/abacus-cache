@@ -103,7 +103,7 @@ public class OffHeapCacheTest {
 
     @Test
     public void test_put_get_2() {
-        final MultiLoopsStatistics result = Profiler.run(32, 3, 1, () -> test_put_get());
+        final MultiLoopsStatistics result = Profiler.run(32, 3, 1, this::test_put_get);
 
         result.printResult();
 
@@ -136,13 +136,13 @@ public class OffHeapCacheTest {
         final StringBuilder sb = Objectory.createStringBuilder();
 
         while (sb.length() < 10000) {
-            sb.append(N.uuid());
+            sb.append(Strings.uuid());
         }
 
         sb.toString();
         Objectory.recycle(sb);
 
-        String longFirstName = Strings.repeat(N.uuid(), 100);
+        String longFirstName = Strings.repeat(Strings.uuid(), 100);
 
         Profiler.run(16, 100, 1, new Throwables.Runnable<Exception>() {
             @Override

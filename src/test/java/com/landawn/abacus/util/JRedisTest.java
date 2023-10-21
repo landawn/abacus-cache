@@ -31,7 +31,7 @@ public class JRedisTest extends TestCase {
 
     public static Account createAccount(String firstName, String lastName) {
         Account account = new Account();
-        account.setGui(N.uuid());
+        account.setGui(Strings.uuid());
         account.setFirstName(firstName);
         account.setMiddleName(MIDDLE_NAME);
         account.setLastName(lastName);
