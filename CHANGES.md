@@ -1,3 +1,7 @@
+## 0.9.1
+* Improvements by SonarLint.
+
+
 ## 0.9.0
 * Improvements by SonarLint.
 
