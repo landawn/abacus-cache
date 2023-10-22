@@ -837,7 +837,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             synchronized (this) {
                 final List<Map.Entry<Long, Segment>> localSegments = this.segments;
 
-                if (N.isNullOrEmpty(localSegments)) {
+                if (N.isEmpty(localSegments)) {
                     return null;
                 }
 
