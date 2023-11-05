@@ -12,7 +12,7 @@ import java.nio.ByteBuffer;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.cache.OffHeapCache;
 import com.landawn.abacus.type.ByteBufferType;
