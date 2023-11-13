@@ -46,19 +46,19 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     private MemcachedClient mc;
 
     /**
-     * 
      *
-     * @param serverUrl 
+     *
+     * @param serverUrl
      */
     public SpyMemcached(final String serverUrl) {
         this(serverUrl, DEFAULT_TIMEOUT);
     }
 
     /**
-     * 
      *
-     * @param serverUrl 
-     * @param timeout 
+     *
+     * @param serverUrl
+     * @param timeout
      */
     public SpyMemcached(final String serverUrl, final long timeout) {
         super(serverUrl);
@@ -401,9 +401,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      * @throws UncheckedIOException the unchecked IO exception
      */
-    protected net.spy.memcached.MemcachedClient createSpyMemcachedClient(String serverUrl, ConnectionFactory connFactory) throws UncheckedIOException {
+    protected static MemcachedClient createSpyMemcachedClient(String serverUrl, ConnectionFactory connFactory) throws UncheckedIOException {
         try {
-            return new net.spy.memcached.MemcachedClient(connFactory, AddrUtil.getAddressList(serverUrl));
+            return new MemcachedClient(connFactory, AddrUtil.getAddressList(serverUrl));
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to create Memcached client.", e);
         }

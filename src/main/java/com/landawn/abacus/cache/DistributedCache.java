@@ -17,6 +17,7 @@ package com.landawn.abacus.cache;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.landawn.abacus.util.Charsets;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Strings;
 
@@ -196,7 +197,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return
      */
     protected String generateKey(K k) {
-        return Strings.isEmpty(keyPrefix) ? Strings.base64Encode(N.stringOf(k).getBytes()) : (keyPrefix + Strings.base64Encode(N.stringOf(k).getBytes()));
+        return Strings.isEmpty(keyPrefix) ? Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8))
+                : (keyPrefix + Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8)));
     }
 
     /**

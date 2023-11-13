@@ -1,15 +1,23 @@
+## 0.9.6
+
+* Improvements
+
 ## 0.9.5
+
 * Improvements
 
 ## 0.9.4
+
 * Improvements
 
 
 ## 0.9.3
+
 * Improvements
 
 
 ## 0.9.2
+
 * Improvements
 
 

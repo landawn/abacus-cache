@@ -52,7 +52,6 @@ import com.landawn.abacus.util.IOUtil;
 import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Objectory;
-import com.landawn.abacus.util.Throwables;
 
 import sun.misc.Unsafe; //NOSONAR
 
@@ -237,18 +236,15 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         _pool = PoolFactory.createKeyedObjectPool((int) (_capacityB / MIN_BLOCK_SIZE), evictDelay);
 
         if (evictDelay > 0) {
-            final Runnable evictTask = new Runnable() {
-                @Override
-                public void run() {
-                    // Evict from the pool
-                    try {
-                        evict();
-                    } catch (Exception e) {
-                        // ignore
+            final Runnable evictTask = () -> {
+                // Evict from the pool
+                try {
+                    evict();
+                } catch (Exception e) {
+                    // ignore
 
-                        if (logger.isWarnEnabled()) {
-                            logger.warn(ExceptionUtil.getErrorMessage(e));
-                        }
+                    if (logger.isWarnEnabled()) {
+                        logger.warn(ExceptionUtil.getErrorMessage(e));
                     }
                 }
             };
@@ -572,19 +568,16 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
             _activeVacationTaskCount.incrementAndGet();
 
-            _asyncExecutor.execute(new Throwables.Runnable<RuntimeException>() {
-                @Override
-                public void run() {
-                    try {
-                        _pool.vacate();
+            _asyncExecutor.execute(() -> {
+                try {
+                    _pool.vacate();
 
-                        evict();
+                    evict();
 
-                        // wait for couple of seconds to avoid the second vacation which just arrives before the this vacation is done.
-                        N.sleep(3000);
-                    } finally {
-                        _activeVacationTaskCount.decrementAndGet();
-                    }
+                    // wait for couple of seconds to avoid the second vacation which just arrives before the this vacation is done.
+                    N.sleep(3000);
+                } finally {
+                    _activeVacationTaskCount.decrementAndGet();
                 }
             });
         }
@@ -614,9 +607,9 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @return 
+     *
+     * @return
      */
     @Override
     public Set<K> keySet() {
@@ -624,9 +617,9 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @return 
+     *
+     * @return
      */
     @Override
     public int size() {

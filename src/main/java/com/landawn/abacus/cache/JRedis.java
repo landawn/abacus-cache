@@ -22,6 +22,7 @@ import java.util.List;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
+import com.landawn.abacus.util.Charsets;
 import com.landawn.abacus.util.N;
 
 import redis.clients.jedis.BinaryShardedJedis;
@@ -175,7 +176,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     protected byte[] getKeyBytes(String key) {
-        return key.getBytes();
+        return key.getBytes(Charsets.UTF_8);
     }
 
     /**
