@@ -405,7 +405,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         try {
             result = _pool.put(k, w);
         } finally {
-            if (!result) {
+            if (!result && w != null) {
                 w.destroy();
             }
         }
