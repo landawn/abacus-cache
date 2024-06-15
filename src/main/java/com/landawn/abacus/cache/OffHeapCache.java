@@ -317,7 +317,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             size = bytes.length;
         } else {
             os = Objectory.createByteArrayOutputStream();
-            parser.serialize(os, v);
+            parser.serialize(v, os);
             bytes = os.array();
             size = os.size();
         }
@@ -777,7 +777,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 } else if (type.isByteBuffer()) {
                     return (T) ByteBufferType.valueOf(bytes);
                 } else {
-                    return parser.deserialize(type.clazz(), new ByteArrayInputStream(bytes));
+                    return parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
                 }
             }
         }
@@ -861,7 +861,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 } else if (type.isByteBuffer()) {
                     return this.segments == null ? null : (T) (T) ByteBufferType.valueOf(bytes);
                 } else {
-                    return this.segments == null ? null : parser.deserialize(type.clazz(), new ByteArrayInputStream(bytes));
+                    return this.segments == null ? null : parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
                 }
             }
         }
