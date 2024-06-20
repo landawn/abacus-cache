@@ -18,6 +18,9 @@ public class MemcachedLockTest extends TestCase {
     final String url = "localhost:11211";
     final MemcachedLock<String, Long> memcachedLock = new MemcachedLock<>(url);
 
+    /**
+     * 
+     */
     @Test
     public void test_lock() {
         String key = "mysql";

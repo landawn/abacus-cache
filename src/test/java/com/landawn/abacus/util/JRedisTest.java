@@ -25,10 +25,22 @@ public class JRedisTest extends TestCase {
     protected static final String LAST_NAME = "lastName";
     private static JRedis<Object> client = new JRedis<>("hqd-billing-01:6379");
 
+    /**
+     * 
+     *
+     * @return 
+     */
     public static Account createAccount() {
         return createAccount(FIRST_NAME, LAST_NAME);
     }
 
+    /**
+     * 
+     *
+     * @param firstName 
+     * @param lastName 
+     * @return 
+     */
     public static Account createAccount(String firstName, String lastName) {
         Account account = new Account();
         account.setGui(Strings.uuid());
@@ -41,6 +53,9 @@ public class JRedisTest extends TestCase {
         return account;
     }
 
+    /**
+     * 
+     */
     public void testSetGetBigArray() {
         int loops = 10;
         int objectNum = 10000;
@@ -81,6 +96,9 @@ public class JRedisTest extends TestCase {
         N.println(Arrays.toString(a[0]));
     }
 
+    /**
+     * 
+     */
     public void testSetGetManyObjects() {
         int loops = 10;
         int objectNum = 10000;
@@ -115,6 +133,9 @@ public class JRedisTest extends TestCase {
         // N.println(Arrays.toString(accounts));
     }
 
+    /**
+     * 
+     */
     public void testSetGetOneObject() {
         int loops = 10000;
         Account account = null;
