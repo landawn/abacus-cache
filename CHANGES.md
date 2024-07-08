@@ -1,3 +1,7 @@
+## 1.2
+* Improvements
+
+
 ## 1.1
 * Improvements
 

@@ -17,7 +17,7 @@
 * Gradle:
 ```gradle
 // JDK 1.8 or above:
-compile 'com.landawn:abacus-cache:1.1'
+compile 'com.landawn:abacus-cache:1.2'
 ```
 
 
