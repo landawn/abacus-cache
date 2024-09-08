@@ -14,11 +14,11 @@
 
 package com.landawn.abacus.cache;
 
-import net.spy.memcached.CachedData;
-import net.spy.memcached.transcoders.Transcoder;
-
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
+
+import net.spy.memcached.CachedData;
+import net.spy.memcached.transcoders.Transcoder;
 
 /**
  *
@@ -33,18 +33,18 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     private final int maxSize;
 
     /**
-     * 
+     *
      */
     public KryoTranscoder() {
         this(CachedData.MAX_SIZE);
     }
 
     /**
-     * 
      *
-     * @param maxSize 
+     *
+     * @param maxSize
      */
-    public KryoTranscoder(int maxSize) {
+    public KryoTranscoder(final int maxSize) {
         this.maxSize = maxSize;
     }
 
@@ -54,7 +54,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @return true, if successful
      */
     @Override
-    public boolean asyncDecode(CachedData d) {
+    public boolean asyncDecode(final CachedData d) {
         return false;
     }
 
@@ -64,7 +64,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @return
      */
     @Override
-    public CachedData encode(T o) {
+    public CachedData encode(final T o) {
         return new CachedData(0, kryoParser.encode(o), maxSize);
     }
 
@@ -74,7 +74,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @return
      */
     @Override
-    public T decode(CachedData d) {
+    public T decode(final CachedData d) {
         return kryoParser.decode(d.getData());
     }
 

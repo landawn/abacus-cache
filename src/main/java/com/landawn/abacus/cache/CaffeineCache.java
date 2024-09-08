@@ -37,8 +37,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * @param cache 
      */
-    public CaffeineCache(Cache<K, V> cache) {
-        this.cacheImpl = cache;
+    public CaffeineCache(final Cache<K, V> cache) {
+        cacheImpl = cache;
     }
 
     /**
@@ -48,7 +48,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @return
      */
     @Override
-    public V gett(K k) {
+    public V gett(final K k) {
         assertNotClosed();
 
         return cacheImpl.getIfPresent(k);
@@ -63,7 +63,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean put(K k, V v, long liveTime, long maxIdleTime) {
+    public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
         cacheImpl.put(k, v); // TODO
@@ -76,7 +76,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param k
      */
     @Override
-    public void remove(K k) {
+    public void remove(final K k) {
         assertNotClosed();
 
         cacheImpl.invalidate(k);
@@ -88,7 +88,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean containsKey(K k) {
+    public boolean containsKey(final K k) {
         assertNotClosed();
 
         return get(k).isPresent();

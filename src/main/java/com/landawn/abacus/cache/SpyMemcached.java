@@ -65,7 +65,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
         final Transcoder<Object> transcoder = ParserFactory.isKryoAvailable() ? new KryoTranscoder<>() : null;
 
-        ConnectionFactory connFactory = new DefaultConnectionFactory() {
+        final ConnectionFactory connFactory = new DefaultConnectionFactory() {
             @Override
             public long getOperationTimeout() {
                 return timeout;
@@ -91,7 +91,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings("unchecked")
     @Override
-    public T get(String key) {
+    public T get(final String key) {
         return (T) mc.get(key);
     }
 
@@ -101,7 +101,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @SuppressWarnings("unchecked")
-    public Future<T> asyncGet(String key) {
+    public Future<T> asyncGet(final String key) {
         return (Future<T>) mc.asyncGet(key);
     }
 
@@ -114,7 +114,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @SuppressWarnings("unchecked")
     @Override
     @SafeVarargs
-    public final Map<String, T> getBulk(String... keys) {
+    public final Map<String, T> getBulk(final String... keys) {
         return (Map<String, T>) mc.getBulk(keys);
     }
 
@@ -126,7 +126,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
     @SafeVarargs
-    public final Future<Map<String, T>> asyncGetBulk(String... keys) {
+    public final Future<Map<String, T>> asyncGetBulk(final String... keys) {
         return (Future) mc.asyncGetBulk(keys);
     }
 
@@ -138,7 +138,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings("unchecked")
     @Override
-    public Map<String, T> getBulk(Collection<String> keys) {
+    public Map<String, T> getBulk(final Collection<String> keys) {
         return (Map<String, T>) mc.getBulk(keys);
     }
 
@@ -149,7 +149,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
-    public Future<Map<String, T>> asyncGetBulk(Collection<String> keys) {
+    public Future<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
         return (Future) mc.asyncGetBulk(keys);
     }
 
@@ -161,7 +161,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return true, if successful
      */
     @Override
-    public boolean set(String key, T obj, long liveTime) {
+    public boolean set(final String key, final T obj, final long liveTime) {
         return resultOf(mc.set(key, toSeconds(liveTime), obj));
     }
 
@@ -172,7 +172,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param liveTime
      * @return
      */
-    public Future<Boolean> asyncSet(String key, T obj, long liveTime) {
+    public Future<Boolean> asyncSet(final String key, final T obj, final long liveTime) {
         return mc.set(key, toSeconds(liveTime), obj);
     }
 
@@ -183,7 +183,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param liveTime
      * @return true, if successful
      */
-    public boolean add(String key, T obj, long liveTime) {
+    public boolean add(final String key, final T obj, final long liveTime) {
         return resultOf(mc.add(key, toSeconds(liveTime), obj));
     }
 
@@ -194,7 +194,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param liveTime
      * @return
      */
-    public Future<Boolean> asyncAdd(String key, T obj, long liveTime) {
+    public Future<Boolean> asyncAdd(final String key, final T obj, final long liveTime) {
         return mc.add(key, toSeconds(liveTime), obj);
     }
 
@@ -205,7 +205,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param liveTime
      * @return true, if successful
      */
-    public boolean replace(String key, T obj, long liveTime) {
+    public boolean replace(final String key, final T obj, final long liveTime) {
         return resultOf(mc.replace(key, toSeconds(liveTime), obj));
     }
 
@@ -216,7 +216,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param liveTime
      * @return
      */
-    public Future<Boolean> asyncReplace(String key, T obj, long liveTime) {
+    public Future<Boolean> asyncReplace(final String key, final T obj, final long liveTime) {
         return mc.replace(key, toSeconds(liveTime), obj);
     }
 
@@ -226,7 +226,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return true, if successful
      */
     @Override
-    public boolean delete(String key) {
+    public boolean delete(final String key) {
         return resultOf(mc.delete(key));
     }
 
@@ -235,7 +235,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key
      * @return
      */
-    public Future<Boolean> asyncDelete(String key) {
+    public Future<Boolean> asyncDelete(final String key) {
         return mc.delete(key);
     }
 
@@ -245,7 +245,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public long incr(String key) {
+    public long incr(final String key) {
         return mc.incr(key, 1);
     }
 
@@ -256,7 +256,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public long incr(String key, int deta) {
+    public long incr(final String key, final int deta) {
         return mc.incr(key, deta);
     }
 
@@ -267,7 +267,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param defaultValue
      * @return
      */
-    public long incr(String key, int deta, long defaultValue) {
+    public long incr(final String key, final int deta, final long defaultValue) {
         return mc.incr(key, deta, defaultValue, -1);
     }
 
@@ -279,7 +279,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param liveTime
      * @return
      */
-    public long incr(String key, int deta, long defaultValue, long liveTime) {
+    public long incr(final String key, final int deta, final long defaultValue, final long liveTime) {
         return mc.incr(key, deta, defaultValue, toSeconds(liveTime));
     }
 
@@ -289,7 +289,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public long decr(String key) {
+    public long decr(final String key) {
         return mc.decr(key, 1);
     }
 
@@ -300,7 +300,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public long decr(String key, int deta) {
+    public long decr(final String key, final int deta) {
         return mc.decr(key, deta);
     }
 
@@ -311,7 +311,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param defaultValue
      * @return
      */
-    public long decr(String key, int deta, long defaultValue) {
+    public long decr(final String key, final int deta, final long defaultValue) {
         return mc.decr(key, deta, defaultValue, -1);
     }
 
@@ -323,7 +323,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param liveTime
      * @return
      */
-    public long decr(String key, int deta, long defaultValue, long liveTime) {
+    public long decr(final String key, final int deta, final long defaultValue, final long liveTime) {
         return mc.decr(key, deta, defaultValue, toSeconds(liveTime));
     }
 
@@ -349,7 +349,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param delay
      * @return true, if successful
      */
-    public boolean flushAll(long delay) {
+    public boolean flushAll(final long delay) {
         return resultOf(mc.flush(toSeconds(delay)));
     }
 
@@ -359,7 +359,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param delay
      * @return
      */
-    public Future<Boolean> asyncFlushAll(long delay) {
+    public Future<Boolean> asyncFlushAll(final long delay) {
         return mc.flush(toSeconds(delay));
     }
 
@@ -375,7 +375,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param timeout
      */
-    public void disconnect(long timeout) {
+    public void disconnect(final long timeout) {
         mc.shutdown(timeout, TimeUnit.MICROSECONDS);
     }
 
@@ -385,7 +385,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param future
      * @return
      */
-    protected <R> R resultOf(Future<R> future) {
+    protected <R> R resultOf(final Future<R> future) {
         try {
             return future.get();
         } catch (InterruptedException | ExecutionException e) {
@@ -401,10 +401,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      * @throws UncheckedIOException the unchecked IO exception
      */
-    protected static MemcachedClient createSpyMemcachedClient(String serverUrl, ConnectionFactory connFactory) throws UncheckedIOException {
+    protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory) throws UncheckedIOException {
         try {
             return new MemcachedClient(connFactory, AddrUtil.getAddressList(serverUrl));
-        } catch (IOException e) {
+        } catch (final IOException e) {
             throw new UncheckedIOException("Failed to create Memcached client.", e);
         }
     }

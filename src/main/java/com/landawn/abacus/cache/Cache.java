@@ -30,9 +30,9 @@ import com.landawn.abacus.util.u.Optional;
  */
 public interface Cache<K, V> extends Closeable {
 
-    public static final long DEFAULT_LIVE_TIME = 3 * 60 * 60 * 1000L;
+    long DEFAULT_LIVE_TIME = 3 * 60 * 60 * 1000L;
 
-    public static final long DEFAULT_MAX_IDLE_TIME = 30 * 60 * 1000L;
+    long DEFAULT_MAX_IDLE_TIME = 30 * 60 * 1000L;
 
     /**
      *

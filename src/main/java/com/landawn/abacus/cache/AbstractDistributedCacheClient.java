@@ -27,7 +27,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
 
     private final String serverUrl;
 
-    protected AbstractDistributedCacheClient(String serverUrl) {
+    protected AbstractDistributedCacheClient(final String serverUrl) {
         this.serverUrl = serverUrl;
     }
 
@@ -49,7 +49,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @throws UnsupportedOperationException 
      */
     @Override
-    public Map<String, T> getBulk(String... keys) throws UnsupportedOperationException {
+    public Map<String, T> getBulk(final String... keys) throws UnsupportedOperationException {
         throw new UnsupportedOperationException();
     }
 
@@ -61,7 +61,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @throws UnsupportedOperationException 
      */
     @Override
-    public Map<String, T> getBulk(Collection<String> keys) throws UnsupportedOperationException {
+    public Map<String, T> getBulk(final Collection<String> keys) throws UnsupportedOperationException {
         throw new UnsupportedOperationException();
     }
 
@@ -80,7 +80,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @param liveTime
      * @return
      */
-    protected int toSeconds(long liveTime) {
+    protected int toSeconds(final long liveTime) {
         return (int) ((liveTime % 1000 == 0) ? (liveTime / 1000) : (liveTime / 1000) + 1);
     }
 }

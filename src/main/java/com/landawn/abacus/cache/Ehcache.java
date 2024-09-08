@@ -32,12 +32,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     private boolean isClosed = false;
 
     /**
-     * 
      *
-     * @param cache 
+     *
+     * @param cache
      */
-    public Ehcache(Cache<K, V> cache) {
-        this.cacheImpl = cache;
+    public Ehcache(final Cache<K, V> cache) {
+        cacheImpl = cache;
     }
 
     /**
@@ -47,7 +47,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @return
      */
     @Override
-    public V gett(K k) {
+    public V gett(final K k) {
         assertNotClosed();
 
         return cacheImpl.get(k);
@@ -62,7 +62,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean put(K k, V v, long liveTime, long maxIdleTime) {
+    public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
         cacheImpl.put(k, v); // TODO
@@ -75,7 +75,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @param k
      */
     @Override
-    public void remove(K k) {
+    public void remove(final K k) {
         assertNotClosed();
 
         cacheImpl.remove(k);
@@ -87,17 +87,17 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean containsKey(K k) {
+    public boolean containsKey(final K k) {
         assertNotClosed();
 
         return cacheImpl.containsKey(k);
     }
 
     /**
-     * 
      *
-     * @return 
-     * @throws UnsupportedOperationException 
+     *
+     * @return
+     * @throws UnsupportedOperationException
      */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
@@ -105,10 +105,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @return 
-     * @throws UnsupportedOperationException 
+     *
+     * @return
+     * @throws UnsupportedOperationException
      */
     @Override
     public int size() throws UnsupportedOperationException {

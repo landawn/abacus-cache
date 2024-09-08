@@ -14,7 +14,6 @@
 
 package com.landawn.abacus.cache;
 
-import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 
 import com.landawn.abacus.util.AsyncExecutor;
@@ -48,7 +47,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
         this(DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
-    protected AbstractCache(long defaultLiveTime, long defaultMaxIdleTime) {
+    protected AbstractCache(final long defaultLiveTime, final long defaultMaxIdleTime) {
         this.defaultLiveTime = defaultLiveTime;
         this.defaultMaxIdleTime = defaultMaxIdleTime;
     }
@@ -59,7 +58,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @return
      */
     @Override
-    public Optional<V> get(K k) {
+    public Optional<V> get(final K k) {
         return Optional.ofNullable(gett(k));
     }
 
@@ -70,7 +69,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean put(K key, V value) {
+    public boolean put(final K key, final V value) {
         return put(key, value, defaultLiveTime, defaultMaxIdleTime);
     }
 
@@ -81,12 +80,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     @Override
     public ContinuableFuture<Optional<V>> asyncGet(final K k) {
-        return asyncExecutor.execute(new Callable<Optional<V>>() {
-            @Override
-            public Optional<V> call() throws Exception {
-                return get(k);
-            }
-        });
+        return asyncExecutor.execute(() -> get(k));
     }
 
     /**
@@ -96,12 +90,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     @Override
     public ContinuableFuture<V> asyncGett(final K k) {
-        return asyncExecutor.execute(new Callable<V>() {
-            @Override
-            public V call() throws Exception {
-                return gett(k);
-            }
-        });
+        return asyncExecutor.execute(() -> gett(k));
     }
 
     /**
@@ -112,12 +101,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K k, final V v) {
-        return asyncExecutor.execute(new Callable<Boolean>() {
-            @Override
-            public Boolean call() throws Exception {
-                return put(k, v);
-            }
-        });
+        return asyncExecutor.execute(() -> put(k, v));
     }
 
     /**
@@ -130,12 +114,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K k, final V v, final long liveTime, final long maxIdleTime) {
-        return asyncExecutor.execute(new Callable<Boolean>() {
-            @Override
-            public Boolean call() throws Exception {
-                return put(k, v, liveTime, maxIdleTime);
-            }
-        });
+        return asyncExecutor.execute(() -> put(k, v, liveTime, maxIdleTime));
     }
 
     /**
@@ -145,13 +124,10 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     @Override
     public ContinuableFuture<Void> asyncRemove(final K k) {
-        return asyncExecutor.execute(new Callable<Void>() {
-            @Override
-            public Void call() throws Exception {
-                remove(k);
+        return asyncExecutor.execute(() -> {
+            remove(k);
 
-                return null;
-            }
+            return null;
         });
     }
 
@@ -163,12 +139,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     @Override
     public ContinuableFuture<Boolean> asyncContainsKey(final K k) {
-        return asyncExecutor.execute(new Callable<Boolean>() {
-            @Override
-            public Boolean call() throws Exception {
-                return containsKey(k);
-            }
-        });
+        return asyncExecutor.execute(() -> containsKey(k));
     }
 
     /**
@@ -189,7 +160,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @return
      */
     @Override
-    public <T> T getProperty(String propName) {
+    public <T> T getProperty(final String propName) {
         return (T) properties.get(propName);
     }
 
@@ -202,7 +173,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @return
      */
     @Override
-    public <T> T setProperty(String propName, Object propValue) {
+    public <T> T setProperty(final String propName, final Object propValue) {
         return (T) properties.put(propName, propValue);
     }
 
@@ -214,7 +185,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @return
      */
     @Override
-    public <T> T removeProperty(String propName) {
+    public <T> T removeProperty(final String propName) {
         return (T) properties.remove(propName);
     }
 }

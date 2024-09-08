@@ -47,7 +47,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param serverUrl
      */
-    public JRedis(String serverUrl) {
+    public JRedis(final String serverUrl) {
         this(serverUrl, DEFAULT_TIMEOUT);
     }
 
@@ -60,11 +60,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);
 
-        List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
+        final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
 
-        List<JedisShardInfo> jedisClusterNodes = new ArrayList<>();
+        final List<JedisShardInfo> jedisClusterNodes = new ArrayList<>();
 
-        for (InetSocketAddress addr : addressList) {
+        for (final InetSocketAddress addr : addressList) {
             jedisClusterNodes.add(new JedisShardInfo(addr.getHostName(), addr.getPort(), (int) timeout));
         }
 
@@ -77,7 +77,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public T get(String key) {
+    public T get(final String key) {
         return decode(jedis.get(getKeyBytes(key)));
     }
 
@@ -89,7 +89,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return true, if successful
      */
     @Override
-    public boolean set(String key, T obj, long liveTime) {
+    public boolean set(final String key, final T obj, final long liveTime) {
         jedis.setex(getKeyBytes(key), toSeconds(liveTime), encode(obj));
 
         return true;
@@ -101,7 +101,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return true, if successful
      */
     @Override
-    public boolean delete(String key) {
+    public boolean delete(final String key) {
         jedis.del(getKeyBytes(key));
 
         return true;
@@ -113,7 +113,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public long incr(String key) {
+    public long incr(final String key) {
         return jedis.incr(getKeyBytes(key));
     }
 
@@ -124,7 +124,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public long incr(String key, int deta) {
+    public long incr(final String key, final int deta) {
         return jedis.incrBy(getKeyBytes(key), deta);
     }
 
@@ -134,7 +134,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public long decr(String key) {
+    public long decr(final String key) {
         return jedis.decr(getKeyBytes(key));
     }
 
@@ -145,7 +145,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @Override
-    public long decr(String key, int deta) {
+    public long decr(final String key, final int deta) {
         return jedis.decrBy(getKeyBytes(key), deta);
     }
 
@@ -156,7 +156,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public void flushAll() {
         final Collection<Jedis> allShards = jedis.getAllShards();
 
-        for (Jedis j : allShards) {
+        for (final Jedis j : allShards) {
             j.flushAll();
         }
     }
@@ -175,7 +175,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @param key
      * @return
      */
-    protected byte[] getKeyBytes(String key) {
+    protected byte[] getKeyBytes(final String key) {
         return key.getBytes(Charsets.UTF_8);
     }
 
@@ -184,7 +184,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @param obj
      * @return
      */
-    protected byte[] encode(Object obj) {
+    protected byte[] encode(final Object obj) {
         return obj == null ? N.EMPTY_BYTE_ARRAY : kryoParser.encode(obj);
     }
 
@@ -193,7 +193,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @param bytes
      * @return
      */
-    protected T decode(byte[] bytes) {
+    protected T decode(final byte[] bytes) {
         return (T) (N.isEmpty(bytes) ? null : kryoParser.decode(bytes));
     }
 }

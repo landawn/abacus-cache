@@ -32,22 +32,22 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     private final KeyedObjectPool<K, PoolableWrapper<V>> pool;
 
     /**
-     * 
      *
-     * @param capacity 
-     * @param evictDelay 
+     *
+     * @param capacity
+     * @param evictDelay
      */
     public LocalCache(final int capacity, final long evictDelay) {
         this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
     /**
-     * 
      *
-     * @param capacity 
-     * @param evictDelay 
-     * @param defaultLiveTime 
-     * @param defaultMaxIdleTime 
+     *
+     * @param capacity
+     * @param evictDelay
+     * @param defaultLiveTime
+     * @param defaultMaxIdleTime
      */
     public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         super(defaultLiveTime, defaultMaxIdleTime);
@@ -56,11 +56,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @param defaultLiveTime 
-     * @param defaultMaxIdleTime 
-     * @param pool 
+     *
+     * @param defaultLiveTime
+     * @param defaultMaxIdleTime
+     * @param pool
      */
     public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
         super(defaultLiveTime, defaultMaxIdleTime);
@@ -75,7 +75,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @return
      */
     @Override
-    public V gett(K key) {
+    public V gett(final K key) {
         final PoolableWrapper<V> w = pool.get(key);
 
         return w == null ? null : w.value();
@@ -90,7 +90,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean put(K key, V value, long liveTime, long maxIdleTime) {
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         return pool.put(key, PoolableWrapper.of(value, liveTime, maxIdleTime));
     }
 
@@ -99,7 +99,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param key
      */
     @Override
-    public void remove(K key) {
+    public void remove(final K key) {
         pool.remove(key);
     }
 
@@ -109,14 +109,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean containsKey(K key) {
+    public boolean containsKey(final K key) {
         return pool.containsKey(key);
     }
 
     /**
-     * 
      *
-     * @return 
+     *
+     * @return
      */
     @Override
     public Set<K> keySet() {
@@ -124,9 +124,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @return 
+     *
+     * @return
      */
     @Override
     public int size() {

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015, Haiyang Li.
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -34,11 +34,11 @@ public final class MemcachedLock<K, V> {
     private final SpyMemcached<V> mc;
 
     /**
-     * 
      *
-     * @param serverUrl 
+     *
+     * @param serverUrl
      */
-    public MemcachedLock(String serverUrl) {
+    public MemcachedLock(final String serverUrl) {
         mc = new SpyMemcached<>(serverUrl);
     }
 
@@ -48,7 +48,7 @@ public final class MemcachedLock<K, V> {
      * @param liveTime
      * @return
      */
-    public boolean lock(K target, long liveTime) {
+    public boolean lock(final K target, final long liveTime) {
         return lock(target, (V) N.EMPTY_BYTE_ARRAY, liveTime);
     }
 
@@ -59,12 +59,12 @@ public final class MemcachedLock<K, V> {
      * @param liveTime unit is milliseconds
      * @return
      */
-    public boolean lock(K target, V value, long liveTime) {
-        String key = toKey(target);
+    public boolean lock(final K target, final V value, final long liveTime) {
+        final String key = toKey(target);
 
         try {
             return mc.add(key, value, liveTime);
-        } catch (Exception e) {
+        } catch (final Exception e) {
             throw new RuntimeException("Failed to lock target with key: " + key, e);
         }
     }
@@ -75,7 +75,7 @@ public final class MemcachedLock<K, V> {
      * @param target
      * @return true, if is locked
      */
-    public boolean isLocked(K target) {
+    public boolean isLocked(final K target) {
         return mc.get(toKey(target)) != null;
     }
 
@@ -84,8 +84,8 @@ public final class MemcachedLock<K, V> {
      * @param target
      * @return
      */
-    public V get(K target) {
-        Object value = mc.get(toKey(target));
+    public V get(final K target) {
+        final Object value = mc.get(toKey(target));
 
         return (V) (value instanceof byte[] && ((byte[]) value).length == 0 ? null : value);
     }
@@ -95,10 +95,10 @@ public final class MemcachedLock<K, V> {
      * @param target
      * @return
      */
-    public boolean unlock(K target) {
+    public boolean unlock(final K target) {
         try {
             return mc.delete(toKey(target));
-        } catch (Exception e) {
+        } catch (final Exception e) {
             throw new RuntimeException("Failed to unlock with key: " + target, e);
         }
     }
@@ -108,14 +108,14 @@ public final class MemcachedLock<K, V> {
      * @param target
      * @return
      */
-    protected String toKey(K target) {
+    protected String toKey(final K target) {
         return N.stringOf(target);
     }
 
     /**
-     * 
      *
-     * @return 
+     *
+     * @return
      */
     public SpyMemcached<V> client() {
         return mc;

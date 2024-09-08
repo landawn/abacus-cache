@@ -128,10 +128,10 @@ public final class CacheFactory {
      */
     @SuppressWarnings("unchecked")
     public static <K, V> Cache<K, V> createCache(final String provider) {
-        TypeAttrParser attrResult = TypeAttrParser.parse(provider);
-        String[] parameters = attrResult.getParameters();
-        String url = parameters[0];
-        String className = attrResult.getClassName();
+        final TypeAttrParser attrResult = TypeAttrParser.parse(provider);
+        final String[] parameters = attrResult.getParameters();
+        final String url = parameters[0];
+        final String className = attrResult.getClassName();
         Class<?> cls = null;
 
         if (DistributedCacheClient.MEMCACHED.equalsIgnoreCase(className)) {

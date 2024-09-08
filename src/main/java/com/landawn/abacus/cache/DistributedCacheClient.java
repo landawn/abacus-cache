@@ -25,16 +25,16 @@ import java.util.Map;
  */
 public interface DistributedCacheClient<T> {
 
-    public static final long DEFAULT_TIMEOUT = 1000;
+    long DEFAULT_TIMEOUT = 1000;
 
-    public static final String MEMCACHED = "Memcached";
+    String MEMCACHED = "Memcached";
 
-    public static final String REDIS = "Redis";
+    String REDIS = "Redis";
 
     /**
-     * 
      *
-     * @return 
+     *
+     * @return
      */
     String serverUrl();
 

@@ -50,15 +50,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     private boolean isClosed = false;
 
-    protected DistributedCache(DistributedCacheClient<V> dcc) {
+    protected DistributedCache(final DistributedCacheClient<V> dcc) {
         this(dcc, Strings.EMPTY_STRING, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
     }
 
-    protected DistributedCache(DistributedCacheClient<V> dcc, String keyPrefix) {
+    protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
         this(dcc, keyPrefix, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
     }
 
-    protected DistributedCache(DistributedCacheClient<V> dcc, String keyPrefix, int maxFailedNumForRetry, long retryDelay) {
+    protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
         this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY_STRING : keyPrefix;
         this.dcc = dcc;
         this.maxFailedNumForRetry = maxFailedNumForRetry;
@@ -72,7 +72,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return
      */
     @Override
-    public V gett(K k) {
+    public V gett(final K k) {
         assertNotClosed();
 
         if ((failedCounter.get() > maxFailedNumForRetry) && ((System.currentTimeMillis() - lastFailedTime) < retryDelay)) {
@@ -107,7 +107,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean put(K k, V v, long liveTime, long maxIdleTime) {
+    public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
         return dcc.set(generateKey(k), v, liveTime);
@@ -119,7 +119,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param k
      */
     @Override
-    public void remove(K k) {
+    public void remove(final K k) {
         assertNotClosed();
 
         dcc.delete(generateKey(k));
@@ -131,7 +131,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return true, if successful
      */
     @Override
-    public boolean containsKey(K k) {
+    public boolean containsKey(final K k) {
         return get(k) != null;
     }
 
@@ -196,7 +196,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param k
      * @return
      */
-    protected String generateKey(K k) {
+    protected String generateKey(final K k) {
         return Strings.isEmpty(keyPrefix) ? Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8))
                 : (keyPrefix + Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8)));
     }
