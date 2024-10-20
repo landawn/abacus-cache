@@ -22,9 +22,7 @@ import net.spy.memcached.transcoders.Transcoder;
 
 /**
  *
- * @author Haiyang Li
  * @param <T>
- * @since 0.8
  */
 public class KryoTranscoder<T> implements Transcoder<T> {
 

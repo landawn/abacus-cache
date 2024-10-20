@@ -31,9 +31,7 @@ import redis.clients.jedis.JedisShardInfo;
 
 /**
  *
- * @author Haiyang Li
  * @param <T>
- * @since 0.8
  */
 @SuppressWarnings("deprecation")
 public class JRedis<T> extends AbstractDistributedCacheClient<T> {

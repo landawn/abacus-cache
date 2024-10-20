@@ -21,10 +21,8 @@ import com.landawn.abacus.util.Numbers;
 
 /**
  *
- * @author haiyang li
  * @param <K> the key type
  * @param <V> the value type
- * @since 0.9
  */
 public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 

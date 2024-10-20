@@ -22,10 +22,8 @@ import com.landawn.abacus.pool.PoolableWrapper;
 
 /**
  *
- * @author Haiyang Li
  * @param <K> the key type
  * @param <V> the value type
- * @since 0.8
  */
 public class LocalCache<K, V> extends AbstractCache<K, V> {
 

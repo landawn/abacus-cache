@@ -22,10 +22,8 @@ import com.landawn.abacus.logging.LoggerFactory;
 
 /**
  *
- * @author Haiyang Li
  * @param <K> the key type
  * @param <V> the value type
- * @since 0.8
  */
 public final class MemcachedLock<K, V> {
 

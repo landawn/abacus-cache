@@ -19,9 +19,7 @@ import java.util.Map;
 
 /**
  *
- * @author Haiyang Li
  * @param <T>
- * @since 0.8
  */
 public abstract class AbstractDistributedCacheClient<T> implements DistributedCacheClient<T> {
 

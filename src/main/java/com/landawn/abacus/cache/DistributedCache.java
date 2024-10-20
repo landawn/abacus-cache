@@ -23,10 +23,8 @@ import com.landawn.abacus.util.Strings;
 
 /**
  *
- * @author Haiyang Li
  * @param <K> the key type
  * @param <V> the value type
- * @since 0.8
  */
 public class DistributedCache<K, V> extends AbstractCache<K, V> {
 

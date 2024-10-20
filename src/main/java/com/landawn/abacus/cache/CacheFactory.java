@@ -26,8 +26,6 @@ import com.landawn.abacus.util.TypeAttrParser;
 /**
  * A factory for creating Cache objects.
  *
- * @author Haiyang Li
- * @since 0.8
  */
 public final class CacheFactory {
 

@@ -16,9 +16,7 @@ package com.landawn.abacus.cache;
 
 /**
  *
- * @author Haiyang Li
  * @see <a href="https://github.com/OpenHFT/Chronicle-Map">Chronicle-Map</a>
- * @since 1.0.4
  */
 public class ChronicleMap {
 

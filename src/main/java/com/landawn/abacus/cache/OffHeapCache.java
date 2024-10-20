@@ -61,10 +61,8 @@ import sun.misc.Unsafe; //NOSONAR
  * It's not designed for tiny objects(length of bytes < 128 after serialization).
  * Since it's off heap cache, modifying the objects from cache won't impact the objects in cache.
  *
- * @author haiyang li
  * @param <K> the key type
  * @param <V> the value type
- * @since 0.8
  */
 @SuppressFBWarnings({ "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "JLM_JSR166_UTILCONCURRENT_MONITORENTER" })
 public class OffHeapCache<K, V> extends AbstractCache<K, V> {
@@ -85,7 +83,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     //     * If the effective addresses and length are (resp.) even modulo 4 or 2,
     //     * the transfer takes place in units of 'int' or 'short'.
     //     *
-    //     * @since 1.7
     //     */
     //    public native void copyMemory(Object srcBase, long srcOffset,
     //                                  Object destBase, long destOffset,
