@@ -37,9 +37,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     protected final Properties<String, Object> properties = new Properties<>();
 
-    protected long defaultLiveTime;
+    protected final long defaultLiveTime;
 
-    protected long defaultMaxIdleTime;
+    protected final long defaultMaxIdleTime;
 
     protected AbstractCache() {
         this(DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);

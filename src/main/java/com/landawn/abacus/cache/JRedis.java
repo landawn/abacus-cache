@@ -192,6 +192,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     protected T decode(final byte[] bytes) {
-        return (T) (N.isEmpty(bytes) ? null : kryoParser.decode(bytes));
+        return N.isEmpty(bytes) ? null : kryoParser.decode(bytes);
     }
 }

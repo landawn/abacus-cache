@@ -97,6 +97,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     private static final int MAX_BLOCK_SIZE = 8192; // 8K
 
     private static final Unsafe UNSAFE;
+
     static {
         try {
             final Field f = Unsafe.class.getDeclaredField("theUnsafe");
@@ -110,6 +111,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     private static final int BYTE_ARRAY_BASE = UNSAFE.arrayBaseOffset(byte[].class);
 
     private static final ScheduledExecutorService scheduledExecutor;
+
     static {
         final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(IOUtil.CPU_CORES);
         // executor.setRemoveOnCancelPolicy(true);
@@ -227,7 +229,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         _segments = new Segment[(int) (_capacityB / SEGMENT_SIZE)];
 
         for (int i = 0, len = _segments.length; i < len; i++) {
-            _segments[i] = new Segment(_startPtr + i * SEGMENT_SIZE);
+            _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE);
         }
 
         _pool = PoolFactory.createKeyedObjectPool((int) (_capacityB / MIN_BLOCK_SIZE), evictDelay);
@@ -249,18 +251,15 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             scheduleFuture = scheduledExecutor.scheduleWithFixedDelay(evictTask, evictDelay, evictDelay, TimeUnit.MILLISECONDS);
         }
 
-        Runtime.getRuntime().addShutdownHook(new Thread() {
-            @Override
-            public void run() {
-                logger.warn("Starting to shutdown task in OffHeapCache");
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            logger.warn("Starting to shutdown task in OffHeapCache");
 
-                try {
-                    close();
-                } finally {
-                    logger.warn("Completed to shutdown task in OffHeapCache");
-                }
+            try {
+                close();
+            } finally {
+                logger.warn("Completed to shutdown task in OffHeapCache");
             }
-        });
+        }));
     }
 
     /**
@@ -320,7 +319,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         if (size <= MAX_BLOCK_SIZE) {
-            final AvaialbeSegment availableSegment = getAvailableSegment(size);
+            final AvailableSegment availableSegment = getAvailableSegment(size);
 
             if (availableSegment == null) {
                 Objectory.recycle(os);
@@ -329,7 +328,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 return false;
             }
 
-            final long startPtr = availableSegment.segment.startPtr + availableSegment.availableBlockIndex * availableSegment.segment.sizeOfBlock;
+            final long startPtr = availableSegment.segment.startPtr + (long) availableSegment.availableBlockIndex * availableSegment.segment.sizeOfBlock;
             boolean isOK = false;
 
             try {
@@ -339,9 +338,10 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             } finally {
                 Objectory.recycle(os);
 
-                if (isOK == false) {
+                if (!isOK) {
                     availableSegment.release();
 
+                    //noinspection ReturnInsideFinallyBlock
                     return false; //NOSONAR
                 }
             }
@@ -354,8 +354,8 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
             try {
                 while (copiedSize < size) {
-                    final int sizeToCopy = size - copiedSize > MAX_BLOCK_SIZE ? MAX_BLOCK_SIZE : size - copiedSize;
-                    final AvaialbeSegment availableSegment = getAvailableSegment(sizeToCopy);
+                    final int sizeToCopy = Math.min(size - copiedSize, MAX_BLOCK_SIZE);
+                    final AvailableSegment availableSegment = getAvailableSegment(sizeToCopy);
 
                     if (availableSegment == null) {
 
@@ -363,7 +363,8 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                         return false;
                     }
 
-                    final long startPtr = availableSegment.segment.startPtr + availableSegment.availableBlockIndex * availableSegment.segment.sizeOfBlock;
+                    final long startPtr = availableSegment.segment.startPtr
+                            + (long) availableSegment.availableBlockIndex * availableSegment.segment.sizeOfBlock;
                     boolean isOK = false;
 
                     try {
@@ -374,9 +375,10 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
                         isOK = true;
                     } finally {
-                        if (isOK == false) {
+                        if (!isOK) {
                             availableSegment.release();
 
+                            //noinspection ReturnInsideFinallyBlock
                             return false; //NOSONAR
                         }
                     }
@@ -417,7 +419,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
      * @return
      */
     // TODO: performance tuning for concurrent put.
-    private AvaialbeSegment getAvailableSegment(final int size) {
+    private AvailableSegment getAvailableSegment(final int size) {
         Deque<Segment> queue = null;
         int blockSize = 0;
 
@@ -535,7 +537,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
-        return new AvaialbeSegment(segment, availableBlockIndex);
+        return new AvailableSegment(segment, availableBlockIndex);
     }
 
     /**
@@ -571,7 +573,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
                     evict();
 
-                    // wait for couple of seconds to avoid the second vacation which just arrives before the this vacation is done.
+                    // wait for a couple of seconds to avoid the second vacation which just arrives before the vacation is done.
                     N.sleep(3000);
                 } finally {
                     _activeVacationTaskCount.decrementAndGet();
@@ -838,7 +840,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 for (final Map.Entry<Long, Segment> entry : localSegments) {
                     final long startPtr = entry.getKey();
                     final Segment segment = entry.getValue();
-                    final int sizeToCopy = size > segment.sizeOfBlock ? segment.sizeOfBlock : size;
+                    final int sizeToCopy = Math.min(size, segment.sizeOfBlock);
 
                     copyFromMemory(startPtr, bytes, destOffset, sizeToCopy);
 
@@ -856,7 +858,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 if (type.isPrimitiveByteArray()) {
                     return segments == null ? null : (T) bytes;
                 } else if (type.isByteBuffer()) {
-                    return segments == null ? null : (T) (T) ByteBufferType.valueOf(bytes);
+                    return segments == null ? null : (T) ByteBufferType.valueOf(bytes);
                 } else {
                     return segments == null ? null : parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
                 }
@@ -941,26 +943,11 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * The Class AvaialbeSegment.
+     * The Class AvailableSegment.
+     * @param segment  The segment.
+     * @param availableBlockIndex  The available block index.
      */
-    private static final class AvaialbeSegment {
-
-        /** The segment. */
-        final Segment segment;
-
-        /** The available block index. */
-        final int availableBlockIndex;
-
-        /**
-         * Instantiates a new avaialbe segment.
-         *
-         * @param segment
-         * @param availableBlockIndex
-         */
-        AvaialbeSegment(final Segment segment, final int availableBlockIndex) {
-            this.segment = segment;
-            this.availableBlockIndex = availableBlockIndex;
-        }
+    private record AvailableSegment(Segment segment, int availableBlockIndex) {
 
         /**
          * Release.

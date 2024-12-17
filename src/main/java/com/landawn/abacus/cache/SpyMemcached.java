@@ -41,7 +41,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     static final Logger logger = LoggerFactory.getLogger(SpyMemcached.class);
 
-    private MemcachedClient mc;
+    private final MemcachedClient mc;
 
     /**
      *

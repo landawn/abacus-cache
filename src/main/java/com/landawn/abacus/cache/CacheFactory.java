@@ -155,7 +155,7 @@ public final class CacheFactory {
         } else {
             cls = ClassUtil.forClass(className);
 
-            return (Cache<K, V>) TypeAttrParser.newInstance(cls, provider);
+            return TypeAttrParser.newInstance(cls, provider);
         }
     }
 }

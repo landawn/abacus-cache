@@ -16,6 +16,7 @@
 
 package com.landawn.abacus.util;
 
+import com.landawn.abacus.annotation.SuppressFBWarnings;
 import com.landawn.abacus.cache.SpyMemcached;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
@@ -115,6 +116,7 @@ public final class MemcachedLock<K, V> {
      *
      * @return
      */
+    @SuppressFBWarnings("EI_EXPOSE_REP")
     public SpyMemcached<V> client() {
         return mc;
     }
