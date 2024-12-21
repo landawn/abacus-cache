@@ -26,7 +26,7 @@ import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
-import com.landawn.abacus.util.N;
+import com.landawn.abacus.util.ExceptionUtil;
 
 import net.spy.memcached.ConnectionFactory;
 import net.spy.memcached.DefaultConnectionFactory;
@@ -387,7 +387,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         try {
             return future.get();
         } catch (InterruptedException | ExecutionException e) {
-            throw N.toRuntimeException(e);
+            throw ExceptionUtil.toRuntimeException(e, true);
         }
     }
 
