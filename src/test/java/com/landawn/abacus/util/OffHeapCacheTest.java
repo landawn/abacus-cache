@@ -37,7 +37,7 @@ public class OffHeapCacheTest {
     private static final AtomicInteger counter = new AtomicInteger();
 
     /**
-     * 
+     *
      */
     @Test
     public void test_ByteBuffer() {
@@ -68,7 +68,7 @@ public class OffHeapCacheTest {
     }
 
     /**
-     * 
+     *
      */
     @Test
     public void test_put_get() {
@@ -86,9 +86,9 @@ public class OffHeapCacheTest {
 
             Objectory.recycle(sb);
 
-            String key = account.getEmailAddress();
+            final String key = account.getEmailAddress();
             cache.put(key, account);
-            Account account2 = cache.get(key).orElse(null);
+            final Account account2 = cache.get(key).orElse(null);
 
             assertEquals(account, account2);
 
@@ -103,12 +103,12 @@ public class OffHeapCacheTest {
         }
     }
 
-    private Account createAccount(Class<Account> cls) {
+    private Account createAccount(final Class<Account> cls) {
         return N.fill(cls);
     }
 
     /**
-     * 
+     *
      */
     @Test
     public void test_put_get_2() {
@@ -120,61 +120,47 @@ public class OffHeapCacheTest {
     }
 
     /**
-     * 
+     *
      */
     @Test
     public void test_perf() {
-        Profiler.run(8, 10000, 1, new Throwables.Runnable<Exception>() {
-            @Override
-            public void run() {
-                Account account = createAccount(Account.class);
+        Profiler.run(8, 10000, 1, () -> {
+            final Account account = createAccount(Account.class);
 
-                String key = account.getEmailAddress();
-                cache.put(key, account);
-                Account account2 = cache.get(key).orElse(null);
+            final String key = account.getEmailAddress();
+            cache.put(key, account);
+            final Account account2 = cache.get(key).orElse(null);
 
-                assertEquals(account.getId(), account2.getId());
+            assertEquals(account.getId(), account2.getId());
 
-                if (Math.abs(rand.nextInt()) % 3 == 0) {
-                    cache.remove(key);
-                    assertNull(cache.get(key).orElse(null));
-                }
+            if (Math.abs(rand.nextInt()) % 3 == 0) {
+                cache.remove(key);
+                assertNull(cache.get(key).orElse(null));
             }
         }).printResult();
     }
 
     /**
-     * 
+     *
      */
     @Test
     public void test_perf_big_Object() {
-        final StringBuilder sb = Objectory.createStringBuilder();
 
-        while (sb.length() < 10000) {
-            sb.append(Strings.uuid());
-        }
+        final String longFirstName = Strings.repeat(Strings.uuid(), 100);
 
-        sb.toString();
-        Objectory.recycle(sb);
+        Profiler.run(16, 10000, 3, () -> {
+            final Account account = createAccount(Account.class);
+            account.setFirstName(longFirstName);
 
-        String longFirstName = Strings.repeat(Strings.uuid(), 100);
+            final String key = account.getEmailAddress();
+            if (cache.put(key, account)) {
+                final Account account2 = cache.get(key).orElse(null);
+                assertEquals(account.getId(), account2.getId());
+            }
 
-        Profiler.run(16, 100, 1, new Throwables.Runnable<Exception>() {
-            @Override
-            public void run() {
-                final Account account = createAccount(Account.class);
-                account.setFirstName(longFirstName);
-
-                String key = account.getEmailAddress();
-                if (cache.put(key, account)) {
-                    Account account2 = cache.get(key).orElse(null);
-                    assertEquals(account.getId(), account2.getId());
-                }
-
-                if (Math.abs(rand.nextInt()) % 3 == 0) {
-                    cache.remove(key);
-                    assertNull(cache.get(key).orElse(null));
-                }
+            if (Math.abs(rand.nextInt()) % 3 == 0) {
+                cache.remove(key);
+                assertNull(cache.get(key).orElse(null));
             }
         }).printResult();
     }

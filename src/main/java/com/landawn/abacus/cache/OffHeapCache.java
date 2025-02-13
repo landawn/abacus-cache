@@ -348,7 +348,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
             w = new SWrapper<>(type, liveTime, maxIdleTime, size, availableSegment.segment, startPtr);
         } else {
-            final List<Map.Entry<Long, Segment>> segmentResult = new ArrayList<>(size / MAX_BLOCK_SIZE + 1);
+            final List<SegmentEntry> segmentResult = new ArrayList<>(size / MAX_BLOCK_SIZE + 1);
             int copiedSize = 0;
             int srcOffset = BYTE_ARRAY_BASE;
 
@@ -383,7 +383,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                         }
                     }
 
-                    segmentResult.add(N.newImmutableEntry(startPtr, availableSegment.segment));
+                    segmentResult.add(new SegmentEntry(startPtr, availableSegment.segment));
                 }
 
                 w = new MWrapper<>(type, liveTime, maxIdleTime, size, segmentResult);
@@ -391,9 +391,9 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 Objectory.recycle(os);
 
                 if (w == null) {
-                    for (final Map.Entry<Long, Segment> entry : segmentResult) {
-                        final Segment segment = entry.getValue();
-                        segment.release((int) ((entry.getKey() - segment.startPtr) / segment.sizeOfBlock));
+                    for (final SegmentEntry entry : segmentResult) {
+                        final Segment segment = entry.segment;
+                        segment.release((int) ((entry.startPtr - segment.startPtr) / segment.sizeOfBlock));
                     }
                 }
             }
@@ -803,7 +803,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     private static final class MWrapper<T> extends Wrapper<T> {
 
         /** The segments. */
-        private List<Map.Entry<Long, Segment>> segments;
+        private List<SegmentEntry> segments;
 
         /**
          * Instantiates a new m wrapper.
@@ -814,7 +814,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
          * @param size
          * @param segments
          */
-        MWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final List<Map.Entry<Long, Segment>> segments) {
+        MWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final List<SegmentEntry> segments) {
             super(type, liveTime, maxIdleTime, size);
 
             this.segments = segments;
@@ -827,7 +827,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         T read() {
             synchronized (this) {
-                final List<Map.Entry<Long, Segment>> localSegments = segments;
+                final List<SegmentEntry> localSegments = segments;
 
                 if (N.isEmpty(localSegments)) {
                     return null;
@@ -837,9 +837,9 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
                 int size = this.size;
                 int destOffset = BYTE_ARRAY_BASE;
 
-                for (final Map.Entry<Long, Segment> entry : localSegments) {
-                    final long startPtr = entry.getKey();
-                    final Segment segment = entry.getValue();
+                for (final SegmentEntry entry : localSegments) {
+                    final long startPtr = entry.startPtr;
+                    final Segment segment = entry.segment;
                     final int sizeToCopy = Math.min(size, segment.sizeOfBlock);
 
                     copyFromMemory(startPtr, bytes, destOffset, sizeToCopy);
@@ -872,9 +872,9 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         public void destroy() {
             synchronized (this) {
                 if (segments != null) {
-                    for (final Map.Entry<Long, Segment> entry : segments) {
-                        final Segment segment = entry.getValue();
-                        segment.release((int) ((entry.getKey() - segment.startPtr) / segment.sizeOfBlock));
+                    for (final SegmentEntry entry : segments) {
+                        final Segment segment = entry.segment;
+                        segment.release((int) ((entry.startPtr - segment.startPtr) / segment.sizeOfBlock));
                     }
 
                     segments = null;
@@ -955,5 +955,8 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         void release() {
             segment.release(availableBlockIndex);
         }
+    }
+
+    private static final record SegmentEntry(long startPtr, Segment segment) {
     }
 }
