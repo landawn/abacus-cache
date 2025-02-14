@@ -348,7 +348,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
             w = new SWrapper<>(type, liveTime, maxIdleTime, size, availableSegment.segment, startPtr);
         } else {
-            final List<SegmentEntry> segmentResult = new ArrayList<>(size / MAX_BLOCK_SIZE + 1);
+            final List<SegmentEntry> segmentResult = new ArrayList<>(size / MAX_BLOCK_SIZE + (size % MAX_BLOCK_SIZE == 0 ? 0 : 1));
             int copiedSize = 0;
             int srcOffset = BYTE_ARRAY_BASE;
 
@@ -412,12 +412,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         return result;
     }
 
-    /**
-     * Gets the available segment.
-     *
-     * @param size
-     * @return
-     */
     // TODO: performance tuning for concurrent put.
     private AvailableSegment getAvailableSegment(final int size) {
         Deque<Segment> queue = null;
@@ -540,21 +534,10 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         return new AvailableSegment(segment, availableBlockIndex);
     }
 
-    /**
-     * Copy to memory.
-     *
-     * @param srcBytes
-     * @param srcOffset
-     * @param startPtr
-     * @param len
-     */
     private static void copyToMemory(final byte[] srcBytes, final int srcOffset, final long startPtr, final int len) {
         UNSAFE.copyMemory(srcBytes, srcOffset, null, startPtr, len);
     }
 
-    /**
-     * Vacate.
-     */
     private void vacate() {
         if (_activeVacationTaskCount.get() > 0) {
             return;
@@ -582,10 +565,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     *
-     * @param k
-     */
     @Override
     public void remove(final K k) {
         final Wrapper<V> w = _pool.remove(k);
@@ -595,47 +574,26 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     *
-     * @param k
-     * @return true, if successful
-     */
     @Override
     public boolean containsKey(final K k) {
         return _pool.containsKey(k);
     }
 
-    /**
-     *
-     *
-     * @return
-     */
     @Override
     public Set<K> keySet() {
         return _pool.keySet();
     }
 
-    /**
-     *
-     *
-     * @return
-     */
     @Override
     public int size() {
         return _pool.size();
     }
 
-    /**
-     * Clear.
-     */
     @Override
     public void clear() {
         _pool.clear();
     }
 
-    /**
-     * Close.
-     */
     @Override
     public synchronized void close() {
         if (_pool.isClosed()) {
@@ -655,20 +613,11 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     * Checks if is closed.
-     *
-     * @return true, if is closed
-     */
     @Override
     public boolean isClosed() {
         return _pool.isClosed();
     }
 
-    /**
-     * recycle the empty Segment.
-     *
-     */
     protected void evict() {
         for (int i = 0, len = _segments.length; i < len; i++) {
             if (_segments[i].blockBitSet.isEmpty()) {
@@ -690,27 +639,12 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     * The Class Wrapper.
-     *
-     * @param <T>
-     */
     private abstract static class Wrapper<T> extends AbstractPoolable {
 
-        /** The type. */
         final Type<T> type;
 
-        /** The size. */
         final int size;
 
-        /**
-         * Instantiates a new wrapper.
-         *
-         * @param type
-         * @param liveTime
-         * @param maxIdleTime
-         * @param size
-         */
         Wrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size) {
             super(liveTime, maxIdleTime);
 
@@ -718,36 +652,15 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             this.size = size;
         }
 
-        /**
-         *
-         * @return
-         */
         abstract T read();
     }
 
-    /**
-     * The Class SWrapper.
-     *
-     * @param <T>
-     */
     private static final class SWrapper<T> extends Wrapper<T> {
 
-        /** The segment. */
         private Segment segment;
 
-        /** The start ptr. */
         private final long startPtr;
 
-        /**
-         * Instantiates a new s wrapper.
-         *
-         * @param type
-         * @param liveTime
-         * @param maxIdleTime
-         * @param size
-         * @param segment
-         * @param startPtr
-         */
         SWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final Segment segment, final long startPtr) {
             super(type, liveTime, maxIdleTime, size);
 
@@ -755,10 +668,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             this.startPtr = startPtr;
         }
 
-        /**
-         *
-         * @return
-         */
         @Override
         T read() {
             synchronized (this) {
@@ -781,9 +690,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
-        /**
-         * Destroy.
-         */
         @Override
         public void destroy() {
             synchronized (this) {
@@ -795,35 +701,16 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     * The Class MWrapper.
-     *
-     * @param <T>
-     */
     private static final class MWrapper<T> extends Wrapper<T> {
 
-        /** The segments. */
         private List<SegmentEntry> segments;
 
-        /**
-         * Instantiates a new m wrapper.
-         *
-         * @param type
-         * @param liveTime
-         * @param maxIdleTime
-         * @param size
-         * @param segments
-         */
         MWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final List<SegmentEntry> segments) {
             super(type, liveTime, maxIdleTime, size);
 
             this.segments = segments;
         }
 
-        /**
-         *
-         * @return
-         */
         @Override
         T read() {
             synchronized (this) {
@@ -865,9 +752,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
-        /**
-         * Destroy.
-         */
         @Override
         public void destroy() {
             synchronized (this) {
@@ -883,33 +767,18 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     * The Class Segment.
-     */
     private static final class Segment {
 
-        /** The block bit set. */
         private final BitSet blockBitSet = new BitSet();
 
-        /** The start ptr. */
         private final long startPtr;
 
-        /** The size of block. */
         private int sizeOfBlock;
 
-        /**
-         * Instantiates a new segment.
-         *
-         * @param segmentStartPtr
-         */
         public Segment(final long segmentStartPtr) {
             startPtr = segmentStartPtr;
         }
 
-        /**
-         *
-         * @return
-         */
         public int allocate() {
             synchronized (blockBitSet) {
                 final int result = blockBitSet.nextClearBit(0);
@@ -924,10 +793,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
-        /**
-         *
-         * @param blockIndex
-         */
         public void release(final int blockIndex) {
             synchronized (blockBitSet) {
                 blockBitSet.clear(blockIndex);
@@ -942,16 +807,8 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         //        }
     }
 
-    /**
-     * The Class AvailableSegment.
-     * @param segment  The segment.
-     * @param availableBlockIndex  The available block index.
-     */
-    private record AvailableSegment(Segment segment, int availableBlockIndex) {
+    private static final record AvailableSegment(Segment segment, int availableBlockIndex) {
 
-        /**
-         * Release.
-         */
         void release() {
             segment.release(availableBlockIndex);
         }
