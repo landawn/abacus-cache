@@ -114,7 +114,7 @@ public class OffHeapCacheTest {
      */
     @Test
     public void test_put_get_2() {
-        final MultiLoopsStatistics result = Profiler.run(32, 3, 1, this::test_put_get);
+        final MultiLoopsStatistics result = Profiler.run(32, 100, 1, this::test_put_get);
 
         result.printResult();
 
