@@ -53,8 +53,6 @@ import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Objectory;
 
-import sun.misc.Unsafe; //NOSONAR
-
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
 /**
@@ -96,13 +94,13 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
     private static final int MAX_BLOCK_SIZE = 8192; // 8K
 
-    private static final Unsafe UNSAFE;
+    private static final sun.misc.Unsafe UNSAFE;
 
     static {
         try {
-            final Field f = Unsafe.class.getDeclaredField("theUnsafe");
+            final Field f = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
             ClassUtil.setAccessible(f, true);
-            UNSAFE = (Unsafe) f.get(null);
+            UNSAFE = (sun.misc.Unsafe) f.get(null);
         } catch (final Exception e) {
             throw new RuntimeException("Failed to initialize Unsafe", e);
         }
