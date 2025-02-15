@@ -28,9 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -46,8 +44,6 @@ import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.ClassUtil;
 import com.landawn.abacus.util.ExceptionUtil;
-import com.landawn.abacus.util.IOUtil;
-import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Objectory;
 
@@ -78,14 +74,6 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     private static final int BYTE_ARRAY_BASE = UNSAFE.arrayBaseOffset(byte[].class);
-
-    private static final ScheduledExecutorService scheduledExecutor;
-
-    static {
-        final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(IOUtil.CPU_CORES);
-        // executor.setRemoveOnCancelPolicy(true);
-        scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
-    }
 
     private final long _capacityB; //NOSONAR
 
@@ -247,12 +235,6 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         UNSAFE.copyMemory(srcBytes, srcOffset, null, startPtr, len);
     }
 
-    /**
-     * Gets the t.
-     *
-     * @param k
-     * @return
-     */
     @Override
     public V gett(final K k) {
         final Wrapper<V> w = _pool.get(k);
@@ -284,52 +266,50 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         }
 
         if (size <= MAX_BLOCK_SIZE) {
-            final AvailableSegment availableSegment = getAvailableSegment(size);
+            final Slice slice = getAvailableSlice(size);
 
-            if (availableSegment == null) {
+            if (slice == null) {
                 Objectory.recycle(os);
 
                 vacate();
                 return false;
             }
 
-            final long startPtr = availableSegment.segment.startPtr + (long) availableSegment.availableBlockIndex * availableSegment.segment.sizeOfBlock;
+            final long sliceStartPtr = slice.segment.segmentStartPtr + (long) slice.indexOfSlice * slice.segment.sizeOfSlice;
             boolean isOK = false;
 
             try {
-                copyToMemory(bytes, BYTE_ARRAY_BASE, startPtr, size);
+                copyToMemory(bytes, BYTE_ARRAY_BASE, sliceStartPtr, size);
 
                 isOK = true;
             } finally {
                 Objectory.recycle(os);
 
                 if (!isOK) {
-                    availableSegment.release();
+                    slice.release();
 
                     //noinspection ReturnInsideFinallyBlock
                     return false; //NOSONAR
                 }
             }
 
-            w = new SWrapper<>(type, liveTime, maxIdleTime, size, availableSegment.segment, startPtr);
+            w = new SliceWrapper<>(type, liveTime, maxIdleTime, size, slice, sliceStartPtr);
         } else {
-            final List<SegmentEntry> segmentResult = new ArrayList<>(size / MAX_BLOCK_SIZE + (size % MAX_BLOCK_SIZE == 0 ? 0 : 1));
+            final List<Slice> slices = new ArrayList<>(size / MAX_BLOCK_SIZE + (size % MAX_BLOCK_SIZE == 0 ? 0 : 1));
             int copiedSize = 0;
             int srcOffset = BYTE_ARRAY_BASE;
 
             try {
                 while (copiedSize < size) {
                     final int sizeToCopy = Math.min(size - copiedSize, MAX_BLOCK_SIZE);
-                    final AvailableSegment availableSegment = getAvailableSegment(sizeToCopy);
+                    final Slice slice = getAvailableSlice(sizeToCopy);
 
-                    if (availableSegment == null) {
-
+                    if (slice == null) {
                         vacate();
                         return false;
                     }
 
-                    final long startPtr = availableSegment.segment.startPtr
-                            + (long) availableSegment.availableBlockIndex * availableSegment.segment.sizeOfBlock;
+                    final long startPtr = slice.segment.segmentStartPtr + (long) slice.indexOfSlice * slice.segment.sizeOfSlice;
                     boolean isOK = false;
 
                     try {
@@ -341,24 +321,23 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
                         isOK = true;
                     } finally {
                         if (!isOK) {
-                            availableSegment.release();
+                            slice.release();
 
                             //noinspection ReturnInsideFinallyBlock
                             return false; //NOSONAR
                         }
                     }
 
-                    segmentResult.add(new SegmentEntry(startPtr, availableSegment.segment));
+                    slices.add(slice);
                 }
 
-                w = new MWrapper<>(type, liveTime, maxIdleTime, size, segmentResult);
+                w = new SlicesWrapper<>(type, liveTime, maxIdleTime, size, slices);
             } finally {
                 Objectory.recycle(os);
 
                 if (w == null) {
-                    for (final SegmentEntry entry : segmentResult) {
-                        final Segment segment = entry.segment;
-                        segment.release((int) ((entry.startPtr - segment.startPtr) / segment.sizeOfBlock));
+                    for (final Slice slice : slices) {
+                        slice.release();
                     }
                 }
             }
@@ -378,73 +357,73 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     // TODO: performance tuning for concurrent put.
-    private AvailableSegment getAvailableSegment(final int size) {
+    private Slice getAvailableSlice(final int size) {
         Deque<Segment> queue = null;
-        int blockSize = 0;
+        int sliceSize = 0;
 
         if (size <= 256) {
             queue = _queue256;
-            blockSize = 256;
+            sliceSize = 256;
         } else if (size <= 384) {
             queue = _queue384;
-            blockSize = 384;
+            sliceSize = 384;
         } else if (size <= 512) {
             queue = _queue512;
-            blockSize = 512;
+            sliceSize = 512;
         } else if (size <= 640) {
             queue = _queue640;
-            blockSize = 640;
+            sliceSize = 640;
         } else if (size <= 768) {
             queue = _queue768;
-            blockSize = 768;
+            sliceSize = 768;
         } else if (size <= 896) {
             queue = _queue896;
-            blockSize = 896;
+            sliceSize = 896;
         } else if (size <= 1024) {
             queue = _queue1K;
-            blockSize = 1024;
+            sliceSize = 1024;
         } else if (size <= 1280) {
             queue = _queue1280;
-            blockSize = 1280;
+            sliceSize = 1280;
         } else if (size <= 1536) {
             queue = _queue1536;
-            blockSize = 1536;
+            sliceSize = 1536;
         } else if (size <= 1792) {
             queue = _queue1792;
-            blockSize = 1792;
+            sliceSize = 1792;
         } else if (size <= 2048) {
             queue = _queue2K;
-            blockSize = 2048;
+            sliceSize = 2048;
         } else if (size <= 2560) {
             queue = _queue2_5K;
-            blockSize = 2560;
+            sliceSize = 2560;
         } else if (size <= 3072) {
             queue = _queue3K;
-            blockSize = 3072;
+            sliceSize = 3072;
         } else if (size <= 3584) {
             queue = _queue3_5K;
-            blockSize = 3584;
+            sliceSize = 3584;
         } else if (size <= 4096) {
             queue = _queue4K;
-            blockSize = 4096;
+            sliceSize = 4096;
         } else if (size <= 5120) {
             queue = _queue5K;
-            blockSize = 5120;
+            sliceSize = 5120;
         } else if (size <= 6144) {
             queue = _queue6K;
-            blockSize = 6144;
+            sliceSize = 6144;
         } else if (size <= 7168) {
             queue = _queue7K;
-            blockSize = 7168;
+            sliceSize = 7168;
         } else if (size <= 8192) {
             queue = _queue8K;
-            blockSize = 8192;
+            sliceSize = 8192;
         } else {
             throw new RuntimeException("Unsupported object size: " + size);
         }
 
         Segment segment = null;
-        int availableBlockIndex = -1;
+        int indexOfAvaiableSlice = -1;
 
         synchronized (queue) {
             final Iterator<Segment> iterator = queue.iterator();
@@ -455,7 +434,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
                 cnt++;
                 segment = iterator.next();
 
-                if ((availableBlockIndex = segment.allocate()) >= 0) {
+                if ((indexOfAvaiableSlice = segment.allocateSlice()) >= 0) {
                     if (cnt > 3) {
                         iterator.remove();
                         queue.addFirst(segment);
@@ -466,7 +445,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
                 segment = descendingIterator.next();
 
-                if ((availableBlockIndex = segment.allocate()) >= 0) {
+                if ((indexOfAvaiableSlice = segment.allocateSlice()) >= 0) {
                     if (cnt > 3) {
                         descendingIterator.remove();
                         queue.addFirst(segment);
@@ -476,7 +455,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
                 }
             }
 
-            if (availableBlockIndex < 0) {
+            if (indexOfAvaiableSlice < 0) {
                 synchronized (_segmentBitSet) {
                     final int nextSegmentIndex = _segmentBitSet.nextClearBit(0);
 
@@ -488,42 +467,35 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
                     _segmentBitSet.set(nextSegmentIndex);
                     _segmentQueueMap.put(nextSegmentIndex, queue);
 
-                    segment.sizeOfBlock = blockSize;
+                    segment.sizeOfSlice = sliceSize;
                     queue.addFirst(segment);
 
-                    availableBlockIndex = segment.allocate();
+                    indexOfAvaiableSlice = segment.allocateSlice();
                 }
             }
         }
 
-        return new AvailableSegment(segment, availableBlockIndex);
+        return new Slice(indexOfAvaiableSlice, segment);
     }
 
     private void vacate() {
-        if (_activeVacationTaskCount.get() > 0) {
+        if (_activeVacationTaskCount.incrementAndGet() > 1) {
+            _activeVacationTaskCount.decrementAndGet();
             return;
         }
 
-        synchronized (_activeVacationTaskCount) {
-            if (_activeVacationTaskCount.get() > 0) {
-                return;
+        _asyncExecutor.execute(() -> {
+            try {
+                _pool.vacate();
+
+                evict();
+
+                // wait for a couple of seconds to avoid the second vacation which just arrives before the vacation is done.
+                N.sleep(3000);
+            } finally {
+                _activeVacationTaskCount.decrementAndGet();
             }
-
-            _activeVacationTaskCount.incrementAndGet();
-
-            _asyncExecutor.execute(() -> {
-                try {
-                    _pool.vacate();
-
-                    evict();
-
-                    // wait for a couple of seconds to avoid the second vacation which just arrives before the vacation is done.
-                    N.sleep(3000);
-                } finally {
-                    _activeVacationTaskCount.decrementAndGet();
-                }
-            });
-        }
+        });
     }
 
     @Override
@@ -581,12 +553,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     protected void evict() {
         for (int i = 0, len = _segments.length; i < len; i++) {
-            if (_segments[i].blockBitSet.isEmpty()) {
+            if (_segments[i].sliceBitSet.isEmpty()) {
                 final Deque<Segment> queue = _segmentQueueMap.get(i);
 
                 if (queue != null) {
                     synchronized (queue) {
-                        if (_segments[i].blockBitSet.isEmpty()) {
+                        if (_segments[i].sliceBitSet.isEmpty()) {
                             synchronized (_segmentBitSet) {
                                 queue.remove(_segments[i]);
 
@@ -600,10 +572,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         }
     }
 
-    private abstract static class Wrapper<T> extends AbstractPoolable {
-
+    abstract static class Wrapper<T> extends AbstractPoolable {
         final Type<T> type;
-
         final int size;
 
         Wrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size) {
@@ -616,29 +586,28 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         abstract T read();
     }
 
-    private static final class SWrapper<T> extends Wrapper<T> {
+    private static final class SliceWrapper<T> extends Wrapper<T> {
 
-        private Segment segment;
+        private Slice slice;
+        private final long sliceStartPtr;
 
-        private final long startPtr;
-
-        SWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final Segment segment, final long startPtr) {
+        SliceWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final Slice slice, final long sliceStartPtr) {
             super(type, liveTime, maxIdleTime, size);
 
-            this.segment = segment;
-            this.startPtr = startPtr;
+            this.slice = slice;
+            this.sliceStartPtr = sliceStartPtr;
         }
 
         @Override
         T read() {
             synchronized (this) {
-                if (segment == null) {
+                if (slice == null) {
                     return null;
                 }
 
                 final byte[] bytes = new byte[size];
 
-                copyFromMemory(startPtr, bytes, BYTE_ARRAY_BASE, size);
+                copyFromMemory(sliceStartPtr, bytes, BYTE_ARRAY_BASE, size);
 
                 // it's destroyed after read from memory. dirty data may be read.
                 if (type.isPrimitiveByteArray()) {
@@ -654,41 +623,40 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         @Override
         public void destroy() {
             synchronized (this) {
-                if (segment != null) {
-                    segment.release((int) ((startPtr - segment.startPtr) / segment.sizeOfBlock));
-                    segment = null;
+                if (slice != null) {
+                    slice.release();
+                    slice = null;
                 }
             }
         }
     }
 
-    private static final class MWrapper<T> extends Wrapper<T> {
+    private static final class SlicesWrapper<T> extends Wrapper<T> {
 
-        private List<SegmentEntry> segments;
+        private List<Slice> slices;
 
-        MWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final List<SegmentEntry> segments) {
+        SlicesWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final List<Slice> segments) {
             super(type, liveTime, maxIdleTime, size);
 
-            this.segments = segments;
+            slices = segments;
         }
 
         @Override
         T read() {
             synchronized (this) {
-                final List<SegmentEntry> localSegments = segments;
-
-                if (N.isEmpty(localSegments)) {
+                if (N.isEmpty(slices)) {
                     return null;
                 }
 
                 final byte[] bytes = new byte[size];
                 int size = this.size;
                 int destOffset = BYTE_ARRAY_BASE;
+                Segment segment = null;
 
-                for (final SegmentEntry entry : localSegments) {
-                    final long startPtr = entry.startPtr;
-                    final Segment segment = entry.segment;
-                    final int sizeToCopy = Math.min(size, segment.sizeOfBlock);
+                for (final Slice slice : slices) {
+                    segment = slice.segment;
+                    final long startPtr = segment.segmentStartPtr + slice.indexOfSlice * segment.sizeOfSlice;
+                    final int sizeToCopy = Math.min(size, segment.sizeOfSlice);
 
                     copyFromMemory(startPtr, bytes, destOffset, sizeToCopy);
 
@@ -704,11 +672,11 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
                 // it's destroyed after read from memory. dirty data may be read.
                 if (type.isPrimitiveByteArray()) {
-                    return segments == null ? null : (T) bytes;
+                    return slices == null ? null : (T) bytes;
                 } else if (type.isByteBuffer()) {
-                    return segments == null ? null : (T) ByteBufferType.valueOf(bytes);
+                    return slices == null ? null : (T) ByteBufferType.valueOf(bytes);
                 } else {
-                    return segments == null ? null : parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
+                    return slices == null ? null : parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
                 }
             }
         }
@@ -716,65 +684,67 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         @Override
         public void destroy() {
             synchronized (this) {
-                if (segments != null) {
-                    for (final SegmentEntry entry : segments) {
-                        final Segment segment = entry.segment;
-                        segment.release((int) ((entry.startPtr - segment.startPtr) / segment.sizeOfBlock));
+                if (slices != null) {
+                    for (final Slice slice : slices) {
+                        slice.release();
                     }
 
-                    segments = null;
+                    slices = null;
                 }
             }
         }
     }
 
-    private static final class Segment {
+    static final class Segment {
 
-        private final BitSet blockBitSet = new BitSet();
-
-        private final long startPtr;
-
-        private int sizeOfBlock;
+        private final BitSet sliceBitSet = new BitSet();
+        private final long segmentStartPtr;
+        // It can be reset/reused by set sizeOfSlice to: 64, 128, 256, 512, 1024, 2048, 4096, 8192....
+        private int sizeOfSlice;
 
         public Segment(final long segmentStartPtr) {
-            startPtr = segmentStartPtr;
+            this.segmentStartPtr = segmentStartPtr;
         }
 
-        public int allocate() {
-            synchronized (blockBitSet) {
-                final int result = blockBitSet.nextClearBit(0);
+        public int allocateSlice() {
+            synchronized (sliceBitSet) {
+                final int result = sliceBitSet.nextClearBit(0);
 
-                if (result >= SEGMENT_SIZE / sizeOfBlock) {
+                if (result >= SEGMENT_SIZE / sizeOfSlice) {
                     return -1;
                 }
 
-                blockBitSet.set(result);
+                sliceBitSet.set(result);
 
                 return result;
             }
         }
 
-        public void release(final int blockIndex) {
-            synchronized (blockBitSet) {
-                blockBitSet.clear(blockIndex);
+        public void releaseSlice(final int sliceIndex) {
+            synchronized (sliceBitSet) {
+                sliceBitSet.clear(sliceIndex);
             }
         }
-        //
-        //        public void clear() {
-        //            synchronized (blockBitSet) {
-        //                blockBitSet.clear();
-        //                sizeOfBlock = 0;
-        //            }
+
+        //    public void clear() {
+        //        synchronized (sliceBitSet) {
+        //            sliceBitSet.clear();
+        //            sizeOfSlice = 0;
         //        }
+        //    }
     }
 
-    private static final record AvailableSegment(Segment segment, int availableBlockIndex) {
+    //    static final record AvailableSegment(Segment segment, int availableBlockIndex) {
+    //
+    //        void release() {
+    //            segment.releaseSlice(availableBlockIndex);
+    //        }
+    //    }
+
+    static final record Slice(int indexOfSlice, Segment segment) {
 
         void release() {
-            segment.release(availableBlockIndex);
+            segment.releaseSlice(indexOfSlice);
         }
-    }
-
-    private static final record SegmentEntry(long startPtr, Segment segment) {
     }
 }
