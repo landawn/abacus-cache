@@ -30,17 +30,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.landawn.abacus.annotation.SuppressFBWarnings;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
-import com.landawn.abacus.parser.Parser;
-import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.pool.AbstractPoolable;
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
@@ -49,8 +45,6 @@ import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.ExceptionUtil;
-import com.landawn.abacus.util.IOUtil;
-import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Objectory;
 
@@ -64,44 +58,9 @@ import com.landawn.abacus.util.Objectory;
  * @param <V> the value type
  */
 @SuppressFBWarnings({ "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "JLM_JSR166_UTILCONCURRENT_MONITORENTER" })
-public class OffHeapCache25<K, V> extends AbstractCache<K, V> {
+public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     private static final Logger logger = LoggerFactory.getLogger(OffHeapCache25.class);
-    //    /**
-    //     * Sets all bytes in a given block of memory to a copy of another
-    //     * block.
-    //     *
-    //     * <p>This method determines each block's base address by means of two parameters,
-    //     * and so it provides (in effect) a <em>double-register</em> addressing mode,
-    //     * as discussed in {@link #getInt(Object,long)}.  When the object reference is null,
-    //     * the offset supplies an absolute base address.
-    //     *
-    //     * <p>The transfers are in coherent (atomic) units of a size determined
-    //     * by the address and length parameters.  If the effective addresses and
-    //     * length are all even modulo 8, the transfer takes place in 'long' units.
-    //     * If the effective addresses and length are (resp.) even modulo 4 or 2,
-    //     * the transfer takes place in units of 'int' or 'short'.
-    //     *
-    //     */
-    //    public native void copyMemory(Object srcBase, long srcOffset,
-    //                                  Object destBase, long destOffset,
-    //                                  long bytes);
-
-    private static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
-
-    private static final int SEGMENT_SIZE = 1024 * 1024; // (int) N.ONE_MB;
-
-    private static final int MIN_BLOCK_SIZE = 256;
-
-    private static final int MAX_BLOCK_SIZE = 8192; // 8K
-
-    private static final ScheduledExecutorService scheduledExecutor;
-
-    static {
-        final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(IOUtil.CPU_CORES);
-        // executor.setRemoveOnCancelPolicy(true);
-        scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
-    }
 
     private final long _capacityB; //NOSONAR
     private final Arena arena;
