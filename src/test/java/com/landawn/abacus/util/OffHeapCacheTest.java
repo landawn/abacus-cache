@@ -20,6 +20,8 @@ import com.landawn.abacus.type.Type;
 import com.landawn.abacus.type.TypeFactory;
 import com.landawn.abacus.util.Profiler.MultiLoopsStatistics;
 
+//--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
+
 /**
  *
  * @since 0.8
@@ -163,5 +165,6 @@ public class OffHeapCacheTest {
                 assertNull(cache.get(key).orElse(null));
             }
         }).printResult();
+
     }
 }

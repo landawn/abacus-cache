@@ -118,8 +118,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
 
-    private ScheduledFuture<?> scheduleFuture;
-
     private final long _capacityB; //NOSONAR
 
     private final long _startPtr; //NOSONAR
@@ -192,6 +190,8 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     private final AtomicInteger _activeVacationTaskCount = new AtomicInteger(); //NOSONAR
 
     private final KeyedObjectPool<K, Wrapper<V>> _pool; //NOSONAR
+
+    private ScheduledFuture<?> scheduleFuture;
 
     /**
      * The memory with the specified size of MB will be allocated at application start up.
