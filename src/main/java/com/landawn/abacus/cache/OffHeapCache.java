@@ -149,7 +149,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     private final Deque<Segment> _queue896 = new LinkedList<>(); //NOSONAR
 
     /** The queue 1024. */
-    private final Deque<Segment> _queue1024 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue1K = new LinkedList<>(); //NOSONAR
 
     /** The queue 1280. */
     private final Deque<Segment> _queue1280 = new LinkedList<>(); //NOSONAR
@@ -161,31 +161,31 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
     private final Deque<Segment> _queue1792 = new LinkedList<>(); //NOSONAR
 
     /** The queue 2048. */
-    private final Deque<Segment> _queue2048 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue2K = new LinkedList<>(); //NOSONAR
 
     /** The queue 2560. */
-    private final Deque<Segment> _queue2560 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue2_5K = new LinkedList<>(); //NOSONAR
 
     /** The queue 3072. */
-    private final Deque<Segment> _queue3072 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue3K = new LinkedList<>(); //NOSONAR
 
     /** The queue 3584. */
-    private final Deque<Segment> _queue3584 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue3_5K = new LinkedList<>(); //NOSONAR
 
     /** The queue 4096. */
-    private final Deque<Segment> _queue4096 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue4K = new LinkedList<>(); //NOSONAR
 
     /** The queue 5120. */
-    private final Deque<Segment> _queue5120 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue5K = new LinkedList<>(); //NOSONAR
 
     /** The queue 6144. */
-    private final Deque<Segment> _queue6144 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue6K = new LinkedList<>(); //NOSONAR
 
     /** The queue 7168. */
-    private final Deque<Segment> _queue7168 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue7K = new LinkedList<>(); //NOSONAR
 
     /** The queue 8192. */
-    private final Deque<Segment> _queue8192 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment> _queue8K = new LinkedList<>(); //NOSONAR
 
     private final AsyncExecutor _asyncExecutor = new AsyncExecutor(); //NOSONAR
 
@@ -225,7 +225,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
 
         _capacityB = sizeMB * (1024L * 1024L); // N.ONE_MB;
         // ByteBuffer.allocateDirect((int) capacity);
-        _startPtr = UNSAFE.allocateMemory(_capacityB);
+        _startPtr = allocateMemory(_capacityB);
         _segments = new Segment[(int) (_capacityB / SEGMENT_SIZE)];
 
         for (int i = 0, len = _segments.length; i < len; i++) {
@@ -262,6 +262,22 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }));
     }
 
+    private static long allocateMemory(final long capacityB) {
+        return UNSAFE.allocateMemory(capacityB);
+    }
+
+    private static void freeMemory(final long startPtr) {
+        UNSAFE.freeMemory(startPtr);
+    }
+
+    private static void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+        UNSAFE.copyMemory(null, startPtr, bytes, destOffset, len);
+    }
+
+    private static void copyToMemory(final byte[] srcBytes, final int srcOffset, final long startPtr, final int len) {
+        UNSAFE.copyMemory(srcBytes, srcOffset, null, startPtr, len);
+    }
+
     /**
      * Gets the t.
      *
@@ -275,26 +291,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         return w == null ? null : w.read();
     }
 
-    /**
-     * Copy from memory.
-     *
-     * @param startPtr
-     * @param bytes
-     * @param destOffset
-     * @param len
-     */
-    private static void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
-        UNSAFE.copyMemory(null, startPtr, bytes, destOffset, len);
-    }
-
-    /**
-     *
-     * @param k
-     * @param v
-     * @param liveTime
-     * @param maxIdleTime
-     * @return true, if successful
-     */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         final Type<V> type = N.typeOf(v.getClass());
@@ -436,7 +432,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             queue = _queue896;
             blockSize = 896;
         } else if (size <= 1024) {
-            queue = _queue1024;
+            queue = _queue1K;
             blockSize = 1024;
         } else if (size <= 1280) {
             queue = _queue1280;
@@ -448,31 +444,31 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             queue = _queue1792;
             blockSize = 1792;
         } else if (size <= 2048) {
-            queue = _queue2048;
+            queue = _queue2K;
             blockSize = 2048;
         } else if (size <= 2560) {
-            queue = _queue2560;
+            queue = _queue2_5K;
             blockSize = 2560;
         } else if (size <= 3072) {
-            queue = _queue3072;
+            queue = _queue3K;
             blockSize = 3072;
         } else if (size <= 3584) {
-            queue = _queue3584;
+            queue = _queue3_5K;
             blockSize = 3584;
         } else if (size <= 4096) {
-            queue = _queue4096;
+            queue = _queue4K;
             blockSize = 4096;
         } else if (size <= 5120) {
-            queue = _queue5120;
+            queue = _queue5K;
             blockSize = 5120;
         } else if (size <= 6144) {
-            queue = _queue6144;
+            queue = _queue6K;
             blockSize = 6144;
         } else if (size <= 7168) {
-            queue = _queue7168;
+            queue = _queue7K;
             blockSize = 7168;
         } else if (size <= 8192) {
-            queue = _queue8192;
+            queue = _queue8K;
             blockSize = 8192;
         } else {
             throw new RuntimeException("Unsupported object size: " + size);
@@ -532,10 +528,6 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         return new AvailableSegment(segment, availableBlockIndex);
-    }
-
-    private static void copyToMemory(final byte[] srcBytes, final int srcOffset, final long startPtr, final int len) {
-        UNSAFE.copyMemory(srcBytes, srcOffset, null, startPtr, len);
     }
 
     private void vacate() {
@@ -608,7 +600,7 @@ public class OffHeapCache<K, V> extends AbstractCache<K, V> {
             try {
                 _pool.close();
             } finally {
-                UNSAFE.freeMemory(_startPtr);
+                freeMemory(_startPtr);
             }
         }
     }
