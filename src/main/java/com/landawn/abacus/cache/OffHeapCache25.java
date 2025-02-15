@@ -212,7 +212,7 @@ public class OffHeapCache25<K, V> extends AbstractCache<K, V> {
         // ByteBuffer.allocateDirect((int) capacity);
 
         arena = Arena.ofShared();
-        buffer = arena.allocate(ValueLayout.JAVA_BYTE, _capacityB);
+        buffer = arena.allocate(_capacityB);
 
         _segments = new Segment[(int) (_capacityB / SEGMENT_SIZE)];
 

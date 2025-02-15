@@ -1,3 +1,7 @@
+## 1.2.9
+* Add `OffHeapCache25`
+* Improvements
+
 ## 1.2.8
 * Improvements
 
