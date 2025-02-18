@@ -11,6 +11,7 @@ import static org.junit.Assert.assertTrue;
 import java.nio.ByteBuffer;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.Test;
 
@@ -149,8 +150,9 @@ public class OffHeapCacheTest {
     public void test_perf_big_Object() {
 
         final String longFirstName = Strings.repeat(Strings.uuid(), 100);
+        final AtomicLong counter = new AtomicLong();
 
-        Profiler.run(16, 10000, 3, () -> {
+        Profiler.run(16, 100_000, 3, () -> {
             final Account account = createAccount(Account.class);
             account.setFirstName(longFirstName);
 
@@ -160,10 +162,18 @@ public class OffHeapCacheTest {
                 assertEquals(account.getId(), account2.getId());
             }
 
-            if (Math.abs(rand.nextInt()) % 3 == 0) {
+            if (counter.incrementAndGet() % 10 < 9) {
                 cache.remove(key);
                 assertNull(cache.get(key).orElse(null));
             }
+        }).printResult();
+
+        final Account account = createAccount(Account.class);
+        account.setFirstName(Strings.repeat(Strings.uuid(), 16));
+        cache.put(account.getEmailAddress(), account);
+
+        Profiler.run(16, 100_000, 3, () -> {
+            assertEquals(account, cache.get(account.getEmailAddress()).orElse(null));
         }).printResult();
 
     }

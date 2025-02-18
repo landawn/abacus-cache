@@ -240,6 +240,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
+
         final Type<V> type = N.typeOf(v.getClass());
         Wrapper<V> w = null;
 
@@ -266,6 +267,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             if (slice == null) {
                 Objectory.recycle(os);
+                _pool.remove(k);
 
                 vacate();
                 return false;
@@ -280,6 +282,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 isOK = true;
             } finally {
                 Objectory.recycle(os);
+                _pool.remove(k);
 
                 if (!isOK) {
                     slice.release();
@@ -302,6 +305,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                     if (slice == null) {
                         vacate();
+
                         return false;
                     }
 
@@ -332,6 +336,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 Objectory.recycle(os);
 
                 if (w == null) {
+                    _pool.remove(k);
+
                     for (final Slice slice : slices) {
                         slice.release();
                     }
