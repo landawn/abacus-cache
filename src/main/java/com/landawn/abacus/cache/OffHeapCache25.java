@@ -19,10 +19,18 @@ package com.landawn.abacus.cache;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 
 import com.landawn.abacus.annotation.SuppressFBWarnings;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
+import com.landawn.abacus.type.Type;
+import com.landawn.abacus.util.ByteArrayOutputStream;
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
@@ -45,32 +53,37 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * The memory with the specified size of MB will be allocated at application start up.
      *
-     * @param sizeMB
+     * @param sizeInMB
      */
-    public OffHeapCache25(final int sizeMB) {
-        this(sizeMB, 3000);
+    public OffHeapCache25(final int sizeInMB) {
+        this(sizeInMB, 3000);
     }
 
     /**
      * The memory with the specified size of MB will be allocated at application start up.
      *
-     * @param sizeMB
+     * @param sizeInMB
      * @param evictDelay unit is milliseconds
      */
-    public OffHeapCache25(final int sizeMB, final long evictDelay) {
-        this(sizeMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
+    public OffHeapCache25(final int sizeInMB, final long evictDelay) {
+        this(sizeInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
     /**
      * The memory with the specified size of MB will be allocated at application start up.
      *
-     * @param sizeMB
+     * @param sizeInMB
      * @param evictDelay unit is milliseconds
      * @param defaultLiveTime unit is milliseconds
      * @param defaultMaxIdleTime unit is milliseconds
      */
-    public OffHeapCache25(final int sizeMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
-        super(sizeMB, evictDelay, defaultLiveTime, defaultMaxIdleTime, 0, logger);
+    public OffHeapCache25(final int sizeInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
+        this(sizeInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime, null, null);
+    }
+
+    OffHeapCache25(final int sizeInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
+            final BiConsumer<? super V, ByteArrayOutputStream> serializer, final BiFunction<byte[], Type<V>, ? extends V> deserializer) {
+        super(sizeInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime, 0, serializer, deserializer, logger);
     }
 
     @Override
@@ -95,5 +108,25 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     @Override
     protected void copyToMemory(final byte[] srcBytes, final int srcOffset, final long startPtr, final int len) {
         MemorySegment.copy(srcBytes, srcOffset, buffer, ValueLayout.JAVA_BYTE, startPtr - _startPtr, len);
+    }
+
+    public static <K, V> Builder<K, V> builder() {
+        return new Builder<>();
+    }
+
+    @Data
+    @NoArgsConstructor
+    @Accessors(chain = true, fluent = true)
+    public static class Builder<K, V> {
+        private int sizeInMB;
+        private long evictDelay;
+        private long defaultLiveTime;
+        private long defaultMaxIdleTime;
+        private BiConsumer<? super V, ByteArrayOutputStream> serializer;
+        private BiFunction<byte[], Type<V>, ? extends V> deserializer;
+
+        public OffHeapCache25<K, V> build() {
+            return new OffHeapCache25<>(sizeInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime, serializer, deserializer);
+        }
     }
 }

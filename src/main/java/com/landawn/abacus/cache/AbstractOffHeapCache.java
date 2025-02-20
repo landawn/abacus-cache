@@ -32,6 +32,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.parser.Parser;
@@ -74,6 +76,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     //                                  long bytes);
 
     static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
+
+    static final BiConsumer<Object, ByteArrayOutputStream> SERIALIZER = (obj, output) -> {
+        parser.serialize(obj, output);
+    };
+
+    static final BiFunction<byte[], Type<?>, Object> DESERIALIZER = (bytes, type) -> {
+        // it's destroyed after read from memory. dirty data may be read.
+        if (type.isPrimitiveByteArray()) {
+            return bytes;
+        } else if (type.isByteBuffer()) {
+            return ByteBufferType.valueOf(bytes);
+        } else {
+            return parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
+        }
+    };
 
     static final int SEGMENT_SIZE = 1024 * 1024; // (int) N.ONE_MB;
 
@@ -173,16 +190,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private final KeyedObjectPool<K, Wrapper<V>> _pool; //NOSONAR
 
     private ScheduledFuture<?> scheduleFuture;
+    final BiConsumer<? super V, ByteArrayOutputStream> serializer;
+    final BiFunction<byte[], Type<V>, ? extends V> deserializer;
 
-    protected AbstractOffHeapCache(final int sizeMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime, final int arrayOffset,
-            final Logger logger) {
+    @SuppressWarnings("rawtypes")
+    protected AbstractOffHeapCache(final int sizeInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime, final int arrayOffset,
+            final BiConsumer<? super V, ByteArrayOutputStream> serializer, final BiFunction<byte[], Type<V>, ? extends V> deserializer, final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         this.logger = logger;
 
         _arrayOffset = arrayOffset;
 
-        _capacityB = sizeMB * (1024L * 1024L); // N.ONE_MB;
+        _capacityB = sizeInMB * (1024L * 1024L); // N.ONE_MB;
 
         // ByteBuffer.allocateDirect((int) capacity);
         _startPtr = allocate(_capacityB);
@@ -194,6 +214,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         _pool = PoolFactory.createKeyedObjectPool((int) (_capacityB / MIN_BLOCK_SIZE), evictDelay);
+
+        this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
+        this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
 
         if (evictDelay > 0) {
             final Runnable evictTask = () -> {
@@ -257,7 +280,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             size = bytes.length;
         } else {
             os = Objectory.createByteArrayOutputStream();
-            parser.serialize(v, os);
+            serializer.accept(v, os);
             bytes = os.array();
             size = os.size();
         }
@@ -292,7 +315,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             }
 
-            w = new SliceWrapper<>(type, liveTime, maxIdleTime, size, slice, sliceStartPtr);
+            w = new SliceWrapper(type, liveTime, maxIdleTime, size, slice, sliceStartPtr);
         } else {
             final List<Slice> slices = new ArrayList<>(size / MAX_BLOCK_SIZE + (size % MAX_BLOCK_SIZE == 0 ? 0 : 1));
             int copiedSize = 0;
@@ -331,7 +354,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     slices.add(slice);
                 }
 
-                w = new SlicesWrapper<>(type, liveTime, maxIdleTime, size, slices);
+                w = new SlicesWrapper(type, liveTime, maxIdleTime, size, slices);
             } finally {
                 Objectory.recycle(os);
 
@@ -633,12 +656,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         abstract T read();
     }
 
-    final class SliceWrapper<T> extends Wrapper<T> {
+    final class SliceWrapper extends Wrapper<V> {
 
         private Slice slice;
         private final long sliceStartPtr;
 
-        SliceWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final Slice slice, final long sliceStartPtr) {
+        SliceWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final Slice slice, final long sliceStartPtr) {
             super(type, liveTime, maxIdleTime, size);
 
             this.slice = slice;
@@ -646,7 +669,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         @Override
-        T read() {
+        V read() {
             synchronized (this) {
                 if (slice == null) {
                     return null;
@@ -656,13 +679,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 copyFromMemory(sliceStartPtr, bytes, _arrayOffset, size);
 
-                // it's destroyed after read from memory. dirty data may be read.
                 if (type.isPrimitiveByteArray()) {
-                    return (T) bytes;
+                    return (V) bytes;
                 } else if (type.isByteBuffer()) {
-                    return (T) ByteBufferType.valueOf(bytes);
+                    return (V) ByteBufferType.valueOf(bytes);
                 } else {
-                    return parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
+                    return deserializer.apply(bytes, type);
                 }
             }
         }
@@ -678,18 +700,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    final class SlicesWrapper<T> extends Wrapper<T> {
+    final class SlicesWrapper extends Wrapper<V> {
 
         private List<Slice> slices;
 
-        SlicesWrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final List<Slice> segments) {
+        SlicesWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slice> segments) {
             super(type, liveTime, maxIdleTime, size);
 
             slices = segments;
         }
 
         @Override
-        T read() {
+        V read() {
             synchronized (this) {
                 if (N.isEmpty(slices)) {
                     return null;
@@ -719,11 +741,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 // it's destroyed after read from memory. dirty data may be read.
                 if (type.isPrimitiveByteArray()) {
-                    return slices == null ? null : (T) bytes;
+                    return (V) bytes;
                 } else if (type.isByteBuffer()) {
-                    return slices == null ? null : (T) ByteBufferType.valueOf(bytes);
+                    return (V) ByteBufferType.valueOf(bytes);
                 } else {
-                    return slices == null ? null : parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
+                    return deserializer.apply(bytes, type);
                 }
             }
         }

@@ -7,13 +7,24 @@ package com.landawn.abacus.util;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 
+import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.ehcache.Cache;
+import org.ehcache.CacheManager;
+import org.ehcache.config.builders.CacheConfigurationBuilder;
+import org.ehcache.config.builders.CacheManagerBuilder;
+import org.ehcache.config.builders.ResourcePoolsBuilder;
+import org.ehcache.config.units.EntryUnit;
+import org.ehcache.config.units.MemoryUnit;
+import org.ehcache.spi.serialization.SerializerException;
 import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.cache.OffHeapCache25;
+import com.landawn.abacus.parser.Parser;
+import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.type.TypeFactory;
@@ -28,9 +39,9 @@ import com.landawn.abacus.type.TypeFactory;
  */
 public class OffHeapCache25Test {
     private static final Random rand = new Random();
-
-    private static final ByteBufferType bbType = (ByteBufferType) ((Type<?>) TypeFactory.getType(ByteBufferType.BYTE_BUFFER));
-    private static final OffHeapCache25<String, Account> cache = new OffHeapCache25<>(4096, 3000, 1000_000, 1000_000);
+    static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
+    static final ByteBufferType bbType = (ByteBufferType) ((Type<?>) TypeFactory.getType(ByteBufferType.BYTE_BUFFER));
+    static final OffHeapCache25<String, Account> cache = new OffHeapCache25<>(4096, 3000, 1000_000, 1000_000);
     // private static final OffHeapCache<String, String> ohcache = new OffHeapCache<>(1204, 3000, 1000_000, 1000_000);
 
     private static final long start = System.currentTimeMillis();
@@ -136,7 +147,7 @@ public class OffHeapCache25Test {
 
         final String longFirstName = Strings.repeat(Strings.uuid(), 100);
 
-        Profiler.run(16, 10000, 3, () -> {
+        Profiler.run(16, 90000, 1, "OffHeapCache25", () -> {
             final Account account = createAccount(Account.class);
             account.setFirstName(longFirstName);
 
@@ -153,4 +164,62 @@ public class OffHeapCache25Test {
         }).printResult();
 
     }
+
+    @Test
+    public void test_perf_vs_ehcache() {
+
+        final CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
+                .withCache("myCache",
+                        CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, Account.class,
+                                ResourcePoolsBuilder.newResourcePoolsBuilder()
+                                        .heap(1000000, EntryUnit.ENTRIES) // Heap storage
+                                        .offheap(4096, MemoryUnit.MB)))
+                .withSerializer(Account.class, KryoSerializer.class) // Off-heap storage
+                .build(true);
+
+        final Cache<String, Account> ehCache = cacheManager.getCache("myCache", String.class, Account.class);
+
+        final String longFirstName = Strings.repeat(Strings.uuid(), 100);
+
+        Profiler.run(16, 90000, 1, "ehcache", () -> {
+            final Account account = createAccount(Account.class);
+            account.setFirstName(longFirstName);
+
+            final String key = account.getEmailAddress();
+            ehCache.put(key, account);
+            final Account account2 = ehCache.get(key);
+            assertEquals(account.getGui(), account2.getGui());
+
+            if (Math.abs(rand.nextInt()) % 3 == 0) {
+                ehCache.remove(key);
+                assertNull(ehCache.get(key));
+            }
+        }).printResult();
+
+    }
+
+    public static class KryoSerializer implements org.ehcache.spi.serialization.Serializer<Account> {
+
+        public KryoSerializer(final ClassLoader classLoader) {
+            //
+        }
+
+        @Override
+        public ByteBuffer serialize(final Account object) throws SerializerException {
+            final ByteArrayOutputStream output = new ByteArrayOutputStream();
+            parser.serialize(object, output);
+            return ByteBuffer.wrap(output.array(), 0, output.size());
+        }
+
+        @Override
+        public Account read(final ByteBuffer binary) throws ClassNotFoundException, SerializerException {
+            return parser.deserialize(new ByteArrayInputStream(binary.array()), Account.class);
+        }
+
+        @Override
+        public boolean equals(final Account object, final ByteBuffer binary) throws ClassNotFoundException, SerializerException {
+            return false;
+        }
+    }
+
 }
