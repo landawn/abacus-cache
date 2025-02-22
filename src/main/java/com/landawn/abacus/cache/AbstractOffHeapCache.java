@@ -77,9 +77,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
 
-    static final BiConsumer<Object, ByteArrayOutputStream> SERIALIZER = (obj, output) -> {
-        parser.serialize(obj, output);
-    };
+    static final BiConsumer<Object, ByteArrayOutputStream> SERIALIZER = parser::serialize;
 
     static final BiFunction<byte[], Type<?>, Object> DESERIALIZER = (bytes, type) -> {
         // it's destroyed after read from memory. dirty data may be read.
@@ -488,7 +486,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         Segment segment = null;
-        int indexOfAvaiableSlice = -1;
+        int indexOfAvailableSlice = -1;
 
         synchronized (queue) {
             final Iterator<Segment> iterator = queue.iterator();
@@ -499,7 +497,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 cnt++;
                 segment = iterator.next();
 
-                if ((indexOfAvaiableSlice = segment.allocateSlice()) >= 0) {
+                if ((indexOfAvailableSlice = segment.allocateSlice()) >= 0) {
                     if (cnt > 3) {
                         iterator.remove();
                         queue.addFirst(segment);
@@ -510,7 +508,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 segment = descendingIterator.next();
 
-                if ((indexOfAvaiableSlice = segment.allocateSlice()) >= 0) {
+                if ((indexOfAvailableSlice = segment.allocateSlice()) >= 0) {
                     if (cnt > 3) {
                         descendingIterator.remove();
                         queue.addFirst(segment);
@@ -520,7 +518,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             }
 
-            if (indexOfAvaiableSlice < 0) {
+            if (indexOfAvailableSlice < 0) {
                 synchronized (_segmentBitSet) {
                     final int nextSegmentIndex = _segmentBitSet.nextClearBit(0);
 
@@ -535,12 +533,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     segment.sizeOfSlice = sliceSize;
                     queue.addFirst(segment);
 
-                    indexOfAvaiableSlice = segment.allocateSlice();
+                    indexOfAvailableSlice = segment.allocateSlice();
                 }
             }
         }
 
-        return new Slice(indexOfAvaiableSlice, segment);
+        return new Slice(indexOfAvailableSlice, segment);
     }
 
     private void vacate() {
@@ -669,7 +667,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    static final record Slice(int indexOfSlice, Segment segment) {
+    record Slice(int indexOfSlice, Segment segment) {
 
         void release() {
             segment.releaseSlice(indexOfSlice);
@@ -758,7 +756,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 for (final Slice slice : slices) {
                     segment = slice.segment;
-                    final long startPtr = segment.segmentStartPtr + slice.indexOfSlice * segment.sizeOfSlice;
+                    final long startPtr = segment.segmentStartPtr + (long) slice.indexOfSlice * segment.sizeOfSlice;
                     final int sizeToCopy = Math.min(size, segment.sizeOfSlice);
 
                     copyFromMemory(startPtr, bytes, destOffset, sizeToCopy);
