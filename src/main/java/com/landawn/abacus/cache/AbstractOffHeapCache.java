@@ -94,9 +94,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     static final int SEGMENT_SIZE = 1024 * 1024; // (int) N.ONE_MB;
 
-    static final int MIN_BLOCK_SIZE = 256;
+    static final int MIN_BLOCK_SIZE = 64;
 
-    static final int MAX_BLOCK_SIZE = 8192; // 8K
+    static final int DEFAULT_MAX_BLOCK_SIZE = 8192; // 8K
 
     static final ScheduledExecutorService scheduledExecutor;
 
@@ -108,11 +108,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     final Logger logger;
 
-    final long _capacityB; //NOSONAR
+    final long _capacityInBytes; //NOSONAR
 
     final long _startPtr; //NOSONAR
 
     final int _arrayOffset;
+
+    final int _maxBlockSize;
 
     private final Segment[] _segments; //NOSONAR
 
@@ -120,68 +122,76 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     private final Map<Integer, Deque<Segment>> _segmentQueueMap = new ConcurrentHashMap<>(); //NOSONAR
 
-    /** The queue 64. */
-    private final Deque<Segment> _queue64 = new LinkedList<>(); //NOSONAR
+    private final Deque<Segment>[] _segmentQueues; //  = new Deque[_maxBlockSize / MIN_BLOCK_SIZE]; //
 
-    /** The queue 128. */
-    private final Deque<Segment> _queue128 = new LinkedList<>(); //NOSONAR
+    //    {
+    //        for (int i = 0, len = _segmentQueues.length; i < len; i++) {
+    //            _segmentQueues[i] = new LinkedList<>();
+    //        }
+    //    }
 
-    /** The queue 256. */
-    private final Deque<Segment> _queue256 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 384. */
-    private final Deque<Segment> _queue384 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 512. */
-    private final Deque<Segment> _queue512 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 640. */
-    private final Deque<Segment> _queue640 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 768. */
-    private final Deque<Segment> _queue768 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 896. */
-    private final Deque<Segment> _queue896 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 1024. */
-    private final Deque<Segment> _queue1K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 1280. */
-    private final Deque<Segment> _queue1280 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 1536. */
-    private final Deque<Segment> _queue1536 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 1792. */
-    private final Deque<Segment> _queue1792 = new LinkedList<>(); //NOSONAR
-
-    /** The queue 2048. */
-    private final Deque<Segment> _queue2K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 2560. */
-    private final Deque<Segment> _queue2_5K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 3072. */
-    private final Deque<Segment> _queue3K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 3584. */
-    private final Deque<Segment> _queue3_5K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 4096. */
-    private final Deque<Segment> _queue4K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 5120. */
-    private final Deque<Segment> _queue5K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 6144. */
-    private final Deque<Segment> _queue6K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 7168. */
-    private final Deque<Segment> _queue7K = new LinkedList<>(); //NOSONAR
-
-    /** The queue 8192. */
-    private final Deque<Segment> _queue8K = new LinkedList<>(); //NOSONAR
+    //    /** The queue 64. */
+    //    private final Deque<Segment> _queue64 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 128. */
+    //    private final Deque<Segment> _queue128 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 256. */
+    //    private final Deque<Segment> _queue256 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 384. */
+    //    private final Deque<Segment> _queue384 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 512. */
+    //    private final Deque<Segment> _queue512 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 640. */
+    //    private final Deque<Segment> _queue640 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 768. */
+    //    private final Deque<Segment> _queue768 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 896. */
+    //    private final Deque<Segment> _queue896 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 1024. */
+    //    private final Deque<Segment> _queue1K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 1280. */
+    //    private final Deque<Segment> _queue1280 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 1536. */
+    //    private final Deque<Segment> _queue1536 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 1792. */
+    //    private final Deque<Segment> _queue1792 = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 2048. */
+    //    private final Deque<Segment> _queue2K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 2560. */
+    //    private final Deque<Segment> _queue2_5K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 3072. */
+    //    private final Deque<Segment> _queue3K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 3584. */
+    //    private final Deque<Segment> _queue3_5K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 4096. */
+    //    private final Deque<Segment> _queue4K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 5120. */
+    //    private final Deque<Segment> _queue5K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 6144. */
+    //    private final Deque<Segment> _queue6K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 7168. */
+    //    private final Deque<Segment> _queue7K = new LinkedList<>(); //NOSONAR
+    //
+    //    /** The queue 8192. */
+    //    private final Deque<Segment> _queue8K = new LinkedList<>(); //NOSONAR
 
     private final AsyncExecutor _asyncExecutor = new AsyncExecutor(); //NOSONAR
 
@@ -194,26 +204,32 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final BiFunction<byte[], Type<V>, ? extends V> deserializer;
 
     @SuppressWarnings("rawtypes")
-    protected AbstractOffHeapCache(final int sizeInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime, final int arrayOffset,
-            final BiConsumer<? super V, ByteArrayOutputStream> serializer, final BiFunction<byte[], Type<V>, ? extends V> deserializer, final Logger logger) {
+    protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
+            final long defaultMaxIdleTime, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
+            final BiFunction<byte[], Type<V>, ? extends V> deserializer, final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
+
+        N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "The Maximum Block size can't be: {}. It must be >= 1024 and <= {}", maxBlockSize,
+                SEGMENT_SIZE);
 
         this.logger = logger;
 
         _arrayOffset = arrayOffset;
 
-        _capacityB = sizeInMB * (1024L * 1024L); // N.ONE_MB;
+        _capacityInBytes = capacityInMB * (1024L * 1024L); // N.ONE_MB;
+        _maxBlockSize = maxBlockSize % MIN_BLOCK_SIZE == 0 ? maxBlockSize : (maxBlockSize / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
+        _segmentQueues = new Deque[_maxBlockSize / MIN_BLOCK_SIZE]; //
 
         // ByteBuffer.allocateDirect((int) capacity);
-        _startPtr = allocate(_capacityB);
+        _startPtr = allocate(_capacityInBytes);
 
-        _segments = new Segment[(int) (_capacityB / SEGMENT_SIZE)];
+        _segments = new Segment[(int) (_capacityInBytes / SEGMENT_SIZE)];
 
         for (int i = 0, len = _segments.length; i < len; i++) {
             _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE);
         }
 
-        _pool = PoolFactory.createKeyedObjectPool((int) (_capacityB / MIN_BLOCK_SIZE), evictDelay);
+        _pool = PoolFactory.createKeyedObjectPool((int) (_capacityInBytes / MIN_BLOCK_SIZE), evictDelay);
 
         this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
         this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
@@ -285,7 +301,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             size = os.size();
         }
 
-        if (size <= MAX_BLOCK_SIZE) {
+        if (size <= _maxBlockSize) {
             final Slice slice = getAvailableSlice(size);
 
             if (slice == null) {
@@ -317,13 +333,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             w = new SliceWrapper(type, liveTime, maxIdleTime, size, slice, sliceStartPtr);
         } else {
-            final List<Slice> slices = new ArrayList<>(size / MAX_BLOCK_SIZE + (size % MAX_BLOCK_SIZE == 0 ? 0 : 1));
+            final List<Slice> slices = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
             int copiedSize = 0;
             int srcOffset = _arrayOffset;
 
             try {
                 while (copiedSize < size) {
-                    final int sizeToCopy = Math.min(size - copiedSize, MAX_BLOCK_SIZE);
+                    final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
                     final Slice slice = getAvailableSlice(sizeToCopy);
 
                     if (slice == null) {
@@ -383,74 +399,92 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     // TODO: performance tuning for concurrent put.
     private Slice getAvailableSlice(final int size) {
-        Deque<Segment> queue = null;
         int sliceSize = 0;
 
-        if (size <= 64) {
-            queue = _queue64;
-            sliceSize = 64;
-        } else if (size <= 128) {
-            queue = _queue128;
-            sliceSize = 128;
-        } else if (size <= 256) {
-            queue = _queue256;
-            sliceSize = 256;
-        } else if (size <= 384) {
-            queue = _queue384;
-            sliceSize = 384;
-        } else if (size <= 512) {
-            queue = _queue512;
-            sliceSize = 512;
-        } else if (size <= 640) {
-            queue = _queue640;
-            sliceSize = 640;
-        } else if (size <= 768) {
-            queue = _queue768;
-            sliceSize = 768;
-        } else if (size <= 896) {
-            queue = _queue896;
-            sliceSize = 896;
-        } else if (size <= 1024) {
-            queue = _queue1K;
-            sliceSize = 1024;
-        } else if (size <= 1280) {
-            queue = _queue1280;
-            sliceSize = 1280;
-        } else if (size <= 1536) {
-            queue = _queue1536;
-            sliceSize = 1536;
-        } else if (size <= 1792) {
-            queue = _queue1792;
-            sliceSize = 1792;
-        } else if (size <= 2048) {
-            queue = _queue2K;
-            sliceSize = 2048;
-        } else if (size <= 2560) {
-            queue = _queue2_5K;
-            sliceSize = 2560;
-        } else if (size <= 3072) {
-            queue = _queue3K;
-            sliceSize = 3072;
-        } else if (size <= 3584) {
-            queue = _queue3_5K;
-            sliceSize = 3584;
-        } else if (size <= 4096) {
-            queue = _queue4K;
-            sliceSize = 4096;
-        } else if (size <= 5120) {
-            queue = _queue5K;
-            sliceSize = 5120;
-        } else if (size <= 6144) {
-            queue = _queue6K;
-            sliceSize = 6144;
-        } else if (size <= 7168) {
-            queue = _queue7K;
-            sliceSize = 7168;
-        } else if (size <= 8192) {
-            queue = _queue8K;
-            sliceSize = 8192;
+        //        if (size <= 64) {
+        //            queue = _queue64;
+        //            sliceSize = 64;
+        //        } else if (size <= 128) {
+        //            queue = _queue128;
+        //            sliceSize = 128;
+        //        } else if (size <= 256) {
+        //            queue = _queue256;
+        //            sliceSize = 256;
+        //        } else if (size <= 384) {
+        //            queue = _queue384;
+        //            sliceSize = 384;
+        //        } else if (size <= 512) {
+        //            queue = _queue512;
+        //            sliceSize = 512;
+        //        } else if (size <= 640) {
+        //            queue = _queue640;
+        //            sliceSize = 640;
+        //        } else if (size <= 768) {
+        //            queue = _queue768;
+        //            sliceSize = 768;
+        //        } else if (size <= 896) {
+        //            queue = _queue896;
+        //            sliceSize = 896;
+        //        } else if (size <= 1024) {
+        //            queue = _queue1K;
+        //            sliceSize = 1024;
+        //        } else if (size <= 1280) {
+        //            queue = _queue1280;
+        //            sliceSize = 1280;
+        //        } else if (size <= 1536) {
+        //            queue = _queue1536;
+        //            sliceSize = 1536;
+        //        } else if (size <= 1792) {
+        //            queue = _queue1792;
+        //            sliceSize = 1792;
+        //        } else if (size <= 2048) {
+        //            queue = _queue2K;
+        //            sliceSize = 2048;
+        //        } else if (size <= 2560) {
+        //            queue = _queue2_5K;
+        //            sliceSize = 2560;
+        //        } else if (size <= 3072) {
+        //            queue = _queue3K;
+        //            sliceSize = 3072;
+        //        } else if (size <= 3584) {
+        //            queue = _queue3_5K;
+        //            sliceSize = 3584;
+        //        } else if (size <= 4096) {
+        //            queue = _queue4K;
+        //            sliceSize = 4096;
+        //        } else if (size <= 5120) {
+        //            queue = _queue5K;
+        //            sliceSize = 5120;
+        //        } else if (size <= 6144) {
+        //            queue = _queue6K;
+        //            sliceSize = 6144;
+        //        } else if (size <= 7168) {
+        //            queue = _queue7K;
+        //            sliceSize = 7168;
+        //        } else if (size <= 8192) {
+        //            queue = _queue8K;
+        //            sliceSize = 8192;
+        //        } else {
+        //            throw new RuntimeException("Unsupported object size: " + size);
+        //        }
+
+        if (size >= _maxBlockSize) {
+            sliceSize = _maxBlockSize;
         } else {
-            throw new RuntimeException("Unsupported object size: " + size);
+            sliceSize = size % MIN_BLOCK_SIZE == 0 ? size : (size / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
+        }
+
+        final int idx = sliceSize / MIN_BLOCK_SIZE - 1;
+        Deque<Segment> queue = _segmentQueues[idx];
+
+        if (queue == null) {
+            synchronized (_segmentQueues) {
+                queue = _segmentQueues[idx];
+
+                if (queue == null) {
+                    queue = (_segmentQueues[idx] = new LinkedList<>());
+                }
+            }
         }
 
         Segment segment = null;

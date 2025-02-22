@@ -64,37 +64,37 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * The memory with the specified size of MB will be allocated at application start up.
      *
-     * @param sizeInMB
+     * @param capacityInMB
      */
-    public OffHeapCache(final int sizeInMB) {
-        this(sizeInMB, 3000);
+    public OffHeapCache(final int capacityInMB) {
+        this(capacityInMB, 3000);
     }
 
     /**
      * The memory with the specified size of MB will be allocated at application start up.
      *
-     * @param sizeInMB
+     * @param capacityInMB
      * @param evictDelay unit is milliseconds
      */
-    public OffHeapCache(final int sizeInMB, final long evictDelay) {
-        this(sizeInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
+    public OffHeapCache(final int capacityInMB, final long evictDelay) {
+        this(capacityInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
     /**
      * The memory with the specified size of MB will be allocated at application start up.
      *
-     * @param sizeInMB
+     * @param capacityInMB
      * @param evictDelay unit is milliseconds
      * @param defaultLiveTime unit is milliseconds
      * @param defaultMaxIdleTime unit is milliseconds
      */
-    public OffHeapCache(final int sizeInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
-        this(sizeInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime, null, null);
+    public OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
+        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, null, null);
     }
 
-    OffHeapCache(final int sizeInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
+    OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final BiConsumer<? super V, ByteArrayOutputStream> serializer, final BiFunction<byte[], Type<V>, ? extends V> deserializer) {
-        super(sizeInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime, BYTE_ARRAY_BASE, serializer, deserializer, logger);
+        super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, BYTE_ARRAY_BASE, serializer, deserializer, logger);
     }
 
     @SuppressWarnings("removal")
@@ -130,15 +130,17 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     @NoArgsConstructor
     @Accessors(chain = true, fluent = true)
     public static class Builder<K, V> {
-        private int sizeInMB;
-        private long evictDelay;
-        private long defaultLiveTime;
-        private long defaultMaxIdleTime;
+        private int capacityInMB;
+        private int maxBlockSizeInBytes = DEFAULT_MAX_BLOCK_SIZE;
+        private long evictDelay; // unit is milliseconds
+        private long defaultLiveTime; // unit is milliseconds
+        private long defaultMaxIdleTime; // unit is milliseconds
         private BiConsumer<? super V, ByteArrayOutputStream> serializer;
         private BiFunction<byte[], Type<V>, ? extends V> deserializer;
 
         public OffHeapCache<K, V> build() {
-            return new OffHeapCache<>(sizeInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime, serializer, deserializer);
+            return new OffHeapCache<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,
+                    defaultMaxIdleTime, serializer, deserializer);
         }
     }
 

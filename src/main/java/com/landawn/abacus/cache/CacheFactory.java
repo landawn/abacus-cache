@@ -56,9 +56,8 @@ public final class CacheFactory {
      * @param defaultMaxIdleTime default value is 30 minutes
      * @return
      */
-    public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime,
-            final long defaultMaxIdleTime) {
-        return new LocalCache<>(capacity, evictDelay, defaultLiveTime, defaultMaxIdleTime);
+    public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long maxIdleTime) {
+        return new LocalCache<>(capacity, evictDelay, defaultLiveTime, maxIdleTime);
     }
 
     /**
