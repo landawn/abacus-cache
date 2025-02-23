@@ -300,9 +300,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         if (size <= _maxBlockSize) {
-            final Slice slice = getAvailableSlice(size);
+            final Slot slot = getAvailableSlot(size);
 
-            if (slice == null) {
+            if (slot == null) {
                 Objectory.recycle(os);
                 _pool.remove(k);
 
@@ -310,11 +310,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 return false;
             }
 
-            final long sliceStartPtr = slice.segment.segmentStartPtr + (long) slice.indexOfSlice * slice.segment.sizeOfSlice;
+            final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
             boolean isOK = false;
 
             try {
-                copyToMemory(bytes, _arrayOffset, sliceStartPtr, size);
+                copyToMemory(bytes, _arrayOffset, slotStartPtr, size);
 
                 isOK = true;
             } finally {
@@ -322,31 +322,31 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 _pool.remove(k);
 
                 if (!isOK) {
-                    slice.release();
+                    slot.release();
 
                     //noinspection ReturnInsideFinallyBlock
                     return false; //NOSONAR
                 }
             }
 
-            w = new SliceWrapper(type, liveTime, maxIdleTime, size, slice, sliceStartPtr);
+            w = new SlotWrapper(type, liveTime, maxIdleTime, size, slot, slotStartPtr);
         } else {
-            final List<Slice> slices = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
+            final List<Slot> slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
             int copiedSize = 0;
             int srcOffset = _arrayOffset;
 
             try {
                 while (copiedSize < size) {
                     final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
-                    final Slice slice = getAvailableSlice(sizeToCopy);
+                    final Slot slot = getAvailableSlot(sizeToCopy);
 
-                    if (slice == null) {
+                    if (slot == null) {
                         vacate();
 
                         return false;
                     }
 
-                    final long startPtr = slice.segment.segmentStartPtr + (long) slice.indexOfSlice * slice.segment.sizeOfSlice;
+                    final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
                     boolean isOK = false;
 
                     try {
@@ -358,25 +358,25 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         isOK = true;
                     } finally {
                         if (!isOK) {
-                            slice.release();
+                            slot.release();
 
                             //noinspection ReturnInsideFinallyBlock
                             return false; //NOSONAR
                         }
                     }
 
-                    slices.add(slice);
+                    slots.add(slot);
                 }
 
-                w = new SlicesWrapper(type, liveTime, maxIdleTime, size, slices);
+                w = new MultiSlotsWrapper(type, liveTime, maxIdleTime, size, slots);
             } finally {
                 Objectory.recycle(os);
 
                 if (w == null) {
                     _pool.remove(k);
 
-                    for (final Slice slice : slices) {
-                        slice.release();
+                    for (final Slot slot : slots) {
+                        slot.release();
                     }
                 }
             }
@@ -396,83 +396,83 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     // TODO: performance tuning for concurrent put.
-    private Slice getAvailableSlice(final int size) {
-        int sliceSize = 0;
+    private Slot getAvailableSlot(final int size) {
+        int slotSize = 0;
 
         //        if (size <= 64) {
         //            queue = _queue64;
-        //            sliceSize = 64;
+        //            slotSize = 64;
         //        } else if (size <= 128) {
         //            queue = _queue128;
-        //            sliceSize = 128;
+        //            slotSize = 128;
         //        } else if (size <= 256) {
         //            queue = _queue256;
-        //            sliceSize = 256;
+        //            slotSize = 256;
         //        } else if (size <= 384) {
         //            queue = _queue384;
-        //            sliceSize = 384;
+        //            slotSize = 384;
         //        } else if (size <= 512) {
         //            queue = _queue512;
-        //            sliceSize = 512;
+        //            slotSize = 512;
         //        } else if (size <= 640) {
         //            queue = _queue640;
-        //            sliceSize = 640;
+        //            slotSize = 640;
         //        } else if (size <= 768) {
         //            queue = _queue768;
-        //            sliceSize = 768;
+        //            slotSize = 768;
         //        } else if (size <= 896) {
         //            queue = _queue896;
-        //            sliceSize = 896;
+        //            slotSize = 896;
         //        } else if (size <= 1024) {
         //            queue = _queue1K;
-        //            sliceSize = 1024;
+        //            slotSize = 1024;
         //        } else if (size <= 1280) {
         //            queue = _queue1280;
-        //            sliceSize = 1280;
+        //            slotSize = 1280;
         //        } else if (size <= 1536) {
         //            queue = _queue1536;
-        //            sliceSize = 1536;
+        //            slotSize = 1536;
         //        } else if (size <= 1792) {
         //            queue = _queue1792;
-        //            sliceSize = 1792;
+        //            slotSize = 1792;
         //        } else if (size <= 2048) {
         //            queue = _queue2K;
-        //            sliceSize = 2048;
+        //            slotSize = 2048;
         //        } else if (size <= 2560) {
         //            queue = _queue2_5K;
-        //            sliceSize = 2560;
+        //            slotSize = 2560;
         //        } else if (size <= 3072) {
         //            queue = _queue3K;
-        //            sliceSize = 3072;
+        //            slotSize = 3072;
         //        } else if (size <= 3584) {
         //            queue = _queue3_5K;
-        //            sliceSize = 3584;
+        //            slotSize = 3584;
         //        } else if (size <= 4096) {
         //            queue = _queue4K;
-        //            sliceSize = 4096;
+        //            slotSize = 4096;
         //        } else if (size <= 5120) {
         //            queue = _queue5K;
-        //            sliceSize = 5120;
+        //            slotSize = 5120;
         //        } else if (size <= 6144) {
         //            queue = _queue6K;
-        //            sliceSize = 6144;
+        //            slotSize = 6144;
         //        } else if (size <= 7168) {
         //            queue = _queue7K;
-        //            sliceSize = 7168;
+        //            slotSize = 7168;
         //        } else if (size <= 8192) {
         //            queue = _queue8K;
-        //            sliceSize = 8192;
+        //            slotSize = 8192;
         //        } else {
         //            throw new RuntimeException("Unsupported object size: " + size);
         //        }
 
         if (size >= _maxBlockSize) {
-            sliceSize = _maxBlockSize;
+            slotSize = _maxBlockSize;
         } else {
-            sliceSize = size % MIN_BLOCK_SIZE == 0 ? size : (size / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
+            slotSize = size % MIN_BLOCK_SIZE == 0 ? size : (size / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
         }
 
-        final int idx = sliceSize / MIN_BLOCK_SIZE - 1;
+        final int idx = slotSize / MIN_BLOCK_SIZE - 1;
         Deque<Segment> queue = _segmentQueues[idx];
 
         if (queue == null) {
@@ -486,7 +486,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         Segment segment = null;
-        int indexOfAvailableSlice = -1;
+        int indexOfAvailableSlot = -1;
 
         synchronized (queue) {
             final Iterator<Segment> iterator = queue.iterator();
@@ -497,7 +497,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 cnt++;
                 segment = iterator.next();
 
-                if ((indexOfAvailableSlice = segment.allocateSlice()) >= 0) {
+                if ((indexOfAvailableSlot = segment.allocateSlot()) >= 0) {
                     if (cnt > 3) {
                         iterator.remove();
                         queue.addFirst(segment);
@@ -508,7 +508,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 segment = descendingIterator.next();
 
-                if ((indexOfAvailableSlice = segment.allocateSlice()) >= 0) {
+                if ((indexOfAvailableSlot = segment.allocateSlot()) >= 0) {
                     if (cnt > 3) {
                         descendingIterator.remove();
                         queue.addFirst(segment);
@@ -518,7 +518,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             }
 
-            if (indexOfAvailableSlice < 0) {
+            if (indexOfAvailableSlot < 0) {
                 synchronized (_segmentBitSet) {
                     final int nextSegmentIndex = _segmentBitSet.nextClearBit(0);
 
@@ -530,15 +530,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     _segmentBitSet.set(nextSegmentIndex);
                     _segmentQueueMap.put(nextSegmentIndex, queue);
 
-                    segment.sizeOfSlice = sliceSize;
+                    segment.sizeOfSlot = slotSize;
                     queue.addFirst(segment);
 
-                    indexOfAvailableSlice = segment.allocateSlice();
+                    indexOfAvailableSlot = segment.allocateSlot();
                 }
             }
         }
 
-        return new Slice(indexOfAvailableSlice, segment);
+        return new Slot(indexOfAvailableSlot, segment);
     }
 
     private void vacate() {
@@ -616,12 +616,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     protected void evict() {
         for (int i = 0, len = _segments.length; i < len; i++) {
-            if (_segments[i].sliceBitSet.isEmpty()) {
+            if (_segments[i].slotBitSet.isEmpty()) {
                 final Deque<Segment> queue = _segmentQueueMap.get(i);
 
                 if (queue != null) {
                     synchronized (queue) {
-                        if (_segments[i].sliceBitSet.isEmpty()) {
+                        if (_segments[i].slotBitSet.isEmpty()) {
                             synchronized (_segmentBitSet) {
                                 queue.remove(_segments[i]);
 
@@ -637,40 +637,40 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     static final class Segment {
 
-        private final BitSet sliceBitSet = new BitSet();
+        private final BitSet slotBitSet = new BitSet();
         private final long segmentStartPtr;
-        // It can be reset/reused by set sizeOfSlice to: 64, 128, 256, 512, 1024, 2048, 4096, 8192....
-        private int sizeOfSlice;
+        // It can be reset/reused by set sizeOfSlot to: 64, 128, 256, 512, 1024, 2048, 4096, 8192....
+        private int sizeOfSlot;
 
         public Segment(final long segmentStartPtr) {
             this.segmentStartPtr = segmentStartPtr;
         }
 
-        public int allocateSlice() {
-            synchronized (sliceBitSet) {
-                final int result = sliceBitSet.nextClearBit(0);
+        public int allocateSlot() {
+            synchronized (slotBitSet) {
+                final int result = slotBitSet.nextClearBit(0);
 
-                if (result >= SEGMENT_SIZE / sizeOfSlice) {
+                if (result >= SEGMENT_SIZE / sizeOfSlot) {
                     return -1;
                 }
 
-                sliceBitSet.set(result);
+                slotBitSet.set(result);
 
                 return result;
             }
         }
 
-        public void releaseSlice(final int sliceIndex) {
-            synchronized (sliceBitSet) {
-                sliceBitSet.clear(sliceIndex);
+        public void releaseSlot(final int slotIndex) {
+            synchronized (slotBitSet) {
+                slotBitSet.clear(slotIndex);
             }
         }
     }
 
-    record Slice(int indexOfSlice, Segment segment) {
+    record Slot(int indexOfSlot, Segment segment) {
 
         void release() {
-            segment.releaseSlice(indexOfSlice);
+            segment.releaseSlot(indexOfSlot);
         }
     }
 
@@ -688,28 +688,28 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         abstract T read();
     }
 
-    final class SliceWrapper extends Wrapper<V> {
+    final class SlotWrapper extends Wrapper<V> {
 
-        private Slice slice;
-        private final long sliceStartPtr;
+        private Slot slot;
+        private final long slotStartPtr;
 
-        SliceWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final Slice slice, final long sliceStartPtr) {
+        SlotWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final Slot slot, final long slotStartPtr) {
             super(type, liveTime, maxIdleTime, size);
 
-            this.slice = slice;
-            this.sliceStartPtr = sliceStartPtr;
+            this.slot = slot;
+            this.slotStartPtr = slotStartPtr;
         }
 
         @Override
         V read() {
             synchronized (this) {
-                if (slice == null) {
+                if (slot == null) {
                     return null;
                 }
 
                 final byte[] bytes = new byte[size];
 
-                copyFromMemory(sliceStartPtr, bytes, _arrayOffset, size);
+                copyFromMemory(slotStartPtr, bytes, _arrayOffset, size);
 
                 if (type.isPrimitiveByteArray()) {
                     return (V) bytes;
@@ -724,28 +724,28 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         public void destroy() {
             synchronized (this) {
-                if (slice != null) {
-                    slice.release();
-                    slice = null;
+                if (slot != null) {
+                    slot.release();
+                    slot = null;
                 }
             }
         }
     }
 
-    final class SlicesWrapper extends Wrapper<V> {
+    final class MultiSlotsWrapper extends Wrapper<V> {
 
-        private List<Slice> slices;
+        private List<Slot> slots;
 
-        SlicesWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slice> segments) {
+        MultiSlotsWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slot> segments) {
             super(type, liveTime, maxIdleTime, size);
 
-            slices = segments;
+            slots = segments;
         }
 
         @Override
         V read() {
             synchronized (this) {
-                if (N.isEmpty(slices)) {
+                if (N.isEmpty(slots)) {
                     return null;
                 }
 
@@ -754,10 +754,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 int destOffset = _arrayOffset;
                 Segment segment = null;
 
-                for (final Slice slice : slices) {
-                    segment = slice.segment;
-                    final long startPtr = segment.segmentStartPtr + (long) slice.indexOfSlice * segment.sizeOfSlice;
-                    final int sizeToCopy = Math.min(size, segment.sizeOfSlice);
+                for (final Slot slot : slots) {
+                    segment = slot.segment;
+                    final long startPtr = segment.segmentStartPtr + (long) slot.indexOfSlot * segment.sizeOfSlot;
+                    final int sizeToCopy = Math.min(size, segment.sizeOfSlot);
 
                     copyFromMemory(startPtr, bytes, destOffset, sizeToCopy);
 
@@ -785,12 +785,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         public void destroy() {
             synchronized (this) {
-                if (slices != null) {
-                    for (final Slice slice : slices) {
-                        slice.release();
+                if (slots != null) {
+                    for (final Slot slot : slots) {
+                        slot.release();
                     }
 
-                    slices = null;
+                    slots = null;
                 }
             }
         }
