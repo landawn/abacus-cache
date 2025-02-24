@@ -249,6 +249,8 @@ public class OffHeapCache25Test {
             assertEquals(account, account2);
 
             if (i % 3 == 0) {
+                persistentCache.remove(key);
+
                 for (int j = 0; j < 100; j++) {
                     persistentCache.put(Strings.uuid(), account);
                 }
@@ -260,7 +262,11 @@ public class OffHeapCache25Test {
             }
         }
 
+        final int size = persistentCache.size();
+        final long start = System.currentTimeMillis();
         persistentCache.clear();
+        N.println("persistentCache.clear(" + size + "): " + (System.currentTimeMillis() - start));
+
         N.println(persistentCache.stats());
 
         N.sleep(4000);

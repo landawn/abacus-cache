@@ -120,6 +120,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final AtomicLong cachedCountOnDisk = new AtomicLong();
     final AtomicLong writeCountToDisk = new AtomicLong();
     final AtomicLong readCountFromDisk = new AtomicLong();
+    final AtomicLong evictionCountFromDisk = new AtomicLong();
 
     final Logger logger;
 
@@ -668,9 +669,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final BigInteger totalReadTimeFromDisk = totalReadTimeFromDiskHolder.value();
 
         return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), cachedCountOnDisk.get(), poolStats.putCount(), currentWriteCountToDisk,
-                poolStats.getCount(), poolStats.hitCount(), currentReadCountFromDisk, poolStats.missCount(), poolStats.evictionCount(), _capacityInBytes,
-                totalOccupiedMemorySize.get(), totalDataSize.get(), dataSizeOnDisk.get(), SEGMENT_SIZE, usedSlotCount,
-                currentWriteCountToDisk == 0 ? 0D : totalWriteTimeToDisk.divide(BigInteger.valueOf(currentWriteCountToDisk)).doubleValue(),
+                poolStats.getCount(), poolStats.hitCount(), currentReadCountFromDisk, poolStats.missCount(), poolStats.evictionCount(),
+                evictionCountFromDisk.get(), _capacityInBytes, totalOccupiedMemorySize.get(), totalDataSize.get(), dataSizeOnDisk.get(), SEGMENT_SIZE,
+                usedSlotCount, currentWriteCountToDisk == 0 ? 0D : totalWriteTimeToDisk.divide(BigInteger.valueOf(currentWriteCountToDisk)).doubleValue(),
                 currentReadCountFromDisk == 0 ? 0D : totalReadTimeFromDisk.divide(BigInteger.valueOf(currentReadCountFromDisk)).doubleValue());
     }
 
@@ -927,6 +928,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     dataSizeOnDisk.addAndGet(-size);
 
                     totalDataSize.addAndGet(-size);
+
+                    evictionCountFromDisk.incrementAndGet();
+
                     offHeapStore.remove(permenantKey);
                     permenantKey = null;
                 }
