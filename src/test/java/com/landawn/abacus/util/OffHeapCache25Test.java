@@ -21,8 +21,12 @@ import org.ehcache.config.units.EntryUnit;
 import org.ehcache.config.units.MemoryUnit;
 import org.ehcache.spi.serialization.SerializerException;
 import org.junit.jupiter.api.Test;
+import org.rocksdb.Options;
+import org.rocksdb.RocksDB;
+import org.rocksdb.RocksDBException;
 
 import com.landawn.abacus.cache.OffHeapCache25;
+import com.landawn.abacus.cache.OffHeapStore;
 import com.landawn.abacus.parser.Parser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.type.ByteBufferType;
@@ -41,12 +45,67 @@ public class OffHeapCache25Test {
     private static final Random rand = new Random();
     static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
     static final ByteBufferType bbType = (ByteBufferType) ((Type<?>) TypeFactory.getType(ByteBufferType.BYTE_BUFFER));
+    static final OffHeapStore<String> offHeapStore;
+    static {
+        RocksDB.loadLibrary();
+
+        RocksDB db = null;
+        try {
+            final Options options = new Options().setCreateIfMissing(true);
+            db = RocksDB.open(options, "rocksdb-data");
+        } catch (final RocksDBException e) {
+            throw new RuntimeException(e);
+        }
+
+        final RocksDB finalDB = db;
+        offHeapStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                try {
+                    finalDB.put(key.getBytes(), value);
+                    return true;
+                } catch (final RocksDBException e) {
+                    return false;
+                }
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                try {
+                    return finalDB.get(key.getBytes());
+                } catch (final RocksDBException e) {
+                    return null;
+                }
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                try {
+                    finalDB.delete(key.getBytes());
+                    return true;
+                } catch (final RocksDBException e) {
+                    return false;
+                }
+            }
+        };
+    }
+
     static final OffHeapCache25<String, Account> cache = OffHeapCache25.<String, Account> builder()
             .capacityInMB(4096)
             .maxBlockSizeInBytes(16001)
             .evictDelay(3000)
             .defaultLiveTime(1000_000)
             .defaultMaxIdleTime(1000_000)
+            .build(); //  new OffHeapCache25<>(4096, 3000, 1000_000, 1000_000);
+
+    static final OffHeapCache25<String, Account> persistentCache = OffHeapCache25.<String, Account> builder()
+            .capacityInMB(100)
+            .maxBlockSizeInBytes(16001)
+            .evictDelay(3000)
+            .defaultLiveTime(1000_000)
+            .defaultMaxIdleTime(1000_000)
+            .offHeapStore(offHeapStore)
+            .statsTimeOnDisk(true)
             .build(); //  new OffHeapCache25<>(4096, 3000, 1000_000, 1000_000);
     // private static final OffHeapCache<String, String> ohcache = new OffHeapCache<>(1204, 3000, 1000_000, 1000_000);
 
@@ -165,6 +224,47 @@ public class OffHeapCache25Test {
 
         N.sleep(4000);
         N.println(cache.stats());
+    }
+
+    @Test
+    public void test_persistentCache() {
+        for (int i = 0; i < 1000; i++) {
+            final Account account = createAccount(Account.class);
+            final StringBuilder sb = Objectory.createStringBuilder();
+
+            int tmp = Math.abs(rand.nextInt(1000));
+
+            while (tmp-- > 0) {
+                sb.append(account.getGui()).append('\\');
+            }
+
+            account.setFirstName(sb.toString());
+
+            Objectory.recycle(sb);
+
+            final String key = account.getEmailAddress();
+            persistentCache.put(key, account);
+            final Account account2 = persistentCache.get(key).orElse(null);
+
+            assertEquals(account, account2);
+
+            if (i % 3 == 0) {
+                for (int j = 0; j < 100; j++) {
+                    persistentCache.put(Strings.uuid(), account);
+                }
+            }
+
+            if (counter.incrementAndGet() % 100 == 0) {
+                N.println(Strings.repeat("=", 80));
+                N.println(persistentCache.stats());
+            }
+        }
+
+        persistentCache.clear();
+        N.println(persistentCache.stats());
+
+        N.sleep(4000);
+        N.println(persistentCache.stats());
     }
 
     private Account createAccount(final Class<Account> cls) {

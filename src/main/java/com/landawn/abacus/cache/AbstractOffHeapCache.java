@@ -17,6 +17,7 @@
 package com.landawn.abacus.cache;
 
 import java.io.ByteArrayInputStream;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -50,6 +51,7 @@ import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.Fn.Suppliers;
+import com.landawn.abacus.util.Holder;
 import com.landawn.abacus.util.IOUtil;
 import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
@@ -114,6 +116,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     final AtomicLong totalOccupiedMemorySize = new AtomicLong();
     final AtomicLong totalDataSize = new AtomicLong();
+    final AtomicLong dataSizeOnDisk = new AtomicLong();
+    final AtomicLong cachedCountOnDisk = new AtomicLong();
+    final AtomicLong writeCountToDisk = new AtomicLong();
+    final AtomicLong readCountFromDisk = new AtomicLong();
 
     final Logger logger;
 
@@ -211,11 +217,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private ScheduledFuture<?> scheduleFuture;
     final BiConsumer<? super V, ByteArrayOutputStream> serializer;
     final BiFunction<byte[], Type<V>, ? extends V> deserializer;
+    final OffHeapStore<K> offHeapStore;
+    final boolean statsTimeOnDisk;
+    final Holder<BigInteger> totalWriteTimeToDiskHolder = Holder.of(BigInteger.ZERO);
+    final Holder<BigInteger> totalReadTimeFromDiskHolder = Holder.of(BigInteger.ZERO);
 
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime, final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
-            final BiFunction<byte[], Type<V>, ? extends V> deserializer, final Logger logger) {
+            final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
+            final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "The Maximum Block size can't be: {}. It must be >= 1024 and <= {}", maxBlockSize,
@@ -243,6 +254,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
         this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
+        this.offHeapStore = offHeapStore;
+        this.statsTimeOnDisk = statsTimeOnDisk;
 
         if (evictDelay > 0) {
             final Runnable evictTask = () -> {
@@ -284,7 +297,26 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public V gett(final K k) {
         final Wrapper<V> w = _pool.get(k);
 
-        return w == null ? null : w.read();
+        if (w instanceof StoreWrapper) {
+            readCountFromDisk.incrementAndGet();
+
+            if (statsTimeOnDisk) {
+                final long startTime = System.currentTimeMillis();
+
+                try {
+                    return w.read();
+                } finally {
+                    synchronized (totalReadTimeFromDiskHolder) {
+                        totalReadTimeFromDiskHolder
+                                .setValue(totalReadTimeFromDiskHolder.value().add(BigInteger.valueOf(System.currentTimeMillis() - startTime)));
+                    }
+                }
+            } else {
+                return w.read();
+            }
+        } else {
+            return w == null ? null : w.read();
+        }
     }
 
     @Override
@@ -311,106 +343,118 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             size = os.size();
         }
 
-        if (size <= _maxBlockSize) {
-            final Slot slot = getAvailableSlot(size);
+        Slot slot = null;
+        List<Slot> slots = null;
 
-            if (slot == null) {
-                Objectory.recycle(os);
-                _pool.remove(k);
+        try {
+            if (size <= _maxBlockSize) {
+                slot = getAvailableSlot(size);
 
-                vacate();
-                return false;
-            }
+                if (slot != null) {
+                    final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
 
-            final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-            boolean isOK = false;
+                    copyToMemory(bytes, _arrayOffset, slotStartPtr, size);
 
-            try {
-                copyToMemory(bytes, _arrayOffset, slotStartPtr, size);
+                    occupiedMemory = slot.segment.sizeOfSlot;
 
-                isOK = true;
-            } finally {
-                Objectory.recycle(os);
-                _pool.remove(k);
-
-                if (!isOK) {
-                    slot.release();
-
-                    //noinspection ReturnInsideFinallyBlock
-                    return false; //NOSONAR
+                    w = new SlotWrapper(type, liveTime, maxIdleTime, size, slot, slotStartPtr);
+                } else if ((offHeapStore != null)) {
+                    w = putToDisk(k, liveTime, maxIdleTime, type, bytes, size);
                 }
-            }
+            } else {
+                slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
+                int copiedSize = 0;
+                int srcOffset = _arrayOffset;
 
-            occupiedMemory = slot.segment.sizeOfSlot;
-
-            w = new SlotWrapper(type, liveTime, maxIdleTime, size, slot, slotStartPtr);
-        } else {
-            final List<Slot> slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
-            int copiedSize = 0;
-            int srcOffset = _arrayOffset;
-
-            try {
                 while (copiedSize < size) {
                     final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
-                    final Slot slot = getAvailableSlot(sizeToCopy);
+                    slot = getAvailableSlot(sizeToCopy);
 
                     if (slot == null) {
-                        vacate();
-
-                        return false;
+                        break;
                     }
 
                     final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-                    boolean isOK = false;
 
-                    try {
-                        copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
+                    copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
 
-                        srcOffset += sizeToCopy;
-                        copiedSize += sizeToCopy;
-
-                        isOK = true;
-                    } finally {
-                        if (!isOK) {
-                            slot.release();
-
-                            //noinspection ReturnInsideFinallyBlock
-                            return false; //NOSONAR
-                        }
-                    }
+                    srcOffset += sizeToCopy;
+                    copiedSize += sizeToCopy;
 
                     occupiedMemory += slot.segment.sizeOfSlot;
                     slots.add(slot);
                 }
 
-                w = new MultiSlotsWrapper(type, liveTime, maxIdleTime, size, slots);
-            } finally {
-                Objectory.recycle(os);
+                if (copiedSize == size) {
+                    w = new MultiSlotsWrapper(type, liveTime, maxIdleTime, size, slots);
+                } else if (offHeapStore != null) {
+                    w = putToDisk(k, liveTime, maxIdleTime, type, bytes, size);
+                }
+            }
+        } finally {
+            Objectory.recycle(os);
 
-                if (w == null) {
-                    _pool.remove(k);
+            if (w == null) {
+                _pool.remove(k);
 
-                    for (final Slot slot : slots) {
-                        slot.release();
+                if (slot != null) {
+                    slot.release();
+                }
+
+                if (slots != null) {
+                    for (final Slot e : slots) {
+                        e.release();
                     }
                 }
+
+                vacate();
+                return false;
             }
         }
 
         boolean result = false;
 
         try {
-            totalOccupiedMemorySize.addAndGet(occupiedMemory);
+            if (w instanceof SlotWrapper || w instanceof MultiSlotsWrapper) {
+                totalOccupiedMemorySize.addAndGet(occupiedMemory);
+            }
+
             totalDataSize.addAndGet(size);
 
             result = _pool.put(k, w);
         } finally {
-            if (!result && w != null) {
+            if (!result) {
                 w.destroy();
             }
         }
 
         return result;
+    }
+
+    Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
+        writeCountToDisk.incrementAndGet();
+
+        boolean putToDiskSuccessfully = false;
+
+        if (statsTimeOnDisk) {
+            final long startTime = System.currentTimeMillis();
+
+            try {
+                putToDiskSuccessfully = offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size));
+            } finally {
+                synchronized (totalWriteTimeToDiskHolder) {
+                    totalWriteTimeToDiskHolder.setValue(totalWriteTimeToDiskHolder.value().add(BigInteger.valueOf(System.currentTimeMillis() - startTime)));
+                }
+            }
+        } else {
+            putToDiskSuccessfully = offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size));
+        }
+
+        if (putToDiskSuccessfully) {
+            return new StoreWrapper(type, liveTime, maxIdleTime, size, k);
+        }
+
+        return null;
     }
 
     // TODO: performance tuning for concurrent put.
@@ -618,9 +662,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }).sortedBy(it -> it._1).groupTo(it -> it._1, it -> it._2, Suppliers.ofLinkedHashMap());
 
-        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), poolStats.putCount(), poolStats.getCount(), poolStats.hitCount(),
-                poolStats.missCount(), poolStats.evictionCount(), _capacityInBytes, totalOccupiedMemorySize.get(), totalDataSize.get(), SEGMENT_SIZE,
-                usedSlotCount);
+        final long currentWriteCountToDisk = writeCountToDisk.get();
+        final long currentReadCountFromDisk = readCountFromDisk.get();
+        final BigInteger totalWriteTimeToDisk = totalWriteTimeToDiskHolder.value();
+        final BigInteger totalReadTimeFromDisk = totalReadTimeFromDiskHolder.value();
+
+        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), cachedCountOnDisk.get(), poolStats.putCount(), currentWriteCountToDisk,
+                poolStats.getCount(), poolStats.hitCount(), currentReadCountFromDisk, poolStats.missCount(), poolStats.evictionCount(), _capacityInBytes,
+                totalOccupiedMemorySize.get(), totalDataSize.get(), dataSizeOnDisk.get(), SEGMENT_SIZE, usedSlotCount,
+                currentWriteCountToDisk == 0 ? 0D : totalWriteTimeToDisk.divide(BigInteger.valueOf(currentWriteCountToDisk)).doubleValue(),
+                currentReadCountFromDisk == 0 ? 0D : totalReadTimeFromDisk.divide(BigInteger.valueOf(currentReadCountFromDisk)).doubleValue());
     }
 
     @Override
@@ -741,10 +792,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         V read() {
             synchronized (this) {
-                if (slot == null) {
-                    return null;
-                }
-
                 final byte[] bytes = new byte[size];
 
                 copyFromMemory(slotStartPtr, bytes, _arrayOffset, size);
@@ -785,10 +832,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         V read() {
             synchronized (this) {
-                if (N.isEmpty(slots)) {
-                    return null;
-                }
-
                 final byte[] bytes = new byte[size];
                 int size = this.size;
                 int destOffset = _arrayOffset;
@@ -825,7 +868,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         public void destroy() {
             synchronized (this) {
-                if (slots != null) {
+                if (N.notEmpty(slots)) {
                     for (final Slot slot : slots) {
                         totalOccupiedMemorySize.addAndGet(-slot.segment.sizeOfSlot);
                         slot.release();
@@ -834,6 +877,58 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     totalDataSize.addAndGet(-size);
 
                     slots = null;
+                }
+            }
+        }
+    }
+
+    final class StoreWrapper extends Wrapper<V> {
+        private K permenantKey;
+
+        StoreWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final K permenantKey) {
+            super(type, liveTime, maxIdleTime, size);
+
+            this.permenantKey = permenantKey;
+
+            cachedCountOnDisk.incrementAndGet();
+            dataSizeOnDisk.addAndGet(size);
+        }
+
+        @Override
+        V read() {
+            synchronized (this) {
+                final byte[] bytes = offHeapStore.get(permenantKey);
+
+                if (bytes == null) {
+                    return null;
+                }
+
+                // should never happen.
+                if (bytes.length != size) {
+                    throw new RuntimeException("Unknown error happening when retrieve value. The fetched byte array size: " + size
+                            + " is not equal to the expected size: " + size);
+                }
+
+                if (type.isPrimitiveByteArray()) {
+                    return (V) bytes;
+                } else if (type.isByteBuffer()) {
+                    return (V) ByteBufferType.valueOf(bytes);
+                } else {
+                    return deserializer.apply(bytes, type);
+                }
+            }
+        }
+
+        @Override
+        public void destroy() {
+            synchronized (this) {
+                if (permenantKey != null) {
+                    cachedCountOnDisk.decrementAndGet();
+                    dataSizeOnDisk.addAndGet(-size);
+
+                    totalDataSize.addAndGet(-size);
+                    offHeapStore.remove(permenantKey);
+                    permenantKey = null;
                 }
             }
         }

@@ -66,7 +66,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * @param capacityInMB
      */
-    public OffHeapCache(final int capacityInMB) {
+    OffHeapCache(final int capacityInMB) {
         this(capacityInMB, 3000);
     }
 
@@ -76,7 +76,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param capacityInMB
      * @param evictDelay unit is milliseconds
      */
-    public OffHeapCache(final int capacityInMB, final long evictDelay) {
+    OffHeapCache(final int capacityInMB, final long evictDelay) {
         this(capacityInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
@@ -88,14 +88,15 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param defaultLiveTime unit is milliseconds
      * @param defaultMaxIdleTime unit is milliseconds
      */
-    public OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
-        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null);
+    OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
+        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false);
     }
 
     OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
-            final BiFunction<byte[], Type<V>, ? extends V> deserializer) {
-        super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, BYTE_ARRAY_BASE, serializer, deserializer, logger);
+            final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk) {
+        super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, BYTE_ARRAY_BASE, serializer, deserializer,
+                offHeapStore, statsTimeOnDisk, logger);
     }
 
     @SuppressWarnings("removal")
@@ -139,10 +140,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         private float vacatingFactor = DEFAULT_VACATING_FACTOR;
         private BiConsumer<? super V, ByteArrayOutputStream> serializer;
         private BiFunction<byte[], Type<V>, ? extends V> deserializer;
+        private OffHeapStore<K> offHeapStore;
+        private boolean statsTimeOnDisk;
 
         public OffHeapCache<K, V> build() {
             return new OffHeapCache<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,
-                    defaultMaxIdleTime, vacatingFactor, serializer, deserializer);
+                    defaultMaxIdleTime, vacatingFactor, serializer, deserializer, offHeapStore, statsTimeOnDisk);
         }
     }
 

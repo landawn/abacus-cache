@@ -33,7 +33,12 @@ public class OffHeapCacheTest {
     private static final Random rand = new Random();
 
     private static final ByteBufferType bbType = (ByteBufferType) ((Type<?>) TypeFactory.getType(ByteBufferType.BYTE_BUFFER));
-    private static final OffHeapCache<String, Account> cache = new OffHeapCache<>(4096, 3000, 1000_000, 1000_000);
+    private static final OffHeapCache<String, Account> cache = OffHeapCache.<String, Account> builder()
+            .capacityInMB(4096)
+            .evictDelay(3000)
+            .defaultLiveTime(1000_000)
+            .defaultMaxIdleTime(1000_000)
+            .build();
     // private static final OffHeapCache<String, String> ohcache = new OffHeapCache<>(1204, 3000, 1000_000, 1000_000);
 
     private static final long start = System.currentTimeMillis();
