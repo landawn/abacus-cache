@@ -14,9 +14,14 @@
 
 package com.landawn.abacus.cache;
 
+import java.util.Map;
 import java.util.Set;
 
 import org.ehcache.Cache;
+import org.ehcache.spi.loaderwriter.BulkCacheLoadingException;
+import org.ehcache.spi.loaderwriter.BulkCacheWritingException;
+import org.ehcache.spi.loaderwriter.CacheLoadingException;
+import org.ehcache.spi.loaderwriter.CacheWritingException;
 
 /**
  *
@@ -91,12 +96,38 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
         return cacheImpl.containsKey(k);
     }
 
+    public V putIfAbsent(final K key, final V value) throws CacheLoadingException, CacheWritingException {
+        assertNotClosed();
+
+        return cacheImpl.putIfAbsent(key, value);
+    }
+
+    public Map<K, V> getAll(final Set<? extends K> keys) throws BulkCacheLoadingException {
+        assertNotClosed();
+
+        return cacheImpl.getAll(keys);
+    }
+
+    public void putAll(final Map<? extends K, ? extends V> entries) throws BulkCacheWritingException {
+        assertNotClosed();
+
+        cacheImpl.putAll(entries);
+    }
+
+    public void removeAll(final Set<? extends K> keys) throws BulkCacheWritingException {
+        assertNotClosed();
+
+        cacheImpl.removeAll(keys);
+    }
+
     /**
      *
      *
      * @return
      * @throws UnsupportedOperationException
+     * @Deprecated Unsupported operation
      */
+    @Deprecated
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
         throw new UnsupportedOperationException();
@@ -107,7 +138,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @return
      * @throws UnsupportedOperationException
+     * @Deprecated Unsupported operation
      */
+    @Deprecated
     @Override
     public int size() throws UnsupportedOperationException {
         throw new UnsupportedOperationException();

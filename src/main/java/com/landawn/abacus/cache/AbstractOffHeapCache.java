@@ -32,6 +32,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
@@ -39,17 +40,22 @@ import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.parser.Parser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.pool.AbstractPoolable;
+import com.landawn.abacus.pool.EvictionPolicy;
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
+import com.landawn.abacus.pool.PoolStats;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.ExceptionUtil;
+import com.landawn.abacus.util.Fn.Suppliers;
 import com.landawn.abacus.util.IOUtil;
 import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Objectory;
+import com.landawn.abacus.util.Tuple;
+import com.landawn.abacus.util.stream.Stream;
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
@@ -74,6 +80,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     //    public native void copyMemory(Object srcBase, long srcOffset,
     //                                  Object destBase, long destOffset,
     //                                  long bytes);
+
+    static final float DEFAULT_VACATING_FACTOR = 0.2f;
 
     static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
 
@@ -103,6 +111,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // executor.setRemoveOnCancelPolicy(true);
         scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
+
+    final AtomicLong totalOccupiedMemorySize = new AtomicLong();
+    final AtomicLong totalDataSize = new AtomicLong();
 
     final Logger logger;
 
@@ -203,7 +214,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
-            final long defaultMaxIdleTime, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
+            final long defaultMaxIdleTime, final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
@@ -227,7 +238,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE);
         }
 
-        _pool = PoolFactory.createKeyedObjectPool((int) (_capacityInBytes / MIN_BLOCK_SIZE), evictDelay);
+        _pool = PoolFactory.createKeyedObjectPool((int) (_capacityInBytes / MIN_BLOCK_SIZE), evictDelay, EvictionPolicy.LAST_ACCESS_TIME, true,
+                vacatingFactor == 0f ? DEFAULT_VACATING_FACTOR : vacatingFactor);
 
         this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
         this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
@@ -277,7 +289,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
-
         final Type<V> type = N.typeOf(v.getClass());
         Wrapper<V> w = null;
 
@@ -285,6 +296,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         ByteArrayOutputStream os = null;
         byte[] bytes = null;
         int size = 0;
+        long occupiedMemory = 0;
 
         if (type.isPrimitiveByteArray()) {
             bytes = (byte[]) v;
@@ -329,6 +341,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             }
 
+            occupiedMemory = slot.segment.sizeOfSlot;
+
             w = new SlotWrapper(type, liveTime, maxIdleTime, size, slot, slotStartPtr);
         } else {
             final List<Slot> slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
@@ -365,6 +379,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         }
                     }
 
+                    occupiedMemory += slot.segment.sizeOfSlot;
                     slots.add(slot);
                 }
 
@@ -385,6 +400,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         boolean result = false;
 
         try {
+            totalOccupiedMemorySize.addAndGet(occupiedMemory);
+            totalDataSize.addAndGet(size);
+
             result = _pool.put(k, w);
         } finally {
             if (!result && w != null) {
@@ -493,7 +511,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final Iterator<Segment> descendingIterator = queue.descendingIterator();
             int half = queue.size() / 2 + 1;
             int cnt = 0;
-            while (iterator.hasNext() && half-- > 0) {
+            while (iterator.hasNext() && half-- >= 0) {
                 cnt++;
                 segment = iterator.next();
 
@@ -527,10 +545,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     }
 
                     segment = _segments[nextSegmentIndex];
+                    segment.sizeOfSlot = slotSize;
+
                     _segmentBitSet.set(nextSegmentIndex);
                     _segmentQueueMap.put(nextSegmentIndex, queue);
 
-                    segment.sizeOfSlot = slotSize;
                     queue.addFirst(segment);
 
                     indexOfAvailableSlot = segment.allocateSlot();
@@ -590,6 +609,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         _pool.clear();
     }
 
+    public OffHeapCacheStats stats() {
+        final PoolStats poolStats = _pool.stats();
+
+        final Map<Integer, List<Integer>> usedSlotCount = Stream.of(new ArrayList<>(_segmentQueueMap.values())).distinct().flatmap(queue -> {
+            synchronized (queue) {
+                return N.map(queue, it -> Tuple.of(it.sizeOfSlot, it.slotBitSet.cardinality()));
+            }
+        }).sortedBy(it -> it._1).groupTo(it -> it._1, it -> it._2, Suppliers.ofLinkedHashMap());
+
+        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), poolStats.putCount(), poolStats.getCount(), poolStats.hitCount(),
+                poolStats.missCount(), poolStats.evictionCount(), _capacityInBytes, totalOccupiedMemorySize.get(), totalDataSize.get(), SEGMENT_SIZE,
+                usedSlotCount);
+    }
+
     @Override
     public synchronized void close() {
         if (_pool.isClosed()) {
@@ -615,14 +648,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     protected void evict() {
-        for (int i = 0, len = _segments.length; i < len; i++) {
-            if (_segments[i].slotBitSet.isEmpty()) {
-                final Deque<Segment> queue = _segmentQueueMap.get(i);
+        synchronized (_segmentBitSet) {
+            for (int i = 0, len = _segments.length; i < len; i++) {
+                if (_segments[i].slotBitSet.isEmpty()) {
+                    final Deque<Segment> queue = _segmentQueueMap.get(i);
 
-                if (queue != null) {
-                    synchronized (queue) {
-                        if (_segments[i].slotBitSet.isEmpty()) {
-                            synchronized (_segmentBitSet) {
+                    if (queue != null) {
+                        synchronized (queue) {
+                            if (_segments[i].slotBitSet.isEmpty()) {
                                 queue.remove(_segments[i]);
 
                                 _segmentQueueMap.remove(i);
@@ -664,6 +697,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             synchronized (slotBitSet) {
                 slotBitSet.clear(slotIndex);
             }
+        }
+
+        @Override
+        public String toString() {
+            return "Segment [segmentStartPtr=" + segmentStartPtr + ", sizeOfSlot=" + sizeOfSlot + "]";
         }
     }
 
@@ -725,6 +763,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         public void destroy() {
             synchronized (this) {
                 if (slot != null) {
+                    totalOccupiedMemorySize.addAndGet(-slot.segment.sizeOfSlot);
+                    totalDataSize.addAndGet(-size);
                     slot.release();
                     slot = null;
                 }
@@ -787,8 +827,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             synchronized (this) {
                 if (slots != null) {
                     for (final Slot slot : slots) {
+                        totalOccupiedMemorySize.addAndGet(-slot.segment.sizeOfSlot);
                         slot.release();
                     }
+
+                    totalDataSize.addAndGet(-size);
 
                     slots = null;
                 }

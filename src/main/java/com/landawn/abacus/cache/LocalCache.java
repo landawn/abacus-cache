@@ -18,6 +18,7 @@ import java.util.Set;
 
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
+import com.landawn.abacus.pool.PoolStats;
 import com.landawn.abacus.pool.PoolableWrapper;
 
 /**
@@ -137,6 +138,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     @Override
     public void clear() {
         pool.clear();
+    }
+
+    public CacheStats stats() {
+        final PoolStats poolStats = pool.stats();
+
+        return new CacheStats(poolStats.capacity(), poolStats.size(), poolStats.putCount(), poolStats.getCount(), poolStats.hitCount(),
+                poolStats.missCount(), poolStats.evictionCount(), poolStats.maxMemory(), poolStats.dataSize());
     }
 
     /**

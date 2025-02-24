@@ -89,12 +89,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param defaultMaxIdleTime unit is milliseconds
      */
     public OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
-        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, null, null);
+        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null);
     }
 
     OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
-            final BiConsumer<? super V, ByteArrayOutputStream> serializer, final BiFunction<byte[], Type<V>, ? extends V> deserializer) {
-        super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, BYTE_ARRAY_BASE, serializer, deserializer, logger);
+            final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
+            final BiFunction<byte[], Type<V>, ? extends V> deserializer) {
+        super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, BYTE_ARRAY_BASE, serializer, deserializer, logger);
     }
 
     @SuppressWarnings("removal")
@@ -135,12 +136,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         private long evictDelay; // unit is milliseconds
         private long defaultLiveTime; // unit is milliseconds
         private long defaultMaxIdleTime; // unit is milliseconds
+        private float vacatingFactor = DEFAULT_VACATING_FACTOR;
         private BiConsumer<? super V, ByteArrayOutputStream> serializer;
         private BiFunction<byte[], Type<V>, ? extends V> deserializer;
 
         public OffHeapCache<K, V> build() {
             return new OffHeapCache<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,
-                    defaultMaxIdleTime, serializer, deserializer);
+                    defaultMaxIdleTime, vacatingFactor, serializer, deserializer);
         }
     }
 

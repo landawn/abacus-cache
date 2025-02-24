@@ -17,6 +17,7 @@ package com.landawn.abacus.cache;
 import java.util.Set;
 
 import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import com.landawn.abacus.util.Numbers;
 
 /**
@@ -31,9 +32,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     private boolean isClosed = false;
 
     /**
-     * 
      *
-     * @param cache 
+     *
+     * @param cache
      */
     public CaffeineCache(final Cache<K, V> cache) {
         cacheImpl = cache;
@@ -93,10 +94,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @return 
-     * @throws UnsupportedOperationException 
+     *
+     * @return
+     * @throws UnsupportedOperationException
      */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
@@ -104,9 +105,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * 
      *
-     * @return 
+     *
+     * @return
      */
     @Override
     public int size() {
@@ -145,6 +146,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     @Override
     public boolean isClosed() {
         return isClosed;
+    }
+
+    /**
+     *
+     * @return
+     * @see Cache#stats()
+     */
+    public CacheStats stats() {
+        return cacheImpl.stats();
     }
 
     /**

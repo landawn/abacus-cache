@@ -120,10 +120,51 @@ public class OffHeapCache25Test {
                 assertNull(cache.get(key).orElse(null));
             }
 
-            if (counter.incrementAndGet() % 10000 == 0) {
+            if (counter.incrementAndGet() % 100 == 0) {
                 N.println("=========" + counter.get() + ": " + (System.currentTimeMillis() - start));
             }
         }
+    }
+
+    @Test
+    public void test_stats() {
+        for (int i = 0; i < 1000; i++) {
+            final Account account = createAccount(Account.class);
+            final StringBuilder sb = Objectory.createStringBuilder();
+
+            int tmp = Math.abs(rand.nextInt(1000));
+
+            while (tmp-- > 0) {
+                sb.append(account.getGui()).append('\\');
+            }
+
+            account.setFirstName(sb.toString());
+
+            Objectory.recycle(sb);
+
+            final String key = account.getEmailAddress();
+            cache.put(key, account);
+            final Account account2 = cache.get(key).orElse(null);
+
+            assertEquals(account, account2);
+
+            if (i % 3 == 0) {
+                for (int j = 0; j < 100; j++) {
+                    cache.put(Strings.uuid(), account);
+                }
+            }
+
+            if (counter.incrementAndGet() % 100 == 0) {
+                N.println(Strings.repeat("=", 80));
+                N.println(cache.stats());
+            }
+        }
+
+        cache.clear();
+        N.println(cache.stats());
+
+        N.sleep(4000);
+        N.println(cache.stats());
     }
 
     private Account createAccount(final Class<Account> cls) {
