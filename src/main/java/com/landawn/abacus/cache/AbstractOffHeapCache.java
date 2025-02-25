@@ -17,7 +17,6 @@
 package com.landawn.abacus.cache;
 
 import java.io.ByteArrayInputStream;
-import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -25,6 +24,7 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.LongSummaryStatistics;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
+import com.landawn.abacus.cache.OffHeapCacheStats.MinMaxAvg;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.parser.Parser;
 import com.landawn.abacus.parser.ParserFactory;
@@ -45,18 +46,22 @@ import com.landawn.abacus.pool.EvictionPolicy;
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
 import com.landawn.abacus.pool.PoolStats;
+import com.landawn.abacus.pool.Poolable.Caller;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
+import com.landawn.abacus.util.Comparators;
 import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.Fn.Suppliers;
-import com.landawn.abacus.util.Holder;
 import com.landawn.abacus.util.IOUtil;
 import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
+import com.landawn.abacus.util.Numbers;
 import com.landawn.abacus.util.Objectory;
 import com.landawn.abacus.util.Tuple;
+import com.landawn.abacus.util.Tuple.Tuple3;
+import com.landawn.abacus.util.stream.Collectors;
 import com.landawn.abacus.util.stream.Stream;
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
@@ -117,7 +122,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final AtomicLong totalOccupiedMemorySize = new AtomicLong();
     final AtomicLong totalDataSize = new AtomicLong();
     final AtomicLong dataSizeOnDisk = new AtomicLong();
-    final AtomicLong cachedCountOnDisk = new AtomicLong();
+    final AtomicLong sizeOnDisk = new AtomicLong();
     final AtomicLong writeCountToDisk = new AtomicLong();
     final AtomicLong readCountFromDisk = new AtomicLong();
     final AtomicLong evictionCountFromDisk = new AtomicLong();
@@ -220,8 +225,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final BiFunction<byte[], Type<V>, ? extends V> deserializer;
     final OffHeapStore<K> offHeapStore;
     final boolean statsTimeOnDisk;
-    final Holder<BigInteger> totalWriteTimeToDiskHolder = Holder.of(BigInteger.ZERO);
-    final Holder<BigInteger> totalReadTimeFromDiskHolder = Holder.of(BigInteger.ZERO);
+    final LongSummaryStatistics totalWriteToDiskTimeStats = new LongSummaryStatistics();
+    final LongSummaryStatistics totalReadFromDiskTimeStats = new LongSummaryStatistics();
 
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
@@ -247,7 +252,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         _segments = new Segment[(int) (_capacityInBytes / SEGMENT_SIZE)];
 
         for (int i = 0, len = _segments.length; i < len; i++) {
-            _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE);
+            _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE, i);
         }
 
         _pool = PoolFactory.createKeyedObjectPool((int) (_capacityInBytes / MIN_BLOCK_SIZE), evictDelay, EvictionPolicy.LAST_ACCESS_TIME, true,
@@ -307,9 +312,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 try {
                     return w.read();
                 } finally {
-                    synchronized (totalReadTimeFromDiskHolder) {
-                        totalReadTimeFromDiskHolder
-                                .setValue(totalReadTimeFromDiskHolder.value().add(BigInteger.valueOf(System.currentTimeMillis() - startTime)));
+                    synchronized (totalReadFromDiskTimeStats) {
+                        totalReadFromDiskTimeStats.accept(System.currentTimeMillis() - startTime);
                     }
                 }
             } else {
@@ -326,6 +330,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         Wrapper<V> w = null;
 
         // final byte[] bytes = parser.serialize(v).getBytes();
+        final long startTime = statsTimeOnDisk ? System.currentTimeMillis() : 0;
         ByteArrayOutputStream os = null;
         byte[] bytes = null;
         int size = 0;
@@ -395,9 +400,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         } finally {
             Objectory.recycle(os);
 
-            if (w == null) {
-                _pool.remove(k);
-
+            if (w == null || w instanceof StoreWrapper) {
                 if (slot != null) {
                     slot.release();
                 }
@@ -407,6 +410,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         e.release();
                     }
                 }
+            }
+
+            if (w == null) {
+                _pool.remove(k);
 
                 vacate();
                 return false;
@@ -425,7 +432,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             result = _pool.put(k, w);
         } finally {
             if (!result) {
-                w.destroy();
+                w.destroy(Caller.PUT_ADD_FAILURE);
+            }
+
+            if (w instanceof StoreWrapper) {
+                writeCountToDisk.incrementAndGet();
+
+                if (statsTimeOnDisk) {
+                    synchronized (totalWriteToDiskTimeStats) {
+                        totalWriteToDiskTimeStats.accept(System.currentTimeMillis() - startTime);
+                    }
+                }
             }
         }
 
@@ -433,25 +450,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
-        writeCountToDisk.incrementAndGet();
-
-        boolean putToDiskSuccessfully = false;
-
-        if (statsTimeOnDisk) {
-            final long startTime = System.currentTimeMillis();
-
-            try {
-                putToDiskSuccessfully = offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size));
-            } finally {
-                synchronized (totalWriteTimeToDiskHolder) {
-                    totalWriteTimeToDiskHolder.setValue(totalWriteTimeToDiskHolder.value().add(BigInteger.valueOf(System.currentTimeMillis() - startTime)));
-                }
-            }
-        } else {
-            putToDiskSuccessfully = offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size));
-        }
-
-        if (putToDiskSuccessfully) {
+        if (offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size))) {
             return new StoreWrapper(type, liveTime, maxIdleTime, size, k);
         }
 
@@ -630,7 +629,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final Wrapper<V> w = _pool.remove(k);
 
         if (w != null) {
-            w.destroy();
+            w.destroy(Caller.REMOVE_REPLACE_CLEAR);
         }
     }
 
@@ -657,22 +656,34 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();
 
-        final Map<Integer, List<Integer>> usedSlotCount = Stream.of(new ArrayList<>(_segmentQueueMap.values())).distinct().flatmap(queue -> {
+        final Map<Integer, Map<Integer, Integer>> occupiedSlots = Stream.of(new ArrayList<>(_segmentQueueMap.values())).distinct().flatmap(queue -> {
             synchronized (queue) {
-                return N.map(queue, it -> Tuple.of(it.sizeOfSlot, it.slotBitSet.cardinality()));
+                return N.map(queue, it -> Tuple.of(it.sizeOfSlot, it.index, it.slotBitSet.cardinality()));
             }
-        }).sortedBy(it -> it._1).groupTo(it -> it._1, it -> it._2, Suppliers.ofLinkedHashMap());
+        })
+                .sorted(Comparators.<Tuple3<Integer, Integer, Integer>> comparingInt(it -> it._1).thenComparingInt(it -> it._2))
+                .groupTo(it -> it._1, Collectors.toMap(it -> it._2, it -> it._3, Suppliers.ofLinkedHashMap()), Suppliers.ofLinkedHashMap());
 
-        final long currentWriteCountToDisk = writeCountToDisk.get();
-        final long currentReadCountFromDisk = readCountFromDisk.get();
-        final BigInteger totalWriteTimeToDisk = totalWriteTimeToDiskHolder.value();
-        final BigInteger totalReadTimeFromDisk = totalReadTimeFromDiskHolder.value();
+        // TODO check if there is duplicated segment size and index. for debug purpose and will be removed later.
+        if (Stream.of(occupiedSlots.values()).flatmap(Map::keySet).hasDuplicates()) {
+            throw new RuntimeException("Duplicated segment size and index found");
+        }
 
-        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), cachedCountOnDisk.get(), poolStats.putCount(), currentWriteCountToDisk,
-                poolStats.getCount(), poolStats.hitCount(), currentReadCountFromDisk, poolStats.missCount(), poolStats.evictionCount(),
-                evictionCountFromDisk.get(), _capacityInBytes, totalOccupiedMemorySize.get(), totalDataSize.get(), dataSizeOnDisk.get(), SEGMENT_SIZE,
-                usedSlotCount, currentWriteCountToDisk == 0 ? 0D : totalWriteTimeToDisk.divide(BigInteger.valueOf(currentWriteCountToDisk)).doubleValue(),
-                currentReadCountFromDisk == 0 ? 0D : totalReadTimeFromDisk.divide(BigInteger.valueOf(currentReadCountFromDisk)).doubleValue());
+        final long totalWriteToDiskCount = totalWriteToDiskTimeStats.getCount();
+        final long totalReadFromDiskCount = totalReadFromDiskTimeStats.getCount();
+
+        final MinMaxAvg writeToDiskTimeStats = new MinMaxAvg(totalWriteToDiskCount > 0 ? totalWriteToDiskTimeStats.getMin() : 0.0D,
+                totalWriteToDiskCount > 0 ? totalWriteToDiskTimeStats.getMax() : 0.0D,
+                totalWriteToDiskCount > 0 ? Numbers.round(totalWriteToDiskTimeStats.getAverage(), 2) : 0.0D);
+
+        final MinMaxAvg readFromDiskTimeStats = new MinMaxAvg(totalReadFromDiskCount > 0 ? totalReadFromDiskTimeStats.getMin() : 0.0D,
+                totalReadFromDiskCount > 0 ? totalReadFromDiskTimeStats.getMax() : 0.0D,
+                totalReadFromDiskCount > 0 ? Numbers.round(totalReadFromDiskTimeStats.getAverage(), 2) : 0.0D);
+
+        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), sizeOnDisk.get(), poolStats.putCount(), writeCountToDisk.get(),
+                poolStats.getCount(), poolStats.hitCount(), readCountFromDisk.get(), poolStats.missCount(), poolStats.evictionCount(),
+                evictionCountFromDisk.get(), _capacityInBytes, totalOccupiedMemorySize.get(), totalDataSize.get(), dataSizeOnDisk.get(), writeToDiskTimeStats,
+                readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
     }
 
     @Override
@@ -724,11 +735,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         private final BitSet slotBitSet = new BitSet();
         private final long segmentStartPtr;
+        private final int index;
         // It can be reset/reused by set sizeOfSlot to: 64, 128, 256, 512, 1024, 2048, 4096, 8192....
         private int sizeOfSlot;
 
-        public Segment(final long segmentStartPtr) {
+        public Segment(final long segmentStartPtr, final int index) {
             this.segmentStartPtr = segmentStartPtr;
+            this.index = index;
+        }
+
+        public int index() {
+            return index;
         }
 
         public int allocateSlot() {
@@ -808,7 +825,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         @Override
-        public void destroy() {
+        public void destroy(final Caller caller) {
             synchronized (this) {
                 if (slot != null) {
                     totalOccupiedMemorySize.addAndGet(-slot.segment.sizeOfSlot);
@@ -867,7 +884,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         @Override
-        public void destroy() {
+        public void destroy(final Caller caller) {
             synchronized (this) {
                 if (N.notEmpty(slots)) {
                     for (final Slot slot : slots) {
@@ -891,7 +908,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             this.permenantKey = permenantKey;
 
-            cachedCountOnDisk.incrementAndGet();
+            sizeOnDisk.incrementAndGet();
             dataSizeOnDisk.addAndGet(size);
         }
 
@@ -921,15 +938,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         @Override
-        public void destroy() {
+        public void destroy(final Caller caller) {
             synchronized (this) {
                 if (permenantKey != null) {
-                    cachedCountOnDisk.decrementAndGet();
+                    if (caller == Caller.EVICT || caller == Caller.VACATE) {
+                        evictionCountFromDisk.incrementAndGet();
+                    }
+
+                    sizeOnDisk.decrementAndGet();
                     dataSizeOnDisk.addAndGet(-size);
 
                     totalDataSize.addAndGet(-size);
-
-                    evictionCountFromDisk.incrementAndGet();
 
                     offHeapStore.remove(permenantKey);
                     permenantKey = null;

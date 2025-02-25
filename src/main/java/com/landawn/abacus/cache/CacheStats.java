@@ -22,7 +22,7 @@ package com.landawn.abacus.cache;
  * <p>
  * A snapshot of the statistics of a {@link Cache} at a point in time.
  */
-public record CacheStats(int capacity, int cachedCount, long putCount, long getCount, long hitCount, long missCount, long evictionCount, long maxMemory,
+public record CacheStats(int capacity, int size, long putCount, long getCount, long hitCount, long missCount, long evictionCount, long maxMemory,
         long dataSize) {
 
 }
