@@ -6,6 +6,11 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
         long missCount, long evictionCount, long evictionCountFromDisk, long allocatedMemory, long occupiedMemory, long dataSize, long dataSizeOnDisk,
         MinMaxAvg writeToDiskTimeStats, MinMaxAvg readFromDiskTimeStats, int segmentSize, Map<Integer, Map<Integer, Integer>> occupiedSlots) {
 
+    /**
+     * Returns a map of occupied slots. The key is the size of slot, and the value is a map of segment index and the number of occupied slots in the segment.
+     *
+     * @return
+     */
     public final Map<Integer, Map<Integer, Integer>> occupiedSlots() {
         return occupiedSlots;
     }

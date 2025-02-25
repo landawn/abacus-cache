@@ -9,6 +9,8 @@ import static org.junit.Assert.assertNull;
 
 import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -106,6 +108,7 @@ public class OffHeapCache25Test {
             .defaultMaxIdleTime(1000_000)
             .offHeapStore(offHeapStore)
             .statsTimeOnDisk(true)
+            .testerForLoadingItemFromDiskToMemory((activityPrint, _, _) -> activityPrint.getAccessCount() >= 100)
             .build(); //  new OffHeapCache25<>(4096, 3000, 1000_000, 1000_000);
     // private static final OffHeapCache<String, String> ohcache = new OffHeapCache<>(1204, 3000, 1000_000, 1000_000);
 
@@ -271,6 +274,47 @@ public class OffHeapCache25Test {
 
         N.sleep(4000);
         N.println(persistentCache.stats());
+    }
+
+    @Test
+    public void test_loadingItemFromDiskToMemory() {
+        for (int i = 0; i < 20000; i++) {
+            final Account account = createAccount(Account.class);
+            final StringBuilder sb = Objectory.createStringBuilder();
+
+            int tmp = Math.abs(rand.nextInt(1000));
+
+            while (tmp-- > 0) {
+                sb.append(account.getGui()).append('\\');
+            }
+
+            account.setFirstName(sb.toString());
+
+            Objectory.recycle(sb);
+
+            final String key = account.getEmailAddress();
+            persistentCache.put(key, account);
+            final Account account2 = persistentCache.get(key).orElse(null);
+
+            assertEquals(account, account2);
+        }
+
+        final List<String> keys = new ArrayList<>(persistentCache.keySet());
+
+        final Account account = createAccount(Account.class);
+        persistentCache.put(account.getEmailAddress(), account);
+
+        for (int i = 0; i < 100; i++) {
+            persistentCache.get(account.getEmailAddress());
+        }
+
+        keys.stream().skip(100).forEach(key -> {
+            persistentCache.remove(key);
+        });
+
+        persistentCache.get(account.getEmailAddress());
+
+        persistentCache.clear();
     }
 
     private Account createAccount(final Class<Account> cls) {

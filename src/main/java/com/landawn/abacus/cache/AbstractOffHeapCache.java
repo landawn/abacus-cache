@@ -42,6 +42,7 @@ import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.parser.Parser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.pool.AbstractPoolable;
+import com.landawn.abacus.pool.ActivityPrint;
 import com.landawn.abacus.pool.EvictionPolicy;
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
@@ -61,6 +62,7 @@ import com.landawn.abacus.util.Numbers;
 import com.landawn.abacus.util.Objectory;
 import com.landawn.abacus.util.Tuple;
 import com.landawn.abacus.util.Tuple.Tuple3;
+import com.landawn.abacus.util.function.TriPredicate;
 import com.landawn.abacus.util.stream.Collectors;
 import com.landawn.abacus.util.stream.Stream;
 
@@ -225,6 +227,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final BiFunction<byte[], Type<V>, ? extends V> deserializer;
     final OffHeapStore<K> offHeapStore;
     final boolean statsTimeOnDisk;
+    final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
     final LongSummaryStatistics totalWriteToDiskTimeStats = new LongSummaryStatistics();
     final LongSummaryStatistics totalReadFromDiskTimeStats = new LongSummaryStatistics();
 
@@ -232,7 +235,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime, final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
-            final Logger logger) {
+            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "The Maximum Block size can't be: {}. It must be >= 1024 and <= {}", maxBlockSize,
@@ -262,6 +265,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
         this.offHeapStore = offHeapStore;
         this.statsTimeOnDisk = statsTimeOnDisk;
+        this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
 
         if (evictDelay > 0) {
             final Runnable evictTask = () -> {
@@ -303,17 +307,113 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public V gett(final K k) {
         final Wrapper<V> w = _pool.get(k);
 
-        if (w instanceof StoreWrapper) {
+        if (w instanceof final StoreWrapper storeWrapper) {
             readCountFromDisk.incrementAndGet();
 
-            if (statsTimeOnDisk) {
+            if (statsTimeOnDisk || testerForLoadingItemFromDiskToMemory != null) {
                 final long startTime = System.currentTimeMillis();
 
                 try {
                     return w.read();
                 } finally {
-                    synchronized (totalReadFromDiskTimeStats) {
-                        totalReadFromDiskTimeStats.accept(System.currentTimeMillis() - startTime);
+                    final long elapsedTime = System.currentTimeMillis() - startTime;
+
+                    if (statsTimeOnDisk) {
+                        synchronized (totalReadFromDiskTimeStats) {
+                            totalReadFromDiskTimeStats.accept(elapsedTime);
+                        }
+                    }
+
+                    if (testerForLoadingItemFromDiskToMemory != null
+                            && testerForLoadingItemFromDiskToMemory.test(storeWrapper.activityPrint(), storeWrapper.size, elapsedTime)) {
+
+                        final ActivityPrint activityPrint = storeWrapper.activityPrint();
+                        final long maxIdleTime = activityPrint.getMaxIdleTime();
+                        final long liveTime = activityPrint.getLiveTime() - (System.currentTimeMillis() - activityPrint.getCreatedTime());
+
+                        final int size = storeWrapper.size;
+                        final byte[] bytes = liveTime > 0 ? offHeapStore.get(k) : null;
+
+                        if (bytes != null && bytes.length == size) {
+                            Slot slot = null;
+                            List<Slot> slots = null;
+                            int occupiedMemory = 0;
+                            Wrapper<V> slotWrapper = null;
+
+                            try {
+                                if (size <= _maxBlockSize) {
+                                    slot = getAvailableSlot(size);
+
+                                    if (slot != null) {
+                                        final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
+
+                                        copyToMemory(bytes, _arrayOffset, slotStartPtr, size);
+
+                                        occupiedMemory = slot.segment.sizeOfSlot;
+
+                                        slotWrapper = new SlotWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slot, slotStartPtr);
+                                    }
+                                } else {
+                                    slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
+                                    int copiedSize = 0;
+                                    int srcOffset = _arrayOffset;
+
+                                    while (copiedSize < size) {
+                                        final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
+                                        slot = getAvailableSlot(sizeToCopy);
+
+                                        if (slot == null) {
+                                            break;
+                                        }
+
+                                        final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
+
+                                        copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
+
+                                        srcOffset += sizeToCopy;
+                                        copiedSize += sizeToCopy;
+
+                                        occupiedMemory += slot.segment.sizeOfSlot;
+                                        slots.add(slot);
+                                    }
+
+                                    if (copiedSize == size) {
+                                        slotWrapper = new MultiSlotsWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slots);
+                                    }
+                                }
+                            } finally {
+                                if (slotWrapper == null) {
+                                    if (slot != null) {
+                                        slot.release();
+                                    }
+
+                                    if (slots != null) {
+                                        for (final Slot e : slots) {
+                                            e.release();
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (slotWrapper != null) {
+                                boolean result = false;
+
+                                try {
+                                    remove(k);
+
+                                    totalOccupiedMemorySize.addAndGet(occupiedMemory);
+
+                                    totalDataSize.addAndGet(size);
+
+                                    result = _pool.put(k, slotWrapper);
+                                } finally {
+                                    if (!result) {
+                                        slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
+                                    }
+
+                                }
+                            }
+                        }
                     }
                 }
             } else {
