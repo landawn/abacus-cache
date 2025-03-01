@@ -893,7 +893,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    abstract static class Wrapper<T> extends AbstractPoolable {
+    abstract class Wrapper<T> extends AbstractPoolable {
         final Type<T> type;
         final int size;
 
@@ -907,7 +907,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         abstract T read();
     }
 
-    final static class SlotWrapper<V> extends Wrapper<V> {
+    final class SlotWrapper extends Wrapper<V> {
 
         private Slot slot;
         private final long slotStartPtr;
