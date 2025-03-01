@@ -28,6 +28,7 @@ import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.pool.ActivityPrint;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.ByteArrayOutputStream;
+import com.landawn.abacus.util.function.TriFunction;
 import com.landawn.abacus.util.function.TriPredicate;
 
 import lombok.Data;
@@ -80,15 +81,16 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * @param defaultMaxIdleTime unit is milliseconds
      */
     OffHeapCache25(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
-        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null);
+        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null,
+                null);
     }
 
     OffHeapCache25(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
-            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory) {
+            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector) {
         super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, 0, serializer, deserializer, offHeapStore,
-                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, logger);
+                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger);
     }
 
     @Override
@@ -134,10 +136,12 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
         private OffHeapStore<K> offHeapStore;
         private boolean statsTimeOnDisk;
         private TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
+        private TriFunction<K, V, Integer, Integer> storeSelector;
 
         public OffHeapCache25<K, V> build() {
             return new OffHeapCache25<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,
-                    defaultMaxIdleTime, vacatingFactor, serializer, deserializer, offHeapStore, statsTimeOnDisk, testerForLoadingItemFromDiskToMemory);
+                    defaultMaxIdleTime, vacatingFactor, serializer, deserializer, offHeapStore, statsTimeOnDisk, testerForLoadingItemFromDiskToMemory,
+                    storeSelector);
         }
     }
 }

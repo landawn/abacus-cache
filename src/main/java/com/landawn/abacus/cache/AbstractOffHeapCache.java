@@ -62,6 +62,7 @@ import com.landawn.abacus.util.Numbers;
 import com.landawn.abacus.util.Objectory;
 import com.landawn.abacus.util.Tuple;
 import com.landawn.abacus.util.Tuple.Tuple3;
+import com.landawn.abacus.util.function.TriFunction;
 import com.landawn.abacus.util.function.TriPredicate;
 import com.landawn.abacus.util.stream.Collectors;
 import com.landawn.abacus.util.stream.Stream;
@@ -228,6 +229,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final OffHeapStore<K> offHeapStore;
     final boolean statsTimeOnDisk;
     final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
+    final TriFunction<K, V, Integer, Integer> storeSelector;
     final LongSummaryStatistics totalWriteToDiskTimeStats = new LongSummaryStatistics();
     final LongSummaryStatistics totalReadFromDiskTimeStats = new LongSummaryStatistics();
 
@@ -235,7 +237,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime, final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
-            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final Logger logger) {
+            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
+            final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "The Maximum Block size can't be: {}. It must be >= 1024 and <= {}", maxBlockSize,
@@ -266,6 +269,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         this.offHeapStore = offHeapStore;
         this.statsTimeOnDisk = statsTimeOnDisk;
         this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
+        this.storeSelector = storeSelector;
 
         if (evictDelay > 0) {
             final Runnable evictTask = () -> {
@@ -449,12 +453,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             size = os.size();
         }
 
+        final boolean canBeStoredInMemory = storeSelector == null || storeSelector.apply(k, v, size) < 2;
+        final boolean canBeStoredToDisk = storeSelector == null || storeSelector.apply(k, v, size) != 1;
+
         Slot slot = null;
         List<Slot> slots = null;
 
         try {
             if (size <= _maxBlockSize) {
-                slot = getAvailableSlot(size);
+                slot = canBeStoredInMemory ? getAvailableSlot(size) : null;
 
                 if (slot != null) {
                     final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
@@ -464,36 +471,39 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     occupiedMemory = slot.segment.sizeOfSlot;
 
                     w = new SlotWrapper(type, liveTime, maxIdleTime, size, slot, slotStartPtr);
-                } else if ((offHeapStore != null)) {
+                } else if (canBeStoredToDisk && offHeapStore != null) {
                     w = putToDisk(k, liveTime, maxIdleTime, type, bytes, size);
                 }
             } else {
-                slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
                 int copiedSize = 0;
-                int srcOffset = _arrayOffset;
 
-                while (copiedSize < size) {
-                    final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
-                    slot = getAvailableSlot(sizeToCopy);
+                if (canBeStoredInMemory) {
+                    slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
+                    int srcOffset = _arrayOffset;
 
-                    if (slot == null) {
-                        break;
+                    while (copiedSize < size) {
+                        final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
+                        slot = getAvailableSlot(sizeToCopy);
+
+                        if (slot == null) {
+                            break;
+                        }
+
+                        final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
+
+                        copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
+
+                        srcOffset += sizeToCopy;
+                        copiedSize += sizeToCopy;
+
+                        occupiedMemory += slot.segment.sizeOfSlot;
+                        slots.add(slot);
                     }
-
-                    final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-
-                    copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
-
-                    srcOffset += sizeToCopy;
-                    copiedSize += sizeToCopy;
-
-                    occupiedMemory += slot.segment.sizeOfSlot;
-                    slots.add(slot);
                 }
 
                 if (copiedSize == size) {
                     w = new MultiSlotsWrapper(type, liveTime, maxIdleTime, size, slots);
-                } else if (offHeapStore != null) {
+                } else if (canBeStoredToDisk && offHeapStore != null) {
                     w = putToDisk(k, liveTime, maxIdleTime, type, bytes, size);
                 }
             }
@@ -679,24 +689,26 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     break;
                 }
             }
+        }
 
-            if (indexOfAvailableSlot < 0) {
-                synchronized (_segmentBitSet) {
-                    final int nextSegmentIndex = _segmentBitSet.nextClearBit(0);
+        if (indexOfAvailableSlot < 0) {
+            synchronized (_segmentBitSet) {
+                final int nextSegmentIndex = _segmentBitSet.nextClearBit(0);
 
-                    if (nextSegmentIndex >= _segments.length) {
-                        return null; // No space available;
-                    }
+                if (nextSegmentIndex >= _segments.length) {
+                    return null; // No space available;
+                }
 
-                    segment = _segments[nextSegmentIndex];
-                    segment.sizeOfSlot = slotSize;
+                _segmentBitSet.set(nextSegmentIndex);
+                _segmentQueueMap.put(nextSegmentIndex, queue);
 
-                    _segmentBitSet.set(nextSegmentIndex);
-                    _segmentQueueMap.put(nextSegmentIndex, queue);
+                segment = _segments[nextSegmentIndex];
+                segment.sizeOfSlot = slotSize;
 
+                indexOfAvailableSlot = segment.allocateSlot();
+
+                synchronized (queue) {
                     queue.addFirst(segment);
-
-                    indexOfAvailableSlot = segment.allocateSlot();
                 }
             }
         }
@@ -895,7 +907,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         abstract T read();
     }
 
-    final class SlotWrapper extends Wrapper<V> {
+    final static class SlotWrapper<V> extends Wrapper<V> {
 
         private Slot slot;
         private final long slotStartPtr;

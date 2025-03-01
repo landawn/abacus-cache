@@ -27,6 +27,7 @@ import com.landawn.abacus.pool.ActivityPrint;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.ClassUtil;
+import com.landawn.abacus.util.function.TriFunction;
 import com.landawn.abacus.util.function.TriPredicate;
 
 import lombok.Data;
@@ -36,7 +37,7 @@ import lombok.experimental.Accessors;
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
 /**
- * It's not designed for tiny objects(length of bytes < 128 after serialization).
+ * It's not designed for tiny objects(length of bytes &lt; 128 after serialization).
  * Since it's off heap cache, modifying the objects from cache won't impact the objects in cache.
  *
  * @param <K> the key type
@@ -91,15 +92,16 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param defaultMaxIdleTime unit is milliseconds
      */
     OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
-        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null);
+        this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null,
+                null);
     }
 
     OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
-            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory) {
+            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector) {
         super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, BYTE_ARRAY_BASE, serializer, deserializer,
-                offHeapStore, statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, logger);
+                offHeapStore, statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger);
     }
 
     @SuppressWarnings("removal")
@@ -146,10 +148,14 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         private OffHeapStore<K> offHeapStore;
         private boolean statsTimeOnDisk;
         private TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
+        // first input parameter is key, second input parameter is value, third input parameter is the size of value.
+        // 0 -> default, 1 -> memory only, 2 -> disk only
+        private TriFunction<K, V, Integer, Integer> storeSelector;
 
         public OffHeapCache<K, V> build() {
             return new OffHeapCache<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,
-                    defaultMaxIdleTime, vacatingFactor, serializer, deserializer, offHeapStore, statsTimeOnDisk, testerForLoadingItemFromDiskToMemory);
+                    defaultMaxIdleTime, vacatingFactor, serializer, deserializer, offHeapStore, statsTimeOnDisk, testerForLoadingItemFromDiskToMemory,
+                    storeSelector);
         }
     }
 
