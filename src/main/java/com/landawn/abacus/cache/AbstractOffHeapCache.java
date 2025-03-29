@@ -893,7 +893,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    abstract class Wrapper<T> extends AbstractPoolable {
+    abstract static class Wrapper<T> extends AbstractPoolable {
         final Type<T> type;
         final int size;
 
@@ -1013,12 +1013,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     final class StoreWrapper extends Wrapper<V> {
-        private K permenantKey;
+        private K permanentKey;
 
         StoreWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final K permenantKey) {
             super(type, liveTime, maxIdleTime, size);
 
-            this.permenantKey = permenantKey;
+            this.permanentKey = permenantKey;
 
             sizeOnDisk.incrementAndGet();
             dataSizeOnDisk.addAndGet(size);
@@ -1027,7 +1027,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         V read() {
             synchronized (this) {
-                final byte[] bytes = offHeapStore.get(permenantKey);
+                final byte[] bytes = offHeapStore.get(permanentKey);
 
                 if (bytes == null) {
                     return null;
@@ -1052,7 +1052,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         public void destroy(final Caller caller) {
             synchronized (this) {
-                if (permenantKey != null) {
+                if (permanentKey != null) {
                     if (caller == Caller.EVICT || caller == Caller.VACATE) {
                         evictionCountFromDisk.incrementAndGet();
                     }
@@ -1062,8 +1062,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                     totalDataSize.addAndGet(-size);
 
-                    offHeapStore.remove(permenantKey);
-                    permenantKey = null;
+                    offHeapStore.remove(permanentKey);
+                    permanentKey = null;
                 }
             }
         }
