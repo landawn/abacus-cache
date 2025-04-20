@@ -49,7 +49,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     private boolean isClosed = false;
 
     protected DistributedCache(final DistributedCacheClient<V> dcc) {
-        this(dcc, Strings.EMPTY_STRING, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
+        this(dcc, Strings.EMPTY, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
     }
 
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
@@ -57,7 +57,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
-        this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY_STRING : keyPrefix;
+        this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
         this.dcc = dcc;
         this.maxFailedNumForRetry = maxFailedNumForRetry;
         this.retryDelay = retryDelay;
