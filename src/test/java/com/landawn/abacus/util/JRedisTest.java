@@ -48,7 +48,7 @@ public class JRedisTest extends TestCase {
         account.setMiddleName(MIDDLE_NAME);
         account.setLastName(lastName);
         account.setEmailAddress(account.getGui() + "@email");
-        account.setBirthDate(DateUtil.currentTimestamp());
+        account.setBirthDate(Dates.currentTimestamp());
 
         return account;
     }

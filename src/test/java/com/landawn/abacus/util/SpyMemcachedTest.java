@@ -160,7 +160,7 @@ public class SpyMemcachedTest extends TestCase {
         account.setMiddleName(MIDDLE_NAME);
         account.setLastName(lastName);
         account.setEmailAddress(getEmail(account.getGui()));
-        account.setBirthDate(DateUtil.currentTimestamp());
+        account.setBirthDate(Dates.currentTimestamp());
 
         return account;
     }
