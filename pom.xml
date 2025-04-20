@@ -5,17 +5,17 @@
 
 	<groupId>com.landawn</groupId>
 	<artifactId>abacus-cache</artifactId>
-	<version>1.3.4</version>
+	<version>1.3.5</version>
 	<packaging>jar</packaging>
 
 	<name>abacus-cache</name>
 	<url>https://github.com/landawn/abacus-cache</url>
 
 	<properties>
-		<java.version>24</java.version>
-		<maven.compiler.source>24</maven.compiler.source>
-		<maven.compiler.target>24</maven.compiler.target>
-		<maven.compiler.release>24</maven.compiler.release>
+		<java.version>23</java.version>
+		<maven.compiler.source>23</maven.compiler.source>
+		<maven.compiler.target>23</maven.compiler.target>
+		<maven.compiler.release>23</maven.compiler.release>
 		<junit.jupiter.version>5.10.1</junit.jupiter.version>
 		<junit.platform.version>1.10.1</junit.platform.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
