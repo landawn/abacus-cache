@@ -38,7 +38,7 @@ import lombok.experimental.Accessors;
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
 /**
- * It's not designed for tiny objects(length of bytes &lt; 128 after serialization).
+ * It's not designed for tiny objects (length of bytes &lt; 128 after serialization).
  * Since it's off heap cache, modifying the objects from cache won't impact the objects in cache.
  *
  * @param <K> the key type
