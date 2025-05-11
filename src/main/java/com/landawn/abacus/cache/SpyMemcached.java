@@ -111,7 +111,6 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings("unchecked")
     @Override
-    @SafeVarargs
     public final Map<String, T> getBulk(final String... keys) {
         return (Map<String, T>) mc.getBulk(keys);
     }
@@ -123,7 +122,6 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
-    @SafeVarargs
     public final Future<Map<String, T>> asyncGetBulk(final String... keys) {
         return (Future) mc.asyncGetBulk(keys);
     }

@@ -308,9 +308,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     @Override
     public V gett(final K k) {
-        final Wrapper<V> w = _pool.get(k);
+        final Wrapper<V> w = _pool.get(k); 
 
-        if (w instanceof final StoreWrapper storeWrapper) {
+        // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
+        if (w != null && StoreWrapper.class.equals(w.getClass())) {
+            final StoreWrapper storeWrapper = (StoreWrapper) w;
+
             readCountFromDisk.incrementAndGet();
 
             if (statsTimeOnDisk || testerForLoadingItemFromDiskToMemory != null) {
@@ -509,7 +512,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         } finally {
             Objectory.recycle(os);
 
-            if (w == null || w instanceof StoreWrapper) {
+            // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
+            if (w == null || StoreWrapper.class.equals(w.getClass())) {
                 if (slot != null) {
                     slot.release();
                 }
@@ -530,9 +534,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         boolean result = false;
+        final Class<?> wcls = w.getClass();
 
         try {
-            if (w instanceof SlotWrapper || w instanceof MultiSlotsWrapper) {
+            // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
+
+            if (SlotWrapper.class.equals(wcls) || MultiSlotsWrapper.class.equals(wcls)) {
                 totalOccupiedMemorySize.addAndGet(occupiedMemory);
             }
 
@@ -544,7 +551,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 w.destroy(Caller.PUT_ADD_FAILURE);
             }
 
-            if (w instanceof StoreWrapper) {
+            // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
+            if (StoreWrapper.class.equals(wcls)) {
                 writeCountToDisk.incrementAndGet();
 
                 if (statsTimeOnDisk) {
@@ -892,7 +900,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    abstract class Wrapper<T> extends AbstractPoolable {
+    abstract static class Wrapper<T> extends AbstractPoolable {
         final Type<T> type;
         final int size;
 
