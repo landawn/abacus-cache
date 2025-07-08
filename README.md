@@ -1,7 +1,7 @@
 # abacus-cache
 
 [![Maven Central](https://img.shields.io/maven-central/v/com.landawn/abacus-cache.svg)](https://maven-badges.herokuapp.com/maven-central/com.landawn/abacus-cache/)
-[![Javadocs](https://img.shields.io/badge/javadoc-1.3.7-brightgreen.svg)](https://www.javadoc.io/doc/com.landawn/abacus-cache/1.3.7/index.html)
+[![Javadocs](https://img.shields.io/badge/javadoc-1.3.8-brightgreen.svg)](https://www.javadoc.io/doc/com.landawn/abacus-cache/1.3.8/index.html)
 
 
 * SpyMemcached/JRedis: 
@@ -16,7 +16,7 @@
 * Gradle:
 ```gradle
 // JDK 1.8 or above:
-compile 'com.landawn:abacus-cache:1.3.7'
+compile 'com.landawn:abacus-cache:1.3.8'
 ```
 
 
