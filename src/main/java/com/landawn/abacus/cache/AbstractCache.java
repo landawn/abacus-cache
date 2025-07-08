@@ -24,36 +24,117 @@ import com.landawn.abacus.util.Properties;
 import com.landawn.abacus.util.u.Optional;
 
 /**
+ * Abstract base class for all cache implementations providing common functionality.
+ * This class implements the asynchronous operations, property management, and default
+ * behaviors defined in the Cache interface. It serves as the foundation for all
+ * concrete cache implementations in the framework.
+ * 
+ * <br><br>
+ * Key features provided:
+ * <ul>
+ * <li>Asynchronous operation implementations using a shared thread pool</li>
+ * <li>Default TTL and idle time management</li>
+ * <li>Property bag for custom configuration</li>
+ * <li>Optional-based wrapper methods</li>
+ * </ul>
+ * 
+ * <br>
+ * Subclasses must implement:
+ * <ul>
+ * <li>{@link #gett(Object)} - Direct value retrieval</li>
+ * <li>{@link #put(Object, Object, long, long)} - Storage with expiration</li>
+ * <li>{@link #remove(Object)} - Entry removal</li>
+ * <li>{@link #containsKey(Object)} - Key existence check</li>
+ * <li>{@link #keySet()} - Key enumeration (optional)</li>
+ * <li>{@link #size()} - Entry count (optional)</li>
+ * <li>{@link #clear()} - Bulk removal</li>
+ * <li>{@link #close()} - Resource cleanup</li>
+ * <li>{@link #isClosed()} - State check</li>
+ * </ul>
+ * 
+ * <br>
+ * Example of extending this class:
+ * <pre>{@code
+ * public class MyCache<K, V> extends AbstractCache<K, V> {
+ *     private final Map<K, V> storage = new ConcurrentHashMap<>();
+ *     
+ *     @Override
+ *     public V gett(K key) {
+ *         return storage.get(key);
+ *     }
+ *     
+ *     @Override
+ *     public boolean put(K key, V value, long liveTime, long maxIdleTime) {
+ *         storage.put(key, value);
+ *         // Handle expiration logic
+ *         return true;
+ *     }
+ *     // ... implement other abstract methods
+ * }
+ * }</pre>
  *
  * @param <K> the key type
  * @param <V> the value type
+ * @see Cache
+ * @see LocalCache
+ * @see DistributedCache
  */
 public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
+    /**
+     * Shared async executor for all cache implementations.
+     * Configured with a thread pool sized based on CPU cores to efficiently
+     * handle asynchronous cache operations without overwhelming the system.
+     */
     protected static final AsyncExecutor asyncExecutor = new AsyncExecutor(//
             N.max(64, IOUtil.CPU_CORES * 8), // coreThreadPoolSize
             N.max(128, IOUtil.CPU_CORES * 16), // maxThreadPoolSize
             180L, TimeUnit.SECONDS);
 
+    /**
+     * Property bag for storing custom configuration and metadata.
+     * Can be used by cache implementations and users to store arbitrary properties.
+     */
     protected final Properties<String, Object> properties = new Properties<>();
 
+    /**
+     * Default time-to-live for cache entries in milliseconds.
+     * Used when put() is called without explicit TTL.
+     */
     protected final long defaultLiveTime;
 
+    /**
+     * Default maximum idle time for cache entries in milliseconds.
+     * Used when put() is called without explicit idle time.
+     */
     protected final long defaultMaxIdleTime;
 
+    /**
+     * Creates an AbstractCache with default expiration times.
+     * Uses DEFAULT_LIVE_TIME (3 hours) and DEFAULT_MAX_IDLE_TIME (30 minutes).
+     */
     protected AbstractCache() {
         this(DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
+    /**
+     * Creates an AbstractCache with custom default expiration times.
+     * These defaults are used when entries are added without explicit expiration.
+     *
+     * @param defaultLiveTime default TTL in milliseconds for new entries
+     * @param defaultMaxIdleTime default max idle time in milliseconds for new entries
+     */
     protected AbstractCache(final long defaultLiveTime, final long defaultMaxIdleTime) {
         this.defaultLiveTime = defaultLiveTime;
         this.defaultMaxIdleTime = defaultMaxIdleTime;
     }
 
     /**
+     * Retrieves a value from the cache wrapped in an Optional.
+     * This method provides a null-safe alternative to gett().
      *
-     * @param k
-     * @return
+     * @param k the key to look up
+     * @return an Optional containing the value if present, or empty if not found
      */
     @Override
     public Optional<V> get(final K k) {
@@ -61,10 +142,12 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
+     * Stores a key-value pair using default expiration settings.
+     * The default TTL and idle time specified in the constructor are used.
      *
-     * @param key
-     * @param value
-     * @return true, if successful
+     * @param key the key
+     * @param value the value to cache
+     * @return true if the operation was successful
      */
     @Override
     public boolean put(final K key, final V value) {
@@ -72,9 +155,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
+     * Asynchronously retrieves a value from the cache.
+     * The operation is executed on the shared thread pool.
      *
-     * @param k
-     * @return
+     * @param k the key to look up
+     * @return a future that will contain the Optional result
      */
     @Override
     public ContinuableFuture<Optional<V>> asyncGet(final K k) {
@@ -82,9 +167,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
+     * Asynchronously retrieves a value from the cache directly.
+     * The operation is executed on the shared thread pool.
      *
-     * @param k
-     * @return
+     * @param k the key to look up
+     * @return a future that will contain the value or null
      */
     @Override
     public ContinuableFuture<V> asyncGett(final K k) {
@@ -92,10 +179,12 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
+     * Asynchronously stores a key-value pair using default expiration.
+     * The operation is executed on the shared thread pool.
      *
-     * @param k
-     * @param v
-     * @return
+     * @param k the key
+     * @param v the value to cache
+     * @return a future that will contain true if successful
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K k, final V v) {
@@ -103,12 +192,14 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
+     * Asynchronously stores a key-value pair with custom expiration.
+     * The operation is executed on the shared thread pool.
      *
-     * @param k
-     * @param v
-     * @param liveTime
-     * @param maxIdleTime
-     * @return
+     * @param k the key
+     * @param v the value to cache
+     * @param liveTime TTL in milliseconds
+     * @param maxIdleTime max idle time in milliseconds
+     * @return a future that will contain true if successful
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -116,9 +207,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
+     * Asynchronously removes an entry from the cache.
+     * The operation is executed on the shared thread pool.
      *
-     * @param k
-     * @return
+     * @param k the key to remove
+     * @return a future that completes when the operation finishes
      */
     @Override
     public ContinuableFuture<Void> asyncRemove(final K k) {
@@ -130,10 +223,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Async contains key.
+     * Asynchronously checks if the cache contains a key.
+     * The operation is executed on the shared thread pool.
      *
-     * @param k
-     * @return
+     * @param k the key to check
+     * @return a future that will contain true if the key exists
      */
     @Override
     public ContinuableFuture<Boolean> asyncContainsKey(final K k) {
@@ -141,9 +235,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Gets the properties.
+     * Returns the properties container for this cache.
+     * Properties can be used to store custom configuration or metadata
+     * that needs to be associated with the cache instance.
      *
-     * @return
+     * @return the properties container
      */
     @Override
     public Properties<String, Object> getProperties() {
@@ -151,11 +247,12 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Gets the property.
+     * Retrieves a property value by name.
+     * Returns null if the property doesn't exist.
      *
-     * @param <T>
-     * @param propName
-     * @return
+     * @param <T> the expected type of the property value
+     * @param propName the property name
+     * @return the property value cast to T, or null if not found
      */
     @Override
     public <T> T getProperty(final String propName) {
@@ -163,12 +260,14 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Sets the property.
+     * Sets a property value.
+     * Properties can be used for custom configuration or to store
+     * metadata about the cache or its usage.
      *
-     * @param <T>
-     * @param propName
-     * @param propValue
-     * @return
+     * @param <T> the type of the previous value
+     * @param propName the property name
+     * @param propValue the new property value
+     * @return the previous value cast to T, or null if none existed
      */
     @Override
     public <T> T setProperty(final String propName, final Object propValue) {
@@ -176,11 +275,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Removes the property.
+     * Removes a property from the cache.
      *
-     * @param <T>
-     * @param propName
-     * @return
+     * @param <T> the type of the removed value
+     * @param propName the property name to remove
+     * @return the removed value cast to T, or null if the property didn't exist
      */
     @Override
     public <T> T removeProperty(final String propName) {

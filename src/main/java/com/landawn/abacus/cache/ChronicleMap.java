@@ -15,12 +15,35 @@
 package com.landawn.abacus.cache;
 
 /**
+ * A placeholder class for Chronicle Map integration.
+ * Chronicle Map is a high-performance, off-heap, key-value store that provides
+ * concurrent access with strong consistency guarantees. This class is intended
+ * to provide integration with Chronicle Map in the Abacus caching framework.
+ * 
+ * <br><br>
+ * Chronicle Map features:
+ * <ul>
+ * <li>Off-heap storage to reduce GC pressure</li>
+ * <li>Memory-mapped files for persistence</li>
+ * <li>Zero-copy operations</li>
+ * <li>Lock-free reads under MVCC</li>
+ * <li>Excellent performance for concurrent access</li>
+ * </ul>
+ * 
+ * <br>
+ * Note: This is currently a placeholder implementation. The actual implementation
+ * would wrap Chronicle Map's functionality to conform to the Abacus Cache interface.
  *
- * @see <a href="https://github.com/OpenHFT/Chronicle-Map">Chronicle-Map</a>
+ * @see <a href="https://github.com/OpenHFT/Chronicle-Map">Chronicle-Map on GitHub</a>
  */
 public class ChronicleMap {
 
+    /**
+     * Private constructor to prevent instantiation of this placeholder class.
+     * The actual implementation would provide factory methods or constructors
+     * to create Chronicle Map instances.
+     */
     private ChronicleMap() {
-        // TODO
+        // TODO: Implement Chronicle Map integration
     }
 }

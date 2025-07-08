@@ -21,9 +21,42 @@ import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import com.landawn.abacus.util.Numbers;
 
 /**
+ * A wrapper implementation that adapts Caffeine cache to the Abacus Cache interface.
+ * Caffeine is a high-performance, near-optimal caching library based on Java 8.
+ * This class provides a bridge between Caffeine's API and the standardized Cache interface,
+ * allowing Caffeine to be used seamlessly within the Abacus caching framework.
+ * 
+ * <br><br>
+ * Caffeine features exposed through this wrapper:
+ * <ul>
+ * <li>Automatic eviction based on size, time, or references</li>
+ * <li>Concurrent performance close to ConcurrentHashMap</li>
+ * <li>Comprehensive statistics collection</li>
+ * <li>Asynchronous cache operations</li>
+ * </ul>
+ * 
+ * <br>
+ * Example usage:
+ * <pre>{@code
+ * Caffeine<String, User> caffeine = Caffeine.newBuilder()
+ *     .maximumSize(10000)
+ *     .expireAfterWrite(10, TimeUnit.MINUTES)
+ *     .recordStats()
+ *     .build();
+ * 
+ * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
+ * cache.put("user:123", user);
+ * 
+ * // Get Caffeine-specific statistics
+ * CacheStats stats = cache.stats();
+ * System.out.println("Hit rate: " + stats.hitRate());
+ * }</pre>
  *
  * @param <K> the key type
  * @param <V> the value type
+ * @see AbstractCache
+ * @see com.github.benmanes.caffeine.cache.Cache
+ * @see com.github.benmanes.caffeine.cache.Caffeine
  */
 public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
@@ -32,19 +65,22 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     private boolean isClosed = false;
 
     /**
+     * Creates a new CaffeineCache wrapper instance.
+     * The underlying Caffeine cache should be pre-configured with desired
+     * eviction policies, maximum size, and expiration settings.
      *
-     *
-     * @param cache
+     * @param cache the underlying Caffeine cache instance to wrap
      */
     public CaffeineCache(final Cache<K, V> cache) {
         cacheImpl = cache;
     }
 
     /**
-     * Gets the t.
+     * Retrieves a value from the cache by its key.
+     * This method uses Caffeine's getIfPresent which doesn't trigger cache loading.
      *
-     * @param k
-     * @return
+     * @param k the key to look up
+     * @return the cached value, or null if not present
      */
     @Override
     public V gett(final K k) {
@@ -54,25 +90,30 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Stores a key-value pair in the cache.
+     * Note: The individual TTL and idle time parameters are currently ignored
+     * as Caffeine's expiration policy is configured at cache creation time.
      *
-     * @param k
-     * @param v
-     * @param liveTime
-     * @param maxIdleTime
-     * @return true, if successful
+     * @param k the key
+     * @param v the value to cache
+     * @param liveTime the time-to-live in milliseconds (currently ignored)
+     * @param maxIdleTime the maximum idle time in milliseconds (currently ignored)
+     * @return true if the operation was successful
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
-        cacheImpl.put(k, v); // TODO
+        cacheImpl.put(k, v); // TODO: Support per-entry expiration
 
         return true;
     }
 
     /**
+     * Removes a key-value pair from the cache.
+     * This triggers immediate removal rather than just marking for eviction.
      *
-     * @param k
+     * @param k the key to remove
      */
     @Override
     public void remove(final K k) {
@@ -82,9 +123,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Checks if the cache contains a specific key.
+     * This method performs a cache lookup and may affect access-based eviction.
      *
-     * @param k
-     * @return true, if successful
+     * @param k the key to check
+     * @return true if the key exists in the cache
      */
     @Override
     public boolean containsKey(final K k) {
@@ -94,10 +137,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Returns the set of keys in the cache.
+     * This operation is not supported as Caffeine doesn't provide
+     * efficient key iteration for performance reasons.
      *
-     *
-     * @return
-     * @throws UnsupportedOperationException
+     * @return never returns normally
+     * @throws UnsupportedOperationException always thrown
      */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
@@ -105,9 +150,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Returns the estimated number of entries in the cache.
+     * This is an approximation and may not be exact due to concurrent modifications.
      *
-     *
-     * @return
+     * @return the estimated number of cache entries
      */
     @Override
     public int size() {
@@ -117,7 +163,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Clear.
+     * Performs cleanup of the cache by removing expired entries.
+     * This triggers Caffeine's cleanup process which is normally performed
+     * asynchronously during cache operations.
      */
     @Override
     public void clear() {
@@ -127,7 +175,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Close.
+     * Closes the cache and releases resources.
+     * After closing, the cache cannot be used anymore.
+     * This method is thread-safe and can be called multiple times.
      */
     @Override
     public synchronized void close() {
@@ -139,9 +189,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if is closed.
+     * Checks if the cache has been closed.
      *
-     * @return true, if is closed
+     * @return true if the cache is closed
      */
     @Override
     public boolean isClosed() {
@@ -149,16 +199,23 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Returns Caffeine-specific cache statistics.
+     * Statistics are only available if the cache was created with recordStats() enabled.
+     * The returned statistics provide detailed metrics about cache performance including
+     * hit rate, miss rate, load count, and eviction count.
      *
-     * @return
+     * @return cache statistics snapshot
      * @see Cache#stats()
+     * @see com.github.benmanes.caffeine.cache.stats.CacheStats
      */
     public CacheStats stats() {
         return cacheImpl.stats();
     }
 
     /**
-     * Assert not closed.
+     * Ensures the cache is not closed before performing operations.
+     *
+     * @throws IllegalStateException if the cache has been closed
      */
     protected void assertNotClosed() {
         if (isClosed) {

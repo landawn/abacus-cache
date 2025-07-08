@@ -18,100 +18,162 @@ import java.util.Collection;
 import java.util.Map;
 
 /**
+ * Interface for distributed cache client implementations.
+ * This interface defines the contract for distributed caching systems like Memcached and Redis,
+ * providing basic cache operations and atomic counter functionality. Implementations handle
+ * network communication, serialization, and distributed data management.
+ * 
+ * <br><br>
+ * Key features:
+ * <ul>
+ * <li>Basic CRUD operations (get, set, delete)</li>
+ * <li>Bulk operations for efficiency</li>
+ * <li>Atomic increment/decrement operations</li>
+ * <li>Time-based expiration support</li>
+ * </ul>
+ * 
+ * <br>
+ * Example usage:
+ * <pre>{@code
+ * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+ * client.set("user:123", user, 3600000); // Cache for 1 hour
+ * User cached = client.get("user:123");
+ * long visits = client.incr("visits:123");
+ * }</pre>
  *
- * @param <T>
+ * @param <T> the type of objects to be cached
+ * @see SpyMemcached
+ * @see JRedis
+ * @see DistributedCache
  */
 public interface DistributedCacheClient<T> {
 
+    /**
+     * Default timeout for network operations in milliseconds (1000ms).
+     */
     long DEFAULT_TIMEOUT = 1000;
 
+    /**
+     * Constant identifier for Memcached client type.
+     */
     String MEMCACHED = "Memcached";
 
+    /**
+     * Constant identifier for Redis client type.
+     */
     String REDIS = "Redis";
 
     /**
+     * Returns the server URL(s) this client is connected to.
+     * For multiple servers, the format is implementation-specific
+     * (e.g., comma-separated for some implementations).
      *
-     *
-     * @return
+     * @return the server URL(s)
      */
     String serverUrl();
 
     /**
+     * Retrieves an object from the cache by its key.
+     * Returns null if the key is not found or has expired.
      *
-     * @param key
-     * @return
+     * @param key the cache key
+     * @return the cached object, or null if not found
      */
     T get(String key);
 
     /**
-     * Gets the bulk.
+     * Retrieves multiple objects from the cache in a single operation.
+     * This is more efficient than multiple individual get operations.
+     * Keys not found in the cache will not be present in the returned map.
      *
-     * @param keys
-     * @return
+     * @param keys the cache keys to retrieve
+     * @return a map of found key-value pairs
      */
     Map<String, T> getBulk(String... keys);
 
     /**
-     * Gets the bulk.
+     * Retrieves multiple objects from the cache in a single operation.
+     * This is more efficient than multiple individual get operations.
+     * Keys not found in the cache will not be present in the returned map.
      *
-     * @param keys
-     * @return
+     * @param keys the collection of cache keys to retrieve
+     * @return a map of found key-value pairs
      */
     Map<String, T> getBulk(Collection<String> keys);
 
     /**
+     * Stores an object in the cache with a specified time-to-live.
+     * If the key already exists, its value will be replaced.
      *
-     * @param key
-     * @param obj
-     * @param liveTime
-     * @return true, if successful
+     * @param key the cache key
+     * @param obj the object to cache
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration)
+     * @return true if the operation was successful
      */
     boolean set(String key, T obj, long liveTime);
 
     /**
+     * Removes an object from the cache.
+     * This operation succeeds whether or not the key exists.
      *
-     * @param key
-     * @return true, if successful
+     * @param key the cache key to delete
+     * @return true if the operation was successful
      */
     boolean delete(String key);
 
     /**
+     * Atomically increments a numeric value by 1.
+     * If the key doesn't exist, it will be created with value 1.
+     * This operation is atomic across all clients.
      *
-     * @param key
-     * @return
+     * @param key the cache key
+     * @return the value after increment
      */
     long incr(String key);
 
     /**
+     * Atomically increments a numeric value by a specified amount.
+     * If the key doesn't exist, it will be created with the delta value.
+     * This operation is atomic across all clients.
      *
-     * @param key
-     * @param deta
-     * @return
+     * @param key the cache key
+     * @param deta the increment amount (can be negative for decrement)
+     * @return the value after increment
      */
     long incr(String key, int deta);
 
     /**
+     * Atomically decrements a numeric value by 1.
+     * If the key doesn't exist, behavior is implementation-specific
+     * (some create it with -1, others with 0 then decrement).
+     * This operation is atomic across all clients.
      *
-     * @param key
-     * @return
+     * @param key the cache key
+     * @return the value after decrement
      */
     long decr(String key);
 
     /**
+     * Atomically decrements a numeric value by a specified amount.
+     * If the key doesn't exist, behavior is implementation-specific.
+     * This operation is atomic across all clients.
      *
-     * @param key
-     * @param deta
-     * @return
+     * @param key the cache key
+     * @param deta the decrement amount (positive value)
+     * @return the value after decrement
      */
     long decr(String key, int deta);
 
     /**
-     * Delete all the keys from all the servers.
+     * Removes all keys from all connected cache servers.
+     * This is a destructive operation that affects all data across all servers.
+     * Use with extreme caution in production environments.
      */
     void flushAll();
 
     /**
-     * Disconnect.
+     * Disconnects from all cache servers and releases resources.
+     * After calling this method, the client cannot be used anymore.
      */
     void disconnect();
 }

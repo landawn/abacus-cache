@@ -69,33 +69,58 @@ import com.landawn.abacus.util.stream.Stream;
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
+/**
+ * Abstract base class for off-heap cache implementations providing the core memory management logic.
+ * This class handles memory segmentation, allocation, eviction, and optional disk spillover.
+ * It serves as the foundation for both Unsafe-based and Foreign Memory API-based implementations.
+ * 
+ * <br><br>
+ * Architecture overview:
+ * <ul>
+ * <li>Memory is divided into fixed-size segments (default 1MB each)</li>
+ * <li>Each segment can be subdivided into slots of various sizes</li>
+ * <li>Slot sizes are multiples of MIN_BLOCK_SIZE (64 bytes)</li>
+ * <li>Large objects span multiple slots if needed</li>
+ * <li>Automatic defragmentation when memory becomes fragmented</li>
+ * <li>Optional disk spillover via OffHeapStore interface</li>
+ * </ul>
+ * 
+ * <br>
+ * Memory management strategy:
+ * <ul>
+ * <li>Best-fit allocation within size-based segment queues</li>
+ * <li>Lazy segment allocation - segments allocated only when needed</li>
+ * <li>Automatic eviction based on LRU when capacity reached</li>
+ * <li>Vacating process triggers defragmentation</li>
+ * <li>Statistics tracking for monitoring and optimization</li>
+ * </ul>
+ *
+ * @param <K> the key type
+ * @param <V> the value type
+ * @see OffHeapCache
+ * @see OffHeapCache25
+ */
 abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
-    //    /**
-    //     * Sets all bytes in a given block of memory to a copy of another block.
-    //     *
-    //     * <p>This method determines each block's base address by two parameters,
-    //     * and so it provides (in effect) a <em>double-register</em> addressing mode,
-    //     * as discussed in {@link #getInt(Object,long)}.  When the object reference is null,
-    //     * the offset supplies an absolute base address.
-    //     *
-    //     * <p>The transfers are incoherent (atomic) units of a size determined
-    //     * by the address and length parameters.  If the effective addresses and
-    //     * length are all even modulo 8, the transfer takes place in 'long' units.
-    //     * If the effective addresses and length are (resp.) even modulo 4 or 2,
-    //     * the transfer takes place in units of 'int' or 'short'.
-    //     *
-    //     */
-    //    Public native void copyMemory(Object srcBase, long srcOffset,
-    //                                  Object destBase, long destOffset,
-    //                                  long bytes);
-
+    /**
+     * Default factor (0.2) that triggers memory defragmentation when this fraction
+     * of memory becomes fragmented.
+     */
     static final float DEFAULT_VACATING_FACTOR = 0.2f;
 
+    /**
+     * Default parser for serialization - uses Kryo if available, otherwise JSON.
+     */
     static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
 
+    /**
+     * Default serializer using the configured parser.
+     */
     static final BiConsumer<Object, ByteArrayOutputStream> SERIALIZER = parser::serialize;
 
+    /**
+     * Default deserializer with special handling for byte arrays and ByteBuffers.
+     */
     static final BiFunction<byte[], Type<?>, Object> DESERIALIZER = (bytes, type) -> {
         // it's destroyed after read from memory. dirty data may be read.
         if (type.isPrimitiveByteArray()) {
@@ -107,12 +132,24 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     };
 
+    /**
+     * Size of each memory segment in bytes (1MB).
+     */
     static final int SEGMENT_SIZE = 1024 * 1024; // (int) N.ONE_MB;
 
+    /**
+     * Minimum slot size in bytes. All slot sizes are multiples of this value.
+     */
     static final int MIN_BLOCK_SIZE = 64;
 
+    /**
+     * Default maximum size for a single memory block (8KB).
+     */
     static final int DEFAULT_MAX_BLOCK_SIZE = 8192; // 8K
 
+    /**
+     * Shared scheduled executor for eviction tasks across all off-heap cache instances.
+     */
     static final ScheduledExecutorService scheduledExecutor;
 
     static {
@@ -121,6 +158,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
 
+    // Statistics tracking
     final AtomicLong totalOccupiedMemorySize = new AtomicLong();
     final AtomicLong totalDataSize = new AtomicLong();
     final AtomicLong dataSizeOnDisk = new AtomicLong();
@@ -131,98 +169,24 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     final Logger logger;
 
-    final long _capacityInBytes; //NOSONAR
-
-    final long _startPtr; //NOSONAR
-
+    // Core memory management fields
+    final long _capacityInBytes;
+    final long _startPtr;
     final int _arrayOffset;
-
     final int _maxBlockSize;
 
-    private final Segment[] _segments; //NOSONAR
+    private final Segment[] _segments;
+    private final BitSet _segmentBitSet = new BitSet();
+    private final Map<Integer, Deque<Segment>> _segmentQueueMap = new ConcurrentHashMap<>();
+    private final Deque<Segment>[] _segmentQueues;
 
-    private final BitSet _segmentBitSet = new BitSet(); //NOSONAR
-
-    private final Map<Integer, Deque<Segment>> _segmentQueueMap = new ConcurrentHashMap<>(); //NOSONAR
-
-    private final Deque<Segment>[] _segmentQueues; //  = new Deque[_maxBlockSize / MIN_BLOCK_SIZE]; //
-
-    //    {
-    //        for (int i = 0, len = _segmentQueues.length; i < len; i++) {
-    //            _segmentQueues[i] = new LinkedList<>();
-    //        }
-    //    }
-
-    //    /** The queue 64. */
-    //    private final Deque<Segment> _queue64 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 128. */
-    //    private final Deque<Segment> _queue128 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 256. */
-    //    private final Deque<Segment> _queue256 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 384. */
-    //    private final Deque<Segment> _queue384 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 512. */
-    //    private final Deque<Segment> _queue512 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 640. */
-    //    private final Deque<Segment> _queue640 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 768. */
-    //    private final Deque<Segment> _queue768 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 896. */
-    //    private final Deque<Segment> _queue896 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 1024. */
-    //    private final Deque<Segment> _queue1K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 1280. */
-    //    private final Deque<Segment> _queue1280 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 1536. */
-    //    private final Deque<Segment> _queue1536 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 1792. */
-    //    private final Deque<Segment> _queue1792 = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 2048. */
-    //    private final Deque<Segment> _queue2K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 2560. */
-    //    private final Deque<Segment> _queue2_5K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 3072. */
-    //    private final Deque<Segment> _queue3K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 3584. */
-    //    private final Deque<Segment> _queue3_5K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 4096. */
-    //    private final Deque<Segment> _queue4K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 5120. */
-    //    private final Deque<Segment> _queue5K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 6144. */
-    //    private final Deque<Segment> _queue6K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 7168. */
-    //    private final Deque<Segment> _queue7K = new LinkedList<>(); //NOSONAR
-    //
-    //    /** The queue 8192. */
-    //    private final Deque<Segment> _queue8K = new LinkedList<>(); //NOSONAR
-
-    private final AsyncExecutor _asyncExecutor = new AsyncExecutor(); //NOSONAR
-
-    private final AtomicInteger _activeVacationTaskCount = new AtomicInteger(); //NOSONAR
-
-    private final KeyedObjectPool<K, Wrapper<V>> _pool; //NOSONAR
+    private final AsyncExecutor _asyncExecutor = new AsyncExecutor();
+    private final AtomicInteger _activeVacationTaskCount = new AtomicInteger();
+    private final KeyedObjectPool<K, Wrapper<V>> _pool;
 
     private ScheduledFuture<?> scheduleFuture;
+
+    // Configuration and extension points
     final BiConsumer<? super V, ByteArrayOutputStream> serializer;
     final BiFunction<byte[], Type<V>, ? extends V> deserializer;
     final OffHeapStore<K> offHeapStore;
@@ -232,6 +196,25 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final LongSummaryStatistics totalWriteToDiskTimeStats = new LongSummaryStatistics();
     final LongSummaryStatistics totalReadFromDiskTimeStats = new LongSummaryStatistics();
 
+    /**
+     * Constructs an AbstractOffHeapCache with the specified configuration.
+     * This constructor initializes the memory segments, object pool, and eviction scheduling.
+     *
+     * @param capacityInMB total off-heap memory capacity in megabytes
+     * @param maxBlockSize maximum size of a single memory block in bytes
+     * @param evictDelay delay between eviction runs in milliseconds
+     * @param defaultLiveTime default TTL for entries in milliseconds
+     * @param defaultMaxIdleTime default max idle time for entries in milliseconds
+     * @param vacatingFactor fraction of fragmented memory that triggers defragmentation
+     * @param arrayOffset array base offset for memory operations
+     * @param serializer custom serializer or null for default
+     * @param deserializer custom deserializer or null for default
+     * @param offHeapStore optional disk store for spillover
+     * @param statsTimeOnDisk whether to collect disk I/O timing statistics
+     * @param testerForLoadingItemFromDiskToMemory predicate for loading from disk to memory
+     * @param storeSelector function to determine storage location (0=default, 1=memory only, 2=disk only)
+     * @param logger logger instance for this cache
+     */
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime, final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
@@ -249,7 +232,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         _capacityInBytes = capacityInMB * (1024L * 1024L); // N.ONE_MB;
         _maxBlockSize = maxBlockSize % MIN_BLOCK_SIZE == 0 ? maxBlockSize : (maxBlockSize / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
-        _segmentQueues = new Deque[_maxBlockSize / MIN_BLOCK_SIZE]; //
+        _segmentQueues = new Deque[_maxBlockSize / MIN_BLOCK_SIZE];
 
         // ByteBuffer.allocateDirect((int) capacity);
         _startPtr = allocate(_capacityInBytes);
@@ -298,17 +281,53 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }));
     }
 
+    /**
+     * Allocates the specified amount of off-heap memory.
+     * Implementation depends on the specific memory management approach
+     * (Unsafe vs Foreign Memory API).
+     *
+     * @param capacityInBytes number of bytes to allocate
+     * @return the base address of the allocated memory
+     */
     protected abstract long allocate(long capacityInBytes);
 
+    /**
+     * Deallocates all off-heap memory used by this cache.
+     * Called during shutdown to release native memory resources.
+     */
     protected abstract void deallocate();
 
+    /**
+     * Copies data from a byte array to off-heap memory.
+     *
+     * @param bytes source byte array
+     * @param srcOffset offset in the source array
+     * @param startPtr destination memory address
+     * @param len number of bytes to copy
+     */
     protected abstract void copyToMemory(byte[] bytes, int srcOffset, long startPtr, int len);
 
+    /**
+     * Copies data from off-heap memory to a byte array.
+     *
+     * @param startPtr source memory address
+     * @param bytes destination byte array
+     * @param destOffset offset in the destination array
+     * @param len number of bytes to copy
+     */
     protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
 
+    /**
+     * Retrieves a value from the cache by its key.
+     * Handles both memory and disk storage, with automatic promotion from disk
+     * to memory based on access patterns if configured.
+     *
+     * @param k the key to look up
+     * @return the cached value, or null if not found
+     */
     @Override
     public V gett(final K k) {
-        final Wrapper<V> w = _pool.get(k); 
+        final Wrapper<V> w = _pool.get(k);
 
         // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
         if (w != null && StoreWrapper.class.equals(w.getClass())) {
@@ -430,6 +449,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Stores a key-value pair in the cache with specified expiration settings.
+     * The value is serialized and stored either in memory, on disk, or both
+     * based on size and configuration.
+     *
+     * @param k the key
+     * @param v the value to cache
+     * @param liveTime time-to-live in milliseconds
+     * @param maxIdleTime maximum idle time in milliseconds
+     * @return true if successfully stored
+     */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         final Type<V> type = N.typeOf(v.getClass());
@@ -566,6 +596,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return result;
     }
 
+    /**
+     * Stores a value to disk when memory is unavailable or based on storage policy.
+     *
+     * @param k the key
+     * @param liveTime TTL in milliseconds
+     * @param maxIdleTime max idle time in milliseconds
+     * @param type the value type information
+     * @param bytes serialized value bytes
+     * @param size size of the serialized data
+     * @return a wrapper for the disk-stored value, or null if storage failed
+     */
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
         if (offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size))) {
             return new StoreWrapper(type, liveTime, maxIdleTime, size, k);
@@ -574,76 +615,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return null;
     }
 
-    // TODO: performance tuning for concurrent put.
+    /**
+     * Finds and allocates an available memory slot of the specified size.
+     * Uses a best-fit strategy within size-segregated segment queues.
+     *
+     * @param size required slot size in bytes
+     * @return allocated slot or null if no space available
+     */
     private Slot getAvailableSlot(final int size) {
         int slotSize = 0;
-
-        //        if (size <= 64) {
-        //            queue = _queue64;
-        //            slotSize = 64;
-        //        } else if (size <= 128) {
-        //            queue = _queue128;
-        //            slotSize = 128;
-        //        } else if (size <= 256) {
-        //            queue = _queue256;
-        //            slotSize = 256;
-        //        } else if (size <= 384) {
-        //            queue = _queue384;
-        //            slotSize = 384;
-        //        } else if (size <= 512) {
-        //            queue = _queue512;
-        //            slotSize = 512;
-        //        } else if (size <= 640) {
-        //            queue = _queue640;
-        //            slotSize = 640;
-        //        } else if (size <= 768) {
-        //            queue = _queue768;
-        //            slotSize = 768;
-        //        } else if (size <= 896) {
-        //            queue = _queue896;
-        //            slotSize = 896;
-        //        } else if (size <= 1024) {
-        //            queue = _queue1K;
-        //            slotSize = 1024;
-        //        } else if (size <= 1280) {
-        //            queue = _queue1280;
-        //            slotSize = 1280;
-        //        } else if (size <= 1536) {
-        //            queue = _queue1536;
-        //            slotSize = 1536;
-        //        } else if (size <= 1792) {
-        //            queue = _queue1792;
-        //            slotSize = 1792;
-        //        } else if (size <= 2048) {
-        //            queue = _queue2K;
-        //            slotSize = 2048;
-        //        } else if (size <= 2560) {
-        //            queue = _queue2_5K;
-        //            slotSize = 2560;
-        //        } else if (size <= 3072) {
-        //            queue = _queue3K;
-        //            slotSize = 3072;
-        //        } else if (size <= 3584) {
-        //            queue = _queue3_5K;
-        //            slotSize = 3584;
-        //        } else if (size <= 4096) {
-        //            queue = _queue4K;
-        //            slotSize = 4096;
-        //        } else if (size <= 5120) {
-        //            queue = _queue5K;
-        //            slotSize = 5120;
-        //        } else if (size <= 6144) {
-        //            queue = _queue6K;
-        //            slotSize = 6144;
-        //        } else if (size <= 7168) {
-        //            queue = _queue7K;
-        //            slotSize = 7168;
-        //        } else if (size <= 8192) {
-        //            queue = _queue8K;
-        //            slotSize = 8192;
-        //        } else {
-        //            throw new RuntimeException("Unsupported object size: " + size);
-        //        }
 
         if (size >= _maxBlockSize) {
             slotSize = _maxBlockSize;
@@ -723,6 +703,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return new Slot(indexOfAvailableSlot, segment);
     }
 
+    /**
+     * Triggers asynchronous memory defragmentation when fragmentation exceeds threshold.
+     * This process consolidates free memory by evicting least recently used entries.
+     */
     private void vacate() {
         if (_activeVacationTaskCount.incrementAndGet() > 1) {
             _activeVacationTaskCount.decrementAndGet();
@@ -743,6 +727,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         });
     }
 
+    /**
+     * Removes an entry from the cache.
+     * Properly cleans up memory or disk resources associated with the entry.
+     *
+     * @param k the key to remove
+     */
     @Override
     public void remove(final K k) {
         final Wrapper<V> w = _pool.remove(k);
@@ -752,26 +742,52 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Checks if the cache contains a specific key.
+     *
+     * @param k the key to check
+     * @return true if the key exists
+     */
     @Override
     public boolean containsKey(final K k) {
         return _pool.containsKey(k);
     }
 
+    /**
+     * Returns a set of all keys currently in the cache.
+     *
+     * @return unmodifiable set of cache keys
+     */
     @Override
     public Set<K> keySet() {
         return _pool.keySet();
     }
 
+    /**
+     * Returns the current number of entries in the cache.
+     *
+     * @return number of cache entries
+     */
     @Override
     public int size() {
         return _pool.size();
     }
 
+    /**
+     * Removes all entries from the cache.
+     * Clears both memory and disk storage.
+     */
     @Override
     public void clear() {
         _pool.clear();
     }
 
+    /**
+     * Returns comprehensive statistics about cache performance and resource usage.
+     * Includes memory utilization, disk usage, hit/miss rates, and I/O performance.
+     *
+     * @return cache statistics snapshot
+     */
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();
 
@@ -805,6 +821,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
     }
 
+    /**
+     * Closes the cache and releases all resources.
+     * Stops eviction scheduling, clears all entries, and deallocates memory.
+     * This method is thread-safe and idempotent.
+     */
     @Override
     public synchronized void close() {
         if (_pool.isClosed()) {
@@ -824,11 +845,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Checks if the cache has been closed.
+     *
+     * @return true if closed
+     */
     @Override
     public boolean isClosed() {
         return _pool.isClosed();
     }
 
+    /**
+     * Performs periodic eviction of empty segments to defragment memory.
+     * Called by the scheduled eviction task.
+     */
     protected void evict() {
         synchronized (_segmentBitSet) {
             for (int i = 0, len = _segments.length; i < len; i++) {
@@ -850,6 +880,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Represents a memory segment that can be divided into slots.
+     * Each segment has a fixed size and can be configured with different slot sizes.
+     */
     static final class Segment {
 
         private final BitSet slotBitSet = new BitSet();
@@ -893,6 +927,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Represents an allocated memory slot within a segment.
+     */
     record Slot(int indexOfSlot, Segment segment) {
 
         void release() {
@@ -900,6 +937,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Base wrapper class for cached values with metadata.
+     */
     abstract static class Wrapper<T> extends AbstractPoolable {
         final Type<T> type;
         final int size;
@@ -914,6 +954,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         abstract T read();
     }
 
+    /**
+     * Wrapper for values stored in a single memory slot.
+     */
     final class SlotWrapper extends Wrapper<V> {
 
         private Slot slot;
@@ -956,6 +999,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Wrapper for values stored across multiple memory slots.
+     */
     final class MultiSlotsWrapper extends Wrapper<V> {
 
         private List<Slot> slots;
@@ -1019,6 +1065,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Wrapper for values stored on disk via OffHeapStore.
+     */
     final class StoreWrapper extends Wrapper<V> {
         private K permanentKey;
 

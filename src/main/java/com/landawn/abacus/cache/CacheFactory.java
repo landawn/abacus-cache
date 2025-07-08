@@ -24,50 +24,96 @@ import com.landawn.abacus.util.Strings;
 import com.landawn.abacus.util.TypeAttrParser;
 
 /**
- * A factory for creating Cache objects.
+ * Factory class for creating various types of cache implementations.
+ * This factory provides convenient methods to create local and distributed caches
+ * with different configurations. It supports both programmatic creation and
+ * string-based configuration for dynamic cache instantiation.
+ * 
+ * <br><br>
+ * Supported cache types:
+ * <ul>
+ * <li>LocalCache - In-memory cache with eviction support</li>
+ * <li>DistributedCache - Wrapper for distributed cache clients</li>
+ * <li>Memcached - Via SpyMemcached client</li>
+ * <li>Redis - Via JRedis client</li>
+ * <li>Custom implementations via class name</li>
+ * </ul>
+ * 
+ * <br>
+ * Example usage:
+ * <pre>{@code
+ * // Create local cache
+ * LocalCache<String, User> localCache = CacheFactory.createLocalCache(
+ *     1000,     // capacity
+ *     60000,    // evict delay (1 minute)
+ *     3600000,  // default TTL (1 hour)
+ *     1800000   // default idle time (30 minutes)
+ * );
+ * 
+ * // Create distributed cache with Memcached
+ * Cache<String, User> memcached = CacheFactory.createCache(
+ *     "Memcached(localhost:11211,localhost:11212)"
+ * );
+ * 
+ * // Create distributed cache with Redis and key prefix
+ * Cache<String, User> redis = CacheFactory.createCache(
+ *     "Redis(localhost:6379,myapp:cache:,5000)"
+ * );
+ * }</pre>
  *
+ * @see LocalCache
+ * @see DistributedCache
+ * @see SpyMemcached
+ * @see JRedis
  */
 public final class CacheFactory {
 
+    /**
+     * Private constructor to prevent instantiation of this utility class.
+     */
     private CacheFactory() {
     }
 
     /**
-     * Creates a new Cache object.
+     * Creates a new LocalCache with specified capacity and eviction delay.
+     * Uses default TTL of 3 hours and default idle time of 30 minutes.
      *
      * @param <K> the key type
      * @param <V> the value type
-     * @param capacity
-     * @param evictDelay
-     * @return
+     * @param capacity the maximum number of entries the cache can hold
+     * @param evictDelay the delay in milliseconds between eviction runs
+     * @return a new LocalCache instance
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay) {
         return new LocalCache<>(capacity, evictDelay);
     }
 
     /**
-     * Creates a new Cache object.
+     * Creates a new LocalCache with fully customized parameters.
+     * This method provides complete control over cache behavior.
      *
      * @param <K> the key type
      * @param <V> the value type
-     * @param capacity
-     * @param evictDelay
-     * @param defaultLiveTime default value is 3 hours
-     * @param defaultMaxIdleTime default value is 30 minutes
-     * @return
+     * @param capacity the maximum number of entries the cache can hold
+     * @param evictDelay the delay in milliseconds between eviction runs
+     * @param defaultLiveTime default time-to-live in milliseconds (default: 3 hours)
+     * @param defaultMaxIdleTime default maximum idle time in milliseconds (default: 30 minutes)
+     * @return a new LocalCache instance
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         return new LocalCache<>(capacity, evictDelay, defaultLiveTime, defaultMaxIdleTime);
     }
 
     /**
+     * Creates a new LocalCache with a custom KeyedObjectPool.
+     * This method is for advanced use cases requiring custom pool implementations.
      *
-     * @param <K>
-     * @param <V>
-     * @param defaultLiveTime
-     * @param defaultMaxIdleTime
-     * @param pool
-     * @return
+     * @param <K> the key type
+     * @param <V> the value type
+     * @param defaultLiveTime default time-to-live in milliseconds
+     * @param defaultMaxIdleTime default maximum idle time in milliseconds
+     * @param pool the pre-configured KeyedObjectPool to use
+     * @return a new LocalCache instance
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final long defaultLiveTime, final long defaultMaxIdleTime,
             final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
@@ -75,40 +121,43 @@ public final class CacheFactory {
     }
 
     /**
-     * Creates a new Cache object.
+     * Creates a DistributedCache wrapper for a distributed cache client.
+     * The wrapper adds retry logic and error handling around the client.
      *
      * @param <K> the key type
      * @param <V> the value type
-     * @param dcc
-     * @return
+     * @param dcc the distributed cache client to wrap
+     * @return a new DistributedCache instance
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc) {
         return new DistributedCache<>(dcc);
     }
 
     /**
-     * Creates a new Cache object.
+     * Creates a DistributedCache with a key prefix.
+     * All keys will be prefixed with the specified string for namespace isolation.
      *
      * @param <K> the key type
      * @param <V> the value type
-     * @param dcc
-     * @param keyPrefix
-     * @return
+     * @param dcc the distributed cache client to wrap
+     * @param keyPrefix the prefix to prepend to all keys
+     * @return a new DistributedCache instance
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
         return new DistributedCache<>(dcc, keyPrefix);
     }
 
     /**
-     * Creates a new Cache object.
+     * Creates a DistributedCache with custom retry configuration.
+     * This allows fine-tuning of error handling behavior.
      *
      * @param <K> the key type
      * @param <V> the value type
-     * @param dcc
-     * @param keyPrefix
-     * @param maxFailedNumForRetry
-     * @param retryDelay
-     * @return
+     * @param dcc the distributed cache client to wrap
+     * @param keyPrefix the prefix to prepend to all keys
+     * @param maxFailedNumForRetry maximum failures before stopping retries
+     * @param retryDelay delay in milliseconds between retry attempts
+     * @return a new DistributedCache instance
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix,
             final int maxFailedNumForRetry, final long retryDelay) {
@@ -116,12 +165,38 @@ public final class CacheFactory {
     }
 
     /**
-     * Creates a new Cache object.
+     * Creates a cache instance from a string specification.
+     * This method supports dynamic cache creation based on configuration strings.
+     * 
+     * <br><br>
+     * Supported formats:
+     * <ul>
+     * <li>Memcached(serverUrl) - Creates SpyMemcached client</li>
+     * <li>Memcached(serverUrl,keyPrefix) - With key prefix</li>
+     * <li>Memcached(serverUrl,keyPrefix,timeout) - With custom timeout</li>
+     * <li>Redis(serverUrl) - Creates JRedis client</li>
+     * <li>Redis(serverUrl,keyPrefix) - With key prefix</li>
+     * <li>Redis(serverUrl,keyPrefix,timeout) - With custom timeout</li>
+     * <li>com.example.CustomCache(params...) - Custom implementation</li>
+     * </ul>
+     * 
+     * <br>
+     * Examples:
+     * <pre>{@code
+     * Cache<String, Object> cache1 = CacheFactory.createCache(
+     *     "Memcached(localhost:11211)"
+     * );
+     * 
+     * Cache<String, Object> cache2 = CacheFactory.createCache(
+     *     "Redis(localhost:6379,myapp:,5000)"
+     * );
+     * }</pre>
      *
      * @param <K> the key type
      * @param <V> the value type
-     * @param provider
-     * @return
+     * @param provider the cache specification string
+     * @return a new cache instance
+     * @throws IllegalArgumentException if the specification is invalid
      */
     @SuppressWarnings("unchecked")
     public static <K, V> Cache<K, V> createCache(final String provider) {

@@ -1,3 +1,6 @@
+## 1.3.7
+* Improve Javadoc and bug fixes.
+
 ## 1.3.6
 * Improvements
 

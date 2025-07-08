@@ -22,14 +22,52 @@ import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Strings;
 
 /**
+ * A wrapper cache implementation that provides a standardized Cache interface for distributed cache clients.
+ * This class adds key prefixing, error handling with retry logic, and adapts distributed cache
+ * client operations to the standard Cache interface. It's designed to work with any
+ * DistributedCacheClient implementation like Memcached or Redis.
+ * 
+ * <br><br>
+ * Key features:
+ * <ul>
+ * <li>Automatic key prefixing for namespace isolation</li>
+ * <li>Base64 encoding of keys for compatibility</li>
+ * <li>Retry logic with configurable failure threshold</li>
+ * <li>Transparent error recovery</li>
+ * <li>Adaptation of TTL-only expiration to TTL+idle interface</li>
+ * </ul>
+ * 
+ * <br>
+ * Example usage:
+ * <pre>{@code
+ * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+ * DistributedCache<String, User> cache = new DistributedCache<>(
+ *     client, 
+ *     "myapp:",           // key prefix
+ *     100,                // max failures before stopping retries
+ *     1000                // retry delay in ms
+ * );
+ * 
+ * cache.put("user:123", user, 3600000, 1800000);
+ * Optional<User> cached = cache.get("user:123");
+ * }</pre>
  *
  * @param <K> the key type
  * @param <V> the value type
+ * @see AbstractCache
+ * @see DistributedCacheClient
+ * @see CacheFactory
  */
 public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
+    /**
+     * Default maximum number of consecutive failures before stopping retry attempts.
+     */
     protected static final int DEFAULT_MAX_FAILED_NUMBER = 100;
 
+    /**
+     * Default delay in milliseconds between retry attempts after failures.
+     */
     protected static final long DEFAULT_RETRY_DELAY = 1000;
 
     // ...
@@ -48,14 +86,36 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     private boolean isClosed = false;
 
+    /**
+     * Creates a DistributedCache with default retry configuration.
+     * Uses an empty key prefix and default retry parameters.
+     *
+     * @param dcc the distributed cache client to wrap
+     */
     protected DistributedCache(final DistributedCacheClient<V> dcc) {
         this(dcc, Strings.EMPTY, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
     }
 
+    /**
+     * Creates a DistributedCache with a key prefix.
+     * All keys will be prefixed for namespace isolation.
+     *
+     * @param dcc the distributed cache client to wrap
+     * @param keyPrefix the prefix to prepend to all keys
+     */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
         this(dcc, keyPrefix, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
     }
 
+    /**
+     * Creates a DistributedCache with full configuration.
+     * Allows customization of key prefix and retry behavior.
+     *
+     * @param dcc the distributed cache client to wrap
+     * @param keyPrefix the prefix to prepend to all keys (empty string for no prefix)
+     * @param maxFailedNumForRetry maximum consecutive failures before stopping retries
+     * @param retryDelay delay in milliseconds between retry attempts
+     */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
         this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
         this.dcc = dcc;
@@ -64,10 +124,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Gets the t.
+     * Retrieves a value from the distributed cache by its key.
+     * Includes retry logic that temporarily disables operations after too many failures.
+     * Keys are automatically prefixed and encoded.
      *
-     * @param k
-     * @return
+     * @param k the key to look up
+     * @return the cached value, or null if not found or retry threshold exceeded
      */
     @Override
     public V gett(final K k) {
@@ -97,12 +159,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Stores a key-value pair in the distributed cache.
+     * Note: Most distributed caches only support TTL, so the maxIdleTime parameter
+     * is typically ignored. Keys are automatically prefixed and encoded.
      *
-     * @param k
-     * @param v
-     * @param liveTime
-     * @param maxIdleTime
-     * @return true, if successful
+     * @param k the key
+     * @param v the value to cache
+     * @param liveTime the time-to-live in milliseconds
+     * @param maxIdleTime the maximum idle time in milliseconds (usually ignored)
+     * @return true if the operation was successful
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -112,9 +177,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Always return {@code null}.
+     * Removes an entry from the distributed cache.
+     * This operation always succeeds from the caller's perspective.
      *
-     * @param k
+     * @param k the key to remove
      */
     @Override
     public void remove(final K k) {
@@ -124,9 +190,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Checks if the cache contains a specific key.
+     * This is implemented by attempting to retrieve the value.
      *
-     * @param k
-     * @return true, if successful
+     * @param k the key to check
+     * @return true if the key exists and has a non-null value
      */
     @Override
     public boolean containsKey(final K k) {
@@ -134,10 +202,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Returns the set of keys in the cache.
+     * This operation is not supported for distributed caches due to
+     * performance and consistency concerns.
      *
-     *
-     * @return
-     * @throws UnsupportedOperationException
+     * @return never returns normally
+     * @throws UnsupportedOperationException always thrown
      */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
@@ -145,10 +215,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Returns the number of entries in the cache.
+     * This operation is not supported for distributed caches due to
+     * performance and consistency concerns.
      *
-     *
-     * @return
-     * @throws UnsupportedOperationException
+     * @return never returns normally
+     * @throws UnsupportedOperationException always thrown
      */
     @Override
     public int size() throws UnsupportedOperationException {
@@ -156,7 +228,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Clear.
+     * Removes all entries from all connected cache servers.
+     * This is a destructive operation that affects all data.
+     * Use with extreme caution in production environments.
      */
     @Override
     public void clear() {
@@ -166,7 +240,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Close.
+     * Closes the cache and disconnects from all servers.
+     * After closing, the cache cannot be used anymore.
+     * This method is idempotent and thread-safe.
      */
     @Override
     public synchronized void close() {
@@ -180,9 +256,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if is closed.
+     * Checks if the cache has been closed.
      *
-     * @return true, if is closed
+     * @return true if the cache is closed
      */
     @Override
     public boolean isClosed() {
@@ -190,9 +266,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Generates the actual cache key by applying prefix and encoding.
+     * The key is converted to string, UTF-8 encoded, then Base64 encoded
+     * to ensure compatibility with all distributed cache systems.
      *
-     * @param k
-     * @return
+     * @param k the original key
+     * @return the prefixed and encoded cache key
      */
     protected String generateKey(final K k) {
         return Strings.isEmpty(keyPrefix) ? Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8))
@@ -200,7 +279,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Assert not closed.
+     * Ensures the cache is not closed before performing operations.
+     *
+     * @throws IllegalStateException if the cache has been closed
      */
     protected void assertNotClosed() {
         if (isClosed) {

@@ -24,9 +24,24 @@ import org.ehcache.spi.loaderwriter.CacheLoadingException;
 import org.ehcache.spi.loaderwriter.CacheWritingException;
 
 /**
+ * A wrapper implementation that adapts Ehcache 3.x to the Abacus Cache interface.
+ * This class provides a bridge between Ehcache's API and the standardized Cache interface,
+ * allowing Ehcache to be used seamlessly within the Abacus caching framework.
+ * 
+ * <br><br>
+ * Example usage:
+ * <pre>{@code
+ * Cache<String, Person> ehcache = CacheBuilder.newBuilder()
+ *     .build();
+ * Ehcache<String, Person> cache = new Ehcache<>(ehcache);
+ * cache.put("key1", person, 3600000, 1800000); // 1 hour TTL, 30 min idle
+ * Person person = cache.gett("key1");
+ * }</pre>
  *
  * @param <K> the key type
  * @param <V> the value type
+ * @see AbstractCache
+ * @see org.ehcache.Cache
  */
 public class Ehcache<K, V> extends AbstractCache<K, V> {
 
@@ -35,19 +50,21 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     private boolean isClosed = false;
 
     /**
+     * Creates a new Ehcache wrapper instance.
      *
-     *
-     * @param cache
+     * @param cache the underlying Ehcache instance to wrap
      */
     public Ehcache(final Cache<K, V> cache) {
         cacheImpl = cache;
     }
 
     /**
-     * Gets the t.
+     * Retrieves a value from the cache by its key.
+     * This method may trigger a cache loader if configured in the underlying Ehcache.
      *
-     * @param k
-     * @return
+     * @param k the key to look up
+     * @return the cached value, or null if not present
+     * @throws CacheLoadingException if the cache loader fails
      */
     @Override
     public V gett(final K k) {
@@ -57,12 +74,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Stores a key-value pair in the cache with specified expiration parameters.
+     * Note: The current implementation does not honor the individual TTL and idle time
+     * parameters as Ehcache expiration is configured at cache level.
      *
-     * @param k
-     * @param v
-     * @param liveTime
-     * @param maxIdleTime
-     * @return true, if successful
+     * @param k the key
+     * @param v the value to cache
+     * @param liveTime the time-to-live in milliseconds (currently ignored)
+     * @param maxIdleTime the maximum idle time in milliseconds (currently ignored)
+     * @return true if the operation was successful
+     * @throws CacheWritingException if the cache writer fails
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -74,8 +95,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Removes a key-value pair from the cache.
      *
-     * @param k
+     * @param k the key to remove
+     * @throws CacheWritingException if the cache writer fails
      */
     @Override
     public void remove(final K k) {
@@ -85,9 +108,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Checks if the cache contains a specific key.
      *
-     * @param k
-     * @return true, if successful
+     * @param k the key to check
+     * @return true if the key exists in the cache
      */
     @Override
     public boolean containsKey(final K k) {
@@ -96,24 +120,56 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
         return cacheImpl.containsKey(k);
     }
 
+    /**
+     * Atomically puts a value if the key is not already present.
+     * This operation is atomic and thread-safe.
+     *
+     * @param key the key
+     * @param value the value to put
+     * @return the existing value if present, null otherwise
+     * @throws CacheLoadingException if the cache loader fails
+     * @throws CacheWritingException if the cache writer fails
+     */
     public V putIfAbsent(final K key, final V value) throws CacheLoadingException, CacheWritingException {
         assertNotClosed();
 
         return cacheImpl.putIfAbsent(key, value);
     }
 
+    /**
+     * Retrieves multiple values from the cache in a single operation.
+     * This is more efficient than multiple individual get operations.
+     *
+     * @param keys the set of keys to retrieve
+     * @return a map of key-value pairs found in the cache
+     * @throws BulkCacheLoadingException if the bulk cache loader fails
+     */
     public Map<K, V> getAll(final Set<? extends K> keys) throws BulkCacheLoadingException {
         assertNotClosed();
 
         return cacheImpl.getAll(keys);
     }
 
+    /**
+     * Stores multiple key-value pairs in the cache in a single operation.
+     * This is more efficient than multiple individual put operations.
+     *
+     * @param entries the map of key-value pairs to store
+     * @throws BulkCacheWritingException if the bulk cache writer fails
+     */
     public void putAll(final Map<? extends K, ? extends V> entries) throws BulkCacheWritingException {
         assertNotClosed();
 
         cacheImpl.putAll(entries);
     }
 
+    /**
+     * Removes multiple keys from the cache in a single operation.
+     * This is more efficient than multiple individual remove operations.
+     *
+     * @param keys the set of keys to remove
+     * @throws BulkCacheWritingException if the bulk cache writer fails
+     */
     public void removeAll(final Set<? extends K> keys) throws BulkCacheWritingException {
         assertNotClosed();
 
@@ -121,11 +177,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Returns the set of keys in the cache.
+     * This operation is not supported by the Ehcache wrapper.
      *
-     *
-     * @return
-     * @throws UnsupportedOperationException
-     * @Deprecated Unsupported operation
+     * @return never returns normally
+     * @throws UnsupportedOperationException always thrown
+     * @deprecated Unsupported operation
      */
     @Deprecated
     @Override
@@ -134,11 +191,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
+     * Returns the number of entries in the cache.
+     * This operation is not supported by the Ehcache wrapper.
      *
-     *
-     * @return
-     * @throws UnsupportedOperationException
-     * @Deprecated Unsupported operation
+     * @return never returns normally
+     * @throws UnsupportedOperationException always thrown
+     * @deprecated Unsupported operation
      */
     @Deprecated
     @Override
@@ -147,7 +205,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Clear.
+     * Removes all entries from the cache.
+     * This operation affects only the local cache tier.
      */
     @Override
     public void clear() {
@@ -157,7 +216,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Close.
+     * Closes the cache and releases any resources.
+     * After closing, the cache cannot be used anymore.
+     * This method is thread-safe and can be called multiple times.
      */
     @Override
     public synchronized void close() {
@@ -169,9 +230,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if is closed.
+     * Checks if the cache has been closed.
      *
-     * @return true, if is closed
+     * @return true if the cache is closed
      */
     @Override
     public boolean isClosed() {
@@ -179,7 +240,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Assert not closed.
+     * Ensures the cache is not closed before performing operations.
+     *
+     * @throws IllegalStateException if the cache has been closed
      */
     protected void assertNotClosed() {
         if (isClosed) {
