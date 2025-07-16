@@ -54,7 +54,7 @@ import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.Comparators;
 import com.landawn.abacus.util.ExceptionUtil;
-import com.landawn.abacus.util.Fn.Suppliers;
+import com.landawn.abacus.util.Suppliers;
 import com.landawn.abacus.util.IOUtil;
 import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
