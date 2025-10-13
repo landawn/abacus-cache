@@ -1,3 +1,6 @@
+## 1.3.15, 1.3.16
+* Improve Javadoc and bug fixes.
+
 ## 1.3.13, 1.3.14
 * Improve Javadoc and bug fixes.
 
