@@ -65,6 +65,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      *
      * @return map of slot sizes to segment occupation details
      */
+    @Override
     public Map<Integer, Map<Integer, Integer>> occupiedSlots() {
         return occupiedSlots;
     }

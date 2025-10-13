@@ -54,7 +54,6 @@ public class JRedisTest extends TestCase {
     }
 
     /**
-     * 
      */
     public void testSetGetBigArray() {
         int loops = 10;
@@ -97,7 +96,6 @@ public class JRedisTest extends TestCase {
     }
 
     /**
-     * 
      */
     public void testSetGetManyObjects() {
         int loops = 10;
@@ -134,7 +132,6 @@ public class JRedisTest extends TestCase {
     }
 
     /**
-     * 
      */
     public void testSetGetOneObject() {
         int loops = 10000;

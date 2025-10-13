@@ -19,7 +19,6 @@ public class MemcachedLockTest extends TestCase {
     final MemcachedLock<String, Long> memcachedLock = new MemcachedLock<>(url);
 
     /**
-     * 
      */
     @Test
     public void test_lock() {

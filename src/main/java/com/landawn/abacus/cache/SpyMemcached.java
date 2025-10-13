@@ -459,7 +459,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param timeout the maximum time to wait in milliseconds
      */
     public void disconnect(final long timeout) {
-        mc.shutdown(timeout, TimeUnit.MICROSECONDS);
+        mc.shutdown(timeout, TimeUnit.MILLISECONDS);
     }
 
     /**

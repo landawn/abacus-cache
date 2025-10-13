@@ -16,6 +16,7 @@ package com.landawn.abacus.cache;
 
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.landawn.abacus.util.Charsets;
 import com.landawn.abacus.util.N;
@@ -82,7 +83,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     // ...
     private final AtomicInteger failedCounter = new AtomicInteger();
 
-    private volatile long lastFailedTime = 0;
+    private final AtomicLong lastFailedTime = new AtomicLong(0);
 
     private boolean isClosed = false;
 
@@ -135,7 +136,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     public V gett(final K k) {
         assertNotClosed();
 
-        if ((failedCounter.get() > maxFailedNumForRetry) && ((System.currentTimeMillis() - lastFailedTime) < retryDelay)) {
+        if ((failedCounter.get() > maxFailedNumForRetry) && ((System.currentTimeMillis() - lastFailedTime.get()) < retryDelay)) {
             return null;
         }
 
@@ -149,8 +150,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         } finally {
             if (isOK) {
                 failedCounter.set(0);
+                lastFailedTime.set(0);
             } else {
-                lastFailedTime = System.currentTimeMillis();
+                lastFailedTime.set(System.currentTimeMillis());
                 failedCounter.incrementAndGet();
             }
         }
@@ -198,7 +200,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public boolean containsKey(final K k) {
-        return get(k) != null;
+        return gett(k) != null;
     }
 
     /**

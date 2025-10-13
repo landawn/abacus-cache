@@ -120,7 +120,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Most distributed caches use seconds for TTL, so this utility method
      * converts milliseconds (used by the Cache interface) to seconds.
      * The method rounds up to ensure the TTL is not shorter than requested.
-     * 
+     *
      * <br><br>
      * Example:
      * <pre>{@code
@@ -131,8 +131,15 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * @param liveTime the time-to-live in milliseconds
      * @return the time-to-live in seconds (rounded up)
+     * @throws IllegalArgumentException if the time value exceeds Integer.MAX_VALUE seconds
      */
     protected int toSeconds(final long liveTime) {
-        return (int) ((liveTime % 1000 == 0) ? (liveTime / 1000) : (liveTime / 1000) + 1);
+        final long seconds = (liveTime % 1000 == 0) ? (liveTime / 1000) : (liveTime / 1000) + 1;
+
+        if (seconds > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Time value too large: " + liveTime + " ms (exceeds max integer seconds)");
+        }
+
+        return (int) seconds;
     }
 }

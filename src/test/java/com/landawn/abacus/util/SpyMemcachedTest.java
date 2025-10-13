@@ -26,7 +26,6 @@ public class SpyMemcachedTest extends TestCase {
     private static final SpyMemcached<Object> client = new SpyMemcached<>("localhost:11211");
 
     /**
-     * 
      */
     public void testSetGetOneObject() {
         int loops = 10000;
@@ -58,7 +57,6 @@ public class SpyMemcachedTest extends TestCase {
     }
 
     /**
-     * 
      */
     public void testSetGetManyObjects() {
         int loops = 1000;
@@ -95,7 +93,6 @@ public class SpyMemcachedTest extends TestCase {
     }
 
     /**
-     * 
      */
     public void testSetGetBigArray() {
         int loops = 10;
