@@ -74,10 +74,9 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Retrieves an object from the cache by its key.
-     * Returns null if the key is not found or has expired.
      *
      * @param key the cache key
-     * @return the cached object, or null if not found
+     * @return the cached object, or null if not found or expired
      */
     T get(String key);
 
@@ -123,8 +122,10 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value by 1.
-     * If the key doesn't exist, it will be created with value 1.
-     * This operation is atomic across all clients.
+     * If the key doesn't exist, behavior depends on the implementation:
+     * - Memcached: Creates key with value 1
+     * - Redis: Creates key with value 1
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
      * @return the value after increment
@@ -133,20 +134,23 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value by a specified amount.
-     * If the key doesn't exist, it will be created with the delta value.
-     * This operation is atomic across all clients.
+     * If the key doesn't exist, behavior depends on the implementation:
+     * - Memcached: Creates key with the delta value
+     * - Redis: Creates key with the delta value
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the increment amount (can be negative for decrement)
+     * @param delta the increment amount (can be negative for decrement)
      * @return the value after increment
      */
-    long incr(String key, int deta);
+    long incr(String key, int delta);
 
     /**
      * Atomically decrements a numeric value by 1.
-     * If the key doesn't exist, behavior is implementation-specific
-     * (some create it with -1, others with 0 then decrement).
-     * This operation is atomic across all clients.
+     * If the key doesn't exist, behavior depends on the implementation:
+     * - Memcached: Creates key with value 0, then decrements (result: 0, as underflow is prevented)
+     * - Redis: Creates key with value -1
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
      * @return the value after decrement
@@ -155,14 +159,16 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value by a specified amount.
-     * If the key doesn't exist, behavior is implementation-specific.
-     * This operation is atomic across all clients.
+     * If the key doesn't exist, behavior depends on the implementation:
+     * - Memcached: Creates key with value 0, then decrements (result: 0, as underflow is prevented)
+     * - Redis: Creates key with value -(delta value)
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the decrement amount (positive value)
+     * @param delta the decrement amount (positive value)
      * @return the value after decrement
      */
-    long decr(String key, int deta);
+    long decr(String key, int delta);
 
     /**
      * Removes all keys from all connected cache servers.

@@ -78,9 +78,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Retrieves a value from the cache by its key.
      * This method uses Caffeine's getIfPresent which doesn't trigger cache loading.
+     * The operation may update access time depending on the eviction policy.
      *
      * @param k the key to look up
-     * @return the cached value, or null if not present
+     * @return the cached value, or null if not found, expired, or evicted
      */
     @Override
     public V gett(final K k) {
@@ -91,13 +92,16 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores a key-value pair in the cache.
-     * Note: The individual TTL and idle time parameters are currently ignored
-     * as Caffeine's expiration policy is configured at cache creation time.
+     * If the key already exists, its value will be replaced.
+     *
+     * <br><br>
+     * Note: Caffeine's expiration policy is configured at cache creation time.
+     * The individual TTL and idle time parameters are ignored by this implementation.
      *
      * @param k the key
      * @param v the value to cache
-     * @param liveTime the time-to-live in milliseconds (currently ignored)
-     * @param maxIdleTime the maximum idle time in milliseconds (currently ignored)
+     * @param liveTime time-to-live in milliseconds (ignored - use cache-level configuration)
+     * @param maxIdleTime maximum idle time in milliseconds (ignored - use cache-level configuration)
      * @return true if the operation was successful
      */
     @Override
@@ -163,21 +167,20 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Performs cleanup of the cache by removing expired entries.
-     * This triggers Caffeine's cleanup process which is normally performed
-     * asynchronously during cache operations.
+     * Removes all entries from the cache.
+     * This operation invalidates all cached key-value pairs immediately.
      */
     @Override
     public void clear() {
         assertNotClosed();
 
-        cacheImpl.cleanUp();
+        cacheImpl.invalidateAll();
     }
 
     /**
      * Closes the cache and releases resources.
-     * After closing, the cache cannot be used anymore.
-     * This method is thread-safe and can be called multiple times.
+     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
+     * This method is idempotent and thread-safe - multiple calls have no additional effect.
      */
     @Override
     public synchronized void close() {
@@ -219,7 +222,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      */
     protected void assertNotClosed() {
         if (isClosed) {
-            throw new IllegalStateException("This object pool has been closed");
+            throw new IllegalStateException("This cache has been closed");
         }
     }
 }

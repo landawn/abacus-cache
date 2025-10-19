@@ -91,7 +91,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * The object is deserialized from its binary representation using Kryo.
      *
      * @param key the cache key
-     * @return the cached object, or null if not found
+     * @return the cached object, or null if not found or expired
      */
     @Override
     public T get(final String key) {
@@ -128,8 +128,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Increments a numeric value in the cache by 1.
+     * Atomically increments a numeric value by 1.
      * If the key doesn't exist, it will be created with value 1.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
      * @return the value after increment
@@ -140,21 +141,23 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Increments a numeric value in the cache by a specified delta.
+     * Atomically increments a numeric value by a specified amount.
      * If the key doesn't exist, it will be created with the delta value.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the increment amount
+     * @param delta the increment amount
      * @return the value after increment
      */
     @Override
-    public long incr(final String key, final int deta) {
-        return jedis.incrBy(getKeyBytes(key), deta);
+    public long incr(final String key, final int delta) {
+        return jedis.incrBy(getKeyBytes(key), delta);
     }
 
     /**
-     * Decrements a numeric value in the cache by 1.
+     * Atomically decrements a numeric value by 1.
      * If the key doesn't exist, it will be created with value -1.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
      * @return the value after decrement
@@ -165,16 +168,17 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Decrements a numeric value in the cache by a specified delta.
+     * Atomically decrements a numeric value by a specified amount.
      * If the key doesn't exist, it will be created with the negative delta value.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the decrement amount
+     * @param delta the decrement amount
      * @return the value after decrement
      */
     @Override
-    public long decr(final String key, final int deta) {
-        return jedis.decrBy(getKeyBytes(key), deta);
+    public long decr(final String key, final int delta) {
+        return jedis.decrBy(getKeyBytes(key), delta);
     }
 
     /**

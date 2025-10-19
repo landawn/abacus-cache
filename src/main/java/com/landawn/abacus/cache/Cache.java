@@ -101,12 +101,18 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Stores a key-value pair in the cache with custom expiration settings.
+     * If the key already exists, its value and expiration settings will be replaced.
      * The entry will be evicted when either the TTL expires or the idle time is exceeded.
+     *
+     * <br><br>
+     * Note: Some cache implementations (particularly distributed caches) may not support
+     * idle timeout and will only respect the liveTime parameter.
      *
      * @param k the key
      * @param v the value to cache
      * @param liveTime time-to-live in milliseconds (0 for no expiration)
-     * @param maxIdleTime maximum idle time in milliseconds (0 for no idle timeout)
+     * @param maxIdleTime maximum idle time in milliseconds (0 for no idle timeout).
+     *                    Note: Not supported by all implementations.
      * @return true if the operation was successful
      */
     boolean put(final K k, final V v, long liveTime, long maxIdleTime);
@@ -130,7 +136,7 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously retrieves a value from the cache.
-     * The operation is performed on a background thread.
+     * The operation is executed on a background thread from the shared async executor pool.
      *
      * @param k the key to look up
      * @return a future that will contain the Optional result
@@ -139,7 +145,7 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously retrieves a value from the cache directly.
-     * The operation is performed on a background thread.
+     * The operation is executed on a background thread from the shared async executor pool.
      *
      * @param k the key to look up
      * @return a future that will contain the value or null
@@ -148,7 +154,7 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously stores a key-value pair using default expiration.
-     * The operation is performed on a background thread.
+     * The operation is executed on a background thread from the shared async executor pool.
      *
      * @param k the key
      * @param v the value to cache
@@ -158,19 +164,19 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously stores a key-value pair with custom expiration.
-     * The operation is performed on a background thread.
+     * The operation is executed on a background thread from the shared async executor pool.
      *
      * @param k the key
      * @param v the value to cache
-     * @param liveTime time-to-live in milliseconds
-     * @param maxIdleTime maximum idle time in milliseconds
+     * @param liveTime time-to-live in milliseconds (0 for no expiration)
+     * @param maxIdleTime maximum idle time in milliseconds (0 for no idle timeout)
      * @return a future that will contain true if successful
      */
     ContinuableFuture<Boolean> asyncPut(final K k, final V v, long liveTime, long maxIdleTime);
 
     /**
      * Asynchronously removes an entry from the cache.
-     * The operation is performed on a background thread.
+     * The operation is executed on a background thread from the shared async executor pool.
      *
      * @param k the key to remove
      * @return a future that completes when the operation finishes
@@ -179,7 +185,7 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously checks if the cache contains a key.
-     * The operation is performed on a background thread.
+     * The operation is executed on a background thread from the shared async executor pool.
      *
      * @param k the key to check
      * @return a future that will contain true if the key exists
@@ -213,8 +219,8 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Closes the cache and releases all resources.
-     * After closing, the cache cannot be used. Implementations should ensure
-     * this method is idempotent and thread-safe.
+     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
+     * This method is idempotent and thread-safe - multiple calls have no additional effect.
      */
     @Override
     void close();
@@ -222,7 +228,7 @@ public interface Cache<K, V> extends Closeable {
     /**
      * Checks if the cache has been closed.
      *
-     * @return true if the cache is closed
+     * @return true if {@link #close()} has been called
      */
     boolean isClosed();
 

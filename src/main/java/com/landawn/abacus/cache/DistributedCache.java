@@ -130,7 +130,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Keys are automatically prefixed and encoded.
      *
      * @param k the key to look up
-     * @return the cached value, or null if not found or retry threshold exceeded
+     * @return the cached value, or null if not found, expired, or retry threshold exceeded
      */
     @Override
     public V gett(final K k) {
@@ -162,13 +162,17 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores a key-value pair in the distributed cache.
-     * Note: Most distributed caches only support TTL, so the maxIdleTime parameter
-     * is typically ignored. Keys are automatically prefixed and encoded.
+     * If the key already exists, its value and expiration settings will be replaced.
+     * Keys are automatically prefixed and encoded.
+     *
+     * <br><br>
+     * Note: Distributed caches typically only support TTL-based expiration.
+     * The maxIdleTime parameter is ignored by this implementation.
      *
      * @param k the key
      * @param v the value to cache
-     * @param liveTime the time-to-live in milliseconds
-     * @param maxIdleTime the maximum idle time in milliseconds (usually ignored)
+     * @param liveTime time-to-live in milliseconds (0 for no expiration)
+     * @param maxIdleTime the maximum idle time in milliseconds (ignored by distributed caches)
      * @return true if the operation was successful
      */
     @Override
@@ -242,9 +246,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes the cache and disconnects from all servers.
-     * After closing, the cache cannot be used anymore.
-     * This method is idempotent and thread-safe.
+     * Closes the cache and disconnects from all distributed cache servers.
+     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
+     * This method is idempotent and thread-safe - multiple calls have no additional effect.
      */
     @Override
     public synchronized void close() {
@@ -287,7 +291,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      */
     protected void assertNotClosed() {
         if (isClosed) {
-            throw new IllegalStateException("This object pool has been closed");
+            throw new IllegalStateException("This cache has been closed");
         }
     }
 }

@@ -123,7 +123,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * This is a synchronous operation that blocks until complete.
      *
      * @param key the cache key
-     * @return the cached object, or null if not found
+     * @return the cached object, or null if not found or expired
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -133,10 +133,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously retrieves an object from the cache by its key.
+     * The operation is executed asynchronously by the Memcached client.
      * The returned Future can be used to check completion and get the result.
      *
      * @param key the cache key
-     * @return a Future containing the cached object
+     * @return a Future containing the cached object, or null if not found or expired
      */
     @SuppressWarnings("unchecked")
     public Future<T> asyncGet(final String key) {
@@ -299,6 +300,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Atomically increments a numeric value by 1.
      * If the key doesn't exist, it will be created with value 1.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
      * @return the value after increment
@@ -311,49 +313,53 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Atomically increments a numeric value by a specified amount.
      * If the key doesn't exist, it will be created with the delta value.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the increment amount
+     * @param delta the increment amount
      * @return the value after increment
      */
     @Override
-    public long incr(final String key, final int deta) {
-        return mc.incr(key, deta);
+    public long incr(final String key, final int delta) {
+        return mc.incr(key, delta);
     }
 
     /**
      * Atomically increments a numeric value with a default value if key doesn't exist.
-     * The created value will not expire.
+     * The created value will not expire unless a liveTime is specified.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the increment amount
+     * @param delta the increment amount
      * @param defaultValue the initial value if key doesn't exist
      * @return the value after increment
      */
-    public long incr(final String key, final int deta, final long defaultValue) {
-        return mc.incr(key, deta, defaultValue, -1);
+    public long incr(final String key, final int delta, final long defaultValue) {
+        return mc.incr(key, delta, defaultValue, -1);
     }
 
     /**
      * Atomically increments a numeric value with default value and expiration.
      * If the key doesn't exist, it's created with the default value and TTL.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the increment amount
+     * @param delta the increment amount
      * @param defaultValue the initial value if key doesn't exist
      * @param liveTime the time-to-live in milliseconds for new keys
      * @return the value after increment
      */
-    public long incr(final String key, final int deta, final long defaultValue, final long liveTime) {
-        return mc.incr(key, deta, defaultValue, toSeconds(liveTime));
+    public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
+        return mc.incr(key, delta, defaultValue, toSeconds(liveTime));
     }
 
     /**
      * Atomically decrements a numeric value by 1.
-     * If the key doesn't exist, it will be created with value 0.
+     * If the key doesn't exist, it will be created with value 0 (Memcached prevents underflow).
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @return the value after decrement
+     * @return the value after decrement (0 if key didn't exist)
      */
     @Override
     public long decr(final String key) {
@@ -362,42 +368,45 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value by a specified amount.
-     * If the key doesn't exist, it will be created with value 0.
+     * If the key doesn't exist, it will be created with value 0 (Memcached prevents underflow).
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the decrement amount
-     * @return the value after decrement
+     * @param delta the decrement amount
+     * @return the value after decrement (0 if key didn't exist)
      */
     @Override
-    public long decr(final String key, final int deta) {
-        return mc.decr(key, deta);
+    public long decr(final String key, final int delta) {
+        return mc.decr(key, delta);
     }
 
     /**
      * Atomically decrements a numeric value with a default value if key doesn't exist.
-     * The created value will not expire.
+     * The created value will not expire unless a liveTime is specified.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the decrement amount
+     * @param delta the decrement amount
      * @param defaultValue the initial value if key doesn't exist
      * @return the value after decrement
      */
-    public long decr(final String key, final int deta, final long defaultValue) {
-        return mc.decr(key, deta, defaultValue, -1);
+    public long decr(final String key, final int delta, final long defaultValue) {
+        return mc.decr(key, delta, defaultValue, -1);
     }
 
     /**
      * Atomically decrements a numeric value with default value and expiration.
      * If the key doesn't exist, it's created with the default value and TTL.
+     * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key
-     * @param deta the decrement amount
+     * @param delta the decrement amount
      * @param defaultValue the initial value if key doesn't exist
      * @param liveTime the time-to-live in milliseconds for new keys
      * @return the value after decrement
      */
-    public long decr(final String key, final int deta, final long defaultValue, final long liveTime) {
-        return mc.decr(key, deta, defaultValue, toSeconds(liveTime));
+    public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
+        return mc.decr(key, delta, defaultValue, toSeconds(liveTime));
     }
 
     /**

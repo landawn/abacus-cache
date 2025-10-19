@@ -61,9 +61,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Retrieves a value from the cache by its key.
      * This method may trigger a cache loader if configured in the underlying Ehcache.
+     * The operation may update access time depending on the eviction policy.
      *
      * @param k the key to look up
-     * @return the cached value, or null if not present
+     * @return the cached value, or null if not found, expired, or evicted
      * @throws CacheLoadingException if the cache loader fails
      */
     @Override
@@ -216,9 +217,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes the cache and releases any resources.
-     * After closing, the cache cannot be used anymore.
-     * This method is thread-safe and can be called multiple times.
+     * Closes the cache and releases resources.
+     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
+     * This method is idempotent and thread-safe - multiple calls have no additional effect.
      */
     @Override
     public synchronized void close() {
@@ -246,7 +247,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      */
     protected void assertNotClosed() {
         if (isClosed) {
-            throw new IllegalStateException("This object pool has been closed");
+            throw new IllegalStateException("This cache has been closed");
         }
     }
 }

@@ -107,11 +107,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Retrieves a value from the cache by its key.
-     * Returns null if the key is not found or the entry has expired.
      * This operation updates the last access time for idle timeout calculation.
      *
      * @param key the key to look up
-     * @return the cached value, or null if not present or expired
+     * @return the cached value, or null if not found, expired, or evicted
      */
     @Override
     public V gett(final K key) {
@@ -122,13 +121,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores a key-value pair in the cache with custom expiration settings.
-     * If the key already exists, its value and expiration settings are updated.
-     * The entry will be evicted when either TTL expires or idle time is exceeded.
+     * If the key already exists, its value and expiration settings will be replaced.
+     * The entry will be evicted when either the TTL expires or the idle time is exceeded.
      *
      * @param key the key
      * @param value the value to cache
-     * @param liveTime the time-to-live in milliseconds (0 for no expiration)
-     * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout)
+     * @param liveTime time-to-live in milliseconds (0 for no expiration)
+     * @param maxIdleTime maximum idle time in milliseconds (0 for no idle timeout)
      * @return true if the entry was successfully stored
      */
     @Override
@@ -209,9 +208,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Closes the cache and releases all resources.
-     * After closing, the cache cannot be used anymore.
-     * This method stops the eviction thread and clears all entries.
-     * Multiple calls to close() are safe and have no additional effect.
+     * Stops the eviction scheduler, clears all entries, and releases the underlying object pool.
+     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
+     * This method is idempotent and thread-safe - multiple calls have no additional effect.
      */
     @Override
     public synchronized void close() {
