@@ -77,6 +77,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
         final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
 
+        if (addressList == null || addressList.isEmpty()) {
+            throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
+        }
+
         final List<JedisShardInfo> jedisClusterNodes = new ArrayList<>();
 
         for (final InetSocketAddress addr : addressList) {
@@ -109,9 +113,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public boolean set(final String key, final T obj, final long liveTime) {
-        jedis.setex(getKeyBytes(key), toSeconds(liveTime), encode(obj));
-
-        return true;
+        return "OK".equals(jedis.setex(getKeyBytes(key), toSeconds(liveTime), encode(obj)));
     }
 
     /**
@@ -233,6 +235,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return the deserialized object
      */
     protected T decode(final byte[] bytes) {
-        return N.isEmpty(bytes) ? null : kryoParser.decode(bytes);
+        if (bytes == null || N.isEmpty(bytes)) {
+            return null;
+        }
+        return kryoParser.decode(bytes);
     }
 }

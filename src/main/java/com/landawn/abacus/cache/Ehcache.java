@@ -47,14 +47,18 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     private final Cache<K, V> cacheImpl;
 
-    private boolean isClosed = false;
+    private volatile boolean isClosed = false;
 
     /**
      * Creates a new Ehcache wrapper instance.
      *
      * @param cache the underlying Ehcache instance to wrap
+     * @throws IllegalArgumentException if cache is null
      */
     public Ehcache(final Cache<K, V> cache) {
+        if (cache == null) {
+            throw new IllegalArgumentException("Cache cannot be null");
+        }
         cacheImpl = cache;
     }
 
@@ -89,6 +93,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
+
+        if (k == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
 
         cacheImpl.put(k, v); // TODO
 
@@ -134,6 +142,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public V putIfAbsent(final K key, final V value) throws CacheLoadingException, CacheWritingException {
         assertNotClosed();
 
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+
         return cacheImpl.putIfAbsent(key, value);
     }
 
@@ -148,6 +160,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public Map<K, V> getAll(final Set<? extends K> keys) throws BulkCacheLoadingException {
         assertNotClosed();
 
+        if (keys == null) {
+            throw new IllegalArgumentException("Keys cannot be null");
+        }
+
         return cacheImpl.getAll(keys);
     }
 
@@ -161,6 +177,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public void putAll(final Map<? extends K, ? extends V> entries) throws BulkCacheWritingException {
         assertNotClosed();
 
+        if (entries == null) {
+            throw new IllegalArgumentException("Entries cannot be null");
+        }
+
         cacheImpl.putAll(entries);
     }
 
@@ -173,6 +193,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      */
     public void removeAll(final Set<? extends K> keys) throws BulkCacheWritingException {
         assertNotClosed();
+
+        if (keys == null) {
+            throw new IllegalArgumentException("Keys cannot be null");
+        }
 
         cacheImpl.removeAll(keys);
     }

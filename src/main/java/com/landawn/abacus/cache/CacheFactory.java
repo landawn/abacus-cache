@@ -100,7 +100,8 @@ public final class CacheFactory {
      * @param defaultMaxIdleTime default maximum idle time in milliseconds (default: 30 minutes)
      * @return a new LocalCache instance
      */
-    public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
+    public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime,
+            final long defaultMaxIdleTime) {
         return new LocalCache<>(capacity, evictDelay, defaultLiveTime, defaultMaxIdleTime);
     }
 
@@ -201,7 +202,17 @@ public final class CacheFactory {
     @SuppressWarnings("unchecked")
     public static <K, V> Cache<K, V> createCache(final String provider) {
         final TypeAttrParser attrResult = TypeAttrParser.parse(provider);
+
+        if (attrResult == null) {
+            throw new IllegalArgumentException("Invalid provider specification: " + provider);
+        }
+
         final String[] parameters = attrResult.getParameters();
+
+        if (parameters == null || parameters.length == 0) {
+            throw new IllegalArgumentException("Invalid provider specification: missing parameters");
+        }
+
         final String url = parameters[0];
         final String className = attrResult.getClassName();
         Class<?> cls = null;
@@ -212,7 +223,11 @@ public final class CacheFactory {
             } else if (parameters.length == 2) {
                 return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
-                return new DistributedCache<>(new SpyMemcached<>(url, Numbers.toLong(parameters[2])), parameters[1]);
+                try {
+                    return new DistributedCache<>(new SpyMemcached<>(url, Numbers.toLong(parameters[2])), parameters[1]);
+                } catch (final NumberFormatException e) {
+                    throw new IllegalArgumentException("Invalid timeout parameter: " + parameters[2], e);
+                }
             } else {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
@@ -222,7 +237,11 @@ public final class CacheFactory {
             } else if (parameters.length == 2) {
                 return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
-                return new DistributedCache<>(new JRedis<>(url, Numbers.toLong(parameters[2])), parameters[1]);
+                try {
+                    return new DistributedCache<>(new JRedis<>(url, Numbers.toLong(parameters[2])), parameters[1]);
+                } catch (final NumberFormatException e) {
+                    throw new IllegalArgumentException("Invalid timeout parameter: " + parameters[2], e);
+                }
             } else {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }

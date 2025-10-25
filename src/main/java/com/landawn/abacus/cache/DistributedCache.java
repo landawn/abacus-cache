@@ -85,7 +85,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     private final AtomicLong lastFailedTime = new AtomicLong(0);
 
-    private boolean isClosed = false;
+    private volatile boolean isClosed = false;
 
     /**
      * Creates a DistributedCache with default retry configuration.
@@ -118,6 +118,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param retryDelay delay in milliseconds between retry attempts
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
+        if (dcc == null) {
+            throw new IllegalArgumentException("DistributedCacheClient cannot be null");
+        }
+
         this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
         this.dcc = dcc;
         this.maxFailedNumForRetry = maxFailedNumForRetry;
@@ -145,8 +149,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
         try {
             result = dcc.get(generateKey(k));
-
             isOK = true;
+        } catch (final Exception e) {
+            // Log the exception if needed, but don't rethrow
+            isOK = false;
         } finally {
             if (isOK) {
                 failedCounter.set(0);
@@ -280,6 +286,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return the prefixed and encoded cache key
      */
     protected String generateKey(final K k) {
+        if (k == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+
         return Strings.isEmpty(keyPrefix) ? Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8))
                 : (keyPrefix + Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8)));
     }

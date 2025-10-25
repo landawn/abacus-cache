@@ -92,8 +92,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     private static final Logger logger = LoggerFactory.getLogger(OffHeapCache25.class);
 
-    private Arena arena;
-    private MemorySegment buffer;
+    private volatile Arena arena;
+    private volatile MemorySegment buffer;
 
     /**
      * Creates an OffHeapCache25 with the specified capacity in megabytes.

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(for file in DistributedCache.java JRedis.java SpyMemcached.java CacheFactory.java AbstractDistributedCacheClient.java)",
+      "Bash(do echo \"=== $file ===\")",
+      "Bash(done)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

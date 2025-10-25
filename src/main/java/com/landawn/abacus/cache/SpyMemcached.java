@@ -75,6 +75,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     static final Logger logger = LoggerFactory.getLogger(SpyMemcached.class);
 
     private final MemcachedClient mc;
+    private volatile boolean isShutdown = false;
 
     /**
      * Creates a new SpyMemcached instance with the default timeout.
@@ -97,25 +98,38 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public SpyMemcached(final String serverUrl, final long timeout) {
         super(serverUrl);
 
-        final Transcoder<Object> transcoder = ParserFactory.isKryoAvailable() ? new KryoTranscoder<>() : null;
+        if (timeout <= 0) {
+            throw new IllegalArgumentException("Timeout must be positive: " + timeout);
+        }
 
-        final ConnectionFactory connFactory = new DefaultConnectionFactory() {
-            @Override
-            public long getOperationTimeout() {
-                return timeout;
-            }
+        MemcachedClient tempMc = null;
+        try {
+            final Transcoder<Object> transcoder = ParserFactory.isKryoAvailable() ? new KryoTranscoder<>() : null;
 
-            @Override
-            public Transcoder<Object> getDefaultTranscoder() {
-                if (transcoder != null) {
-                    return transcoder;
-                } else {
-                    return super.getDefaultTranscoder();
+            final ConnectionFactory connFactory = new DefaultConnectionFactory() {
+                @Override
+                public long getOperationTimeout() {
+                    return timeout;
                 }
-            }
-        };
 
-        mc = createSpyMemcachedClient(serverUrl, connFactory);
+                @Override
+                public Transcoder<Object> getDefaultTranscoder() {
+                    if (transcoder != null) {
+                        return transcoder;
+                    } else {
+                        return super.getDefaultTranscoder();
+                    }
+                }
+            };
+
+            tempMc = createSpyMemcachedClient(serverUrl, connFactory);
+            this.mc = tempMc;
+        } catch (final Exception e) {
+            if (tempMc != null) {
+                tempMc.shutdown();
+            }
+            throw ExceptionUtil.toRuntimeException(e);
+        }
     }
 
     /**
@@ -457,8 +471,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Uses default shutdown timeout.
      */
     @Override
-    public void disconnect() {
-        mc.shutdown();
+    public synchronized void disconnect() {
+        if (!isShutdown) {
+            mc.shutdown();
+            isShutdown = true;
+        }
     }
 
     /**
@@ -467,8 +484,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param timeout the maximum time to wait in milliseconds
      */
-    public void disconnect(final long timeout) {
-        mc.shutdown(timeout, TimeUnit.MILLISECONDS);
+    public synchronized void disconnect(final long timeout) {
+        if (!isShutdown) {
+            mc.shutdown(timeout, TimeUnit.MILLISECONDS);
+            isShutdown = true;
+        }
     }
 
     /**
@@ -483,8 +503,16 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     protected <R> R resultOf(final Future<R> future) {
         try {
             return future.get();
-        } catch (InterruptedException | ExecutionException e) {
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt(); // Restore interrupt status
             throw ExceptionUtil.toRuntimeException(e, true);
+        } catch (final ExecutionException e) {
+            final Throwable cause = e.getCause();
+            if (cause != null) {
+                throw ExceptionUtil.toRuntimeException(cause, true);
+            } else {
+                throw ExceptionUtil.toRuntimeException(e, true);
+            }
         }
     }
 

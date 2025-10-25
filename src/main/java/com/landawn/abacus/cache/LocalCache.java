@@ -87,6 +87,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
+        if (capacity <= 0) {
+            throw new IllegalArgumentException("Capacity must be positive: " + capacity);
+        }
+        if (evictDelay < 0) {
+            throw new IllegalArgumentException("Evict delay cannot be negative: " + evictDelay);
+        }
+
         pool = PoolFactory.createKeyedObjectPool(capacity, evictDelay);
     }
 
@@ -101,6 +108,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      */
     public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
         super(defaultLiveTime, defaultMaxIdleTime);
+
+        if (pool == null) {
+            throw new IllegalArgumentException("Pool cannot be null");
+        }
 
         this.pool = pool;
     }
@@ -132,6 +143,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+
         return pool.put(key, PoolableWrapper.of(value, liveTime, maxIdleTime));
     }
 
@@ -202,8 +217,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     public CacheStats stats() {
         final PoolStats poolStats = pool.stats();
 
-        return new CacheStats(poolStats.capacity(), poolStats.size(), poolStats.putCount(), poolStats.getCount(), poolStats.hitCount(),
-                poolStats.missCount(), poolStats.evictionCount(), poolStats.maxMemory(), poolStats.dataSize());
+        return new CacheStats(poolStats.capacity(), poolStats.size(), poolStats.putCount(), poolStats.getCount(), poolStats.hitCount(), poolStats.missCount(),
+                poolStats.evictionCount(), poolStats.maxMemory(), poolStats.dataSize());
     }
 
     /**

@@ -80,7 +80,7 @@ import com.landawn.abacus.logging.LoggerFactory;
  * @param <V> the type of the optional value stored with the lock
  * @see SpyMemcached
  */
-public final class MemcachedLock<K, V> {
+public final class MemcachedLock<K, V> implements AutoCloseable {
 
     static final Logger logger = LoggerFactory.getLogger(MemcachedLock.class);
 
@@ -111,6 +111,13 @@ public final class MemcachedLock<K, V> {
      * @throws RuntimeException if a communication error occurs with Memcached
      */
     public boolean lock(final K target, final long liveTime) {
+        if (target == null) {
+            throw new IllegalArgumentException("Target cannot be null");
+        }
+        if (liveTime <= 0) {
+            throw new IllegalArgumentException("Live time must be positive: " + liveTime);
+        }
+
         return lock(target, (V) N.EMPTY_BYTE_ARRAY, liveTime);
     }
 
@@ -131,6 +138,13 @@ public final class MemcachedLock<K, V> {
      * @throws RuntimeException if a communication error occurs with Memcached
      */
     public boolean lock(final K target, final V value, final long liveTime) {
+        if (target == null) {
+            throw new IllegalArgumentException("Target cannot be null");
+        }
+        if (liveTime <= 0) {
+            throw new IllegalArgumentException("Live time must be positive: " + liveTime);
+        }
+
         final String key = toKey(target);
 
         try {
@@ -153,6 +167,10 @@ public final class MemcachedLock<K, V> {
      * @return true if the lock is currently held, false otherwise
      */
     public boolean isLocked(final K target) {
+        if (target == null) {
+            throw new IllegalArgumentException("Target cannot be null");
+        }
+
         return mc.get(toKey(target)) != null;
     }
 
@@ -161,7 +179,7 @@ public final class MemcachedLock<K, V> {
      * If the lock was acquired with just a live time (no value), this method
      * returns null. If the lock stores an empty byte array (default), null is
      * also returned for convenience.
-     * 
+     *
      * <br><br>
      * This method is useful for:
      * <ul>
@@ -170,10 +188,20 @@ public final class MemcachedLock<K, V> {
      * <li>Implementing lock ownership verification</li>
      * </ul>
      *
+     * <br><br>
+     * WARNING: This method performs an unchecked cast. Ensure the type parameter V
+     * matches the actual type of the stored value to avoid ClassCastException.
+     *
      * @param target the target resource whose lock value to retrieve
      * @return the value associated with the lock, or null if not locked or no value stored
+     * @throws ClassCastException if V doesn't match the actual stored value type
      */
+    @SuppressWarnings("unchecked")
     public V get(final K target) {
+        if (target == null) {
+            throw new IllegalArgumentException("Target cannot be null");
+        }
+
         final Object value = mc.get(toKey(target));
 
         return (V) (value instanceof byte[] && ((byte[]) value).length == 0 ? null : value);
@@ -195,6 +223,10 @@ public final class MemcachedLock<K, V> {
      * @throws RuntimeException if a communication error occurs with Memcached
      */
     public boolean unlock(final K target) {
+        if (target == null) {
+            throw new IllegalArgumentException("Target cannot be null");
+        }
+
         try {
             return mc.delete(toKey(target));
         } catch (final Exception e) {
@@ -237,5 +269,28 @@ public final class MemcachedLock<K, V> {
     @SuppressFBWarnings("EI_EXPOSE_REP")
     public SpyMemcached<V> client() {
         return mc;
+    }
+
+    /**
+     * Closes the underlying Memcached client and releases all associated resources.
+     * After calling this method, the MemcachedLock instance cannot be used anymore.
+     * This method is idempotent - calling it multiple times has no additional effect.
+     *
+     * <br><br>
+     * It's recommended to use this class with try-with-resources to ensure proper cleanup:
+     * <pre>{@code
+     * try (MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211")) {
+     *     if (lock.lock("resource", 30000)) {
+     *         // Use the lock
+     *         lock.unlock("resource");
+     *     }
+     * } // Automatically closed
+     * }</pre>
+     */
+    @Override
+    public void close() {
+        if (mc != null) {
+            mc.disconnect();
+        }
     }
 }

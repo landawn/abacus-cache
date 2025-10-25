@@ -62,7 +62,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     private final Cache<K, V> cacheImpl;
 
-    private boolean isClosed = false;
+    private volatile boolean isClosed = false;
 
     /**
      * Creates a new CaffeineCache wrapper instance.
@@ -70,8 +70,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * eviction policies, maximum size, and expiration settings.
      *
      * @param cache the underlying Caffeine cache instance to wrap
+     * @throws IllegalArgumentException if cache is null
      */
     public CaffeineCache(final Cache<K, V> cache) {
+        if (cache == null) {
+            throw new IllegalArgumentException("Cache cannot be null");
+        }
         cacheImpl = cache;
     }
 
@@ -108,6 +112,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
+        if (k == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+
         cacheImpl.put(k, v); // TODO: Support per-entry expiration
 
         return true;
@@ -137,7 +145,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     public boolean containsKey(final K k) {
         assertNotClosed();
 
-        return get(k).isPresent();
+        return gett(k) != null;
     }
 
     /**

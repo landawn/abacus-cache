@@ -185,6 +185,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private final KeyedObjectPool<K, Wrapper<V>> _pool;
 
     private ScheduledFuture<?> scheduleFuture;
+    private Thread shutdownHook;
 
     // Configuration and extension points
     final BiConsumer<? super V, ByteArrayOutputStream> serializer;
@@ -270,7 +271,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             scheduleFuture = scheduledExecutor.scheduleWithFixedDelay(evictTask, evictDelay, evictDelay, TimeUnit.MILLISECONDS);
         }
 
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        shutdownHook = new Thread(() -> {
             logger.warn("Starting to shutdown task in OffHeapCache");
 
             try {
@@ -278,7 +279,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             } finally {
                 logger.warn("Completed to shutdown task in OffHeapCache");
             }
-        }));
+        });
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
     }
 
     /**
@@ -838,9 +840,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         } finally {
             try {
-                _pool.close();
+                if (shutdownHook != null) {
+                    try {
+                        Runtime.getRuntime().removeShutdownHook(shutdownHook);
+                        shutdownHook = null;
+                    } catch (final IllegalStateException e) {
+                        // Already shutting down, ignore
+                    }
+                }
             } finally {
-                deallocate();
+                try {
+                    _pool.close();
+                } finally {
+                    deallocate();
+                }
             }
         }
     }
@@ -1078,6 +1091,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             sizeOnDisk.incrementAndGet();
             dataSizeOnDisk.addAndGet(size);
+            totalDataSize.addAndGet(size);
         }
 
         @Override
@@ -1091,7 +1105,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 // should never happen.
                 if (bytes.length != size) {
-                    throw new RuntimeException("Unknown error happening when retrieve value. The fetched byte array size: " + size
+                    throw new RuntimeException("Unknown error happening when retrieve value. The fetched byte array size: " + bytes.length
                             + " is not equal to the expected size: " + size);
                 }
 
