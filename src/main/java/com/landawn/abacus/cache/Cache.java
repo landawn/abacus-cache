@@ -119,7 +119,7 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Removes an entry from the cache.
-     * This operation succeeds whether or not the key exists.
+     * This operation succeeds whether the key exists.
      *
      * @param k the key to remove
      */

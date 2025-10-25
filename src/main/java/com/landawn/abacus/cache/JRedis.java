@@ -77,7 +77,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
         final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
 
-        if (addressList == null || addressList.isEmpty()) {
+        if (N.isEmpty(addressList)) {
             throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
         }
 

@@ -152,7 +152,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes an entry from the cache.
-     * This operation succeeds whether or not the key exists.
+     * This operation succeeds whether the key exists.
      *
      * @param key the key to remove
      */

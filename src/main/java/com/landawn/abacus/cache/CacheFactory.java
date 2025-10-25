@@ -18,10 +18,7 @@ import static com.landawn.abacus.cache.DistributedCacheClient.DEFAULT_TIMEOUT;
 
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolableWrapper;
-import com.landawn.abacus.util.ClassUtil;
-import com.landawn.abacus.util.Numbers;
-import com.landawn.abacus.util.Strings;
-import com.landawn.abacus.util.TypeAttrParser;
+import com.landawn.abacus.util.*;
 
 /**
  * Factory class for creating various types of cache implementations.
@@ -203,13 +200,9 @@ public final class CacheFactory {
     public static <K, V> Cache<K, V> createCache(final String provider) {
         final TypeAttrParser attrResult = TypeAttrParser.parse(provider);
 
-        if (attrResult == null) {
-            throw new IllegalArgumentException("Invalid provider specification: " + provider);
-        }
-
         final String[] parameters = attrResult.getParameters();
 
-        if (parameters == null || parameters.length == 0) {
+        if (N.isEmpty(parameters)) {
             throw new IllegalArgumentException("Invalid provider specification: missing parameters");
         }
 

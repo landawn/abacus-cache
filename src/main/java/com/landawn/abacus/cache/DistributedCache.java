@@ -152,7 +152,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             isOK = true;
         } catch (final Exception e) {
             // Log the exception if needed, but don't rethrow
-            isOK = false;
+            // isOK = false;
         } finally {
             if (isOK) {
                 failedCounter.set(0);

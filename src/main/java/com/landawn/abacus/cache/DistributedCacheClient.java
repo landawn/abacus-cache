@@ -113,7 +113,7 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Removes an object from the cache.
-     * This operation succeeds whether or not the key exists.
+     * This operation succeeds whether the key exists.
      *
      * @param key the cache key to delete
      * @return true if the operation was successful

@@ -125,9 +125,6 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             tempMc = createSpyMemcachedClient(serverUrl, connFactory);
             this.mc = tempMc;
         } catch (final Exception e) {
-            if (tempMc != null) {
-                tempMc.shutdown();
-            }
             throw ExceptionUtil.toRuntimeException(e);
         }
     }
@@ -282,7 +279,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key
      * @param obj the object to cache
      * @param liveTime the time-to-live in milliseconds
-     * @return a Future indicating if the replace succeeded
+     * @return a Future indicating if the replacement succeeded
      */
     public Future<Boolean> asyncReplace(final String key, final T obj, final long liveTime) {
         return mc.replace(key, toSeconds(liveTime), obj);
@@ -290,7 +287,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Removes an object from the cache.
-     * This operation succeeds whether or not the key exists.
+     * This operation succeeds whether the key exists.
      *
      * @param key the cache key to delete
      * @return true if the operation was successful
