@@ -142,7 +142,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Allocates off-heap memory using the Foreign Memory API.
      * Creates a shared Arena and allocates a MemorySegment of the specified size.
      *
-     * @param capacityInBytes the number of bytes to allocate
+     * @param capacityInBytes the total number of bytes to allocate
      * @return the base address of the allocated memory segment
      */
     @Override
@@ -167,9 +167,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Copies bytes from off-heap memory to a Java array using MemorySegment API.
      * This provides type-safe memory access compared to Unsafe operations.
      *
-     * @param startPtr the source memory address
-     * @param bytes the destination byte array
-     * @param destOffset the offset in the destination array
+     * @param startPtr the source memory address from which to copy
+     * @param bytes the destination byte array to which data is copied
+     * @param destOffset the starting offset in the destination array
      * @param len the number of bytes to copy
      */
     @Override
@@ -181,9 +181,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Copies bytes from a Java array to off-heap memory using MemorySegment API.
      * This provides type-safe memory access compared to Unsafe operations.
      *
-     * @param srcBytes the source byte array
-     * @param srcOffset the offset in the source array
-     * @param startPtr the destination memory address
+     * @param srcBytes the source byte array from which to copy
+     * @param srcOffset the starting offset in the source array
+     * @param startPtr the destination memory address to which data is copied
      * @param len the number of bytes to copy
      */
     @Override
@@ -304,6 +304,17 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Builds and returns a new OffHeapCache25 instance with the configured parameters.
+         * This method validates the configuration and creates a fully initialized cache instance
+         * ready for use. The cache will allocate off-heap memory immediately upon creation.
+         *
+         * <p><b>Usage Examples:</b></p>
+         * <pre>{@code
+         * OffHeapCache25<String, Data> cache = OffHeapCache25.<String, Data>builder()
+         *     .capacityInMB(100)
+         *     .evictDelay(60000)
+         *     .defaultLiveTime(3600000)
+         *     .build();
+         * }</pre>
          *
          * @return a new OffHeapCache25 instance
          */

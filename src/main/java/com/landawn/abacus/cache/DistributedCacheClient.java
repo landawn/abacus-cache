@@ -80,7 +80,7 @@ public interface DistributedCacheClient<T> {
     String serverUrl();
 
     /**
-     * Retrieves an object from the cache by its key.
+     * Retrieves a value from the cache by its key.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -91,12 +91,12 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key
-     * @return the cached object, or {@code null} if not found or expired
+     * @return the cached value, or {@code null} if not found, expired, or evicted
      */
     T get(String key);
 
     /**
-     * Retrieves multiple objects from the cache in a single operation.
+     * Retrieves multiple values from the cache in a single operation.
      * This is more efficient than multiple individual get operations.
      * Keys not found in the cache will not be present in the returned map.
      *
@@ -112,7 +112,7 @@ public interface DistributedCacheClient<T> {
     Map<String, T> getBulk(String... keys);
 
     /**
-     * Retrieves multiple objects from the cache in a single operation.
+     * Retrieves multiple values from the cache in a single operation.
      * This is more efficient than multiple individual get operations.
      * Keys not found in the cache will not be present in the returned map.
      *
@@ -128,7 +128,7 @@ public interface DistributedCacheClient<T> {
     Map<String, T> getBulk(Collection<String> keys);
 
     /**
-     * Stores an object in the cache with a specified time-to-live.
+     * Stores a key-value pair in the cache with a specified time-to-live.
      * If the key already exists, its value will be replaced.
      *
      * <p><b>Usage Examples:</b></p>
@@ -138,14 +138,14 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key
-     * @param obj the object to cache
+     * @param obj the value to cache
      * @param liveTime the time-to-live in milliseconds (0 means no expiration)
      * @return {@code true} if the operation was successful
      */
     boolean set(String key, T obj, long liveTime);
 
     /**
-     * Removes an object from the cache.
+     * Removes a key-value pair from the cache.
      * This operation succeeds whether the key exists.
      *
      * <p><b>Usage Examples:</b></p>

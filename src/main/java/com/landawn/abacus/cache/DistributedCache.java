@@ -152,7 +152,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Keys are automatically prefixed and encoded.
      *
      * @param k the cache key
-     * @return the cached value, or {@code null} if not found, expired, or retry threshold exceeded
+     * @return the cached value, or {@code null} if not found, expired, evicted, or retry threshold exceeded
      */
     @Override
     public V gett(final K k) {
@@ -195,7 +195,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * @param k the cache key
      * @param v the value to cache
-     * @param liveTime the time-to-live in milliseconds (0 for no expiration)
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored by distributed caches)
      * @return {@code true} if the operation was successful
      */
@@ -207,7 +207,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes an entry from the distributed cache.
+     * Removes a key-value pair from the distributed cache.
      * This operation always succeeds from the caller's perspective.
      *
      * @param k the cache key
@@ -259,7 +259,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes all entries from all connected cache servers.
-     * This is a destructive operation that affects all data.
+     * This is a destructive operation that affects all data across all servers.
      * Use with extreme caution in production environments.
      */
     @Override

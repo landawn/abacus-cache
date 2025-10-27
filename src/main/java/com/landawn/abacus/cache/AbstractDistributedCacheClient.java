@@ -56,7 +56,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * The server URL format is implementation-specific but typically includes
      * host and port information.
      *
-     * @param serverUrl the server URL(s) for the distributed cache
+     * @param serverUrl the server URL(s) for connecting to the distributed cache
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
         this.serverUrl = serverUrl;
@@ -66,7 +66,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Returns the server URL(s) this client is connected to.
      * The format is implementation-specific and may include multiple servers.
      *
-     * @return the server URL(s)
+     * @return the server URL(s) for this client
      */
     @Override
     public String serverUrl() {
@@ -79,7 +79,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Subclasses that support bulk operations should override this method.
      *
      * @param keys the cache keys
-     * @return never returns normally
+     * @return the map of cache keys to values (never returns normally in default implementation)
      * @throws UnsupportedOperationException always thrown by this default implementation
      */
     @Override
@@ -93,7 +93,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Subclasses that support bulk operations should override this method.
      *
      * @param keys the collection of cache keys
-     * @return never returns normally
+     * @return the map of cache keys to values (never returns normally in default implementation)
      * @throws UnsupportedOperationException always thrown by this default implementation
      */
     @Override
@@ -129,7 +129,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * }</pre>
      *
      * @param liveTime the time-to-live in milliseconds
-     * @return the time-to-live in seconds (rounded up)
+     * @return the time-to-live in seconds, rounded up
      * @throws IllegalArgumentException if the time value exceeds Integer.MAX_VALUE seconds
      */
     protected int toSeconds(final long liveTime) {

@@ -141,8 +141,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Retrieves a value from the cache by its key.
      * This operation updates the last access time for idle timeout calculation.
      *
-     * @param key the key whose associated value is to be returned
-     * @return the value associated with the key, or null if not found, expired, or evicted
+     * @param key the cache key whose associated value is to be returned
+     * @return the value associated with the specified key, or null if not found, expired, or evicted
      */
     @Override
     public V gett(final K key) {
@@ -156,8 +156,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * If the key already exists, its value and expiration settings will be replaced.
      * The entry will be evicted when either the TTL expires or the idle time is exceeded.
      *
-     * @param key the key with which the specified value is to be associated
-     * @param value the value to be associated with the specified key
+     * @param key the cache key with which the specified value is to be associated
+     * @param value the cache value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds (0 for no expiration)
      * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout)
      * @return true if the entry was successfully stored
@@ -175,7 +175,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Removes the mapping for a key from the cache if it is present.
      * This operation succeeds whether the key exists or not.
      *
-     * @param key the key whose mapping is to be removed from the cache
+     * @param key the cache key whose mapping is to be removed from the cache
      */
     @Override
     public void remove(final K key) {
@@ -186,7 +186,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Checks if the cache contains a mapping for the specified key.
      * This method checks for key existence without updating access time.
      *
-     * @param key the key whose presence in the cache is to be tested
+     * @param key the cache key whose presence in the cache is to be tested
      * @return true if the cache contains a mapping for the specified key and it hasn't expired
      */
     @Override
@@ -200,7 +200,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * that haven't been evicted yet. Modifications to the returned set do not
      * affect the cache.
      *
-     * @return an unmodifiable set of cache keys
+     * @return a set of all cache keys
      */
     @Override
     public Set<K> keySet() {

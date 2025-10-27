@@ -82,8 +82,8 @@ public interface Cache<K, V> extends Closeable {
      * user.ifPresent(u -> System.out.println("Found: " + u.getName()));
      * }</pre>
      *
-     * @param k the key
-     * @return an Optional containing the value if present, or empty if not found
+     * @param k the cache key
+     * @return an Optional containing the cached value if present, or empty if not found
      */
     Optional<V> get(final K k);
 
@@ -98,7 +98,7 @@ public interface Cache<K, V> extends Closeable {
      * if (user != null) { System.out.println(user.getName()); }
      * }</pre>
      *
-     * @param k the key
+     * @param k the cache key
      * @return the cached value, or null if not found
      */
     V gett(final K k);
@@ -113,9 +113,9 @@ public interface Cache<K, V> extends Closeable {
      * boolean success = cache.put("user:123", user);
      * }</pre>
      *
-     * @param k the key
+     * @param k the cache key
      * @param v the value to cache
-     * @return true if the operation was successful
+     * @return true if the operation was successful, false otherwise
      */
     boolean put(final K k, final V v);
 
@@ -135,12 +135,12 @@ public interface Cache<K, V> extends Closeable {
      * cache.put("temp:data", data, 5000, 0); // 5s TTL, no idle timeout
      * }</pre>
      *
-     * @param k the key
+     * @param k the cache key
      * @param v the value to cache
-     * @param liveTime time-to-live in milliseconds (0 for no expiration)
-     * @param maxIdleTime maximum idle time in milliseconds (0 for no idle timeout).
+     * @param liveTime the time-to-live in milliseconds (0 for no expiration)
+     * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout).
      *                    Note: Not supported by all implementations.
-     * @return true if the operation was successful
+     * @return true if the operation was successful, false otherwise
      */
     boolean put(final K k, final V v, long liveTime, long maxIdleTime);
 
@@ -154,7 +154,7 @@ public interface Cache<K, V> extends Closeable {
      * cache.remove("user:123"); // Removes if exists, no error if not
      * }</pre>
      *
-     * @param k the key
+     * @param k the cache key
      */
     void remove(final K k);
 
@@ -168,8 +168,8 @@ public interface Cache<K, V> extends Closeable {
      * if (cache.containsKey("user:123")) // key exists
      * }</pre>
      *
-     * @param k the key
-     * @return true if the key exists in the cache
+     * @param k the cache key
+     * @return true if the key exists in the cache, false otherwise
      */
     boolean containsKey(final K k);
 
@@ -183,7 +183,7 @@ public interface Cache<K, V> extends Closeable {
      * cache.asyncGet("user:123").thenAccept(opt -> opt.ifPresent(System.out::println));
      * }</pre>
      *
-     * @param k the key
+     * @param k the cache key
      * @return a ContinuableFuture that will contain the Optional result
      */
     ContinuableFuture<Optional<V>> asyncGet(final K k);
@@ -198,8 +198,8 @@ public interface Cache<K, V> extends Closeable {
      * cache.asyncGett("user:123").thenAccept(user -> { if (user != null) process(user); });
      * }</pre>
      *
-     * @param k the key
-     * @return a ContinuableFuture that will contain the value or null
+     * @param k the cache key
+     * @return a ContinuableFuture that will contain the cached value, or null if not found
      */
     ContinuableFuture<V> asyncGett(final K k);
 
@@ -213,9 +213,9 @@ public interface Cache<K, V> extends Closeable {
      * cache.asyncPut("user:123", user).thenAccept(success -> log("Cached: " + success));
      * }</pre>
      *
-     * @param k the key
+     * @param k the cache key
      * @param v the value to cache
-     * @return a ContinuableFuture that will contain true if the operation was successful
+     * @return a ContinuableFuture that will contain true if the operation was successful, false otherwise
      */
     ContinuableFuture<Boolean> asyncPut(final K k, final V v);
 
@@ -230,11 +230,11 @@ public interface Cache<K, V> extends Closeable {
      *      .thenAccept(success -> log("Session cached"));
      * }</pre>
      *
-     * @param k the key
+     * @param k the cache key
      * @param v the value to cache
-     * @param liveTime time-to-live in milliseconds (0 for no expiration)
-     * @param maxIdleTime maximum idle time in milliseconds (0 for no idle timeout)
-     * @return a ContinuableFuture that will contain true if the operation was successful
+     * @param liveTime the time-to-live in milliseconds (0 for no expiration)
+     * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout)
+     * @return a ContinuableFuture that will contain true if the operation was successful, false otherwise
      */
     ContinuableFuture<Boolean> asyncPut(final K k, final V v, long liveTime, long maxIdleTime);
 
@@ -248,7 +248,7 @@ public interface Cache<K, V> extends Closeable {
      * cache.asyncRemove("user:123").thenRun(() -> log("User removed from cache"));
      * }</pre>
      *
-     * @param k the key
+     * @param k the cache key
      * @return a ContinuableFuture that completes when the operation finishes
      */
     ContinuableFuture<Void> asyncRemove(final K k);
@@ -263,8 +263,8 @@ public interface Cache<K, V> extends Closeable {
      * cache.asyncContainsKey("user:123").thenAccept(exists -> log("Exists: " + exists));
      * }</pre>
      *
-     * @param k the key
-     * @return a ContinuableFuture that will contain true if the key exists in the cache
+     * @param k the cache key
+     * @return a ContinuableFuture that will contain true if the key exists in the cache, false otherwise
      */
     ContinuableFuture<Boolean> asyncContainsKey(final K k);
 

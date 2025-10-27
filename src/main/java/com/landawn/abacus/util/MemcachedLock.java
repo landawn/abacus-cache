@@ -121,8 +121,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * }
      * }</pre>
      *
-     * @param target the target resource to lock
-     * @param liveTime the duration in milliseconds before the lock automatically expires
+     * @param target the target resource on which to acquire the lock
+     * @param liveTime the time-to-live in milliseconds before the lock automatically expires
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws RuntimeException if a communication error occurs with Memcached
      */
@@ -155,9 +155,9 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * }
      * }</pre>
      *
-     * @param target the target resource to lock
+     * @param target the target resource on which to acquire the lock
      * @param value the value to associate with the lock (can be {@code null})
-     * @param liveTime the duration in milliseconds before the lock automatically expires
+     * @param liveTime the time-to-live in milliseconds before the lock automatically expires
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws RuntimeException if a communication error occurs with Memcached
      */
@@ -194,7 +194,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * }
      * }</pre>
      *
-     * @param target the target resource to check
+     * @param target the target resource whose lock status is to be checked
      * @return {@code true} if the lock is currently held, {@code false} otherwise
      */
     public boolean isLocked(final K target) {
@@ -231,7 +231,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * }
      * }</pre>
      *
-     * @param target the target resource whose lock value to retrieve
+     * @param target the target resource whose associated lock value is to be retrieved
      * @return the value associated with the lock, or {@code null} if not locked or no value stored
      * @throws ClassCastException if V doesn't match the actual stored value type
      */
@@ -268,7 +268,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * }
      * }</pre>
      *
-     * @param target the target resource to unlock
+     * @param target the target resource whose lock is to be released
      * @return {@code true} if the lock was successfully removed, {@code false} if it didn't exist
      * @throws RuntimeException if a communication error occurs with Memcached
      */
@@ -302,7 +302,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * }
      * }</pre>
      *
-     * @param target the target object to convert
+     * @param target the target object to be converted to a key string
      * @return the string key to use in Memcached
      */
     protected String toKey(final K target) {

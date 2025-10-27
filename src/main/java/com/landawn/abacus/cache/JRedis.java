@@ -108,8 +108,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Retrieves a value from the cache by its key.
      * The value is deserialized from its binary representation using Kryo.
      *
-     * @param key the key whose associated value is to be returned
-     * @return the value associated with the key, or null if not found or expired
+     * @param key the cache key whose associated value is to be returned
+     * @return the value associated with the specified key, or null if not found or expired
      */
     @Override
     public T get(final String key) {
@@ -120,8 +120,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Stores a key-value pair in the cache with a specified time-to-live.
      * The value is serialized using Kryo before storage.
      *
-     * @param key the key with which the specified value is to be associated
-     * @param obj the value to be associated with the specified key
+     * @param key the cache key with which the specified value is to be associated
+     * @param obj the cache value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds
      * @return true if the operation was successful
      */
@@ -133,7 +133,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Removes the mapping for a key from the cache if it is present.
      *
-     * @param key the key whose mapping is to be removed from the cache
+     * @param key the cache key whose mapping is to be removed from the cache
      * @return true if the operation was successful
      */
     @Override
@@ -148,7 +148,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with value 1.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the key whose associated value is to be incremented
+     * @param key the cache key whose associated value is to be incremented
      * @return the value after increment
      */
     @Override
@@ -161,7 +161,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with the delta value.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the key whose associated value is to be incremented
+     * @param key the cache key whose associated value is to be incremented
      * @param delta the amount by which to increment the value
      * @return the value after increment
      */
@@ -175,7 +175,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with value -1.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the key whose associated value is to be decremented
+     * @param key the cache key whose associated value is to be decremented
      * @return the value after decrement
      */
     @Override
@@ -188,7 +188,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with the negative delta value.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the key whose associated value is to be decremented
+     * @param key the cache key whose associated value is to be decremented
      * @param delta the amount by which to decrement the value
      * @return the value after decrement
      */
@@ -223,7 +223,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Converts a string key to UTF-8 encoded bytes for Redis operations.
      *
-     * @param key the string key to convert
+     * @param key the cache key to convert
      * @return the UTF-8 encoded byte array representation of the key
      */
     protected byte[] getKeyBytes(final String key) {

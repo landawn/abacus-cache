@@ -107,7 +107,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * Encodes an object to cached data using Kryo serialization.
      * The object is serialized to bytes with no flags set.
      *
-     * @param o the object to encode
+     * @param o the object to encode and serialize
      * @return the CachedData containing the serialized bytes
      * @throws IllegalArgumentException if the serialized size exceeds maxSize
      */
@@ -120,7 +120,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * Decodes cached data back to an object using Kryo deserialization.
      * This method can deserialize any object type that Kryo supports.
      *
-     * @param d the cached data to decode
+     * @param d the cached data to decode and deserialize
      * @return the deserialized object
      * @throws RuntimeException if the deserialization fails
      */

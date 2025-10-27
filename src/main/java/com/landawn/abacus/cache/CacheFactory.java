@@ -85,7 +85,7 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param capacity the maximum number of entries the cache can hold
      * @param evictDelay the delay in milliseconds between eviction runs
-     * @return a new LocalCache instance
+     * @return the new LocalCache instance
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay) {
         return new LocalCache<>(capacity, evictDelay);
@@ -105,9 +105,9 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param capacity the maximum number of entries the cache can hold
      * @param evictDelay the delay in milliseconds between eviction runs
-     * @param defaultLiveTime default time-to-live in milliseconds (default: 3 hours)
-     * @param defaultMaxIdleTime default maximum idle time in milliseconds (default: 30 minutes)
-     * @return a new LocalCache instance
+     * @param defaultLiveTime the default time-to-live in milliseconds (default: 3 hours)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds (default: 30 minutes)
+     * @return the new LocalCache instance
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime) {
@@ -129,7 +129,7 @@ public final class CacheFactory {
      * @param defaultLiveTime the default time-to-live in milliseconds
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds
      * @param pool the pre-configured KeyedObjectPool to use
-     * @return a new LocalCache instance
+     * @return the new LocalCache instance
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final long defaultLiveTime, final long defaultMaxIdleTime,
             final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
@@ -149,7 +149,7 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap
-     * @return a new DistributedCache instance
+     * @return the new DistributedCache instance
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc) {
         return new DistributedCache<>(dcc);
@@ -169,7 +169,7 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap
      * @param keyPrefix the key prefix to prepend to all keys
-     * @return a new DistributedCache instance
+     * @return the new DistributedCache instance
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
         return new DistributedCache<>(dcc, keyPrefix);
@@ -192,7 +192,7 @@ public final class CacheFactory {
      * @param keyPrefix the key prefix to prepend to all keys
      * @param maxFailedNumForRetry the maximum failures before stopping retries
      * @param retryDelay the delay in milliseconds between retry attempts
-     * @return a new DistributedCache instance
+     * @return the new DistributedCache instance
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix,
             final int maxFailedNumForRetry, final long retryDelay) {
@@ -231,7 +231,7 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param provider the cache provider specification string
-     * @return a new Cache instance
+     * @return the new Cache instance
      * @throws IllegalArgumentException if the provider specification is invalid
      */
     @SuppressWarnings("unchecked")

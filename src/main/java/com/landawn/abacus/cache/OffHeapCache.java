@@ -221,9 +221,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * copyToMemory(data, BYTE_ARRAY_BASE, memoryAddress, data.length);
      * }</pre>
      *
-     * @param srcBytes the source byte array from which to copy
+     * @param srcBytes the source byte array from which to copy data
      * @param srcOffset the starting offset in the source array
-     * @param startPtr the destination memory address
+     * @param startPtr the destination memory address in off-heap memory
      * @param len the number of bytes to copy
      */
     @SuppressWarnings("removal")
@@ -244,7 +244,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * copyFromMemory(memoryAddress, data, BYTE_ARRAY_BASE, length);
      * }</pre>
      *
-     * @param startPtr the source memory address from which to copy
+     * @param startPtr the source memory address in off-heap memory from which to copy data
      * @param bytes the destination byte array
      * @param destOffset the starting offset in the destination array
      * @param len the number of bytes to copy

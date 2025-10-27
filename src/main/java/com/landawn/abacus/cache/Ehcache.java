@@ -75,8 +75,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * This method may trigger a cache loader if configured in the underlying Ehcache.
      * The operation may update access time depending on the eviction policy.
      *
-     * @param k the key whose associated value is to be returned
-     * @return the value associated with the key, or null if not found, expired, or evicted
+     * @param k the cache key whose associated value is to be returned
+     * @return the value associated with the specified key, or null if not found, expired, or evicted
      * @throws CacheLoadingException if the cache loader fails
      */
     @Override
@@ -91,8 +91,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Note: The current implementation does not honor the individual TTL and idle time
      * parameters as Ehcache expiration is configured at cache level.
      *
-     * @param k the key with which the specified value is to be associated
-     * @param v the value to be associated with the specified key
+     * @param k the cache key with which the specified value is to be associated
+     * @param v the cache value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds (currently ignored)
      * @param maxIdleTime the maximum idle time in milliseconds (currently ignored)
      * @return true if the operation was successful
@@ -114,7 +114,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes the mapping for a key from the cache if it is present.
      *
-     * @param k the key whose mapping is to be removed from the cache
+     * @param k the cache key whose mapping is to be removed from the cache
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
@@ -127,7 +127,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Checks if the cache contains a mapping for the specified key.
      *
-     * @param k the key whose presence in the cache is to be tested
+     * @param k the cache key whose presence in the cache is to be tested
      * @return true if the cache contains a mapping for the specified key
      */
     @Override
@@ -151,8 +151,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the key with which the specified value is to be associated
-     * @param value the value to be associated with the specified key
+     * @param key the cache key with which the specified value is to be associated
+     * @param value the cache value to be associated with the specified key
      * @return the previous value associated with the specified key, or null if there was no mapping
      * @throws CacheLoadingException if the cache loader fails
      * @throws CacheWritingException if the cache writer fails
@@ -179,7 +179,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Map<String, User> results = cache.getAll(keys);
      * }</pre>
      *
-     * @param keys the set of keys to retrieve
+     * @param keys the set of cache keys to retrieve
      * @return a map of key-value pairs found in the cache
      * @throws BulkCacheLoadingException if the bulk cache loader fails
      */
@@ -230,7 +230,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.removeAll(keysToRemove);
      * }</pre>
      *
-     * @param keys the set of keys to remove
+     * @param keys the set of cache keys to remove
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
     public void removeAll(final Set<? extends K> keys) throws BulkCacheWritingException {

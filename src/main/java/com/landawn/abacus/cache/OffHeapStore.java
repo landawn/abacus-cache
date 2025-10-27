@@ -97,7 +97,15 @@ public interface OffHeapStore<K> {
      * Returns {@code null} if the key is not found or if an error occurs.
      * The returned byte array should be a copy to prevent external modifications.
      *
-     * @param key the key to look up
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * byte[] data = offHeapStore.get("user:123");
+     * if (data != null) {
+     *     User user = deserialize(data);
+     * }
+     * }</pre>
+     *
+     * @param key the key whose associated value is to be retrieved
      * @return the stored byte array, or {@code null} if not found
      */
     byte[] get(K key);
@@ -108,8 +116,14 @@ public interface OffHeapStore<K> {
      * The implementation should make a defensive copy of the byte array
      * if necessary to prevent external modifications.
      *
-     * @param key the key to associate with the value
-     * @param value the byte array to store
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * byte[] serializedData = serialize(user);
+     * boolean success = offHeapStore.put("user:123", serializedData);
+     * }</pre>
+     *
+     * @param key the key with which the specified value is to be associated
+     * @param value the byte array value to store
      * @return {@code true} if the value was successfully stored, {@code false} otherwise
      */
     boolean put(K key, byte[] value);
@@ -119,7 +133,14 @@ public interface OffHeapStore<K> {
      * Returns {@code true} if a value was removed, {@code false} if the key was not found
      * or if an error occurred during removal.
      *
-     * @param key the key whose value should be removed
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * if (offHeapStore.remove("user:123")) {
+     *     System.out.println("User data removed from disk");
+     * }
+     * }</pre>
+     *
+     * @param key the key whose associated value is to be removed
      * @return {@code true} if a value was removed, {@code false} otherwise
      */
     boolean remove(K key);

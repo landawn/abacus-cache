@@ -201,20 +201,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Constructs an AbstractOffHeapCache with the specified configuration.
      * This constructor initializes the memory segments, object pool, and eviction scheduling.
      *
-     * @param capacityInMB total off-heap memory capacity in megabytes
-     * @param maxBlockSize maximum size of a single memory block in bytes
-     * @param evictDelay delay between eviction runs in milliseconds
-     * @param defaultLiveTime default TTL for entries in milliseconds
-     * @param defaultMaxIdleTime default max idle time for entries in milliseconds
-     * @param vacatingFactor fraction of fragmented memory that triggers defragmentation
-     * @param arrayOffset array base offset for memory operations
-     * @param serializer custom serializer or null for default
-     * @param deserializer custom deserializer or null for default
-     * @param offHeapStore optional disk store for spillover
+     * @param capacityInMB the total off-heap memory capacity in megabytes
+     * @param maxBlockSize the maximum size of a single memory block in bytes
+     * @param evictDelay the delay between eviction runs in milliseconds
+     * @param defaultLiveTime the default TTL for entries in milliseconds
+     * @param defaultMaxIdleTime the default max idle time for entries in milliseconds
+     * @param vacatingFactor the fraction of fragmented memory that triggers defragmentation
+     * @param arrayOffset the array base offset for memory operations
+     * @param serializer the custom serializer, or null for default
+     * @param deserializer the custom deserializer, or null for default
+     * @param offHeapStore the optional disk store for spillover
      * @param statsTimeOnDisk whether to collect disk I/O timing statistics
-     * @param testerForLoadingItemFromDiskToMemory predicate for loading from disk to memory
-     * @param storeSelector function to determine storage location (0=default, 1=memory only, 2=disk only)
-     * @param logger logger instance for this cache
+     * @param testerForLoadingItemFromDiskToMemory the predicate for loading from disk to memory
+     * @param storeSelector the function to determine storage location (0=default, 1=memory only, 2=disk only)
+     * @param logger the logger instance for this cache
      */
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
@@ -288,7 +288,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Implementation depends on the specific memory management approach
      * (Unsafe vs Foreign Memory API).
      *
-     * @param capacityInBytes number of bytes to allocate
+     * @param capacityInBytes the number of bytes to allocate
      * @return the base address of the allocated memory
      */
     protected abstract long allocate(long capacityInBytes);
@@ -302,20 +302,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Copies data from a byte array to off-heap memory.
      *
-     * @param bytes source byte array
-     * @param srcOffset offset in the source array
-     * @param startPtr destination memory address
-     * @param len number of bytes to copy
+     * @param bytes the source byte array
+     * @param srcOffset the offset in the source array
+     * @param startPtr the destination memory address
+     * @param len the number of bytes to copy
      */
     protected abstract void copyToMemory(byte[] bytes, int srcOffset, long startPtr, int len);
 
     /**
      * Copies data from off-heap memory to a byte array.
      *
-     * @param startPtr source memory address
-     * @param bytes destination byte array
-     * @param destOffset offset in the destination array
-     * @param len number of bytes to copy
+     * @param startPtr the source memory address
+     * @param bytes the destination byte array
+     * @param destOffset the offset in the destination array
+     * @param len the number of bytes to copy
      */
     protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
 
@@ -324,7 +324,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Handles both memory and disk storage, with automatic promotion from disk
      * to memory based on access patterns if configured.
      *
-     * @param k the key
+     * @param k the cache key
      * @return the cached value, or null if not found
      */
     @Override
@@ -456,11 +456,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * The value is serialized and stored either in memory, on disk, or both
      * based on size and configuration.
      *
-     * @param k the key
+     * @param k the cache key
      * @param v the value to cache
-     * @param liveTime time-to-live in milliseconds
-     * @param maxIdleTime maximum idle time in milliseconds
-     * @return true if the operation was successful
+     * @param liveTime the time-to-live in milliseconds
+     * @param maxIdleTime the maximum idle time in milliseconds
+     * @return true if the operation was successful, false otherwise
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -601,12 +601,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Stores a value to disk when memory is unavailable or based on storage policy.
      *
-     * @param k the key
-     * @param liveTime time-to-live in milliseconds
-     * @param maxIdleTime maximum idle time in milliseconds
+     * @param k the cache key
+     * @param liveTime the time-to-live in milliseconds
+     * @param maxIdleTime the maximum idle time in milliseconds
      * @param type the value type information
-     * @param bytes serialized value bytes
-     * @param size size of the serialized data
+     * @param bytes the serialized value bytes
+     * @param size the size of the serialized data
      * @return a wrapper for the disk-stored value, or null if storage failed
      */
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
@@ -621,8 +621,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Finds and allocates an available memory slot of the specified size.
      * Uses a best-fit strategy within size-segregated segment queues.
      *
-     * @param size required slot size in bytes
-     * @return allocated slot or null if no space available
+     * @param size the required slot size in bytes
+     * @return the allocated slot, or null if no space available
      */
     private Slot getAvailableSlot(final int size) {
         int slotSize = 0;
@@ -733,7 +733,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Removes an entry from the cache.
      * Properly cleans up memory or disk resources associated with the entry.
      *
-     * @param k the key
+     * @param k the cache key
      */
     @Override
     public void remove(final K k) {
@@ -747,8 +747,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Checks if the cache contains a specific key.
      *
-     * @param k the key
-     * @return true if the key exists in the cache
+     * @param k the cache key
+     * @return true if the key exists in the cache, false otherwise
      */
     @Override
     public boolean containsKey(final K k) {
@@ -758,7 +758,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns a set of all keys in the cache.
      *
-     * @return unmodifiable set of cache keys
+     * @return the unmodifiable set of cache keys
      */
     @Override
     public Set<K> keySet() {
@@ -802,7 +802,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * System.out.println("Hit rate: " + stats.hitCount() + "/" + stats.getCount());
      * }</pre>
      *
-     * @return cache statistics snapshot containing memory, disk, and performance metrics
+     * @return the cache statistics snapshot containing memory, disk, and performance metrics
      */
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();

@@ -133,8 +133,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Retrieves a value from the cache wrapped in an Optional.
      * This method provides a null-safe alternative to gett().
      *
-     * @param k the key
-     * @return an Optional containing the value if present, or empty if not found
+     * @param k the cache key
+     * @return an Optional containing the cached value if present, or empty if not found
      */
     @Override
     public Optional<V> get(final K k) {
@@ -145,9 +145,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Stores a key-value pair using default expiration settings.
      * The default TTL and idle time specified in the constructor are used.
      *
-     * @param key the key
+     * @param key the cache key
      * @param value the value to cache
-     * @return true if the operation was successful
+     * @return true if the operation was successful, false otherwise
      */
     @Override
     public boolean put(final K key, final V value) {
@@ -158,7 +158,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously retrieves a value from the cache.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key
+     * @param k the cache key
      * @return a ContinuableFuture that will contain the Optional result
      */
     @Override
@@ -170,8 +170,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously retrieves a value from the cache directly.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key
-     * @return a ContinuableFuture that will contain the value or null
+     * @param k the cache key
+     * @return a ContinuableFuture that will contain the cached value, or null if not found
      */
     @Override
     public ContinuableFuture<V> asyncGett(final K k) {
@@ -182,9 +182,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously stores a key-value pair using default expiration.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key
+     * @param k the cache key
      * @param v the value to cache
-     * @return a ContinuableFuture that will contain true if the operation was successful
+     * @return a ContinuableFuture that will contain true if the operation was successful, false otherwise
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K k, final V v) {
@@ -195,11 +195,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously stores a key-value pair with custom expiration.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key
+     * @param k the cache key
      * @param v the value to cache
-     * @param liveTime time-to-live in milliseconds
-     * @param maxIdleTime maximum idle time in milliseconds
-     * @return a ContinuableFuture that will contain true if the operation was successful
+     * @param liveTime the time-to-live in milliseconds
+     * @param maxIdleTime the maximum idle time in milliseconds
+     * @return a ContinuableFuture that will contain true if the operation was successful, false otherwise
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -210,7 +210,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously removes an entry from the cache.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key
+     * @param k the cache key
      * @return a ContinuableFuture that completes when the operation finishes
      */
     @Override
@@ -226,8 +226,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously checks if the cache contains a key.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key
-     * @return a ContinuableFuture that will contain true if the key exists in the cache
+     * @param k the cache key
+     * @return a ContinuableFuture that will contain true if the key exists in the cache, false otherwise
      */
     @Override
     public ContinuableFuture<Boolean> asyncContainsKey(final K k) {
@@ -252,7 +252,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @param <T> the type of the property value to be returned
      * @param propName the property name
-     * @return the property value cast to T, or null if not found
+     * @return the property value, or null if not found
      */
     @Override
     public <T> T getProperty(final String propName) {
@@ -266,8 +266,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @param <T> the type of the previous property value to be returned
      * @param propName the property name
-     * @param propValue the new property value
-     * @return the previous value cast to T, or null if none existed
+     * @param propValue the property value
+     * @return the previous value, or null if none existed
      */
     @Override
     public <T> T setProperty(final String propName, final Object propValue) {
@@ -279,7 +279,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @param <T> the type of the property value to be returned
      * @param propName the property name to remove
-     * @return the removed value cast to T, or null if the property didn't exist
+     * @return the removed value, or null if the property didn't exist
      */
     @Override
     public <T> T removeProperty(final String propName) {

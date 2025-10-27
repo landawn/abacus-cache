@@ -145,7 +145,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Retrieves an object from the cache by its key.
      * This is a synchronous operation that blocks until complete.
      *
-     * @param key the cache key
+     * @param key the cache key whose associated value is to be retrieved
      * @return the cached object, or {@code null} if not found or expired
      */
     @SuppressWarnings("unchecked")
@@ -165,8 +165,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * User user = future.get(); // Blocks until complete
      * }</pre>
      *
-     * @param key the cache key
-     * @return a Future containing the cached object, or {@code null} if not found or expired
+     * @param key the cache key whose associated value is to be retrieved
+     * @return a Future that will contain the cached object, or {@code null} if not found or expired
      */
     @SuppressWarnings("unchecked")
     public Future<T> asyncGet(final String key) {
@@ -183,8 +183,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Map<String, User> users = cache.getBulk("user:1", "user:2", "user:3");
      * }</pre>
      *
-     * @param keys the cache keys to retrieve
-     * @return a map of found key-value pairs
+     * @param keys the cache keys whose associated values are to be retrieved
+     * @return a map containing the found key-value pairs
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -202,8 +202,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Map<String, User> users = future.get();
      * }</pre>
      *
-     * @param keys the cache keys to retrieve
-     * @return a Future containing the map of found items
+     * @param keys the cache keys whose associated values are to be retrieved
+     * @return a Future that will contain the map of found key-value pairs
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public final Future<Map<String, T>> asyncGetBulk(final String... keys) {
@@ -220,8 +220,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Map<String, User> users = cache.getBulk(keys);
      * }</pre>
      *
-     * @param keys the collection of cache keys to retrieve
-     * @return a map of found key-value pairs
+     * @param keys the collection of cache keys whose associated values are to be retrieved
+     * @return a map containing the found key-value pairs
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -239,8 +239,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Future<Map<String, User>> future = cache.asyncGetBulk(keys);
      * }</pre>
      *
-     * @param keys the collection of cache keys to retrieve
-     * @return a Future containing the map of found items
+     * @param keys the collection of cache keys whose associated values are to be retrieved
+     * @return a Future that will contain the map of found key-value pairs
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
     public Future<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
@@ -251,10 +251,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Stores an object in the cache with a specified time-to-live.
      * This operation replaces any existing value for the key.
      *
-     * @param key the cache key
-     * @param obj the object to cache
+     * @param key the cache key with which the specified value is to be associated
+     * @param obj the object value to cache
      * @param liveTime the time-to-live in milliseconds
-     * @return {@code true} if the operation was successful
+     * @return {@code true} if the operation was successful, {@code false} otherwise
      */
     @Override
     public boolean set(final String key, final T obj, final long liveTime) {
@@ -271,10 +271,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * boolean success = future.get();
      * }</pre>
      *
-     * @param key the cache key
-     * @param obj the object to cache
+     * @param key the cache key with which the specified value is to be associated
+     * @param obj the object value to cache
      * @param liveTime the time-to-live in milliseconds
-     * @return a Future indicating success or failure
+     * @return a Future that will indicate success ({@code true}) or failure ({@code false})
      */
     public Future<Boolean> asyncSet(final String key, final T obj, final long liveTime) {
         return mc.set(key, toSeconds(liveTime), obj);
@@ -291,10 +291,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key
-     * @param obj the object to cache
+     * @param key the cache key with which the specified value is to be associated
+     * @param obj the object value to cache
      * @param liveTime the time-to-live in milliseconds
-     * @return {@code true} if the object was added, {@code false} if key already exists
+     * @return {@code true} if the object was added, {@code false} if the key already exists
      */
     public boolean add(final String key, final T obj, final long liveTime) {
         return resultOf(mc.add(key, toSeconds(liveTime), obj));
@@ -310,10 +310,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * if (future.get()) { System.out.println("Added"); }
      * }</pre>
      *
-     * @param key the cache key
-     * @param obj the object to cache
+     * @param key the cache key with which the specified value is to be associated
+     * @param obj the object value to cache
      * @param liveTime the time-to-live in milliseconds
-     * @return a Future indicating if the add succeeded
+     * @return a Future that will indicate {@code true} if the add succeeded, {@code false} if the key already exists
      */
     public Future<Boolean> asyncAdd(final String key, final T obj, final long liveTime) {
         return mc.add(key, toSeconds(liveTime), obj);
@@ -330,10 +330,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key
-     * @param obj the object to cache
+     * @param key the cache key with which the specified value is to be associated
+     * @param obj the object value to cache
      * @param liveTime the time-to-live in milliseconds
-     * @return {@code true} if the object was replaced, {@code false} if key doesn't exist
+     * @return {@code true} if the object was replaced, {@code false} if the key doesn't exist
      */
     public boolean replace(final String key, final T obj, final long liveTime) {
         return resultOf(mc.replace(key, toSeconds(liveTime), obj));
@@ -349,10 +349,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * boolean replaced = future.get();
      * }</pre>
      *
-     * @param key the cache key
-     * @param obj the object to cache
+     * @param key the cache key with which the specified value is to be associated
+     * @param obj the object value to cache
      * @param liveTime the time-to-live in milliseconds
-     * @return a Future indicating if the replacement succeeded
+     * @return a Future that will indicate {@code true} if the replacement succeeded, {@code false} if the key doesn't exist
      */
     public Future<Boolean> asyncReplace(final String key, final T obj, final long liveTime) {
         return mc.replace(key, toSeconds(liveTime), obj);
@@ -362,8 +362,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Removes an object from the cache.
      * This operation succeeds whether or not the key exists.
      *
-     * @param key the cache key to delete
-     * @return {@code true} if the operation was successful
+     * @param key the cache key whose associated value is to be removed
+     * @return {@code true} if the operation was successful, {@code false} otherwise
      */
     @Override
     public boolean delete(final String key) {
@@ -380,8 +380,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * boolean deleted = future.get();
      * }</pre>
      *
-     * @param key the cache key to delete
-     * @return a Future indicating success or failure
+     * @param key the cache key whose associated value is to be removed
+     * @return a Future that will indicate success ({@code true}) or failure ({@code false})
      */
     public Future<Boolean> asyncDelete(final String key) {
         return mc.delete(key);
@@ -392,7 +392,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with value 1.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the cache key
+     * @param key the cache key whose associated value is to be incremented
      * @return the value after increment
      */
     @Override
@@ -405,8 +405,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with the delta value.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the cache key
-     * @param delta the increment amount
+     * @param key the cache key whose associated value is to be incremented
+     * @param delta the amount by which to increment the value
      * @return the value after increment
      */
     @Override
@@ -425,9 +425,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * System.out.println("View count: " + count);
      * }</pre>
      *
-     * @param key the cache key
-     * @param delta the increment amount
-     * @param defaultValue the initial value if key doesn't exist
+     * @param key the cache key whose associated value is to be incremented
+     * @param delta the amount by which to increment the value
+     * @param defaultValue the initial value to use if the key doesn't exist
      * @return the value after increment
      */
     public long incr(final String key, final int delta, final long defaultValue) {
@@ -444,10 +444,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * long count = cache.incr("counter:hourly", 1, 0, 3600000);
      * }</pre>
      *
-     * @param key the cache key
-     * @param delta the increment amount
-     * @param defaultValue the initial value if key doesn't exist
-     * @param liveTime the time-to-live in milliseconds for new keys
+     * @param key the cache key whose associated value is to be incremented
+     * @param delta the amount by which to increment the value
+     * @param defaultValue the initial value to use if the key doesn't exist
+     * @param liveTime the time-to-live in milliseconds for newly created keys
      * @return the value after increment
      */
     public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
@@ -459,8 +459,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with value 0 (Memcached prevents underflow).
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the cache key
-     * @return the value after decrement (0 if key didn't exist)
+     * @param key the cache key whose associated value is to be decremented
+     * @return the value after decrement (0 if the key didn't exist)
      */
     @Override
     public long decr(final String key) {
@@ -472,9 +472,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with value 0 (Memcached prevents underflow).
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the cache key
-     * @param delta the decrement amount
-     * @return the value after decrement (0 if key didn't exist)
+     * @param key the cache key whose associated value is to be decremented
+     * @param delta the amount by which to decrement the value
+     * @return the value after decrement (0 if the key didn't exist)
      */
     @Override
     public long decr(final String key, final int delta) {
@@ -492,9 +492,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * System.out.println("Items remaining: " + remaining);
      * }</pre>
      *
-     * @param key the cache key
-     * @param delta the decrement amount
-     * @param defaultValue the initial value if key doesn't exist
+     * @param key the cache key whose associated value is to be decremented
+     * @param delta the amount by which to decrement the value
+     * @param defaultValue the initial value to use if the key doesn't exist
      * @return the value after decrement
      */
     public long decr(final String key, final int delta, final long defaultValue) {
@@ -511,10 +511,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * long remaining = cache.decr("quota:user:123", 1, 1000, 86400000);
      * }</pre>
      *
-     * @param key the cache key
-     * @param delta the decrement amount
-     * @param defaultValue the initial value if key doesn't exist
-     * @param liveTime the time-to-live in milliseconds for new keys
+     * @param key the cache key whose associated value is to be decremented
+     * @param delta the amount by which to decrement the value
+     * @param defaultValue the initial value to use if the key doesn't exist
+     * @param liveTime the time-to-live in milliseconds for newly created keys
      * @return the value after decrement
      */
     public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
@@ -541,7 +541,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * boolean flushed = future.get();
      * }</pre>
      *
-     * @return a Future indicating when the flush completes
+     * @return a Future that will indicate when the flush completes
      */
     public Future<Boolean> asyncFlushAll() {
         return mc.flush();
@@ -556,8 +556,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * cache.flushAll(5000); // Flush after 5 seconds
      * }</pre>
      *
-     * @param delay the delay in milliseconds before flushing
-     * @return {@code true} if the flush was scheduled successfully
+     * @param delay the delay in milliseconds before the flush operation is executed
+     * @return {@code true} if the flush was scheduled successfully, {@code false} otherwise
      */
     public boolean flushAll(final long delay) {
         return resultOf(mc.flush(toSeconds(delay)));
@@ -573,8 +573,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * future.get(); // Wait for scheduled flush
      * }</pre>
      *
-     * @param delay the delay in milliseconds before flushing
-     * @return a Future indicating if the flush was scheduled
+     * @param delay the delay in milliseconds before the flush operation is executed
+     * @return a Future that will indicate if the flush was scheduled successfully
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
         return mc.flush(toSeconds(delay));
@@ -602,7 +602,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * cache.disconnect(5000); // Wait up to 5 seconds for cleanup
      * }</pre>
      *
-     * @param timeout the maximum time to wait in milliseconds
+     * @param timeout the maximum time to wait for shutdown in milliseconds
      */
     public synchronized void disconnect(final long timeout) {
         if (!isShutdown) {
@@ -613,12 +613,19 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Waits for a Future to complete and returns its result.
-     * Converts checked exceptions to runtime exceptions.
+     * Converts checked exceptions to runtime exceptions. This method blocks
+     * until the Future completes and properly handles interruptions and execution errors.
      *
-     * @param <R> the type of the result returned by the Future
-     * @param future the Future to wait for
-     * @return the Future's result
-     * @throws RuntimeException if the Future fails
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Future<Boolean> future = mc.set("key", "value", 3600);
+     * Boolean result = resultOf(future);
+     * }</pre>
+     *
+     * @param <R> the type of result returned by the Future
+     * @param future the Future whose result is to be retrieved
+     * @return the result value from the Future
+     * @throws RuntimeException if the Future execution fails
      */
     protected <R> R resultOf(final Future<R> future) {
         try {
@@ -638,12 +645,19 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Creates a SpyMemcached client with the specified connection factory.
-     * This method handles the IOException that may occur during client creation.
+     * This method handles the IOException that may occur during client creation
+     * and converts it to an unchecked exception for easier handling.
      *
-     * @param serverUrl the server URL(s) to connect to
-     * @param connFactory the connection factory with timeout and transcoder settings
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * ConnectionFactory factory = new DefaultConnectionFactory();
+     * MemcachedClient client = createSpyMemcachedClient("localhost:11211", factory);
+     * }</pre>
+     *
+     * @param serverUrl the Memcached server URL(s) to connect to
+     * @param connFactory the connection factory configured with timeout and transcoder settings
      * @return a configured MemcachedClient instance
-     * @throws UncheckedIOException if connection fails
+     * @throws UncheckedIOException if the connection to Memcached servers fails
      */
     protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory) throws UncheckedIOException {
         try {

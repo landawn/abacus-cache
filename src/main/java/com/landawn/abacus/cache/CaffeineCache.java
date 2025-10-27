@@ -105,11 +105,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores a key-value pair in the cache.
-     * If the key already exists, its value will be replaced.
+     * If the key already exists, its value and expiration settings will be replaced.
      *
      * <br><br>
      * Note: Caffeine's expiration policy is configured at cache creation time.
-     * The individual TTL and idle time parameters are ignored by this implementation.
+     * The liveTime and maxIdleTime parameters are ignored by this implementation.
      *
      * @param k the cache key
      * @param v the value to cache
