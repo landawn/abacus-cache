@@ -68,6 +68,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
+     * User user = new User();
      * CachedData encoded = transcoder.encode(user);
      * }</pre>
      */
@@ -105,7 +106,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
 
     /**
      * Encodes an object to cached data using Kryo serialization.
-     * The object is serialized to bytes with no flags set.
+     * The object is serialized to bytes with no flags set. If the serialized
+     * data exceeds the configured maximum size, an IllegalArgumentException is thrown.
      *
      * @param o the object to encode and serialize
      * @return the CachedData containing the serialized bytes
@@ -118,11 +120,13 @@ public class KryoTranscoder<T> implements Transcoder<T> {
 
     /**
      * Decodes cached data back to an object using Kryo deserialization.
-     * This method can deserialize any object type that Kryo supports.
+     * This method can deserialize any object type that Kryo supports. If the
+     * deserialization fails due to incompatible data or other errors, a runtime
+     * exception is thrown.
      *
      * @param d the cached data to decode and deserialize
      * @return the deserialized object
-     * @throws RuntimeException if the deserialization fails
+     * @throws RuntimeException if the deserialization fails (e.g., corrupt data, class not found)
      */
     @Override
     public T decode(final CachedData d) {

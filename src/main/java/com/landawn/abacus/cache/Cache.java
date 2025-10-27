@@ -146,7 +146,8 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Removes an entry from the cache.
-     * This operation succeeds whether the key exists.
+     * This operation is idempotent - it succeeds whether the key exists or not.
+     * If the key exists, the entry is removed; if not, the operation has no effect.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -160,16 +161,19 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Checks if the cache contains a specific key.
-     * This method should not affect access time for LRU-based caches.
+     * Note: For most implementations, this method checks for the presence of the key
+     * but does not affect the access time or LRU ordering. However, expired entries
+     * may or may not be considered present depending on the implementation.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
-     * if (cache.containsKey("user:123")) // key exists
+     * if (cache.containsKey("user:123")) { // key exists
+     * }
      * }</pre>
      *
      * @param k the cache key
-     * @return true if the key exists in the cache, false otherwise
+     * @return true if the key exists in the cache (and is not expired), false otherwise
      */
     boolean containsKey(final K k);
 
@@ -315,7 +319,8 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Closes the cache and releases all resources.
-     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
+     * After closing, the cache cannot be used - subsequent operations may throw exceptions
+     * or have undefined behavior depending on the implementation.
      * This method is idempotent and thread-safe - multiple calls have no additional effect.
      *
      * <p><b>Usage Examples:</b></p>

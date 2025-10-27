@@ -35,18 +35,17 @@ import com.landawn.abacus.util.Numbers;
  * <li>Asynchronous cache operations</li>
  * </ul>
  * 
- * <br>
- * Example usage:
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
- * Caffeine<String, User> caffeine = Caffeine.newBuilder()
+ * Cache<String, User> caffeine = Caffeine.newBuilder()
  *     .maximumSize(10000)
  *     .expireAfterWrite(10, TimeUnit.MINUTES)
  *     .recordStats()
  *     .build();
- * 
+ *
  * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
  * cache.put("user:123", user);
- * 
+ *
  * // Get Caffeine-specific statistics
  * CacheStats stats = cache.stats();
  * System.out.println("Hit rate: " + stats.hitRate());
@@ -95,6 +94,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * @param k the cache key
      * @return the cached value, or {@code null} if not found, expired, or evicted
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public V gett(final K k) {
@@ -105,17 +105,20 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores a key-value pair in the cache.
-     * If the key already exists, its value and expiration settings will be replaced.
+     * If the key already exists, its value will be replaced.
      *
      * <br><br>
      * Note: Caffeine's expiration policy is configured at cache creation time.
      * The liveTime and maxIdleTime parameters are ignored by this implementation.
+     * All entries use the cache-wide expiration settings.
      *
      * @param k the cache key
      * @param v the value to cache
      * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration)
-     * @return {@code true} if the operation was successful
+     * @return {@code true} always (operation always succeeds unless an exception is thrown)
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if k is null
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -135,6 +138,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * This triggers immediate removal rather than just marking for eviction.
      *
      * @param k the cache key
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public void remove(final K k) {
@@ -144,11 +148,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if the cache contains a specific key.
+     * Checks if the cache contains a specific key with a non-null value.
      * This method performs a cache lookup and may affect access-based eviction.
      *
      * @param k the cache key
-     * @return {@code true} if the key exists in the cache
+     * @return {@code true} if the key exists in the cache and has a non-null value
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean containsKey(final K k) {
@@ -175,6 +180,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * This is an approximation and may not be exact due to concurrent modifications.
      *
      * @return the estimated number of cache entries
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public int size() {
@@ -186,6 +192,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes all entries from the cache.
      * This operation invalidates all cached key-value pairs immediately.
+     *
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public void clear() {
@@ -197,7 +205,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases resources.
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
-     * This method is idempotent and thread-safe - multiple calls have no additional effect.
+     * This method is idempotent and thread-safe - multiple calls throw IllegalStateException.
      */
     @Override
     public synchronized void close() {

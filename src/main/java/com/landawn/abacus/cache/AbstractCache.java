@@ -85,6 +85,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Shared async executor for all cache implementations.
      * Configured with a thread pool sized based on CPU cores to efficiently
      * handle asynchronous cache operations without overwhelming the system.
+     * Core pool size is max(64, CPU_CORES * 8), max pool size is max(128, CPU_CORES * 16),
+     * and threads are kept alive for 180 seconds.
      */
     protected static final AsyncExecutor asyncExecutor = new AsyncExecutor(//
             N.max(64, IOUtil.CPU_CORES * 8), // coreThreadPoolSize
@@ -111,7 +113,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Creates an AbstractCache with default expiration times.
-     * Uses DEFAULT_LIVE_TIME (3 hours) and DEFAULT_MAX_IDLE_TIME (30 minutes).
+     * Uses DEFAULT_LIVE_TIME (3 hours) and DEFAULT_MAX_IDLE_TIME (30 minutes) as the
+     * default TTL and idle time for entries added without explicit expiration settings.
      */
     protected AbstractCache() {
         this(DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);

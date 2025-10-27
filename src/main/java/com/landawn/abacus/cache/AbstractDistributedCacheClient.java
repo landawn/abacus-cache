@@ -129,7 +129,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * }</pre>
      *
      * @param liveTime the time-to-live in milliseconds
-     * @return the time-to-live in seconds, rounded up
+     * @return the time-to-live in seconds, rounded up if there's a fractional second
      * @throws IllegalArgumentException if the time value exceeds Integer.MAX_VALUE seconds
      */
     protected int toSeconds(final long liveTime) {

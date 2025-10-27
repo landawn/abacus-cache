@@ -39,6 +39,7 @@ import redis.clients.jedis.JedisShardInfo;
  * Example usage:
  * <pre>{@code
  * JRedis<User> cache = new JRedis<>("localhost:6379,localhost:6380");
+ * User user = new User();
  * cache.set("user:123", user, 3600000); // Cache for 1 hour
  * User cached = cache.get("user:123");
  * }</pre>
@@ -62,6 +63,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * JRedis<User> cache = new JRedis<>("localhost:6379,localhost:6380");
+     * User user = new User();
      * cache.set("user:123", user, 3600000);
      * }</pre>
      *
@@ -80,11 +82,13 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * JRedis<Data> cache = new JRedis<>("redis1:6379,redis2:6379", 5000); // 5 second timeout
+     * Data data = new Data();
      * cache.set("key", data, 7200000); // Cache for 2 hours
      * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,..."
      * @param timeout the connection timeout in milliseconds
+     * @throws IllegalArgumentException if no valid server addresses found in serverUrl
      */
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);

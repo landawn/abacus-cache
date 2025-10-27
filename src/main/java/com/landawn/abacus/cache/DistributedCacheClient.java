@@ -32,8 +32,8 @@ import java.util.Map;
  * <li>Time-based expiration support</li>
  * </ul>
  * 
- * <br>
- * Example usage:
+ *
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
  * client.set("user:123", user, 3600000); // Cache for 1 hour
@@ -146,24 +146,24 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Removes a key-value pair from the cache.
-     * This operation succeeds whether the key exists.
+     * The return value indicates whether the operation was acknowledged by the server,
+     * not whether the key existed. In most implementations, this returns {@code true}
+     * if the delete command was successfully sent, regardless of key existence.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * boolean success = client.delete("user:123");
-     * System.out.println("Deleted: " + success);
+     * System.out.println("Delete operation sent: " + success);
      * }</pre>
      *
      * @param key the cache key
-     * @return {@code true} if the operation was successful
+     * @return {@code true} if the delete operation was successfully sent to the server
      */
     boolean delete(String key);
 
     /**
      * Atomically increments a numeric value by 1.
-     * If the key doesn't exist, behavior depends on the implementation:
-     * - Memcached: Creates key with value 1
-     * - Redis: Creates key with value 1
+     * If the key doesn't exist, behavior is implementation-dependent.
      * This operation is atomic and thread-safe across all clients.
      *
      * <p><b>Usage Examples:</b></p>
@@ -179,9 +179,7 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value by a specified amount.
-     * If the key doesn't exist, behavior depends on the implementation:
-     * - Memcached: Creates key with the delta value
-     * - Redis: Creates key with the delta value
+     * If the key doesn't exist, behavior is implementation-dependent.
      * This operation is atomic and thread-safe across all clients.
      *
      * <p><b>Usage Examples:</b></p>
@@ -191,16 +189,14 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key
-     * @param delta the increment amount (can be negative for decrement)
+     * @param delta the increment amount (positive value)
      * @return the value after increment
      */
     long incr(String key, int delta);
 
     /**
      * Atomically decrements a numeric value by 1.
-     * If the key doesn't exist, behavior depends on the implementation:
-     * - Memcached: Creates key with value 0, then decrements (result: 0, as underflow is prevented)
-     * - Redis: Creates key with value -1
+     * If the key doesn't exist, behavior is implementation-dependent.
      * This operation is atomic and thread-safe across all clients.
      *
      * <p><b>Usage Examples:</b></p>
@@ -218,9 +214,7 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value by a specified amount.
-     * If the key doesn't exist, behavior depends on the implementation:
-     * - Memcached: Creates key with value 0, then decrements (result: 0, as underflow is prevented)
-     * - Redis: Creates key with value -(delta value)
+     * If the key doesn't exist, behavior is implementation-dependent.
      * This operation is atomic and thread-safe across all clients.
      *
      * <p><b>Usage Examples:</b></p>

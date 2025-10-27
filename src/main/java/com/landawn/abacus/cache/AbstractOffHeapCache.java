@@ -103,8 +103,9 @@ import com.landawn.abacus.util.stream.Stream;
 abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
-     * Default factor (0.2) that triggers memory defragmentation when this fraction
-     * of memory becomes fragmented.
+     * Default vacating factor (0.2) used by the object pool to trigger eviction.
+     * When the pool reaches this utilization threshold, eviction of least recently
+     * used entries is triggered to free up space.
      */
     static final float DEFAULT_VACATING_FACTOR = 0.2f;
 
@@ -321,11 +322,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Retrieves a value from the cache by its key.
-     * Handles both memory and disk storage, with automatic promotion from disk
-     * to memory based on access patterns if configured.
+     * Handles both memory and disk storage. For values stored on disk, this method
+     * may automatically promote them to memory based on access frequency and I/O timing,
+     * as determined by the testerForLoadingItemFromDiskToMemory predicate if configured.
      *
      * @param k the cache key
-     * @return the cached value, or null if not found
+     * @return the cached value, or null if not found or expired
      */
     @Override
     public V gett(final K k) {
@@ -619,10 +621,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Finds and allocates an available memory slot of the specified size.
-     * Uses a best-fit strategy within size-segregated segment queues.
+     * Uses a best-fit strategy within size-segregated segment queues. If no suitable
+     * slot exists in an existing segment, a new segment is allocated from the pool.
+     * Slot sizes are rounded up to the nearest multiple of MIN_BLOCK_SIZE (64 bytes).
      *
      * @param size the required slot size in bytes
-     * @return the allocated slot, or null if no space available
+     * @return the allocated slot, or null if no space available in the cache
      */
     private Slot getAvailableSlot(final int size) {
         int slotSize = 0;
@@ -706,8 +710,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Triggers asynchronous memory defragmentation when fragmentation exceeds threshold.
-     * This process consolidates free memory by evicting least recently used entries.
+     * Triggers asynchronous vacating to free up memory space.
+     * This method is called when memory allocation fails. It delegates to the pool's
+     * vacate() method to evict entries, then runs eviction to release empty segments.
+     * Only one vacating task runs at a time to avoid redundant work.
      */
     private void vacate() {
         if (_activeVacationTaskCount.incrementAndGet() > 1) {
@@ -757,8 +763,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns a set of all keys in the cache.
+     * The returned set includes keys for entries stored in both memory and on disk.
      *
-     * @return the unmodifiable set of cache keys
+     * @return the set of cache keys
      */
     @Override
     public Set<K> keySet() {
@@ -767,6 +774,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns the number of entries in the cache.
+     * The count includes entries stored in both memory and on disk.
      *
      * @return the number of cache entries
      */
@@ -777,7 +785,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes all entries from the cache.
-     * Clears both memory and disk storage.
+     * This operation clears all entries stored in both memory and on disk (via the offHeapStore if configured).
+     * The underlying object pool's clear() method handles the cleanup and calls destroy() on all wrappers.
      */
     @Override
     public void clear() {
@@ -792,7 +801,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using a concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * byte[] data1 = "value1".getBytes();
+     * byte[] data2 = "value2".getBytes();
      * cache.put("key1", data1);
      * cache.put("key2", data2);
      *
@@ -883,8 +895,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Performs periodic eviction of empty segments to defragment memory.
-     * Called by the scheduled eviction task.
+     * Performs periodic eviction of empty segments to release them back to the pool.
+     * This method is called by the scheduled eviction task and also by the vacate() method.
+     * It checks all segments and releases those that have no allocated slots, making them
+     * available for reuse with different slot sizes.
      */
     protected void evict() {
         synchronized (_segmentBitSet) {
@@ -908,8 +922,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Represents a memory segment that can be divided into slots.
-     * Each segment has a fixed size and can be configured with different slot sizes.
+     * Represents a memory segment that can be divided into fixed-size slots.
+     * Each segment is SEGMENT_SIZE bytes (1MB) and can be configured with a specific slot size.
+     * A segment can be reset and reused with a different slot size when all its slots are freed.
+     * Uses a BitSet to track which slots are allocated.
      */
     static final class Segment {
 
@@ -956,6 +972,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Represents an allocated memory slot within a segment.
+     * This record encapsulates the slot index and its parent segment,
+     * providing a convenient way to release the slot when no longer needed.
      */
     record Slot(int indexOfSlot, Segment segment) {
 
@@ -966,6 +984,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Base wrapper class for cached values with metadata.
+     * Extends AbstractPoolable to support TTL and idle time tracking.
+     * Each wrapper stores the value's type information and serialized size.
      */
     abstract static class Wrapper<T> extends AbstractPoolable {
         final Type<T> type;
@@ -983,6 +1003,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Wrapper for values stored in a single memory slot.
+     * Used for values that fit within the maximum block size. The slot reference
+     * is used to release the memory when the entry is evicted or removed.
      */
     final class SlotWrapper extends Wrapper<V> {
 
@@ -1028,6 +1050,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Wrapper for values stored across multiple memory slots.
+     * Used for large values that exceed the maximum block size. The value is split
+     * across multiple slots, and all slots are released together when evicted or removed.
      */
     final class MultiSlotsWrapper extends Wrapper<V> {
 
@@ -1094,6 +1118,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Wrapper for values stored on disk via OffHeapStore.
+     * Used when memory is full or when the storeSelector determines the value
+     * should be stored on disk. The permanentKey is used to retrieve and remove
+     * the value from the disk store.
      */
     final class StoreWrapper extends Wrapper<V> {
         private K permanentKey;

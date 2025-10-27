@@ -71,12 +71,13 @@ import lombok.experimental.Accessors;
  *     .defaultLiveTime(3600000)
  *     .defaultMaxIdleTime(1800000)
  *     .build();
- * 
+ *
+ * byte[] largeByteArray = new byte[1024];
  * cache.put("key1", largeByteArray);
  * byte[] cached = cache.gett("key1");
- * 
+ *
  * OffHeapCacheStats stats = cache.stats();
- * System.out.println("Memory utilization: " + 
+ * System.out.println("Memory utilization: " +
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
  * }</pre>
  *
@@ -109,12 +110,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Creates an OffHeapCache with the specified capacity in megabytes.
-     * Uses default eviction delay of 3 seconds and default expiration times.
-     * Memory is allocated at construction time and held until close().
+     * Uses default eviction delay of 3 seconds (3000 milliseconds) and default expiration times
+     * (3 hours TTL and 30 minutes idle time). Memory is allocated at construction time and held until close().
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100); // 100MB
+     * byte[] largeData = new byte[1024];
      * cache.put("key1", largeData);
      * }</pre>
      *
@@ -132,6 +134,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * OffHeapCache<Long, Data> cache = new OffHeapCache<>(200, 60000); // 200MB, 60s eviction
+     * Data data = new Data();
      * cache.put(123L, data, 7200000, 3600000); // 2h TTL, 1h idle
      * }</pre>
      *
@@ -175,15 +178,11 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Allocates off-heap memory using sun.misc.Unsafe.
      * This memory is outside the JVM heap and must be explicitly freed.
      * The allocated memory address is used for direct byte-level operations.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Internal method - called automatically during cache construction
-     * long memoryAddress = allocate(100 * 1024 * 1024); // 100MB
-     * }</pre>
+     * This is an internal method called automatically during cache construction.
      *
      * @param capacityInBytes the number of bytes to allocate
      * @return the memory address of the allocated memory block
+     * @throws OutOfMemoryError if the allocation fails
      */
     @SuppressWarnings("removal")
     @Override
@@ -194,13 +193,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Deallocates the off-heap memory.
      * Called during cache shutdown to release native memory and prevent memory leaks.
-     * This method is automatically invoked by close().
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Internal method - called automatically during cache.close()
-     * cache.close(); // Triggers deallocate() internally
-     * }</pre>
+     * This method is automatically invoked by close(). This is an internal method.
      */
     @SuppressWarnings("removal")
     @Override
@@ -212,14 +205,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Copies bytes from a Java array to off-heap memory.
      * Uses unsafe operations for efficient memory transfer, bypassing standard
-     * Java array access for maximum performance.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Internal method - called automatically during cache.put()
-     * byte[] data = kryoParser.encode(value);
-     * copyToMemory(data, BYTE_ARRAY_BASE, memoryAddress, data.length);
-     * }</pre>
+     * Java array access for maximum performance. This is an internal method
+     * called automatically during cache put operations.
      *
      * @param srcBytes the source byte array from which to copy data
      * @param srcOffset the starting offset in the source array
@@ -235,14 +222,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Copies bytes from off-heap memory to a Java array.
      * Uses unsafe operations for efficient memory transfer, bypassing standard
-     * Java array access for maximum performance.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Internal method - called automatically during cache.gett()
-     * byte[] data = new byte[length];
-     * copyFromMemory(memoryAddress, data, BYTE_ARRAY_BASE, length);
-     * }</pre>
+     * Java array access for maximum performance. This is an internal method
+     * called automatically during cache get operations.
      *
      * @param startPtr the source memory address in off-heap memory from which to copy data
      * @param bytes the destination byte array
@@ -266,6 +247,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *     .capacityInMB(100)
      *     .evictDelay(60000)
      *     .defaultLiveTime(3600000)
+     *     .defaultMaxIdleTime(1800000)
      *     .build();
      * }</pre>
      *
@@ -285,12 +267,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * <br><br>
      * Example usage:
      * <pre>{@code
+     * OffHeapStore<String> diskStore = new OffHeapStore<>(Paths.get("/tmp/cache"));
      * OffHeapCache<String, Data> cache = OffHeapCache.<String, Data>builder()
      *     .capacityInMB(100)
      *     .maxBlockSizeInBytes(16384)
      *     .evictDelay(60000)
      *     .vacatingFactor(0.3f)
-     *     .offHeapStore(myDiskStore)
+     *     .offHeapStore(diskStore)
      *     .statsTimeOnDisk(true)
      *     .build();
      * }</pre>
@@ -372,6 +355,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * <pre>{@code
          * OffHeapCache<String, Data> cache = OffHeapCache.<String, Data>builder()
          *     .capacityInMB(200)
+         *     .evictDelay(60000)
          *     .vacatingFactor(0.3f)
          *     .build();
          * }</pre>

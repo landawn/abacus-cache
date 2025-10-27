@@ -95,8 +95,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Creates a new SpyMemcached instance with a specified timeout.
-     * The timeout applies to connection and operation timeouts. If Kryo is available,
-     * it will be used for serialization; otherwise, the default Java serialization is used.
+     * The timeout applies to operation timeouts. If Kryo is available on the classpath
+     * (checked via ParserFactory.isKryoAvailable()), it will be used for serialization
+     * via KryoTranscoder; otherwise, the default SpyMemcached serialization mechanism is used.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -105,7 +106,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param serverUrl the Memcached server URL(s) in format "host1:port1,host2:port2,..."
-     * @param timeout the operation timeout in milliseconds
+     * @param timeout the operation timeout in milliseconds (must be positive)
+     * @throws IllegalArgumentException if timeout is not positive
+     * @throws RuntimeException if connection to Memcached servers fails
      */
     public SpyMemcached(final String serverUrl, final long timeout) {
         super(serverUrl);
@@ -143,10 +146,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Retrieves an object from the cache by its key.
-     * This is a synchronous operation that blocks until complete.
+     * This is a synchronous operation that blocks until complete or timeout.
      *
      * @param key the cache key whose associated value is to be retrieved
-     * @return the cached object, or {@code null} if not found or expired
+     * @return the cached object of type T, or {@code null} if not found or expired
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -156,8 +159,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously retrieves an object from the cache by its key.
-     * The operation is executed asynchronously by the Memcached client.
-     * The returned Future can be used to check completion and get the result.
+     * The operation is executed asynchronously by the underlying SpyMemcached client
+     * and returns immediately. The returned Future can be used to check completion status
+     * and retrieve the result when available.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -166,7 +170,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved
-     * @return a Future that will contain the cached object, or {@code null} if not found or expired
+     * @return a Future that will contain the cached object of type T, or {@code null} if not found or expired
      */
     @SuppressWarnings("unchecked")
     public Future<T> asyncGet(final String key) {
@@ -389,11 +393,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value by 1.
-     * If the key doesn't exist, it will be created with value 1.
-     * This operation is atomic and thread-safe across all clients.
+     * If the key doesn't exist, the behavior depends on the Memcached server implementation
+     * (typically returns -1 or NOT_FOUND). This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key whose associated value is to be incremented
-     * @return the value after increment
+     * @return the value after increment, or -1 if the key doesn't exist
      */
     @Override
     public long incr(final String key) {
@@ -402,12 +406,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value by a specified amount.
-     * If the key doesn't exist, it will be created with the delta value.
-     * This operation is atomic and thread-safe across all clients.
+     * If the key doesn't exist, the behavior depends on the Memcached server implementation
+     * (typically returns -1 or NOT_FOUND). This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key whose associated value is to be incremented
-     * @param delta the amount by which to increment the value
-     * @return the value after increment
+     * @param delta the amount by which to increment the value (must be non-negative)
+     * @return the value after increment, or -1 if the key doesn't exist
      */
     @Override
     public long incr(final String key, final int delta) {
@@ -416,7 +420,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value with a default value if key doesn't exist.
-     * The created value will not expire unless a liveTime is specified.
+     * If the key doesn't exist, it is created with the defaultValue, then incremented by delta.
+     * The value will not expire (passing -1 as expiration to SpyMemcached means no expiration).
      * This operation is atomic and thread-safe across all clients.
      *
      * <p><b>Usage Examples:</b></p>
@@ -426,8 +431,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented
-     * @param delta the amount by which to increment the value
-     * @param defaultValue the initial value to use if the key doesn't exist
+     * @param delta the amount by which to increment the value (must be non-negative)
+     * @param defaultValue the initial value to set if the key doesn't exist before incrementing
      * @return the value after increment
      */
     public long incr(final String key, final int delta, final long defaultValue) {
@@ -436,8 +441,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value with default value and expiration.
-     * If the key doesn't exist, it's created with the default value and TTL.
-     * This operation is atomic and thread-safe across all clients.
+     * If the key doesn't exist, it's created with the defaultValue, then incremented by delta,
+     * and the expiration time is set to the specified liveTime. This operation is atomic and
+     * thread-safe across all clients.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -445,9 +451,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented
-     * @param delta the amount by which to increment the value
-     * @param defaultValue the initial value to use if the key doesn't exist
-     * @param liveTime the time-to-live in milliseconds for newly created keys
+     * @param delta the amount by which to increment the value (must be non-negative)
+     * @param defaultValue the initial value to set if the key doesn't exist before incrementing
+     * @param liveTime the time-to-live in milliseconds for the key (converted to seconds for Memcached)
      * @return the value after increment
      */
     public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
@@ -456,11 +462,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value by 1.
-     * If the key doesn't exist, it will be created with value 0 (Memcached prevents underflow).
+     * If the key doesn't exist, the behavior depends on the Memcached server implementation
+     * (typically returns -1 or NOT_FOUND). Values cannot go below 0 (Memcached prevents underflow).
      * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key whose associated value is to be decremented
-     * @return the value after decrement (0 if the key didn't exist)
+     * @return the value after decrement, or -1 if the key doesn't exist
      */
     @Override
     public long decr(final String key) {
@@ -469,12 +476,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value by a specified amount.
-     * If the key doesn't exist, it will be created with value 0 (Memcached prevents underflow).
+     * If the key doesn't exist, the behavior depends on the Memcached server implementation
+     * (typically returns -1 or NOT_FOUND). Values cannot go below 0 (Memcached prevents underflow).
      * This operation is atomic and thread-safe across all clients.
      *
      * @param key the cache key whose associated value is to be decremented
-     * @param delta the amount by which to decrement the value
-     * @return the value after decrement (0 if the key didn't exist)
+     * @param delta the amount by which to decrement the value (must be non-negative)
+     * @return the value after decrement, or -1 if the key doesn't exist
      */
     @Override
     public long decr(final String key, final int delta) {
@@ -483,8 +491,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value with a default value if key doesn't exist.
-     * The created value will not expire unless a liveTime is specified.
-     * This operation is atomic and thread-safe across all clients.
+     * If the key doesn't exist, it is created with the defaultValue, then decremented by delta.
+     * The value will not expire (passing -1 as expiration to SpyMemcached means no expiration).
+     * Values cannot go below 0 (Memcached prevents underflow). This operation is atomic and
+     * thread-safe across all clients.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -493,9 +503,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented
-     * @param delta the amount by which to decrement the value
-     * @param defaultValue the initial value to use if the key doesn't exist
-     * @return the value after decrement
+     * @param delta the amount by which to decrement the value (must be non-negative)
+     * @param defaultValue the initial value to set if the key doesn't exist before decrementing
+     * @return the value after decrement (cannot be negative)
      */
     public long decr(final String key, final int delta, final long defaultValue) {
         return mc.decr(key, delta, defaultValue, -1);
@@ -503,8 +513,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value with default value and expiration.
-     * If the key doesn't exist, it's created with the default value and TTL.
-     * This operation is atomic and thread-safe across all clients.
+     * If the key doesn't exist, it's created with the defaultValue, then decremented by delta,
+     * and the expiration time is set to the specified liveTime. Values cannot go below 0
+     * (Memcached prevents underflow). This operation is atomic and thread-safe across all clients.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -512,10 +523,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented
-     * @param delta the amount by which to decrement the value
-     * @param defaultValue the initial value to use if the key doesn't exist
-     * @param liveTime the time-to-live in milliseconds for newly created keys
-     * @return the value after decrement
+     * @param delta the amount by which to decrement the value (must be non-negative)
+     * @param defaultValue the initial value to set if the key doesn't exist before decrementing
+     * @param liveTime the time-to-live in milliseconds for the key (converted to seconds for Memcached)
+     * @return the value after decrement (cannot be negative)
      */
     public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
         return mc.decr(key, delta, defaultValue, toSeconds(liveTime));
@@ -613,8 +624,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Waits for a Future to complete and returns its result.
-     * Converts checked exceptions to runtime exceptions. This method blocks
-     * until the Future completes and properly handles interruptions and execution errors.
+     * This method blocks until the Future completes and properly handles interruptions
+     * and execution errors by converting checked exceptions to runtime exceptions.
+     * When an InterruptedException occurs, the thread's interrupted status is restored
+     * before throwing the runtime exception.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -625,7 +638,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param <R> the type of result returned by the Future
      * @param future the Future whose result is to be retrieved
      * @return the result value from the Future
-     * @throws RuntimeException if the Future execution fails
+     * @throws RuntimeException if the Future execution fails or is interrupted
      */
     protected <R> R resultOf(final Future<R> future) {
         try {

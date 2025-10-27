@@ -56,7 +56,10 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * This provides detailed information about memory fragmentation and utilization.
      *
      * <br><br>
-     * Example:
+     * Note: This is an accessor method for the record component. It simply returns
+     * the occupiedSlots map that was passed during record construction.
+     *
+     * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * Map<Integer, Map<Integer, Integer>> slots = stats.occupiedSlots();
      * // slots might contain: {1024 -> {0 -> 5, 1 -> 3}, 2048 -> {2 -> 2}}

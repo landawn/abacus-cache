@@ -24,13 +24,13 @@ package com.landawn.abacus.cache;
  * <br><br>
  * Part of this code is copied from <a href="https://github.com/ben-manes/caffeine">caffeine</a> under Apache License 2.0.
  * 
- * <br><br>
- * Example usage:
+ *
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * LocalCache<String, Object> cache = CacheFactory.createLocalCache(1000, 60000);
  * // ... use cache ...
  * CacheStats stats = cache.stats();
- * double hitRate = (double) stats.hitCount() / stats.getCount();
+ * double hitRate = (double) stats.hitCount() / (stats.hitCount() + stats.missCount());
  * System.out.println("Cache hit rate: " + hitRate);
  * }</pre>
  *

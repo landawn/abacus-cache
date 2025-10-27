@@ -73,8 +73,8 @@ import lombok.experimental.Accessors;
  *     .build();
  * 
  * cache.put("key1", largeByteArray);
- * byte[] cached = cache.gett("key1");
- * 
+ * byte[] cached = cache.get("key1");
+ *
  * OffHeapCacheStats stats = cache.stats();
  * System.out.println("Memory utilization: " + 
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
@@ -97,7 +97,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Creates an OffHeapCache25 with the specified capacity in megabytes.
-     * Uses default eviction delay of 3 seconds and default expiration times.
+     * Uses default eviction delay of 3000 milliseconds (3 seconds) and default expiration times
+     * (3 hours for live time and 30 minutes for max idle time, as defined in AbstractOffHeapCache).
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes
      */
@@ -140,7 +141,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Allocates off-heap memory using the Foreign Memory API.
-     * Creates a shared Arena and allocates a MemorySegment of the specified size.
+     * Creates a shared Arena (allowing access from multiple threads) and allocates
+     * a MemorySegment of the specified size. The shared Arena ensures thread-safe
+     * access to the memory segment across the cache operations.
      *
      * @param capacityInBytes the total number of bytes to allocate
      * @return the base address of the allocated memory segment
@@ -155,7 +158,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Deallocates the off-heap memory by closing the Arena.
-     * This releases all memory associated with the Arena.
+     * This releases all memory associated with the Arena and makes the
+     * MemorySegment inaccessible. Any subsequent attempts to access the
+     * memory segment will result in an IllegalStateException.
      */
     @Override
     protected void deallocate() {
@@ -165,11 +170,12 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Copies bytes from off-heap memory to a Java array using MemorySegment API.
-     * This provides type-safe memory access compared to Unsafe operations.
+     * This provides type-safe memory access compared to Unsafe operations. The method
+     * calculates the relative offset within the buffer by subtracting _startPtr from startPtr.
      *
-     * @param startPtr the source memory address from which to copy
+     * @param startPtr the absolute source memory address from which to copy
      * @param bytes the destination byte array to which data is copied
-     * @param destOffset the starting offset in the destination array
+     * @param destOffset the starting offset in the destination array (0-based index)
      * @param len the number of bytes to copy
      */
     @Override
@@ -179,11 +185,12 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Copies bytes from a Java array to off-heap memory using MemorySegment API.
-     * This provides type-safe memory access compared to Unsafe operations.
+     * This provides type-safe memory access compared to Unsafe operations. The method
+     * calculates the relative offset within the buffer by subtracting _startPtr from startPtr.
      *
      * @param srcBytes the source byte array from which to copy
-     * @param srcOffset the starting offset in the source array
-     * @param startPtr the destination memory address to which data is copied
+     * @param srcOffset the starting offset in the source array (0-based index)
+     * @param startPtr the absolute destination memory address to which data is copied
      * @param len the number of bytes to copy
      */
     @Override
@@ -304,8 +311,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Builds and returns a new OffHeapCache25 instance with the configured parameters.
-         * This method validates the configuration and creates a fully initialized cache instance
-         * ready for use. The cache will allocate off-heap memory immediately upon creation.
+         * The cache will allocate off-heap memory immediately upon creation. If maxBlockSizeInBytes
+         * is set to 0, it will be replaced with DEFAULT_MAX_BLOCK_SIZE (8192 bytes).
          *
          * <p><b>Usage Examples:</b></p>
          * <pre>{@code
@@ -316,7 +323,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
          *     .build();
          * }</pre>
          *
-         * @return a new OffHeapCache25 instance
+         * @return a new OffHeapCache25 instance with the configured settings
          */
         public OffHeapCache25<K, V> build() {
             return new OffHeapCache25<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,

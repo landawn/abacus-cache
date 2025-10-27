@@ -73,7 +73,8 @@ public final class CacheFactory {
 
     /**
      * Creates a new LocalCache with specified capacity and eviction delay.
-     * Uses default time-to-live of 3 hours and default idle time of 30 minutes.
+     * Uses default time-to-live of 3 hours and default idle time of 30 minutes
+     * as defined in Cache.DEFAULT_LIVE_TIME and Cache.DEFAULT_MAX_IDLE_TIME.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -84,7 +85,7 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param capacity the maximum number of entries the cache can hold
-     * @param evictDelay the delay in milliseconds between eviction runs
+     * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction)
      * @return the new LocalCache instance
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay) {
@@ -93,7 +94,7 @@ public final class CacheFactory {
 
     /**
      * Creates a new LocalCache with fully customized parameters.
-     * This method provides complete control over cache behavior.
+     * This method provides complete control over cache capacity, eviction timing, and expiration behavior.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -104,9 +105,9 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param capacity the maximum number of entries the cache can hold
-     * @param evictDelay the delay in milliseconds between eviction runs
-     * @param defaultLiveTime the default time-to-live in milliseconds (default: 3 hours)
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds (default: 30 minutes)
+     * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction)
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time
      * @return the new LocalCache instance
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime,
@@ -138,7 +139,8 @@ public final class CacheFactory {
 
     /**
      * Creates a DistributedCache wrapper for a distributed cache client.
-     * The wrapper adds retry logic and error handling around the client.
+     * The wrapper provides a Cache interface implementation around the distributed cache client,
+     * adding error handling and retry logic for resilience.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -156,19 +158,22 @@ public final class CacheFactory {
     }
 
     /**
-     * Creates a DistributedCache with a key prefix.
-     * All keys will be prefixed with the specified string for namespace isolation.
+     * Creates a DistributedCache with a key prefix for namespace isolation.
+     * All cache keys will be automatically prefixed with the specified string,
+     * allowing multiple applications or modules to share the same cache server
+     * without key collisions.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * JRedis<Session> redisClient = new JRedis<>("localhost:6379", 3000);
      * DistributedCache<String, Session> cache = CacheFactory.createDistributedCache(redisClient, "myapp:sessions:");
+     * cache.put("user123", session); // Actually stored as "myapp:sessions:user123"
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap
-     * @param keyPrefix the key prefix to prepend to all keys
+     * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix)
      * @return the new DistributedCache instance
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
@@ -177,20 +182,21 @@ public final class CacheFactory {
 
     /**
      * Creates a DistributedCache with custom retry configuration.
-     * This allows fine-tuning of error handling behavior.
+     * This method allows fine-tuning of error handling and retry behavior for distributed
+     * cache operations, which is useful for handling transient network failures or service disruptions.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * JRedis<User> redisClient = new JRedis<>("localhost:6379", 3000);
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(
-     *     redisClient, "app:", 3, 1000); // 3 retries, 1s delay
+     *     redisClient, "app:", 3, 1000); // 3 max failures, 1s retry delay
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap
-     * @param keyPrefix the key prefix to prepend to all keys
-     * @param maxFailedNumForRetry the maximum failures before stopping retries
+     * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix)
+     * @param maxFailedNumForRetry the maximum number of consecutive failures before giving up on retries
      * @param retryDelay the delay in milliseconds between retry attempts
      * @return the new DistributedCache instance
      */
@@ -202,18 +208,19 @@ public final class CacheFactory {
     /**
      * Creates a cache instance from a string specification.
      * This method supports dynamic cache creation based on configuration strings,
-     * making it ideal for configuration-driven cache setup.
+     * making it ideal for configuration-driven cache setup. The method parses the
+     * provider string and instantiates the appropriate cache implementation.
      *
      * <br><br>
      * Supported formats:
      * <ul>
-     * <li>Memcached(serverUrl) - Creates SpyMemcached client</li>
+     * <li>Memcached(serverUrl) - Creates SpyMemcached client with default timeout</li>
      * <li>Memcached(serverUrl,keyPrefix) - With key prefix</li>
-     * <li>Memcached(serverUrl,keyPrefix,timeout) - With custom timeout</li>
-     * <li>Redis(serverUrl) - Creates JRedis client</li>
+     * <li>Memcached(serverUrl,keyPrefix,timeout) - With key prefix and custom timeout in milliseconds</li>
+     * <li>Redis(serverUrl) - Creates JRedis client with default timeout</li>
      * <li>Redis(serverUrl,keyPrefix) - With key prefix</li>
-     * <li>Redis(serverUrl,keyPrefix,timeout) - With custom timeout</li>
-     * <li>com.example.CustomCache(params...) - Custom implementation</li>
+     * <li>Redis(serverUrl,keyPrefix,timeout) - With key prefix and custom timeout in milliseconds</li>
+     * <li>com.example.CustomCache(params...) - Custom implementation with fully qualified class name</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b></p>
@@ -224,15 +231,15 @@ public final class CacheFactory {
      * // Redis with key prefix and timeout
      * Cache<String, Session> cache2 = CacheFactory.createCache("Redis(localhost:6379,app:cache:,5000)");
      *
-     * // Multiple Memcached servers
-     * Cache<String, Object> cache3 = CacheFactory.createCache("Memcached(host1:11211,host2:11211)");
+     * // Multiple Memcached servers (in serverUrl format)
+     * Cache<String, Object> cache3 = CacheFactory.createCache("Memcached(host1:11211 host2:11211)");
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param provider the cache provider specification string
      * @return the new Cache instance
-     * @throws IllegalArgumentException if the provider specification is invalid
+     * @throws IllegalArgumentException if the provider specification is invalid or has incorrect parameters
      */
     @SuppressWarnings("unchecked")
     public static <K, V> Cache<K, V> createCache(final String provider) {

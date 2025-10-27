@@ -34,8 +34,9 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * Cache<String, Person> ehcache = CacheBuilder.newBuilder()
  *     .build();
  * Ehcache<String, Person> cache = new Ehcache<>(ehcache);
+ * Person person = new Person();
  * cache.put("key1", person, 3600000, 1800000); // 1 hour TTL, 30 min idle
- * Person person = cache.gett("key1");
+ * Person retrieved = cache.gett("key1");
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -77,6 +78,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @param k the cache key whose associated value is to be returned
      * @return the value associated with the specified key, or null if not found, expired, or evicted
+     * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      */
     @Override
@@ -96,6 +98,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the time-to-live in milliseconds (currently ignored)
      * @param maxIdleTime the maximum idle time in milliseconds (currently ignored)
      * @return true if the operation was successful
+     * @throws IllegalArgumentException if key is null
+     * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
@@ -115,6 +119,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Removes the mapping for a key from the cache if it is present.
      *
      * @param k the cache key whose mapping is to be removed from the cache
+     * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
@@ -129,6 +134,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @param k the cache key whose presence in the cache is to be tested
      * @return true if the cache contains a mapping for the specified key
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean containsKey(final K k) {
@@ -145,6 +151,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * V newValue = createNewValue();
      * V existingValue = cache.putIfAbsent("key1", newValue);
      * if (existingValue == null) {
      *     // Value was successfully added
@@ -154,6 +161,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key with which the specified value is to be associated
      * @param value the cache value to be associated with the specified key
      * @return the previous value associated with the specified key, or null if there was no mapping
+     * @throws IllegalArgumentException if key is null
+     * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      * @throws CacheWritingException if the cache writer fails
      */
@@ -181,6 +190,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @param keys the set of cache keys to retrieve
      * @return a map of key-value pairs found in the cache
+     * @throws IllegalArgumentException if keys is null
+     * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheLoadingException if the bulk cache loader fails
      */
     public Map<K, V> getAll(final Set<? extends K> keys) throws BulkCacheLoadingException {
@@ -201,11 +212,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * User user1 = new User();
+     * User user2 = new User();
      * Map<String, User> users = N.asMap("user1", user1, "user2", user2);
      * cache.putAll(users);
      * }</pre>
      *
      * @param entries the map of key-value pairs to store
+     * @throws IllegalArgumentException if entries is null
+     * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
     public void putAll(final Map<? extends K, ? extends V> entries) throws BulkCacheWritingException {
@@ -231,6 +246,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param keys the set of cache keys to remove
+     * @throws IllegalArgumentException if keys is null
+     * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
     public void removeAll(final Set<? extends K> keys) throws BulkCacheWritingException {
@@ -274,6 +291,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes all entries from the cache.
      * This operation affects only the local cache tier.
+     *
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public void clear() {
@@ -285,7 +304,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases resources.
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
-     * This method is idempotent and thread-safe - multiple calls have no additional effect.
+     * This method is thread-safe but NOT idempotent - calling it multiple times will throw IllegalStateException.
+     *
+     * @throws IllegalStateException if the cache has already been closed
      */
     @Override
     public synchronized void close() {

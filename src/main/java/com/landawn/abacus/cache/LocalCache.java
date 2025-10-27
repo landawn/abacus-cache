@@ -41,16 +41,17 @@ import com.landawn.abacus.pool.PoolableWrapper;
  * <pre>{@code
  * // Create cache with 1000 max entries, 60 second eviction delay
  * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
- * 
+ *
  * // Cache with custom TTL and idle time
+ * User user = new User();
  * cache.put("user:123", user, 3600000, 1800000); // 1 hour TTL, 30 min idle
- * 
+ *
  * // Retrieve from cache
  * User cached = cache.gett("user:123");
- * 
+ *
  * // Get cache statistics
  * CacheStats stats = cache.stats();
- * System.out.println("Hit rate: " + (double)stats.hitCount() / stats.getCount());
+ * System.out.println("Hit rate: " + (double) stats.hitCount() / stats.getCount());
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -71,6 +72,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000); // 1000 entries, 60s eviction
+     * User user = new User();
      * cache.put("user:123", user);
      * }</pre>
      *
@@ -97,6 +99,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param evictDelay the delay in milliseconds between eviction runs
      * @param defaultLiveTime the default time-to-live in milliseconds for entries
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries
+     * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      */
     public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         super(defaultLiveTime, defaultMaxIdleTime);
@@ -126,6 +129,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param defaultLiveTime the default time-to-live in milliseconds for entries
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries
      * @param pool the pre-configured KeyedObjectPool to use for storage
+     * @throws IllegalArgumentException if pool is null
      */
     public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
         super(defaultLiveTime, defaultMaxIdleTime);
@@ -161,6 +165,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the time-to-live in milliseconds (0 for no expiration)
      * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout)
      * @return true if the entry was successfully stored
+     * @throws IllegalArgumentException if key is null
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
@@ -184,7 +189,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a mapping for the specified key.
-     * This method checks for key existence without updating access time.
+     * Note: This method may check for key existence, but the underlying pool implementation
+     * may or may not update access time depending on the implementation.
      *
      * @param key the cache key whose presence in the cache is to be tested
      * @return true if the cache contains a mapping for the specified key and it hasn't expired

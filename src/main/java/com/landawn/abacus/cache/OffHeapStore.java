@@ -94,8 +94,9 @@ public interface OffHeapStore<K> {
 
     /**
      * Retrieves the byte array associated with the specified key.
-     * Returns {@code null} if the key is not found or if an error occurs.
-     * The returned byte array should be a copy to prevent external modifications.
+     * Returns {@code null} if the key is not found or if an error occurs during retrieval.
+     * Implementations should consider returning a defensive copy to prevent external
+     * modifications, though this is implementation-specific.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -106,20 +107,23 @@ public interface OffHeapStore<K> {
      * }</pre>
      *
      * @param key the key whose associated value is to be retrieved
-     * @return the stored byte array, or {@code null} if not found
+     * @return the stored byte array, or {@code null} if not found or an error occurs
      */
     byte[] get(K key);
 
     /**
      * Stores a byte array with the specified key.
      * If a value already exists for the key, it should be replaced.
-     * The implementation should make a defensive copy of the byte array
-     * if necessary to prevent external modifications.
+     * Implementations should consider making a defensive copy of the byte array
+     * if necessary to prevent external modifications, though this is implementation-specific.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * byte[] serializedData = serialize(user);
      * boolean success = offHeapStore.put("user:123", serializedData);
+     * if (success) {
+     *     System.out.println("Data stored successfully");
+     * }
      * }</pre>
      *
      * @param key the key with which the specified value is to be associated
