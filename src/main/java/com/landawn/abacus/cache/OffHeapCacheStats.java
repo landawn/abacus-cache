@@ -54,7 +54,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * The outer map's key is the slot size in bytes, and the inner map contains
      * segment index as key and number of occupied slots in that segment as value.
      * This provides detailed information about memory fragmentation and utilization.
-     * 
+     *
      * <br><br>
      * Example:
      * <pre>{@code

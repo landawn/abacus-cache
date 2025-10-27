@@ -324,7 +324,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Handles both memory and disk storage, with automatic promotion from disk
      * to memory based on access patterns if configured.
      *
-     * @param k the key to look up
+     * @param k the key
      * @return the cached value, or null if not found
      */
     @Override
@@ -460,7 +460,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param v the value to cache
      * @param liveTime time-to-live in milliseconds
      * @param maxIdleTime maximum idle time in milliseconds
-     * @return true if successfully stored
+     * @return true if the operation was successful
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -602,8 +602,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Stores a value to disk when memory is unavailable or based on storage policy.
      *
      * @param k the key
-     * @param liveTime TTL in milliseconds
-     * @param maxIdleTime max idle time in milliseconds
+     * @param liveTime time-to-live in milliseconds
+     * @param maxIdleTime maximum idle time in milliseconds
      * @param type the value type information
      * @param bytes serialized value bytes
      * @param size size of the serialized data
@@ -733,7 +733,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Removes an entry from the cache.
      * Properly cleans up memory or disk resources associated with the entry.
      *
-     * @param k the key to remove
+     * @param k the key
      */
     @Override
     public void remove(final K k) {
@@ -747,8 +747,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Checks if the cache contains a specific key.
      *
-     * @param k the key to check
-     * @return true if the key exists
+     * @param k the key
+     * @return true if the key exists in the cache
      */
     @Override
     public boolean containsKey(final K k) {
@@ -756,7 +756,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Returns a set of all keys currently in the cache.
+     * Returns a set of all keys in the cache.
      *
      * @return unmodifiable set of cache keys
      */
@@ -766,9 +766,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Returns the current number of entries in the cache.
+     * Returns the number of entries in the cache.
      *
-     * @return number of cache entries
+     * @return the number of cache entries
      */
     @Override
     public int size() {
@@ -786,9 +786,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns comprehensive statistics about cache performance and resource usage.
-     * Includes memory utilization, disk usage, hit/miss rates, and I/O performance.
+     * Provides detailed insights into memory utilization, disk usage, hit/miss rates,
+     * eviction counts, and I/O performance metrics. This is essential for monitoring
+     * and optimizing off-heap cache behavior.
      *
-     * @return cache statistics snapshot
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * cache.put("key1", data1);
+     * cache.put("key2", data2);
+     *
+     * OffHeapCacheStats stats = cache.stats();
+     * System.out.println("Size in memory: " + stats.sizeInMemory());
+     * System.out.println("Size on disk: " + stats.sizeOnDisk());
+     * System.out.println("Hit rate: " + stats.hitCount() + "/" + stats.getCount());
+     * }</pre>
+     *
+     * @return cache statistics snapshot containing memory, disk, and performance metrics
      */
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();
@@ -861,7 +875,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Checks if the cache has been closed.
      *
-     * @return true if closed
+     * @return true if {@link #close()} has been called
      */
     @Override
     public boolean isClosed() {

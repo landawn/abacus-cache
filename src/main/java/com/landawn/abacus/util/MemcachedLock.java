@@ -90,6 +90,11 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * Creates a new MemcachedLock instance connected to the specified Memcached server(s).
      * The server URL should be in the format "host1:port1,host2:port2" for multiple servers.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     * }</pre>
+     *
      * @param serverUrl the Memcached server URL(s) to connect to
      */
     public MemcachedLock(final String serverUrl) {
@@ -100,14 +105,25 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * Attempts to acquire a lock on the specified target for the given duration.
      * This method stores an empty byte array as the lock value. The lock will be
      * automatically released after the specified live time expires.
-     * 
+     *
      * <br><br>
      * This is a non-blocking operation that returns immediately. If the lock is already
-     * held by another client, this method returns false without waiting.
+     * held by another client, this method returns {@code false} without waiting.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * if (lock.lock("resource1", 30000)) {
+     *     try {
+     *         // Critical section
+     *     } finally {
+     *         lock.unlock("resource1");
+     *     }
+     * }
+     * }</pre>
      *
      * @param target the target resource to lock
      * @param liveTime the duration in milliseconds before the lock automatically expires
-     * @return true if the lock was successfully acquired, false if it's already held
+     * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws RuntimeException if a communication error occurs with Memcached
      */
     public boolean lock(final K target, final long liveTime) {
@@ -126,15 +142,23 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * This method allows storing additional information with the lock, such as the
      * identity of the lock holder or lock metadata. The lock will be automatically
      * released after the specified live time expires.
-     * 
+     *
      * <br><br>
      * The value can be retrieved using {@link #get(Object)} while the lock is held.
      * This is useful for debugging or for implementing more complex locking protocols.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * String lockHolder = InetAddress.getLocalHost().getHostName();
+     * if (lock.lock("resource1", lockHolder, 60000)) {
+     *     System.out.println("Lock acquired by: " + lock.get("resource1"));
+     * }
+     * }</pre>
+     *
      * @param target the target resource to lock
-     * @param value the value to associate with the lock (can be null)
+     * @param value the value to associate with the lock (can be {@code null})
      * @param liveTime the duration in milliseconds before the lock automatically expires
-     * @return true if the lock was successfully acquired, false if it's already held
+     * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws RuntimeException if a communication error occurs with Memcached
      */
     public boolean lock(final K target, final V value, final long liveTime) {
@@ -158,13 +182,20 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * Checks whether a lock is currently held on the specified target.
      * This method performs a read operation to determine lock status without
      * attempting to acquire or modify the lock.
-     * 
+     *
      * <br><br>
      * Note: Due to the distributed nature and timing, a lock could expire or be
      * acquired between checking and subsequent operations.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * if (lock.isLocked("resource1")) {
+     *     System.out.println("Resource is currently locked");
+     * }
+     * }</pre>
+     *
      * @param target the target resource to check
-     * @return true if the lock is currently held, false otherwise
+     * @return {@code true} if the lock is currently held, {@code false} otherwise
      */
     public boolean isLocked(final K target) {
         if (target == null) {
@@ -177,7 +208,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
     /**
      * Retrieves the value associated with a lock on the specified target.
      * If the lock was acquired with just a live time (no value), this method
-     * returns null. If the lock stores an empty byte array (default), null is
+     * returns {@code null}. If the lock stores an empty byte array (default), {@code null} is
      * also returned for convenience.
      *
      * <br><br>
@@ -192,8 +223,16 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * WARNING: This method performs an unchecked cast. Ensure the type parameter V
      * matches the actual type of the stored value to avoid ClassCastException.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * String holder = lock.get("resource1");
+     * if (holder != null) {
+     *     System.out.println("Lock held by: " + holder);
+     * }
+     * }</pre>
+     *
      * @param target the target resource whose lock value to retrieve
-     * @return the value associated with the lock, or null if not locked or no value stored
+     * @return the value associated with the lock, or {@code null} if not locked or no value stored
      * @throws ClassCastException if V doesn't match the actual stored value type
      */
     @SuppressWarnings("unchecked")
@@ -212,14 +251,25 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * This method immediately removes the lock, making the target available for
      * other clients to acquire. It's important to always unlock in a finally block
      * to ensure locks are released even if exceptions occur.
-     * 
+     *
      * <br><br>
      * Note: This implementation does not verify lock ownership. Any client can
      * unlock any lock. For ownership verification, implement additional logic using
      * the value stored with the lock.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * if (lock.lock("resource1", 30000)) {
+     *     try {
+     *         performOperation();
+     *     } finally {
+     *         lock.unlock("resource1");
+     *     }
+     * }
+     * }</pre>
+     *
      * @param target the target resource to unlock
-     * @return true if the lock was successfully removed, false if it didn't exist
+     * @return {@code true} if the lock was successfully removed, {@code false} if it didn't exist
      * @throws RuntimeException if a communication error occurs with Memcached
      */
     public boolean unlock(final K target) {
@@ -238,10 +288,19 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * Converts a lock target to a Memcached key string.
      * This method can be overridden by subclasses to implement custom key
      * generation strategies, such as adding prefixes or namespaces.
-     * 
+     *
      * <br><br>
      * The default implementation uses {@link N#stringOf(Object)} to convert
      * the target to a string representation.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * class NamespacedLock extends MemcachedLock<String, String> {
+     *     protected String toKey(String target) {
+     *         return "lock:myapp:" + target;
+     *     }
+     * }
+     * }</pre>
      *
      * @param target the target object to convert
      * @return the string key to use in Memcached
@@ -255,7 +314,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * This method provides direct access to the Memcached client for advanced
      * operations or diagnostics. Use with caution as direct manipulation of
      * the client could interfere with lock operations.
-     * 
+     *
      * <br><br>
      * Common uses include:
      * <ul>
@@ -263,6 +322,12 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Performing bulk operations</li>
      * <li>Accessing client statistics</li>
      * </ul>
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * SpyMemcached<String> client = lock.client();
+     * client.set("custom:key", "value", 60000);
+     * }</pre>
      *
      * @return the SpyMemcached client instance
      */

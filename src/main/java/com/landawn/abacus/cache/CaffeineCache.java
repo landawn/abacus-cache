@@ -69,6 +69,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * The underlying Caffeine cache should be pre-configured with desired
      * eviction policies, maximum size, and expiration settings.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> caffeine = Caffeine.newBuilder()
+     *     .maximumSize(1000)
+     *     .expireAfterWrite(10, TimeUnit.MINUTES)
+     *     .build();
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
+     * }</pre>
+     *
      * @param cache the underlying Caffeine cache instance to wrap
      * @throws IllegalArgumentException if cache is null
      */
@@ -84,8 +93,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * This method uses Caffeine's getIfPresent which doesn't trigger cache loading.
      * The operation may update access time depending on the eviction policy.
      *
-     * @param k the key to look up
-     * @return the cached value, or null if not found, expired, or evicted
+     * @param k the cache key
+     * @return the cached value, or {@code null} if not found, expired, or evicted
      */
     @Override
     public V gett(final K k) {
@@ -102,11 +111,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Note: Caffeine's expiration policy is configured at cache creation time.
      * The individual TTL and idle time parameters are ignored by this implementation.
      *
-     * @param k the key
+     * @param k the cache key
      * @param v the value to cache
-     * @param liveTime time-to-live in milliseconds (ignored - use cache-level configuration)
-     * @param maxIdleTime maximum idle time in milliseconds (ignored - use cache-level configuration)
-     * @return true if the operation was successful
+     * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration)
+     * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration)
+     * @return {@code true} if the operation was successful
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -125,7 +134,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Removes a key-value pair from the cache.
      * This triggers immediate removal rather than just marking for eviction.
      *
-     * @param k the key to remove
+     * @param k the cache key
      */
     @Override
     public void remove(final K k) {
@@ -138,8 +147,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Checks if the cache contains a specific key.
      * This method performs a cache lookup and may affect access-based eviction.
      *
-     * @param k the key to check
-     * @return true if the key exists in the cache
+     * @param k the cache key
+     * @return {@code true} if the key exists in the cache
      */
     @Override
     public boolean containsKey(final K k) {
@@ -202,7 +211,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Checks if the cache has been closed.
      *
-     * @return true if the cache is closed
+     * @return {@code true} if the cache is closed
      */
     @Override
     public boolean isClosed() {
@@ -214,6 +223,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Statistics are only available if the cache was created with recordStats() enabled.
      * The returned statistics provide detailed metrics about cache performance including
      * hit rate, miss rate, load count, and eviction count.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CacheStats stats = cache.stats();
+     * System.out.println("Hit rate: " + stats.hitRate());
+     * System.out.println("Eviction count: " + stats.evictionCount());
+     * }</pre>
      *
      * @return cache statistics snapshot
      * @see Cache#stats()

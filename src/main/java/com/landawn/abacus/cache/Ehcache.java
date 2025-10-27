@@ -51,6 +51,14 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Creates a new Ehcache wrapper instance.
+     * This constructor wraps an existing Ehcache 3.x Cache to provide compatibility
+     * with the Abacus Cache interface, enabling seamless integration with the caching framework.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> ehcache = CacheBuilder.newBuilder().build();
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * }</pre>
      *
      * @param cache the underlying Ehcache instance to wrap
      * @throws IllegalArgumentException if cache is null
@@ -67,8 +75,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * This method may trigger a cache loader if configured in the underlying Ehcache.
      * The operation may update access time depending on the eviction policy.
      *
-     * @param k the key to look up
-     * @return the cached value, or null if not found, expired, or evicted
+     * @param k the key whose associated value is to be returned
+     * @return the value associated with the key, or null if not found, expired, or evicted
      * @throws CacheLoadingException if the cache loader fails
      */
     @Override
@@ -83,8 +91,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Note: The current implementation does not honor the individual TTL and idle time
      * parameters as Ehcache expiration is configured at cache level.
      *
-     * @param k the key
-     * @param v the value to cache
+     * @param k the key with which the specified value is to be associated
+     * @param v the value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds (currently ignored)
      * @param maxIdleTime the maximum idle time in milliseconds (currently ignored)
      * @return true if the operation was successful
@@ -104,9 +112,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes a key-value pair from the cache.
+     * Removes the mapping for a key from the cache if it is present.
      *
-     * @param k the key to remove
+     * @param k the key whose mapping is to be removed from the cache
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
@@ -117,10 +125,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if the cache contains a specific key.
+     * Checks if the cache contains a mapping for the specified key.
      *
-     * @param k the key to check
-     * @return true if the key exists in the cache
+     * @param k the key whose presence in the cache is to be tested
+     * @return true if the cache contains a mapping for the specified key
      */
     @Override
     public boolean containsKey(final K k) {
@@ -131,11 +139,21 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Atomically puts a value if the key is not already present.
-     * This operation is atomic and thread-safe.
+     * This operation is atomic and thread-safe, ensuring that concurrent operations
+     * maintain consistency. If the key already exists, the existing value is returned
+     * unchanged.
      *
-     * @param key the key
-     * @param value the value to put
-     * @return the existing value if present, null otherwise
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * V existingValue = cache.putIfAbsent("key1", newValue);
+     * if (existingValue == null) {
+     *     // Value was successfully added
+     * }
+     * }</pre>
+     *
+     * @param key the key with which the specified value is to be associated
+     * @param value the value to be associated with the specified key
+     * @return the previous value associated with the specified key, or null if there was no mapping
      * @throws CacheLoadingException if the cache loader fails
      * @throws CacheWritingException if the cache writer fails
      */
@@ -151,7 +169,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Retrieves multiple values from the cache in a single operation.
-     * This is more efficient than multiple individual get operations.
+     * This is more efficient than multiple individual get operations, particularly
+     * when fetching many entries. The returned map only includes keys that were found
+     * in the cache; missing keys are not included.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Set<String> keys = N.asSet("key1", "key2", "key3");
+     * Map<String, User> results = cache.getAll(keys);
+     * }</pre>
      *
      * @param keys the set of keys to retrieve
      * @return a map of key-value pairs found in the cache
@@ -169,7 +195,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores multiple key-value pairs in the cache in a single operation.
-     * This is more efficient than multiple individual put operations.
+     * This is more efficient than multiple individual put operations, particularly
+     * when storing many entries. All key-value pairs are stored in a single batch
+     * operation for optimal performance.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Map<String, User> users = N.asMap("user1", user1, "user2", user2);
+     * cache.putAll(users);
+     * }</pre>
      *
      * @param entries the map of key-value pairs to store
      * @throws BulkCacheWritingException if the bulk cache writer fails
@@ -186,7 +220,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes multiple keys from the cache in a single operation.
-     * This is more efficient than multiple individual remove operations.
+     * This is more efficient than multiple individual remove operations, particularly
+     * when removing many entries. All keys are removed in a single batch operation
+     * for optimal performance.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Set<String> keysToRemove = N.asSet("key1", "key2", "key3");
+     * cache.removeAll(keysToRemove);
+     * }</pre>
      *
      * @param keys the set of keys to remove
      * @throws BulkCacheWritingException if the bulk cache writer fails

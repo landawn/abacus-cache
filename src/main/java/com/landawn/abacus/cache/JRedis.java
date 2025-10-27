@@ -57,6 +57,13 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Creates a new JRedis instance with the default timeout.
      * The server URL should contain comma-separated host:port pairs for multiple Redis instances.
+     * Data is automatically sharded across all specified Redis instances for horizontal scaling.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * JRedis<User> cache = new JRedis<>("localhost:6379,localhost:6380");
+     * cache.set("user:123", user, 3600000);
+     * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,..."
      */
@@ -67,7 +74,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Creates a new JRedis instance with a specified timeout.
      * The server URL should contain comma-separated host:port pairs for multiple Redis instances.
-     * The timeout applies to connection and socket operations.
+     * The timeout applies to both connection establishment and socket read/write operations.
+     * Data is automatically sharded across all specified Redis instances.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * JRedis<Data> cache = new JRedis<>("redis1:6379,redis2:6379", 5000); // 5 second timeout
+     * cache.set("key", data, 7200000); // Cache for 2 hours
+     * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,..."
      * @param timeout the connection timeout in milliseconds
@@ -91,11 +105,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Retrieves an object from the cache by its key.
-     * The object is deserialized from its binary representation using Kryo.
+     * Retrieves a value from the cache by its key.
+     * The value is deserialized from its binary representation using Kryo.
      *
-     * @param key the cache key
-     * @return the cached object, or null if not found or expired
+     * @param key the key whose associated value is to be returned
+     * @return the value associated with the key, or null if not found or expired
      */
     @Override
     public T get(final String key) {
@@ -103,11 +117,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Stores an object in the cache with a specified time-to-live.
-     * The object is serialized using Kryo before storage.
+     * Stores a key-value pair in the cache with a specified time-to-live.
+     * The value is serialized using Kryo before storage.
      *
-     * @param key the cache key
-     * @param obj the object to cache
+     * @param key the key with which the specified value is to be associated
+     * @param obj the value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds
      * @return true if the operation was successful
      */
@@ -117,9 +131,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Removes an object from the cache.
+     * Removes the mapping for a key from the cache if it is present.
      *
-     * @param key the cache key to delete
+     * @param key the key whose mapping is to be removed from the cache
      * @return true if the operation was successful
      */
     @Override
@@ -134,7 +148,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with value 1.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the cache key
+     * @param key the key whose associated value is to be incremented
      * @return the value after increment
      */
     @Override
@@ -147,8 +161,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with the delta value.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the cache key
-     * @param delta the increment amount
+     * @param key the key whose associated value is to be incremented
+     * @param delta the amount by which to increment the value
      * @return the value after increment
      */
     @Override
@@ -161,7 +175,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with value -1.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the cache key
+     * @param key the key whose associated value is to be decremented
      * @return the value after decrement
      */
     @Override
@@ -174,8 +188,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with the negative delta value.
      * This operation is atomic and thread-safe across all clients.
      *
-     * @param key the cache key
-     * @param delta the decrement amount
+     * @param key the key whose associated value is to be decremented
+     * @param delta the amount by which to decrement the value
      * @return the value after decrement
      */
     @Override
@@ -209,8 +223,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Converts a string key to UTF-8 encoded bytes for Redis operations.
      *
-     * @param key the string key
-     * @return UTF-8 encoded byte array
+     * @param key the string key to convert
+     * @return the UTF-8 encoded byte array representation of the key
      */
     protected byte[] getKeyBytes(final String key) {
         return key.getBytes(Charsets.UTF_8);
@@ -221,7 +235,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Null objects are encoded as empty byte arrays.
      *
      * @param obj the object to encode
-     * @return serialized byte array
+     * @return the serialized byte array representation of the object
      */
     protected byte[] encode(final Object obj) {
         return obj == null ? N.EMPTY_BYTE_ARRAY : kryoParser.encode(obj);
@@ -232,7 +246,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Empty byte arrays are decoded as null.
      *
      * @param bytes the byte array to decode
-     * @return the deserialized object
+     * @return the deserialized object, or null if the byte array is null or empty
      */
     protected T decode(final byte[] bytes) {
         if (bytes == null || N.isEmpty(bytes)) {

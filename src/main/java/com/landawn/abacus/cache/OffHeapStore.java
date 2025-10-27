@@ -93,34 +93,34 @@ package com.landawn.abacus.cache;
 public interface OffHeapStore<K> {
 
     /**
-     * Retrieves the byte array associated with the given key.
-     * Returns null if the key is not found or if an error occurs.
+     * Retrieves the byte array associated with the specified key.
+     * Returns {@code null} if the key is not found or if an error occurs.
      * The returned byte array should be a copy to prevent external modifications.
      *
      * @param key the key to look up
-     * @return the stored byte array, or null if not found
+     * @return the stored byte array, or {@code null} if not found
      */
     byte[] get(K key);
 
     /**
-     * Stores a byte array with the associated key.
+     * Stores a byte array with the specified key.
      * If a value already exists for the key, it should be replaced.
      * The implementation should make a defensive copy of the byte array
      * if necessary to prevent external modifications.
      *
      * @param key the key to associate with the value
      * @param value the byte array to store
-     * @return true if the value was successfully stored, false otherwise
+     * @return {@code true} if the value was successfully stored, {@code false} otherwise
      */
     boolean put(K key, byte[] value);
 
     /**
-     * Removes the value associated with the given key.
-     * Returns true if a value was removed, false if the key was not found
+     * Removes the value associated with the specified key.
+     * Returns {@code true} if a value was removed, {@code false} if the key was not found
      * or if an error occurred during removal.
      *
      * @param key the key whose value should be removed
-     * @return true if a value was removed, false otherwise
+     * @return {@code true} if a value was removed, {@code false} otherwise
      */
     boolean remove(K key);
 

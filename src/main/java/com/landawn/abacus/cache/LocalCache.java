@@ -66,6 +66,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     /**
      * Creates a new LocalCache with specified capacity and eviction delay.
      * Uses default TTL of 3 hours and default idle time of 30 minutes.
+     * The eviction delay determines how frequently the cache scans for expired entries.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * LocalCache<String, User> cache = new LocalCache<>(1000, 60000); // 1000 entries, 60s eviction
+     * cache.put("user:123", user);
+     * }</pre>
      *
      * @param capacity the maximum number of entries the cache can hold
      * @param evictDelay the delay in milliseconds between eviction runs
@@ -77,7 +84,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     /**
      * Creates a new LocalCache with fully customized parameters.
      * This constructor allows complete control over cache behavior including
-     * capacity, eviction timing, and default expiration settings.
+     * capacity, eviction timing, and default expiration settings. Entries exceeding
+     * either the TTL or idle timeout will be automatically evicted.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * LocalCache<String, Data> cache = new LocalCache<>(5000, 30000, 7200000, 1800000);
+     * // 5000 capacity, 30s eviction, 2h TTL, 30min idle
+     * }</pre>
      *
      * @param capacity the maximum number of entries the cache can hold
      * @param evictDelay the delay in milliseconds between eviction runs
@@ -100,7 +114,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     /**
      * Creates a new LocalCache with a custom KeyedObjectPool.
      * This constructor is useful for advanced use cases where you need
-     * custom pool configuration or behavior.
+     * custom pool configuration or behavior, such as custom eviction strategies
+     * or monitoring hooks.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * KeyedObjectPool<String, PoolableWrapper<User>> customPool = PoolFactory.createKeyedObjectPool(1000, 60000);
+     * LocalCache<String, User> cache = new LocalCache<>(3600000, 1800000, customPool);
+     * }</pre>
      *
      * @param defaultLiveTime the default time-to-live in milliseconds for entries
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries
@@ -120,8 +141,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Retrieves a value from the cache by its key.
      * This operation updates the last access time for idle timeout calculation.
      *
-     * @param key the key to look up
-     * @return the cached value, or null if not found, expired, or evicted
+     * @param key the key whose associated value is to be returned
+     * @return the value associated with the key, or null if not found, expired, or evicted
      */
     @Override
     public V gett(final K key) {
@@ -135,10 +156,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * If the key already exists, its value and expiration settings will be replaced.
      * The entry will be evicted when either the TTL expires or the idle time is exceeded.
      *
-     * @param key the key
-     * @param value the value to cache
-     * @param liveTime time-to-live in milliseconds (0 for no expiration)
-     * @param maxIdleTime maximum idle time in milliseconds (0 for no idle timeout)
+     * @param key the key with which the specified value is to be associated
+     * @param value the value to be associated with the specified key
+     * @param liveTime the time-to-live in milliseconds (0 for no expiration)
+     * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout)
      * @return true if the entry was successfully stored
      */
     @Override
@@ -151,10 +172,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes an entry from the cache.
-     * This operation succeeds whether the key exists.
+     * Removes the mapping for a key from the cache if it is present.
+     * This operation succeeds whether the key exists or not.
      *
-     * @param key the key to remove
+     * @param key the key whose mapping is to be removed from the cache
      */
     @Override
     public void remove(final K key) {
@@ -162,11 +183,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if the cache contains a specific key.
+     * Checks if the cache contains a mapping for the specified key.
      * This method checks for key existence without updating access time.
      *
-     * @param key the key to check
-     * @return true if the key exists and hasn't expired
+     * @param key the key whose presence in the cache is to be tested
+     * @return true if the cache contains a mapping for the specified key and it hasn't expired
      */
     @Override
     public boolean containsKey(final K key) {
@@ -210,6 +231,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Returns comprehensive statistics about cache performance and usage.
      * The statistics include hit/miss rates, eviction counts, and memory usage.
      * This is a relatively expensive operation as it gathers current metrics.
+     * Use this method to monitor cache effectiveness and tune configuration.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CacheStats stats = cache.stats();
+     * double hitRate = (double) stats.hitCount() / stats.getCount();
+     * System.out.println("Hit rate: " + hitRate);
+     * }</pre>
      *
      * @return a snapshot of current cache statistics
      * @see CacheStats

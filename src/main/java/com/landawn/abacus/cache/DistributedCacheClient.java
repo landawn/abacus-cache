@@ -68,6 +68,13 @@ public interface DistributedCacheClient<T> {
      * For multiple servers, the format is implementation-specific
      * (e.g., comma-separated for some implementations).
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+     * String url = client.serverUrl();
+     * System.out.println("Connected to: " + url);
+     * }</pre>
+     *
      * @return the server URL(s)
      */
     String serverUrl();
@@ -75,8 +82,16 @@ public interface DistributedCacheClient<T> {
     /**
      * Retrieves an object from the cache by its key.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * User user = client.get("user:123");
+     * if (user != null) {
+     *     System.out.println("Found user: " + user.getName());
+     * }
+     * }</pre>
+     *
      * @param key the cache key
-     * @return the cached object, or null if not found or expired
+     * @return the cached object, or {@code null} if not found or expired
      */
     T get(String key);
 
@@ -84,6 +99,12 @@ public interface DistributedCacheClient<T> {
      * Retrieves multiple objects from the cache in a single operation.
      * This is more efficient than multiple individual get operations.
      * Keys not found in the cache will not be present in the returned map.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Map<String, User> users = client.getBulk("user:123", "user:456", "user:789");
+     * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));
+     * }</pre>
      *
      * @param keys the cache keys to retrieve
      * @return a map of found key-value pairs
@@ -95,6 +116,12 @@ public interface DistributedCacheClient<T> {
      * This is more efficient than multiple individual get operations.
      * Keys not found in the cache will not be present in the returned map.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * List<String> userKeys = Arrays.asList("user:123", "user:456");
+     * Map<String, User> users = client.getBulk(userKeys);
+     * }</pre>
+     *
      * @param keys the collection of cache keys to retrieve
      * @return a map of found key-value pairs
      */
@@ -104,10 +131,16 @@ public interface DistributedCacheClient<T> {
      * Stores an object in the cache with a specified time-to-live.
      * If the key already exists, its value will be replaced.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * User user = new User("John", "john@example.com");
+     * boolean success = client.set("user:123", user, 3600000); // 1 hour TTL
+     * }</pre>
+     *
      * @param key the cache key
      * @param obj the object to cache
      * @param liveTime the time-to-live in milliseconds (0 means no expiration)
-     * @return true if the operation was successful
+     * @return {@code true} if the operation was successful
      */
     boolean set(String key, T obj, long liveTime);
 
@@ -115,8 +148,14 @@ public interface DistributedCacheClient<T> {
      * Removes an object from the cache.
      * This operation succeeds whether the key exists.
      *
-     * @param key the cache key to delete
-     * @return true if the operation was successful
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * boolean success = client.delete("user:123");
+     * System.out.println("Deleted: " + success);
+     * }</pre>
+     *
+     * @param key the cache key
+     * @return {@code true} if the operation was successful
      */
     boolean delete(String key);
 
@@ -126,6 +165,12 @@ public interface DistributedCacheClient<T> {
      * - Memcached: Creates key with value 1
      * - Redis: Creates key with value 1
      * This operation is atomic and thread-safe across all clients.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long pageViews = client.incr("page:views");
+     * System.out.println("Page views: " + pageViews);
+     * }</pre>
      *
      * @param key the cache key
      * @return the value after increment
@@ -138,6 +183,12 @@ public interface DistributedCacheClient<T> {
      * - Memcached: Creates key with the delta value
      * - Redis: Creates key with the delta value
      * This operation is atomic and thread-safe across all clients.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long score = client.incr("player:score", 10);
+     * System.out.println("New score: " + score);
+     * }</pre>
      *
      * @param key the cache key
      * @param delta the increment amount (can be negative for decrement)
@@ -152,6 +203,14 @@ public interface DistributedCacheClient<T> {
      * - Redis: Creates key with value -1
      * This operation is atomic and thread-safe across all clients.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long remainingTokens = client.decr("api:tokens");
+     * if (remainingTokens <= 0) {
+     *     System.out.println("Rate limit exceeded");
+     * }
+     * }</pre>
+     *
      * @param key the cache key
      * @return the value after decrement
      */
@@ -164,6 +223,12 @@ public interface DistributedCacheClient<T> {
      * - Redis: Creates key with value -(delta value)
      * This operation is atomic and thread-safe across all clients.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long inventory = client.decr("product:stock", 5);
+     * System.out.println("Remaining inventory: " + inventory);
+     * }</pre>
+     *
      * @param key the cache key
      * @param delta the decrement amount (positive value)
      * @return the value after decrement
@@ -174,12 +239,25 @@ public interface DistributedCacheClient<T> {
      * Removes all keys from all connected cache servers.
      * This is a destructive operation that affects all data across all servers.
      * Use with extreme caution in production environments.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // Warning: This removes ALL data from the cache!
+     * client.flushAll();
+     * System.out.println("All cache data cleared");
+     * }</pre>
      */
     void flushAll();
 
     /**
      * Disconnects from all cache servers and releases resources.
      * After calling this method, the client cannot be used anymore.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * client.disconnect();
+     * System.out.println("Cache client disconnected");
+     * }</pre>
      */
     void disconnect();
 }

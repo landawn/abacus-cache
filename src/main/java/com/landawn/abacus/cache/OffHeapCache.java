@@ -110,6 +110,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Creates an OffHeapCache with the specified capacity in megabytes.
      * Uses default eviction delay of 3 seconds and default expiration times.
+     * Memory is allocated at construction time and held until close().
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100); // 100MB
+     * cache.put("key1", largeData);
+     * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes
      */
@@ -120,6 +127,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Creates an OffHeapCache with specified capacity and eviction delay.
      * Uses default TTL of 3 hours and idle time of 30 minutes.
+     * The eviction delay controls how frequently the cache scans for expired entries.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<Long, Data> cache = new OffHeapCache<>(200, 60000); // 200MB, 60s eviction
+     * cache.put(123L, data, 7200000, 3600000); // 2h TTL, 1h idle
+     * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes
      * @param evictDelay the delay between eviction runs in milliseconds
@@ -131,6 +145,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Creates an OffHeapCache with fully specified basic parameters.
      * Memory is allocated at construction time and held until close().
+     * This constructor provides complete control over cache timing behavior.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(500, 30000, 3600000, 1800000);
+     * // 500MB, 30s eviction, 1h TTL, 30min idle
+     * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes
      * @param evictDelay the delay between eviction runs in milliseconds
@@ -153,9 +174,16 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Allocates off-heap memory using sun.misc.Unsafe.
      * This memory is outside the JVM heap and must be explicitly freed.
+     * The allocated memory address is used for direct byte-level operations.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // Internal method - called automatically during cache construction
+     * long memoryAddress = allocate(100 * 1024 * 1024); // 100MB
+     * }</pre>
      *
      * @param capacityInBytes the number of bytes to allocate
-     * @return the memory address of the allocated block
+     * @return the memory address of the allocated memory block
      */
     @SuppressWarnings("removal")
     @Override
@@ -165,7 +193,14 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Deallocates the off-heap memory.
-     * Called during cache shutdown to release native memory.
+     * Called during cache shutdown to release native memory and prevent memory leaks.
+     * This method is automatically invoked by close().
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // Internal method - called automatically during cache.close()
+     * cache.close(); // Triggers deallocate() internally
+     * }</pre>
      */
     @SuppressWarnings("removal")
     @Override
@@ -176,10 +211,18 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Copies bytes from a Java array to off-heap memory.
-     * Uses unsafe operations for efficient memory transfer.
+     * Uses unsafe operations for efficient memory transfer, bypassing standard
+     * Java array access for maximum performance.
      *
-     * @param srcBytes the source byte array
-     * @param srcOffset the offset in the source array
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // Internal method - called automatically during cache.put()
+     * byte[] data = kryoParser.encode(value);
+     * copyToMemory(data, BYTE_ARRAY_BASE, memoryAddress, data.length);
+     * }</pre>
+     *
+     * @param srcBytes the source byte array from which to copy
+     * @param srcOffset the starting offset in the source array
      * @param startPtr the destination memory address
      * @param len the number of bytes to copy
      */
@@ -191,11 +234,19 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Copies bytes from off-heap memory to a Java array.
-     * Uses unsafe operations for efficient memory transfer.
+     * Uses unsafe operations for efficient memory transfer, bypassing standard
+     * Java array access for maximum performance.
      *
-     * @param startPtr the source memory address
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // Internal method - called automatically during cache.gett()
+     * byte[] data = new byte[length];
+     * copyFromMemory(memoryAddress, data, BYTE_ARRAY_BASE, length);
+     * }</pre>
+     *
+     * @param startPtr the source memory address from which to copy
      * @param bytes the destination byte array
-     * @param destOffset the offset in the destination array
+     * @param destOffset the starting offset in the destination array
      * @param len the number of bytes to copy
      */
     @SuppressWarnings("removal")
@@ -206,7 +257,17 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Creates a new builder for constructing OffHeapCache instances.
-     * The builder provides a fluent API for configuring all cache parameters.
+     * The builder provides a fluent API for configuring all cache parameters
+     * including capacity, eviction policies, serialization, and disk spillover.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, Data> cache = OffHeapCache.<String, Data>builder()
+     *     .capacityInMB(100)
+     *     .evictDelay(60000)
+     *     .defaultLiveTime(3600000)
+     *     .build();
+     * }</pre>
      *
      * @param <K> the type of keys used to identify cache entries
      * @param <V> the type of values stored in the cache
@@ -304,6 +365,16 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Builds and returns a new OffHeapCache instance with the configured parameters.
+         * All builder properties are validated and used to construct the cache with
+         * the specified configuration.
+         *
+         * <p><b>Usage Examples:</b></p>
+         * <pre>{@code
+         * OffHeapCache<String, Data> cache = OffHeapCache.<String, Data>builder()
+         *     .capacityInMB(200)
+         *     .vacatingFactor(0.3f)
+         *     .build();
+         * }</pre>
          *
          * @return a new OffHeapCache instance
          */

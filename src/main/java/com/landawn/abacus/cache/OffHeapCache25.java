@@ -195,6 +195,14 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Creates a new builder for constructing OffHeapCache25 instances.
      * The builder provides a fluent API for configuring all cache parameters.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache25<String, Data> cache = OffHeapCache25.<String, Data>builder()
+     *     .capacityInMB(100)
+     *     .evictDelay(60000)
+     *     .build();
+     * }</pre>
+     *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of values stored in the cache
      * @return a new Builder instance

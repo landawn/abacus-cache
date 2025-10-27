@@ -78,9 +78,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * This default implementation throws UnsupportedOperationException.
      * Subclasses that support bulk operations should override this method.
      *
-     * @param keys the cache keys to retrieve
+     * @param keys the cache keys
      * @return never returns normally
-     * @throws UnsupportedOperationException always thrown by default
+     * @throws UnsupportedOperationException always thrown by this default implementation
      */
     @Override
     public Map<String, T> getBulk(final String... keys) throws UnsupportedOperationException {
@@ -92,9 +92,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * This default implementation throws UnsupportedOperationException.
      * Subclasses that support bulk operations should override this method.
      *
-     * @param keys the collection of cache keys to retrieve
+     * @param keys the collection of cache keys
      * @return never returns normally
-     * @throws UnsupportedOperationException always thrown by default
+     * @throws UnsupportedOperationException always thrown by this default implementation
      */
     @Override
     public Map<String, T> getBulk(final Collection<String> keys) throws UnsupportedOperationException {
@@ -105,10 +105,10 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Flushes all data from all connected cache servers.
      * This default implementation throws UnsupportedOperationException.
      * Subclasses that support flush operations should override this method.
-     * 
+     *
      * Warning: This is a destructive operation that removes all data.
      *
-     * @throws UnsupportedOperationException always thrown by default
+     * @throws UnsupportedOperationException always thrown by this default implementation
      */
     @Override
     public void flushAll() throws UnsupportedOperationException {
@@ -121,12 +121,11 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * converts milliseconds (used by the Cache interface) to seconds.
      * The method rounds up to ensure the TTL is not shorter than requested.
      *
-     * <br><br>
-     * Example:
+     * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * toSeconds(1500) returns 2  // 1.5 seconds rounds up to 2
-     * toSeconds(2000) returns 2  // 2 seconds exactly
-     * toSeconds(999)  returns 1  // Less than 1 second rounds up to 1
+     * int seconds1 = toSeconds(1500);  // Returns 2 (1.5s rounds up)
+     * int seconds2 = toSeconds(2000);  // Returns 2 (exactly 2s)
+     * int seconds3 = toSeconds(999);   // Returns 1 (rounds up to 1s)
      * }</pre>
      *
      * @param liveTime the time-to-live in milliseconds

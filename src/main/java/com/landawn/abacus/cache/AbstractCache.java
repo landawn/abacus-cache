@@ -133,7 +133,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Retrieves a value from the cache wrapped in an Optional.
      * This method provides a null-safe alternative to gett().
      *
-     * @param k the key to look up
+     * @param k the key
      * @return an Optional containing the value if present, or empty if not found
      */
     @Override
@@ -158,8 +158,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously retrieves a value from the cache.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key to look up
-     * @return a future that will contain the Optional result
+     * @param k the key
+     * @return a ContinuableFuture that will contain the Optional result
      */
     @Override
     public ContinuableFuture<Optional<V>> asyncGet(final K k) {
@@ -170,8 +170,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously retrieves a value from the cache directly.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key to look up
-     * @return a future that will contain the value or null
+     * @param k the key
+     * @return a ContinuableFuture that will contain the value or null
      */
     @Override
     public ContinuableFuture<V> asyncGett(final K k) {
@@ -184,7 +184,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @param k the key
      * @param v the value to cache
-     * @return a future that will contain true if successful
+     * @return a ContinuableFuture that will contain true if the operation was successful
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K k, final V v) {
@@ -197,9 +197,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @param k the key
      * @param v the value to cache
-     * @param liveTime TTL in milliseconds
-     * @param maxIdleTime max idle time in milliseconds
-     * @return a future that will contain true if successful
+     * @param liveTime time-to-live in milliseconds
+     * @param maxIdleTime maximum idle time in milliseconds
+     * @return a ContinuableFuture that will contain true if the operation was successful
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -210,8 +210,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously removes an entry from the cache.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key to remove
-     * @return a future that completes when the operation finishes
+     * @param k the key
+     * @return a ContinuableFuture that completes when the operation finishes
      */
     @Override
     public ContinuableFuture<Void> asyncRemove(final K k) {
@@ -226,8 +226,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously checks if the cache contains a key.
      * The operation is executed on the shared thread pool.
      *
-     * @param k the key to check
-     * @return a future that will contain true if the key exists
+     * @param k the key
+     * @return a ContinuableFuture that will contain true if the key exists in the cache
      */
     @Override
     public ContinuableFuture<Boolean> asyncContainsKey(final K k) {
