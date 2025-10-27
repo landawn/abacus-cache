@@ -38,8 +38,8 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * Person person = cache.gett("key1");
  * }</pre>
  *
- * @param <K> the key type
- * @param <V> the value type
+ * @param <K> the type of keys used to identify cache entries
+ * @param <V> the type of values stored in the cache
  * @see AbstractCache
  * @see org.ehcache.Cache
  */

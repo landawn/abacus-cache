@@ -244,7 +244,7 @@ public interface Cache<K, V> extends Closeable {
      * Retrieves a property value by name.
      * Returns null if the property doesn't exist.
      *
-     * @param <T> the expected type of the property value
+     * @param <T> the type of the property value to be returned
      * @param propName the property name
      * @return the property value, or null if not found
      */
@@ -254,7 +254,7 @@ public interface Cache<K, V> extends Closeable {
      * Sets a property value.
      * Properties can be used for custom configuration or metadata.
      *
-     * @param <T> the type of the previous value
+     * @param <T> the type of the previous property value to be returned
      * @param propName the property name
      * @param propValue the property value
      * @return the previous value associated with the property, or null
@@ -264,7 +264,7 @@ public interface Cache<K, V> extends Closeable {
     /**
      * Removes a property.
      *
-     * @param <T> the type of the removed value
+     * @param <T> the type of the property value to be returned
      * @param propName the property name to remove
      * @return the removed value, or null if the property didn't exist
      */

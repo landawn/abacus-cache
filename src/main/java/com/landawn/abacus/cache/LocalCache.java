@@ -53,8 +53,8 @@ import com.landawn.abacus.pool.PoolableWrapper;
  * System.out.println("Hit rate: " + (double)stats.hitCount() / stats.getCount());
  * }</pre>
  *
- * @param <K> the key type
- * @param <V> the value type
+ * @param <K> the type of keys used to identify cache entries
+ * @param <V> the type of values stored in the cache
  * @see AbstractCache
  * @see KeyedObjectPool
  * @see CacheStats

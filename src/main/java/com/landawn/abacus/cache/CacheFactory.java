@@ -75,8 +75,8 @@ public final class CacheFactory {
      * Creates a new LocalCache with specified capacity and eviction delay.
      * Uses default TTL of 3 hours and default idle time of 30 minutes.
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
      * @param capacity the maximum number of entries the cache can hold
      * @param evictDelay the delay in milliseconds between eviction runs
      * @return a new LocalCache instance
@@ -89,8 +89,8 @@ public final class CacheFactory {
      * Creates a new LocalCache with fully customized parameters.
      * This method provides complete control over cache behavior.
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
      * @param capacity the maximum number of entries the cache can hold
      * @param evictDelay the delay in milliseconds between eviction runs
      * @param defaultLiveTime default time-to-live in milliseconds (default: 3 hours)
@@ -106,8 +106,8 @@ public final class CacheFactory {
      * Creates a new LocalCache with a custom KeyedObjectPool.
      * This method is for advanced use cases requiring custom pool implementations.
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
      * @param defaultLiveTime default time-to-live in milliseconds
      * @param defaultMaxIdleTime default maximum idle time in milliseconds
      * @param pool the pre-configured KeyedObjectPool to use
@@ -122,8 +122,8 @@ public final class CacheFactory {
      * Creates a DistributedCache wrapper for a distributed cache client.
      * The wrapper adds retry logic and error handling around the client.
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap
      * @return a new DistributedCache instance
      */
@@ -135,8 +135,8 @@ public final class CacheFactory {
      * Creates a DistributedCache with a key prefix.
      * All keys will be prefixed with the specified string for namespace isolation.
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap
      * @param keyPrefix the prefix to prepend to all keys
      * @return a new DistributedCache instance
@@ -149,8 +149,8 @@ public final class CacheFactory {
      * Creates a DistributedCache with custom retry configuration.
      * This allows fine-tuning of error handling behavior.
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap
      * @param keyPrefix the prefix to prepend to all keys
      * @param maxFailedNumForRetry maximum failures before stopping retries
@@ -165,7 +165,7 @@ public final class CacheFactory {
     /**
      * Creates a cache instance from a string specification.
      * This method supports dynamic cache creation based on configuration strings.
-     * 
+     *
      * <br><br>
      * Supported formats:
      * <ul>
@@ -177,21 +177,21 @@ public final class CacheFactory {
      * <li>Redis(serverUrl,keyPrefix,timeout) - With custom timeout</li>
      * <li>com.example.CustomCache(params...) - Custom implementation</li>
      * </ul>
-     * 
+     *
      * <br>
      * Examples:
      * <pre>{@code
      * Cache<String, Object> cache1 = CacheFactory.createCache(
      *     "Memcached(localhost:11211)"
      * );
-     * 
+     *
      * Cache<String, Object> cache2 = CacheFactory.createCache(
      *     "Redis(localhost:6379,myapp:,5000)"
      * );
      * }</pre>
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
      * @param provider the cache specification string
      * @return a new cache instance
      * @throws IllegalArgumentException if the specification is invalid

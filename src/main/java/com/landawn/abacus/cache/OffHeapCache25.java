@@ -38,7 +38,7 @@ import lombok.experimental.Accessors;
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
 /**
- * A modern off-heap cache implementation using Java's Foreign Function & Memory API.
+ * A modern off-heap cache implementation using Java's Foreign Function &amp; Memory API.
  * This implementation leverages the new Foreign Memory API introduced in recent Java versions
  * as a safer alternative to sun.misc.Unsafe. It provides the same functionality as OffHeapCache
  * but with better safety guarantees and future compatibility.
@@ -57,7 +57,7 @@ import lombok.experimental.Accessors;
  * Important notes:
  * <ul>
  * <li>Requires Java 21+ with Foreign Memory API</li>
- * <li>Not designed for tiny objects (< 128 bytes after serialization)</li>
+ * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
  * <li>Memory is allocated at startup and held until shutdown</li>
  * </ul>
@@ -80,12 +80,12 @@ import lombok.experimental.Accessors;
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
  * }</pre>
  *
- * @param <K> the key type
- * @param <V> the value type
+ * @param <K> the type of keys maintained by this cache
+ * @param <V> the type of mapped values stored in this cache
  * @see AbstractOffHeapCache
  * @see OffHeapCacheStats
  * @see OffHeapStore
- * @see <a href="https://openjdk.org/jeps/471">JEP 471: Foreign Function & Memory API</a>
+ * @see <a href="https://openjdk.org/jeps/471">JEP 471: Foreign Function &amp; Memory API</a>
  */
 @SuppressFBWarnings({ "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "JLM_JSR166_UTILCONCURRENT_MONITORENTER" })
 public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
@@ -195,8 +195,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Creates a new builder for constructing OffHeapCache25 instances.
      * The builder provides a fluent API for configuring all cache parameters.
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of values stored in the cache
      * @return a new Builder instance
      */
     public static <K, V> Builder<K, V> builder() {
@@ -207,7 +207,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Builder class for creating OffHeapCache25 instances with custom configuration.
      * Provides a fluent API for setting all cache parameters including capacity,
      * eviction policies, serialization, and disk spillover options.
-     * 
+     *
      * <br><br>
      * Example usage:
      * <pre>{@code
@@ -221,10 +221,15 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *     .build();
      * }</pre>
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys maintained by the cache being built
+     * @param <V> the type of values stored in the cache being built
      */
     @Data
+    /**
+     * Constructs a new Builder with default values.
+     * All builder properties start with their default values and can be customized
+     * using the fluent setter methods.
+     */
     @NoArgsConstructor
     @Accessors(chain = true, fluent = true)
     public static class Builder<K, V> {

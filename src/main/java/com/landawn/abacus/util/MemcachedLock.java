@@ -76,8 +76,8 @@ import com.landawn.abacus.logging.LoggerFactory;
  * Thread safety: This class is thread-safe. Multiple threads can safely call methods
  * on the same instance. However, the lock itself is not reentrant.
  *
- * @param <K> the type of the lock key (typically String)
- * @param <V> the type of the optional value stored with the lock
+ * @param <K> the type of lock identifiers used as keys (typically String)
+ * @param <V> the type of optional metadata values associated with locks
  * @see SpyMemcached
  */
 public final class MemcachedLock<K, V> implements AutoCloseable {

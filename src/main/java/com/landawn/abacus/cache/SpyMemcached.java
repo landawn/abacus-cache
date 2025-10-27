@@ -66,7 +66,7 @@ import net.spy.memcached.transcoders.Transcoder;
  * Map<String, User> users = cache.getBulk("user:123", "user:456", "user:789");
  * }</pre>
  *
- * @param <T> the type of objects to be cached
+ * @param <T> the type of values stored and retrieved from the cache
  * @see AbstractDistributedCacheClient
  * @see MemcachedClient
  */
@@ -492,7 +492,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Waits for a Future to complete and returns its result.
      * Converts checked exceptions to runtime exceptions.
      *
-     * @param <R> the result type
+     * @param <R> the type of the result returned by the Future
      * @param future the Future to wait for
      * @return the Future's result
      * @throws RuntimeException if the Future fails

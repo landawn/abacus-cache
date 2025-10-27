@@ -250,7 +250,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Retrieves a property value by name.
      * Returns null if the property doesn't exist.
      *
-     * @param <T> the expected type of the property value
+     * @param <T> the type of the property value to be returned
      * @param propName the property name
      * @return the property value cast to T, or null if not found
      */
@@ -264,7 +264,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Properties can be used for custom configuration or to store
      * metadata about the cache or its usage.
      *
-     * @param <T> the type of the previous value
+     * @param <T> the type of the previous property value to be returned
      * @param propName the property name
      * @param propValue the new property value
      * @return the previous value cast to T, or null if none existed
@@ -277,7 +277,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     /**
      * Removes a property from the cache.
      *
-     * @param <T> the type of the removed value
+     * @param <T> the type of the property value to be returned
      * @param propName the property name to remove
      * @return the removed value cast to T, or null if the property didn't exist
      */

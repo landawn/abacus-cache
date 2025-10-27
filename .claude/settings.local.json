@@ -5,7 +5,9 @@
       "Bash(do echo \"=== $file ===\")",
       "Bash(done)",
       "Bash(mvn javadoc:javadoc:*)",
-      "Bash(javadoc:*)"
+      "Bash(javadoc:*)",
+      "Bash(mvn clean compile javadoc:javadoc:*)",
+      "Bash(mvn clean compile:*)"
     ],
     "deny": [],
     "ask": []

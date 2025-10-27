@@ -56,7 +56,7 @@ import lombok.experimental.Accessors;
  * <br>
  * Important notes:
  * <ul>
- * <li>Not designed for tiny objects (< 128 bytes after serialization)</li>
+ * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
  * <li>Requires JVM flags for Unsafe access (see class comment)</li>
  * <li>Memory is allocated at startup and held until shutdown</li>
@@ -80,12 +80,12 @@ import lombok.experimental.Accessors;
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
  * }</pre>
  *
- * @param <K> the key type
- * @param <V> the value type
+ * @param <K> the type of keys used to identify cache entries
+ * @param <V> the type of values stored in the cache
  * @see AbstractOffHeapCache
  * @see OffHeapCacheStats
  * @see OffHeapStore
- * @see <a href="https://openjdk.org/jeps/471">JEP 471: Foreign Function & Memory API (Incubator)</a>
+ * @see <a href="https://openjdk.org/jeps/471">JEP 471: Foreign Function &amp; Memory API (Incubator)</a>
  */
 @SuppressFBWarnings({ "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "JLM_JSR166_UTILCONCURRENT_MONITORENTER" })
 public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
@@ -208,8 +208,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Creates a new builder for constructing OffHeapCache instances.
      * The builder provides a fluent API for configuring all cache parameters.
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys used to identify cache entries
+     * @param <V> the type of values stored in the cache
      * @return a new Builder instance
      */
     public static <K, V> Builder<K, V> builder() {
@@ -234,8 +234,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *     .build();
      * }</pre>
      *
-     * @param <K> the key type
-     * @param <V> the value type
+     * @param <K> the type of keys used to identify cache entries
+     * @param <V> the type of values stored in the cache
      */
     @Data
     @NoArgsConstructor
