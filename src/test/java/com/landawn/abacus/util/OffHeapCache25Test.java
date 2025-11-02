@@ -37,12 +37,6 @@ import com.landawn.abacus.type.TypeFactory;
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
-/**
- *
- * @since 0.8
- *
- * @author Haiyang Li
- */
 public class OffHeapCache25Test {
     private static final Random rand = new Random();
     static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
@@ -116,7 +110,6 @@ public class OffHeapCache25Test {
     private static final AtomicInteger counter = new AtomicInteger();
 
     /**
-     *
      */
     @Test
     public void test_ByteBuffer() {

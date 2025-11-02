@@ -23,12 +23,6 @@ import com.landawn.abacus.util.Profiler.MultiLoopsStatistics;
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
-/**
- *
- * @since 0.8
- *
- * @author Haiyang Li
- */
 public class OffHeapCacheTest {
     private static final Random rand = new Random();
 
@@ -45,7 +39,6 @@ public class OffHeapCacheTest {
     private static final AtomicInteger counter = new AtomicInteger();
 
     /**
-     *
      */
     @Test
     public void test_ByteBuffer() {
@@ -76,7 +69,6 @@ public class OffHeapCacheTest {
     }
 
     /**
-     *
      */
     @Test
     public void test_put_get() {
@@ -116,7 +108,6 @@ public class OffHeapCacheTest {
     }
 
     /**
-     *
      */
     @Test
     public void test_put_get_2() {
@@ -128,7 +119,6 @@ public class OffHeapCacheTest {
     }
 
     /**
-     *
      */
     @Test
     public void test_perf() {
@@ -149,7 +139,6 @@ public class OffHeapCacheTest {
     }
 
     /**
-     *
      */
     @Test
     public void test_perf_big_Object() {

@@ -13,12 +13,6 @@ import com.landawn.abacus.cache.JRedis;
 
 import junit.framework.TestCase;
 
-/**
- *
- * @since 0.8
- *
- * @author Haiyang Li
- */
 public class JRedisTest extends TestCase {
     protected static final String FIRST_NAME = "firstName";
     protected static final String MIDDLE_NAME = "MN";

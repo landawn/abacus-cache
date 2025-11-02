@@ -26,7 +26,6 @@ public class Maven {
 
     /**
      *
-     *
      * @param args
      * @throws Exception
      */

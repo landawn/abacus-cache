@@ -15,9 +15,7 @@ import junit.framework.TestCase;
 
 /**
  * 
- * @since 0.8
  * 
- * @author Haiyang Li
  */
 public class SpyMemcachedTest extends TestCase {
     protected static final String FIRST_NAME = "firstName";
