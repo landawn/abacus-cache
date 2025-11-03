@@ -99,6 +99,14 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Creates an OffHeapCache25 with the specified capacity in megabytes.
      * Uses default eviction delay of 3000 milliseconds (3 seconds) and default expiration times
      * (3 hours for live time and 30 minutes for max idle time, as defined in AbstractOffHeapCache).
+     * Memory is allocated at construction time and held until close().
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache25<String, byte[]> cache = new OffHeapCache25<>(100); // 100MB
+     * byte[] largeData = new byte[1024];
+     * cache.put("key1", largeData);
+     * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes
      */
@@ -109,6 +117,14 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Creates an OffHeapCache25 with specified capacity and eviction delay.
      * Uses default TTL of 3 hours and idle time of 30 minutes.
+     * The eviction delay controls how frequently the cache scans for expired entries.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache25<Long, Data> cache = new OffHeapCache25<>(200, 60000); // 200MB, 60s eviction
+     * Data data = new Data();
+     * cache.put(123L, data, 7200000, 3600000); // 2h TTL, 1h idle
+     * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes
      * @param evictDelay the delay between eviction runs in milliseconds
@@ -119,7 +135,14 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Creates an OffHeapCache25 with fully specified basic parameters.
-     * Memory is allocated at construction time using a shared Arena.
+     * Memory is allocated at construction time using a shared Arena and held until close().
+     * This constructor provides complete control over cache timing behavior.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache25<String, byte[]> cache = new OffHeapCache25<>(500, 30000, 3600000, 1800000);
+     * // 500MB, 30s eviction, 1h TTL, 30min idle
+     * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes
      * @param evictDelay the delay between eviction runs in milliseconds
@@ -143,10 +166,12 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Allocates off-heap memory using the Foreign Memory API.
      * Creates a shared Arena (allowing access from multiple threads) and allocates
      * a MemorySegment of the specified size. The shared Arena ensures thread-safe
-     * access to the memory segment across the cache operations.
+     * access to the memory segment across the cache operations. This is an internal
+     * method called automatically during cache construction.
      *
      * @param capacityInBytes the total number of bytes to allocate
      * @return the base address of the allocated memory segment
+     * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
      */
     @Override
     protected long allocate(final long capacityInBytes) {
@@ -160,7 +185,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Deallocates the off-heap memory by closing the Arena.
      * This releases all memory associated with the Arena and makes the
      * MemorySegment inaccessible. Any subsequent attempts to access the
-     * memory segment will result in an IllegalStateException.
+     * memory segment will result in an IllegalStateException. This is an
+     * internal method called automatically during cache shutdown and should
+     * not be called directly.
      */
     @Override
     protected void deallocate() {
@@ -172,6 +199,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Copies bytes from off-heap memory to a Java array using MemorySegment API.
      * This provides type-safe memory access compared to Unsafe operations. The method
      * calculates the relative offset within the buffer by subtracting _startPtr from startPtr.
+     * This is an internal method called automatically during cache get operations.
      *
      * @param startPtr the absolute source memory address from which to copy
      * @param bytes the destination byte array to which data is copied
@@ -187,6 +215,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Copies bytes from a Java array to off-heap memory using MemorySegment API.
      * This provides type-safe memory access compared to Unsafe operations. The method
      * calculates the relative offset within the buffer by subtracting _startPtr from startPtr.
+     * This is an internal method called automatically during cache put operations.
      *
      * @param srcBytes the source byte array from which to copy
      * @param srcOffset the starting offset in the source array (0-based index)

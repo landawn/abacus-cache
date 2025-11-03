@@ -159,6 +159,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * this method returns null immediately without attempting the operation. Exceptions are
      * caught and null is returned, with the failure counter incremented.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * User user = cache.gett("user:123");
+     * if (user != null) {
+     *     System.out.println("Found: " + user.getName());
+     * }
+     * }</pre>
+     *
      * @param k the cache key
      * @return the cached value, or {@code null} if not found, expired, evicted, retry threshold exceeded, or on error
      * @throws IllegalStateException if the cache has been closed
@@ -202,6 +211,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Note: Distributed caches typically only support TTL-based expiration.
      * The maxIdleTime parameter is ignored by this implementation.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * User user = new User("John");
+     * cache.put("user:123", user, 3600000, 0); // 1 hour TTL, idle time ignored
+     * }</pre>
+     *
      * @param k the cache key
      * @param v the value to cache
      * @param liveTime the time-to-live in milliseconds (0 means no expiration)
@@ -220,6 +236,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Removes a key-value pair from the distributed cache.
      * This operation returns void regardless of whether the key existed or the operation succeeded.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * cache.remove("user:123"); // Removes if exists
+     * }</pre>
+     *
      * @param k the cache key
      * @throws IllegalStateException if the cache has been closed
      */
@@ -234,6 +256,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Checks if the cache contains a specific key with a non-null value.
      * This is implemented by attempting to retrieve the value, so it may
      * return {@code false} if retry threshold is exceeded or network errors occur.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * if (cache.containsKey("user:123")) {
+     *     System.out.println("User exists in cache");
+     * }
+     * }</pre>
      *
      * @param k the cache key
      * @return {@code true} if the key exists and has a non-null value, {@code false} otherwise or on error
@@ -274,6 +304,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * This is a destructive operation that affects all data across all servers.
      * Use with extreme caution in production environments.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * cache.clear(); // WARNING: Flushes ALL data from all cache servers!
+     * }</pre>
+     *
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -287,6 +323,17 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Closes the cache and disconnects from all distributed cache servers.
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
      * This method is idempotent and thread-safe - calling multiple times has no additional effect after the first call.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * try {
+     *     cache.put("key", value);
+     *     // ... use cache
+     * } finally {
+     *     cache.close(); // Always close to disconnect from servers
+     * }
+     * }</pre>
      */
     @Override
     public synchronized void close() {
@@ -301,6 +348,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache has been closed.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * if (!cache.isClosed()) {
+     *     cache.put("key", value);
+     * }
+     * }</pre>
      *
      * @return {@code true} if the cache is closed
      */

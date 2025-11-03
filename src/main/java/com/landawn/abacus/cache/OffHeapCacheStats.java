@@ -8,8 +8,17 @@ import java.util.Map;
  * memory usage, disk operations, and segment allocation details. It extends the basic
  * cache statistics with off-heap specific metrics like disk I/O performance and memory
  * segment utilization.
- * 
+ *
  * <br><br>
+ * Understanding the metrics:
+ * <ul>
+ * <li>Memory metrics: allocatedMemory is the total reserved, occupiedMemory is actually used</li>
+ * <li>Data metrics: dataSize is the actual serialized data size, smaller than occupiedMemory due to slot allocation</li>
+ * <li>Hit metrics: hitCount + hitCountByDisk + missCount = getCount</li>
+ * <li>Put metrics: putCount = size + sizeOnDisk + evictions (approximately)</li>
+ * </ul>
+ *
+ * <br>
  * Example usage:
  * <pre>{@code
  * OffHeapCache<String, byte[]> cache = OffHeapCache.builder()
@@ -18,31 +27,45 @@ import java.util.Map;
  *     .build();
  * // ... use cache ...
  * OffHeapCacheStats stats = cache.stats();
+ *
+ * // Memory efficiency
+ * double memUtilization = (double) stats.occupiedMemory() / stats.allocatedMemory();
+ * System.out.println("Memory utilization: " + (memUtilization * 100) + "%");
+ *
+ * // Hit rate
+ * double hitRate = (double) stats.hitCount() / stats.getCount();
+ * System.out.println("Hit rate: " + (hitRate * 100) + "%");
+ *
+ * // Disk performance
  * System.out.println("Disk write avg time: " + stats.writeToDiskTimeStats().avg() + "ms");
- * System.out.println("Memory utilization: " + 
- *     (double) stats.occupiedMemory() / stats.allocatedMemory());
+ * System.out.println("Disk read avg time: " + stats.readFromDiskTimeStats().avg() + "ms");
+ *
+ * // Fragmentation analysis
+ * double overhead = (double) stats.occupiedMemory() / stats.dataSize();
+ * System.out.println("Memory overhead: " + (overhead * 100) + "%");
  * }</pre>
  *
  * @param capacity the maximum number of entries the cache can hold
  * @param size the current number of entries in memory
  * @param sizeOnDisk the current number of entries stored on disk
- * @param putCount the total number of put operations
+ * @param putCount the total number of put operations since cache creation
  * @param putCountToDisk the number of put operations that went to disk
- * @param getCount the total number of get operations
+ * @param getCount the total number of get operations since cache creation
  * @param hitCount the number of successful get operations from memory
  * @param hitCountByDisk the number of successful get operations from disk
- * @param missCount the number of failed get operations
+ * @param missCount the number of failed get operations (key not found or expired)
  * @param evictionCount the total number of evictions from memory
  * @param evictionCountFromDisk the number of evictions from disk
  * @param allocatedMemory the total allocated off-heap memory in bytes
- * @param occupiedMemory the currently occupied off-heap memory in bytes
- * @param dataSize the total size of data in memory in bytes
+ * @param occupiedMemory the currently occupied off-heap memory in bytes (including overhead)
+ * @param dataSize the total size of actual data in memory in bytes (excluding overhead)
  * @param dataSizeOnDisk the total size of data on disk in bytes
  * @param writeToDiskTimeStats statistics for disk write operations (min/max/avg in milliseconds)
  * @param readFromDiskTimeStats statistics for disk read operations (min/max/avg in milliseconds)
- * @param segmentSize the size of each memory segment in bytes
+ * @param segmentSize the size of each memory segment in bytes (typically 1MB)
  * @param occupiedSlots map of slot sizes to segment occupation details
  * @see OffHeapCache#stats()
+ * @see OffHeapCache25#stats()
  * @see MinMaxAvg
  */
 public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long putCount, long putCountToDisk, long getCount, long hitCount, long hitCountByDisk,
@@ -76,10 +99,20 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
     /**
      * Statistics for minimum, maximum, and average values of a metric.
      * Used to track performance characteristics of disk I/O operations.
-     * 
-     * @param min the minimum observed value
-     * @param max the maximum observed value
-     * @param avg the average of all observed values
+     * All values are in milliseconds. If no operations have been recorded,
+     * all values will be 0.0.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * MinMaxAvg writeStats = stats.writeToDiskTimeStats();
+     * System.out.println("Write time - Min: " + writeStats.min() + "ms, " +
+     *                    "Max: " + writeStats.max() + "ms, " +
+     *                    "Avg: " + writeStats.avg() + "ms");
+     * }</pre>
+     *
+     * @param min the minimum observed value in milliseconds
+     * @param max the maximum observed value in milliseconds
+     * @param avg the average of all observed values in milliseconds
      */
     public record MinMaxAvg(double min, double max, double avg) {
         /**
@@ -96,10 +129,21 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
     /**
      * Represents the occupation details of a specific slot size in the cache.
      * This record provides information about how many slots of a particular size
-     * are occupied across different memory segments.
-     * 
-     * @param sizeOfSlot the size of each slot in bytes
-     * @param occupiedSlots map of segment index to number of occupied slots
+     * are occupied across different memory segments. This is useful for analyzing
+     * memory fragmentation and understanding how memory is being utilized.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Map<Integer, Integer> segmentOccupation = new LinkedHashMap<>();
+     * segmentOccupation.put(0, 5);  // Segment 0 has 5 occupied slots
+     * segmentOccupation.put(1, 3);  // Segment 1 has 3 occupied slots
+     * OccupiedSlot slotInfo = new OccupiedSlot(1024, segmentOccupation);
+     * System.out.println("1KB slots: " + slotInfo.occupiedSlots().values().stream()
+     *     .mapToInt(Integer::intValue).sum() + " total");
+     * }</pre>
+     *
+     * @param sizeOfSlot the size of each slot in bytes (e.g., 64, 128, 256, 512, 1024, 2048, 4096, 8192)
+     * @param occupiedSlots map of segment index to number of occupied slots in that segment
      */
     public record OccupiedSlot(int sizeOfSlot, Map<Integer, Integer> occupiedSlots) {
     }

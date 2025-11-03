@@ -92,8 +92,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * This method uses Caffeine's getIfPresent which doesn't trigger cache loading.
      * The operation may update access time depending on the eviction policy.
      *
-     * @param k the cache key
-     * @return the cached value, or {@code null} if not found, expired, or evicted
+     * @param k the cache key whose associated value is to be returned
+     * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -112,13 +112,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * The liveTime and maxIdleTime parameters are ignored by this implementation.
      * All entries use the cache-wide expiration settings.
      *
-     * @param k the cache key
-     * @param v the value to cache
+     * @param k the cache key with which the specified value is to be associated
+     * @param v the cache value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration)
      * @return {@code true} always (operation always succeeds unless an exception is thrown)
-     * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if k is null
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -134,10 +134,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes a key-value pair from the cache.
+     * Removes the mapping for a key from the cache if it is present.
      * This triggers immediate removal rather than just marking for eviction.
      *
-     * @param k the cache key
+     * @param k the cache key whose mapping is to be removed from the cache
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -148,11 +148,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if the cache contains a specific key with a non-null value.
+     * Checks if the cache contains a mapping for the specified key.
      * This method performs a cache lookup and may affect access-based eviction.
      *
-     * @param k the cache key
-     * @return {@code true} if the key exists in the cache and has a non-null value
+     * @param k the cache key whose presence in the cache is to be tested
+     * @return {@code true} if the cache contains a mapping for the specified key
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -164,12 +164,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns the set of keys in the cache.
-     * This operation is not supported as Caffeine doesn't provide
+     * This operation is not supported by the CaffeineCache wrapper as Caffeine doesn't provide
      * efficient key iteration for performance reasons.
      *
      * @return never returns normally
      * @throws UnsupportedOperationException always thrown
+     * @deprecated Unsupported operation
      */
+    @Deprecated
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
         throw new UnsupportedOperationException();
@@ -205,7 +207,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases resources.
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
-     * This method is idempotent and thread-safe - multiple calls throw IllegalStateException.
+     * This method is thread-safe but NOT idempotent - calling it multiple times will throw IllegalStateException.
+     *
+     * @throws IllegalStateException if the cache has already been closed
      */
     @Override
     public synchronized void close() {
@@ -219,7 +223,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Checks if the cache has been closed.
      *
-     * @return {@code true} if the cache is closed
+     * @return {@code true} if the cache is closed, {@code false} otherwise
      */
     @Override
     public boolean isClosed() {

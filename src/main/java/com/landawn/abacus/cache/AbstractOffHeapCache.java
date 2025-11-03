@@ -326,6 +326,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * may automatically promote them to memory based on access frequency and I/O timing,
      * as determined by the testerForLoadingItemFromDiskToMemory predicate if configured.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * cache.put("key1", "value1".getBytes());
+     * byte[] value = cache.gett("key1");
+     * if (value != null) {
+     *     System.out.println("Found: " + new String(value));
+     * }
+     * }</pre>
+     *
      * @param k the cache key
      * @return the cached value, or null if not found or expired
      */
@@ -456,7 +466,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Stores a key-value pair in the cache with specified expiration settings.
      * The value is serialized and stored either in memory, on disk, or both
-     * based on size and configuration.
+     * based on size and configuration. If memory is not available and disk spillover
+     * is configured, the value will be stored on disk. Returns false if neither
+     * memory nor disk storage is available.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * byte[] data = "large data".getBytes();
+     * // Store with 1 hour TTL and 30 minutes idle time
+     * boolean success = cache.put("key1", data, 3600000, 1800000);
+     * if (success) {
+     *     System.out.println("Data cached successfully");
+     * }
+     * }</pre>
      *
      * @param k the cache key
      * @param v the value to cache
@@ -738,8 +761,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes an entry from the cache.
      * Properly cleans up memory or disk resources associated with the entry.
+     * This operation is idempotent - removing a non-existent key has no effect.
      *
-     * @param k the cache key
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * cache.put("key1", "value1".getBytes());
+     * cache.remove("key1");  // Removes and frees resources
+     * cache.remove("key1");  // Safe to call again, no effect
+     * }</pre>
+     *
+     * @param k the cache key to remove
      */
     @Override
     public void remove(final K k) {
@@ -752,8 +784,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a specific key.
+     * This method returns true for both memory and disk-stored entries.
+     * Note that it does not verify if the entry is expired - use gett() to check expiration.
      *
-     * @param k the cache key
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * cache.put("key1", "value1".getBytes());
+     * if (cache.containsKey("key1")) {
+     *     System.out.println("Key exists");
+     * }
+     * }</pre>
+     *
+     * @param k the cache key to check
      * @return true if the key exists in the cache, false otherwise
      */
     @Override
@@ -764,8 +807,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns a set of all keys in the cache.
      * The returned set includes keys for entries stored in both memory and on disk.
+     * Note that the set includes keys for expired entries until they are evicted.
      *
-     * @return the set of cache keys
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * cache.put("key1", "value1".getBytes());
+     * cache.put("key2", "value2".getBytes());
+     * Set<String> keys = cache.keySet();
+     * System.out.println("Cache contains " + keys.size() + " keys");
+     * }</pre>
+     *
+     * @return a set view of the keys in this cache
      */
     @Override
     public Set<K> keySet() {
@@ -775,8 +828,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns the number of entries in the cache.
      * The count includes entries stored in both memory and on disk.
+     * Note that the count includes expired entries until they are evicted.
      *
-     * @return the number of cache entries
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * cache.put("key1", "value1".getBytes());
+     * cache.put("key2", "value2".getBytes());
+     * System.out.println("Cache size: " + cache.size());  // prints: Cache size: 2
+     * }</pre>
+     *
+     * @return the number of entries currently in the cache
      */
     @Override
     public int size() {
@@ -787,6 +849,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Removes all entries from the cache.
      * This operation clears all entries stored in both memory and on disk (via the offHeapStore if configured).
      * The underlying object pool's clear() method handles the cleanup and calls destroy() on all wrappers.
+     * After calling this method, the cache will be empty but still usable for new entries.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * cache.put("key1", "value1".getBytes());
+     * cache.put("key2", "value2".getBytes());
+     * cache.clear();  // Removes all entries and frees resources
+     * System.out.println("Size after clear: " + cache.size());  // prints: Size after clear: 0
+     * }</pre>
      */
     @Override
     public void clear() {
@@ -852,7 +924,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases all resources.
      * Stops eviction scheduling, clears all entries, and deallocates memory.
-     * This method is thread-safe and idempotent.
+     * This method is thread-safe and idempotent - calling close() multiple times has no additional effect.
+     * After calling close(), the cache cannot be used again and any subsequent operations will fail.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * cache.put("key1", "value1".getBytes());
+     * // Use cache...
+     * cache.close();  // Always close to free native memory
+     * // Or use try-with-resources:
+     * try (OffHeapCache<String, byte[]> cache2 = new OffHeapCache<>(100)) {
+     *     cache2.put("key1", "value1".getBytes());
+     * }  // Automatically closed
+     * }</pre>
      */
     @Override
     public synchronized void close() {
@@ -886,8 +971,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache has been closed.
+     * Once closed, the cache cannot be reopened and any operations will fail.
      *
-     * @return true if {@link #close()} has been called
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * System.out.println("Is closed: " + cache.isClosed());  // prints: Is closed: false
+     * cache.close();
+     * System.out.println("Is closed: " + cache.isClosed());  // prints: Is closed: true
+     * }</pre>
+     *
+     * @return true if {@link #close()} has been called, false otherwise
      */
     @Override
     public boolean isClosed() {

@@ -96,8 +96,15 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * Indicates whether this transcoder supports asynchronous decoding.
      * Kryo transcoding is fast enough that async decoding provides no benefit.
      *
-     * @param d the cached data whose asynchronous decode capability is to be tested
-     * @return false, indicating synchronous decoding only
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
+     * CachedData data = transcoder.encode(user);
+     * boolean supportsAsync = transcoder.asyncDecode(data); // Returns false
+     * }</pre>
+     *
+     * @param d the cached data whose asynchronous decode capability is to be tested (must not be null)
+     * @return {@code false}, indicating synchronous decoding only
      */
     @Override
     public boolean asyncDecode(final CachedData d) {
@@ -109,7 +116,15 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * The object is serialized to bytes with no flags set. If the serialized
      * data exceeds the configured maximum size, an IllegalArgumentException is thrown.
      *
-     * @param o the object to encode and serialize
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
+     * User user = new User("John", 30);
+     * CachedData cached = transcoder.encode(user);
+     * byte[] serialized = cached.getData();
+     * }</pre>
+     *
+     * @param o the object to encode and serialize (can be null)
      * @return the CachedData containing the serialized bytes
      * @throws IllegalArgumentException if the serialized size exceeds maxSize
      */
@@ -124,9 +139,17 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * deserialization fails due to incompatible data or other errors, a runtime
      * exception is thrown.
      *
-     * @param d the cached data to decode and deserialize
-     * @return the deserialized object
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
+     * CachedData cached = transcoder.encode(user);
+     * User decoded = transcoder.decode(cached);
+     * }</pre>
+     *
+     * @param d the cached data to decode and deserialize (must not be null)
+     * @return the deserialized object (can be null if null was encoded)
      * @throws RuntimeException if the deserialization fails (e.g., corrupt data, class not found)
+     * @throws NullPointerException if d is null
      */
     @Override
     public T decode(final CachedData d) {
@@ -136,6 +159,12 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     /**
      * Returns the maximum size for cached objects.
      * Objects larger than this size will fail to cache.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * KryoTranscoder<User> transcoder = new KryoTranscoder<>(1024 * 1024);
+     * int maxSize = transcoder.getMaxSize(); // Returns 1048576
+     * }</pre>
      *
      * @return the maximum size in bytes
      */

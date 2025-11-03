@@ -148,6 +148,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Retrieves an object from the cache by its key.
      * This is a synchronous operation that blocks until complete or timeout.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * User user = cache.get("user:123");
+     * if (user != null) {
+     *     System.out.println("Found user: " + user.getName());
+     * }
+     * }</pre>
+     *
      * @param key the cache key whose associated value is to be retrieved
      * @return the cached object of type T, or {@code null} if not found or expired
      */
@@ -255,9 +263,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Stores an object in the cache with a specified time-to-live.
      * This operation replaces any existing value for the key.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * User user = new User("John", "john@example.com");
+     * boolean success = cache.set("user:123", user, 3600000); // 1 hour TTL
+     * }</pre>
+     *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the object value to cache
-     * @param liveTime the time-to-live in milliseconds
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration)
      * @return {@code true} if the operation was successful, {@code false} otherwise
      */
     @Override
@@ -364,10 +378,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Removes an object from the cache.
-     * This operation succeeds whether or not the key exists.
+     * The return value indicates whether the operation was acknowledged by the server,
+     * not whether the key existed. This operation succeeds whether or not the key exists.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * boolean success = cache.delete("user:123");
+     * System.out.println("Delete operation sent: " + success);
+     * }</pre>
      *
      * @param key the cache key whose associated value is to be removed
-     * @return {@code true} if the operation was successful, {@code false} otherwise
+     * @return {@code true} if the delete operation was successfully sent to the server
      */
     @Override
     public boolean delete(final String key) {
@@ -396,6 +417,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, the behavior depends on the Memcached server implementation
      * (typically returns -1 or NOT_FOUND). This operation is atomic and thread-safe across all clients.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long pageViews = cache.incr("page:views");
+     * System.out.println("Page views: " + pageViews);
+     * }</pre>
+     *
      * @param key the cache key whose associated value is to be incremented
      * @return the value after increment, or -1 if the key doesn't exist
      */
@@ -409,8 +436,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, the behavior depends on the Memcached server implementation
      * (typically returns -1 or NOT_FOUND). This operation is atomic and thread-safe across all clients.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long score = cache.incr("player:score", 10);
+     * System.out.println("New score: " + score);
+     * }</pre>
+     *
      * @param key the cache key whose associated value is to be incremented
-     * @param delta the amount by which to increment the value (must be non-negative)
+     * @param delta the amount by which to increment the value (positive value)
      * @return the value after increment, or -1 if the key doesn't exist
      */
     @Override
@@ -466,6 +499,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * (typically returns -1 or NOT_FOUND). Values cannot go below 0 (Memcached prevents underflow).
      * This operation is atomic and thread-safe across all clients.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long remainingTokens = cache.decr("api:tokens");
+     * if (remainingTokens <= 0) {
+     *     System.out.println("Rate limit exceeded");
+     * }
+     * }</pre>
+     *
      * @param key the cache key whose associated value is to be decremented
      * @return the value after decrement, or -1 if the key doesn't exist
      */
@@ -480,8 +521,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * (typically returns -1 or NOT_FOUND). Values cannot go below 0 (Memcached prevents underflow).
      * This operation is atomic and thread-safe across all clients.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long inventory = cache.decr("product:stock", 5);
+     * System.out.println("Remaining inventory: " + inventory);
+     * }</pre>
+     *
      * @param key the cache key whose associated value is to be decremented
-     * @param delta the amount by which to decrement the value (must be non-negative)
+     * @param delta the amount by which to decrement the value (positive value)
      * @return the value after decrement, or -1 if the key doesn't exist
      */
     @Override
@@ -535,7 +582,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Flushes all data from all connected Memcached servers immediately.
      * This operation removes all keys from all servers.
-     * Use with extreme caution as this is a destructive operation.
+     * Use with extreme caution in production environments as this is a destructive operation.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // Warning: This removes ALL data from the cache!
+     * cache.flushAll();
+     * System.out.println("All cache data cleared");
+     * }</pre>
      */
     @Override
     public void flushAll() {
@@ -595,6 +649,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Disconnects from all Memcached servers and releases resources.
      * After calling this method, the cache client cannot be used anymore.
      * Uses default shutdown timeout.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * cache.disconnect();
+     * System.out.println("Cache client disconnected");
+     * }</pre>
      */
     @Override
     public synchronized void disconnect() {

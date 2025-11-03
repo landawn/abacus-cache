@@ -136,6 +136,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Retrieves a value from the cache wrapped in an Optional.
      * This method provides a null-safe alternative to gett().
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * Optional<User> user = cache.get("user:123");
+     * user.ifPresent(u -> System.out.println("Found: " + u.getName()));
+     * }</pre>
+     *
      * @param k the cache key
      * @return an Optional containing the cached value if present, or empty if not found
      */
@@ -147,6 +154,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     /**
      * Stores a key-value pair using default expiration settings.
      * The default TTL and idle time specified in the constructor are used.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * boolean success = cache.put("user:123", user);
+     * System.out.println("Cached: " + success);
+     * }</pre>
      *
      * @param key the cache key
      * @param value the value to cache
@@ -161,6 +175,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously retrieves a value from the cache.
      * The operation is executed on the shared thread pool.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.asyncGet("user:123")
+     *      .thenAccept(opt -> opt.ifPresent(u -> System.out.println("Found: " + u)));
+     * }</pre>
+     *
      * @param k the cache key
      * @return a ContinuableFuture that will contain the Optional result
      */
@@ -173,6 +194,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously retrieves a value from the cache directly.
      * The operation is executed on the shared thread pool.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.asyncGett("user:123")
+     *      .thenAccept(user -> { if (user != null) process(user); });
+     * }</pre>
+     *
      * @param k the cache key
      * @return a ContinuableFuture that will contain the cached value, or null if not found
      */
@@ -184,6 +212,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     /**
      * Asynchronously stores a key-value pair using default expiration.
      * The operation is executed on the shared thread pool.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.asyncPut("user:123", user)
+     *      .thenAccept(success -> System.out.println("Cached: " + success));
+     * }</pre>
      *
      * @param k the cache key
      * @param v the value to cache
@@ -198,10 +233,17 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously stores a key-value pair with custom expiration.
      * The operation is executed on the shared thread pool.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.asyncPut("session:abc", session, 3600000, 1800000)
+     *      .thenAccept(success -> System.out.println("Session cached"));
+     * }</pre>
+     *
      * @param k the cache key
      * @param v the value to cache
-     * @param liveTime the time-to-live in milliseconds
-     * @param maxIdleTime the maximum idle time in milliseconds
+     * @param liveTime the time-to-live in milliseconds (0 for no expiration)
+     * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout)
      * @return a ContinuableFuture that will contain true if the operation was successful, false otherwise
      */
     @Override
@@ -212,6 +254,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     /**
      * Asynchronously removes an entry from the cache.
      * The operation is executed on the shared thread pool.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.asyncRemove("user:123")
+     *      .thenRun(() -> System.out.println("User removed from cache"));
+     * }</pre>
      *
      * @param k the cache key
      * @return a ContinuableFuture that completes when the operation finishes
@@ -229,6 +278,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Asynchronously checks if the cache contains a key.
      * The operation is executed on the shared thread pool.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.asyncContainsKey("user:123")
+     *      .thenAccept(exists -> System.out.println("Exists: " + exists));
+     * }</pre>
+     *
      * @param k the cache key
      * @return a ContinuableFuture that will contain true if the key exists in the cache, false otherwise
      */
@@ -242,6 +298,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Properties can be used to store custom configuration or metadata
      * that needs to be associated with the cache instance.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * Properties<String, Object> props = cache.getProperties();
+     * props.put("description", "User cache");
+     * }</pre>
+     *
      * @return the properties container
      */
     @Override
@@ -252,6 +315,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     /**
      * Retrieves a property value by name.
      * Returns null if the property doesn't exist.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * String description = cache.getProperty("description");
+     * Integer maxRetries = cache.getProperty("maxRetries");
+     * }</pre>
      *
      * @param <T> the type of the property value to be returned
      * @param propName the property name
@@ -267,6 +337,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Properties can be used for custom configuration or to store
      * metadata about the cache or its usage.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.setProperty("description", "User cache for session data");
+     * cache.setProperty("maxRetries", 3);
+     * }</pre>
+     *
      * @param <T> the type of the previous property value to be returned
      * @param propName the property name
      * @param propValue the property value
@@ -279,6 +356,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Removes a property from the cache.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, User> cache = new LocalCache<>(1000, 60000);
+     * String oldValue = cache.removeProperty("description");
+     * System.out.println("Removed property: " + oldValue);
+     * }</pre>
      *
      * @param <T> the type of the property value to be returned
      * @param propName the property name to remove

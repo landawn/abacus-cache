@@ -92,10 +92,15 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Single server
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     *
+     * // Multiple servers
+     * MemcachedLock<String, String> lock2 = new MemcachedLock<>("server1:11211,server2:11211");
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) to connect to
+     * @param serverUrl the Memcached server URL(s) to connect to (must not be null)
+     * @throws IllegalArgumentException if serverUrl is null or invalid
      */
     public MemcachedLock(final String serverUrl) {
         mc = new SpyMemcached<>(serverUrl);
@@ -308,14 +313,19 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * class NamespacedLock extends MemcachedLock<String, String> {
+     * class NamespacedLock<V> extends MemcachedLock<String, V> {
+     *     public NamespacedLock(String serverUrl) {
+     *         super(serverUrl);
+     *     }
+     *
+     *     @Override
      *     protected String toKey(String target) {
      *         return "lock:myapp:" + target;
      *     }
      * }
      * }</pre>
      *
-     * @param target the target object to be converted to a key string
+     * @param target the target object to be converted to a key string (must not be null)
      * @return the string key to use in Memcached
      */
     protected String toKey(final K target) {
@@ -358,11 +368,16 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <br><br>
      * It's recommended to use this class with try-with-resources to ensure proper cleanup:
+     *
+     * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * try (MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211")) {
      *     if (lock.lock("resource", 30000)) {
-     *         // Use the lock
-     *         lock.unlock("resource");
+     *         try {
+     *             // Critical section
+     *         } finally {
+     *             lock.unlock("resource");
+     *         }
      *     }
      * } // Automatically closed
      * }</pre>

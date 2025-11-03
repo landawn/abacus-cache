@@ -112,8 +112,16 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Retrieves a value from the cache by its key.
      * The value is deserialized from its binary representation using Kryo.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * User user = cache.get("user:123");
+     * if (user != null) {
+     *     System.out.println("Found user: " + user.getName());
+     * }
+     * }</pre>
+     *
      * @param key the cache key whose associated value is to be returned
-     * @return the value associated with the specified key, or null if not found or expired
+     * @return the value associated with the specified key, or {@code null} if not found or expired
      */
     @Override
     public T get(final String key) {
@@ -122,12 +130,19 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Stores a key-value pair in the cache with a specified time-to-live.
-     * The value is serialized using Kryo before storage.
+     * The value is serialized using Kryo before storage. If the key already exists,
+     * its value will be replaced.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * User user = new User("John", "john@example.com");
+     * boolean success = cache.set("user:123", user, 3600000); // 1 hour TTL
+     * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the cache value to be associated with the specified key
-     * @param liveTime the time-to-live in milliseconds
-     * @return true if the operation was successful
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration)
+     * @return {@code true} if the operation was successful, {@code false} otherwise
      */
     @Override
     public boolean set(final String key, final T obj, final long liveTime) {
@@ -136,9 +151,18 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Removes the mapping for a key from the cache if it is present.
+     * The return value indicates whether the operation was acknowledged by the server,
+     * not whether the key existed. This method always returns {@code true} if the delete
+     * command was successfully sent to the Redis server.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * boolean success = cache.delete("user:123");
+     * System.out.println("Delete operation sent: " + success);
+     * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache
-     * @return true if the operation was successful
+     * @return {@code true} if the delete operation was successfully sent to the server
      */
     @Override
     public boolean delete(final String key) {
@@ -151,6 +175,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Atomically increments a numeric value by 1.
      * If the key doesn't exist, it will be created with value 1.
      * This operation is atomic and thread-safe across all clients.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long pageViews = cache.incr("page:views");
+     * System.out.println("Page views: " + pageViews);
+     * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented
      * @return the value after increment
@@ -165,8 +195,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with the delta value.
      * This operation is atomic and thread-safe across all clients.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long score = cache.incr("player:score", 10);
+     * System.out.println("New score: " + score);
+     * }</pre>
+     *
      * @param key the cache key whose associated value is to be incremented
-     * @param delta the amount by which to increment the value
+     * @param delta the amount by which to increment the value (positive value)
      * @return the value after increment
      */
     @Override
@@ -178,6 +214,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Atomically decrements a numeric value by 1.
      * If the key doesn't exist, it will be created with value -1.
      * This operation is atomic and thread-safe across all clients.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long remainingTokens = cache.decr("api:tokens");
+     * if (remainingTokens <= 0) {
+     *     System.out.println("Rate limit exceeded");
+     * }
+     * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented
      * @return the value after decrement
@@ -192,8 +236,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it will be created with the negative delta value.
      * This operation is atomic and thread-safe across all clients.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * long inventory = cache.decr("product:stock", 5);
+     * System.out.println("Remaining inventory: " + inventory);
+     * }</pre>
+     *
      * @param key the cache key whose associated value is to be decremented
-     * @param delta the amount by which to decrement the value
+     * @param delta the amount by which to decrement the value (positive value)
      * @return the value after decrement
      */
     @Override
@@ -204,7 +254,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Flushes all data from all connected Redis instances.
      * This operation removes all keys from all databases on all shards.
-     * Use with caution as this is a destructive operation.
+     * Use with extreme caution in production environments as this is a destructive operation.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // Warning: This removes ALL data from all Redis instances!
+     * cache.flushAll();
+     * System.out.println("All cache data cleared");
+     * }</pre>
      */
     @Override
     public void flushAll() {
@@ -216,8 +273,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Disconnects from all Redis instances.
+     * Disconnects from all Redis instances and releases resources.
      * After calling this method, the cache client cannot be used anymore.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * cache.disconnect();
+     * System.out.println("Cache client disconnected");
+     * }</pre>
      */
     @Override
     public void disconnect() {
@@ -226,6 +289,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Converts a string key to UTF-8 encoded bytes for Redis operations.
+     * All Redis operations use binary-safe keys, so strings must be converted to bytes.
      *
      * @param key the cache key to convert
      * @return the UTF-8 encoded byte array representation of the key
@@ -235,11 +299,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Serializes an object to bytes using Kryo.
+     * Serializes an object to bytes using Kryo for storage in Redis.
+     * Kryo provides efficient serialization with compact binary representation.
      * Null objects are encoded as empty byte arrays.
      *
      * @param obj the object to encode
-     * @return the serialized byte array representation of the object
+     * @return the serialized byte array representation of the object, or empty array if obj is {@code null}
      */
     protected byte[] encode(final Object obj) {
         return obj == null ? N.EMPTY_BYTE_ARRAY : kryoParser.encode(obj);
@@ -247,10 +312,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Deserializes bytes to an object using Kryo.
-     * Empty byte arrays are decoded as null.
+     * This method reverses the serialization performed by {@link #encode(Object)}.
+     * Empty byte arrays are decoded as {@code null}.
      *
      * @param bytes the byte array to decode
-     * @return the deserialized object, or null if the byte array is null or empty
+     * @return the deserialized object, or {@code null} if the byte array is {@code null} or empty
      */
     protected T decode(final byte[] bytes) {
         if (bytes == null || N.isEmpty(bytes)) {

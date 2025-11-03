@@ -25,11 +25,22 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
 
 /**
  * A wrapper implementation that adapts Ehcache 3.x to the Abacus Cache interface.
+ * Ehcache is a widely-used, standards-based caching library for Java with support for
+ * multiple tiers of storage (on-heap, off-heap, disk) and enterprise features.
  * This class provides a bridge between Ehcache's API and the standardized Cache interface,
  * allowing Ehcache to be used seamlessly within the Abacus caching framework.
- * 
+ *
  * <br><br>
- * Example usage:
+ * Ehcache features exposed through this wrapper:
+ * <ul>
+ * <li>Multi-tier storage (on-heap, off-heap, disk)</li>
+ * <li>Cache-through and cache-aside patterns with loaders/writers</li>
+ * <li>Bulk operations for improved performance</li>
+ * <li>Atomic operations like putIfAbsent</li>
+ * <li>JSR-107 (JCache) compliance</li>
+ * </ul>
+ *
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * Cache<String, Person> ehcache = CacheBuilder.newBuilder()
  *     .build();
@@ -39,8 +50,8 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * Person retrieved = cache.gett("key1");
  * }</pre>
  *
- * @param <K> the type of keys used to identify cache entries
- * @param <V> the type of values stored in the cache
+ * @param <K> the key type
+ * @param <V> the value type
  * @see AbstractCache
  * @see org.ehcache.Cache
  */
@@ -52,8 +63,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Creates a new Ehcache wrapper instance.
-     * This constructor wraps an existing Ehcache 3.x Cache to provide compatibility
-     * with the Abacus Cache interface, enabling seamless integration with the caching framework.
+     * The underlying Ehcache instance should be pre-configured with desired
+     * storage tiers, eviction policies, expiration settings, and loaders/writers.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -89,16 +100,20 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Stores a key-value pair in the cache with specified expiration parameters.
-     * Note: The current implementation does not honor the individual TTL and idle time
-     * parameters as Ehcache expiration is configured at cache level.
+     * Stores a key-value pair in the cache.
+     * If the key already exists, its value will be replaced.
+     *
+     * <br><br>
+     * Note: Ehcache's expiration policy is configured at cache creation time.
+     * The liveTime and maxIdleTime parameters are ignored by this implementation.
+     * All entries use the cache-wide expiration settings.
      *
      * @param k the cache key with which the specified value is to be associated
      * @param v the cache value to be associated with the specified key
-     * @param liveTime the time-to-live in milliseconds (currently ignored)
-     * @param maxIdleTime the maximum idle time in milliseconds (currently ignored)
-     * @return true if the operation was successful
-     * @throws IllegalArgumentException if key is null
+     * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration)
+     * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration)
+     * @return {@code true} always (operation always succeeds unless an exception is thrown)
+     * @throws IllegalArgumentException if k is null
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
@@ -290,7 +305,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes all entries from the cache.
-     * This operation affects only the local cache tier.
+     * This operation invalidates all cached key-value pairs immediately.
      *
      * @throws IllegalStateException if the cache has been closed
      */
@@ -320,7 +335,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Checks if the cache has been closed.
      *
-     * @return true if the cache is closed
+     * @return {@code true} if the cache is closed, {@code false} otherwise
      */
     @Override
     public boolean isClosed() {

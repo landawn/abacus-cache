@@ -150,8 +150,9 @@ public final class CacheFactory {
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param dcc the distributed cache client to wrap
+     * @param dcc the distributed cache client to wrap (must not be null)
      * @return the new DistributedCache instance
+     * @throws IllegalArgumentException if dcc is null
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc) {
         return new DistributedCache<>(dcc);
@@ -172,9 +173,10 @@ public final class CacheFactory {
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param dcc the distributed cache client to wrap
-     * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix)
+     * @param dcc the distributed cache client to wrap (must not be null)
+     * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix, must not be null)
      * @return the new DistributedCache instance
+     * @throws IllegalArgumentException if dcc or keyPrefix is null
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
         return new DistributedCache<>(dcc, keyPrefix);
@@ -194,11 +196,12 @@ public final class CacheFactory {
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param dcc the distributed cache client to wrap
-     * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix)
-     * @param maxFailedNumForRetry the maximum number of consecutive failures before giving up on retries
-     * @param retryDelay the delay in milliseconds between retry attempts
+     * @param dcc the distributed cache client to wrap (must not be null)
+     * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix, must not be null)
+     * @param maxFailedNumForRetry the maximum number of consecutive failures before giving up on retries (must be non-negative)
+     * @param retryDelay the delay in milliseconds between retry attempts (must be non-negative)
      * @return the new DistributedCache instance
+     * @throws IllegalArgumentException if dcc or keyPrefix is null, or if maxFailedNumForRetry or retryDelay is negative
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix,
             final int maxFailedNumForRetry, final long retryDelay) {

@@ -176,13 +176,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Allocates off-heap memory using sun.misc.Unsafe.
-     * This memory is outside the JVM heap and must be explicitly freed.
+     * This memory is outside the JVM heap and must be explicitly freed via deallocate().
      * The allocated memory address is used for direct byte-level operations.
      * This is an internal method called automatically during cache construction.
      *
      * @param capacityInBytes the number of bytes to allocate
      * @return the memory address of the allocated memory block
-     * @throws OutOfMemoryError if the allocation fails
+     * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
      */
     @SuppressWarnings("removal")
     @Override
@@ -191,9 +191,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     /**
-     * Deallocates the off-heap memory.
+     * Deallocates the off-heap memory allocated by allocate().
      * Called during cache shutdown to release native memory and prevent memory leaks.
-     * This method is automatically invoked by close(). This is an internal method.
+     * This method is automatically invoked by close(). This is an internal method
+     * and should not be called directly.
      */
     @SuppressWarnings("removal")
     @Override
