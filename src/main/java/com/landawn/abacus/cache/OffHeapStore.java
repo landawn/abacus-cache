@@ -123,7 +123,6 @@ public interface OffHeapStore<K> {
      *
      * @param key the key whose associated value is to be retrieved; must not be {@code null}
      * @return the stored byte array, or {@code null} if not found or an error occurs
-     * @throws NullPointerException if the key is {@code null} (implementation-dependent)
      */
     byte[] get(K key);
 
@@ -152,7 +151,6 @@ public interface OffHeapStore<K> {
      * @param key the key with which the specified value is to be associated; must not be {@code null}
      * @param value the byte array value to store; must not be {@code null}
      * @return {@code true} if the value was successfully stored, {@code false} otherwise
-     * @throws NullPointerException if the key or value is {@code null} (implementation-dependent)
      */
     boolean put(K key, byte[] value);
 
@@ -176,7 +174,6 @@ public interface OffHeapStore<K> {
      *
      * @param key the key whose associated value is to be removed; must not be {@code null}
      * @return {@code true} if a value was removed, {@code false} otherwise
-     * @throws NullPointerException if the key is {@code null} (implementation-dependent)
      */
     boolean remove(K key);
 

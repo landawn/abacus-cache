@@ -403,66 +403,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
 
-    /**
-     * Retrieves a value from the cache by its key.
-     * This method handles retrieval from both memory-based storage (SlotWrapper/MultiSlotsWrapper)
-     * and disk-based storage (StoreWrapper). For values stored on disk, this method may automatically
-     * promote them to memory based on access frequency and I/O timing, as determined by the
-     * testerForLoadingItemFromDiskToMemory predicate if configured. This adaptive behavior helps
-     * optimize performance for frequently accessed data.
-     * <br><br>
-     * Retrieval behavior:
-     * <ul>
-     * <li>For memory-stored values: Data is copied directly from off-heap memory and deserialized</li>
-     * <li>For disk-stored values: Data is read from the offHeapStore and may be promoted to memory if:
-     *     <ul>
-     *     <li>The testerForLoadingItemFromDiskToMemory predicate is configured</li>
-     *     <li>The predicate returns true based on access patterns, data size, and I/O elapsed time</li>
-     *     <li>Sufficient memory is available for the promotion</li>
-     *     <li>The entry has not expired (liveTime &gt; 0)</li>
-     *     </ul>
-     * </li>
-     * <li>Returns null if the key is not found or the entry has expired</li>
-     * </ul>
-     * <br>
-     * Promotion algorithm for disk-stored values:
-     * <ol>
-     * <li>If statsTimeOnDisk or testerForLoadingItemFromDiskToMemory is enabled, tracks the read I/O time</li>
-     * <li>Reads the value from offHeapStore and updates readCountFromDisk counter</li>
-     * <li>If testerForLoadingItemFromDiskToMemory returns true:
-     *     <ul>
-     *     <li>Calculates remaining liveTime based on creation time</li>
-     *     <li>Fetches the raw bytes from offHeapStore if liveTime &gt; 0</li>
-     *     <li>Attempts to allocate memory slots (single or multiple based on size)</li>
-     *     <li>Copies data to allocated slots and creates appropriate wrapper (SlotWrapper or MultiSlotsWrapper)</li>
-     *     <li>Removes the old StoreWrapper and adds the new memory-based wrapper</li>
-     *     <li>Updates statistics counters (totalOccupiedMemorySize, totalDataSize)</li>
-     *     <li>If promotion fails (memory unavailable), returns the value without promotion</li>
-     *     </ul>
-     * </li>
-     * </ol>
-     * <br>
-     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
-     * The underlying object pool handles concurrent access, and each wrapper type (SlotWrapper,
-     * MultiSlotsWrapper, StoreWrapper) has synchronized read operations.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Using concrete implementation
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * cache.put("key1", "value1".getBytes());
-     * byte[] value = cache.gett("key1");
-     * if (value != null) {
-     *     System.out.println("Found: " + new String(value));
-     * } else {
-     *     System.out.println("Key not found or expired");
-     * }
-     * }</pre>
-     *
-     * @param k the cache key to retrieve. Must not be null.
-     * @return the cached value associated with the key, or null if the key is not found,
-     *         the entry has expired, or an error occurred during retrieval
-     */
     @Override
     public V gett(final K k) {
         final Wrapper<V> w = _pool.get(k);
@@ -587,91 +527,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     * Stores a key-value pair in the cache with specified expiration settings.
-     * This method serializes the value and stores it either in off-heap memory, on disk,
-     * based on size constraints, memory availability, and the configured storeSelector policy.
-     * <br><br>
-     * Storage decision algorithm:
-     * <ol>
-     * <li>Determines value type and prepares serialized bytes:
-     *     <ul>
-     *     <li>byte[] values: Used directly without serialization</li>
-     *     <li>ByteBuffer values: Converted to byte array without using custom serializer</li>
-     *     <li>Other types: Serialized using the configured serializer (Kryo or JSON by default) to ByteArrayOutputStream</li>
-     *     </ul>
-     * </li>
-     * <li>Consults storeSelector (if configured) to determine storage location policy:
-     *     <ul>
-     *     <li>Return value 0 or null selector: Try memory first, fallback to disk if memory unavailable (canBeStoredInMemory=true, canBeStoredToDisk=true)</li>
-     *     <li>Return value 1: Memory only (fail if memory unavailable) (canBeStoredInMemory=true, canBeStoredToDisk=false)</li>
-     *     <li>Return value 2: Disk only (always store to disk via offHeapStore) (canBeStoredInMemory=false, canBeStoredToDisk=true)</li>
-     *     </ul>
-     * </li>
-     * <li>For values where size &lt;= maxBlockSize:
-     *     <ul>
-     *     <li>If canBeStoredInMemory: Attempts to allocate a single memory slot via getAvailableSlot()</li>
-     *     <li>If slot allocated: Copies bytes to off-heap memory and creates SlotWrapper</li>
-     *     <li>If allocation fails and canBeStoredToDisk: Falls back to putToDisk() to create StoreWrapper</li>
-     *     </ul>
-     * </li>
-     * <li>For values where size &gt; maxBlockSize:
-     *     <ul>
-     *     <li>If canBeStoredInMemory: Attempts to allocate multiple slots iteratively</li>
-     *     <li>For each chunk of data (up to maxBlockSize per slot):
-     *         <ul>
-     *         <li>Calls getAvailableSlot(sizeToCopy) to allocate next slot</li>
-     *         <li>Copies the chunk to the slot's memory region</li>
-     *         <li>Tracks occupied memory and adds slot to list</li>
-     *         </ul>
-     *     </li>
-     *     <li>If all slots allocated successfully: Creates MultiSlotsWrapper with the slot list</li>
-     *     <li>If any allocation fails: Releases all allocated slots and falls back to putToDisk() if canBeStoredToDisk</li>
-     *     </ul>
-     * </li>
-     * <li>If both memory and disk storage fail: Cleans up resources, removes any partial entry from pool, triggers vacate(), returns false</li>
-     * <li>If wrapper created successfully: Calls _pool.put(k, w) to add entry to the pool, updates statistics counters</li>
-     * <li>If _pool.put() fails: Calls wrapper.destroy() to clean up allocated resources</li>
-     * </ol>
-     * <br>
-     * Statistics updated:
-     * <ul>
-     * <li>For memory-stored values: totalOccupiedMemorySize incremented by sum of slot sizes, totalDataSize incremented by actual data size</li>
-     * <li>For disk-stored values: writeCountToDisk incremented, totalWriteToDiskTimeStats updated if statsTimeOnDisk enabled</li>
-     * </ul>
-     * <br>
-     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
-     * Memory allocation uses fine-grained locking on segment queues, and the object pool handles
-     * concurrent put operations safely. The ByteArrayOutputStream from Objectory is recycled after use.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Using concrete implementation
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * byte[] data = "large data".getBytes();
-     *
-     * // Store with 1 hour TTL and 30 minutes idle time
-     * boolean success = cache.put("key1", data, 3600000, 1800000);
-     * if (success) {
-     *     System.out.println("Data cached successfully");
-     * } else {
-     *     System.out.println("Failed to cache - memory and disk full");
-     * }
-     *
-     * // Store with default TTL and idle time
-     * cache.put("key2", "small data".getBytes(), 0, 0);
-     * }</pre>
-     *
-     * @param k the cache key to associate with the value. Must not be null.
-     * @param v the value to cache. Must not be null. Can be byte[], ByteBuffer, or any serializable object.
-     * @param liveTime the time-to-live in milliseconds. If 0 or negative, uses the default live time
-     *                 specified in the constructor. Entries older than this will be considered expired.
-     * @param maxIdleTime the maximum idle time in milliseconds. If 0 or negative, uses the default
-     *                    max idle time specified in the constructor. Entries not accessed within this
-     *                    time will be considered expired.
-     * @return true if the operation was successful and the value was stored (in memory or on disk),
-     *         false if storage failed due to insufficient space in both memory and disk
-     */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
         final Type<V> type = N.typeOf(v.getClass());
@@ -998,36 +853,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         });
     }
 
-    /**
-     * Removes an entry from the cache and releases all associated resources.
-     * This method properly cleans up resources based on the entry's storage type:
-     * <ul>
-     * <li>SlotWrapper: Releases the memory slot back to the segment for reuse</li>
-     * <li>MultiSlotsWrapper: Releases all allocated slots back to their segments</li>
-     * <li>StoreWrapper: Removes the value from the offHeapStore and updates disk statistics</li>
-     * </ul>
-     * <br>
-     * The entry is removed from the underlying object pool, and the wrapper's destroy() method
-     * is called with Caller.REMOVE_REPLACE_CLEAR to perform cleanup. Statistics counters are
-     * automatically updated to reflect the freed resources.
-     * <br><br>
-     * This operation is idempotent - removing a non-existent key has no effect and is safe.
-     * <br><br>
-     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
-     * The object pool handles concurrent remove operations safely, and each wrapper type has
-     * synchronized destroy operations.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Using concrete implementation
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * cache.put("key1", "value1".getBytes());
-     * cache.remove("key1");  // Removes entry and frees resources
-     * cache.remove("key1");  // Safe to call again, no effect
-     * }</pre>
-     *
-     * @param k the cache key to remove. Must not be null. If the key doesn't exist, no operation is performed.
-     */
     @Override
     public void remove(final K k) {
         final Wrapper<V> w = _pool.remove(k);
@@ -1037,157 +862,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     * Checks if the cache contains a specific key.
-     * This method delegates to the underlying object pool's containsKey() method and returns
-     * true for entries stored in both memory (SlotWrapper/MultiSlotsWrapper) and on disk (StoreWrapper).
-     * <br><br>
-     * Important notes:
-     * <ul>
-     * <li>This method does not verify if the entry has expired. An expired entry will still
-     *     return true until it is evicted or accessed via gett()</li>
-     * <li>This is a lightweight check that does not access the actual value data</li>
-     * <li>The result is a point-in-time snapshot; concurrent modifications may occur</li>
-     * </ul>
-     * <br>
-     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Using concrete implementation
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * cache.put("key1", "value1".getBytes());
-     * if (cache.containsKey("key1")) {
-     *     System.out.println("Key exists");
-     * }
-     *
-     * // Check before expensive operation
-     * if (!cache.containsKey("expensive_key")) {
-     *     // Compute expensive value and put it in cache
-     * }
-     * }</pre>
-     *
-     * @param k the cache key to check. Must not be null.
-     * @return true if the key exists in the cache (regardless of expiration status), false otherwise
-     */
     @Override
     public boolean containsKey(final K k) {
         return _pool.containsKey(k);
     }
 
-    /**
-     * Returns a set of all keys in the cache.
-     * This method delegates to the underlying object pool's keySet() method and returns
-     * a set view containing keys for entries stored in both memory (SlotWrapper/MultiSlotsWrapper)
-     * and on disk (StoreWrapper).
-     * <br><br>
-     * Important notes:
-     * <ul>
-     * <li>The set includes keys for expired entries until they are evicted by the background
-     *     eviction task or accessed via gett()</li>
-     * <li>The returned set is a snapshot at the time of the call; subsequent modifications
-     *     to the cache are not reflected in the returned set</li>
-     * <li>Iterating over the set does not access the actual value data, so it's a lightweight operation</li>
-     * </ul>
-     * <br>
-     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
-     * The returned set is a snapshot and can be safely iterated without external synchronization.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Using concrete implementation
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * cache.put("key1", "value1".getBytes());
-     * cache.put("key2", "value2".getBytes());
-     * Set<String> keys = cache.keySet();
-     * System.out.println("Cache contains " + keys.size() + " keys");
-     *
-     * // Iterate over all keys
-     * for (String key : cache.keySet()) {
-     *     byte[] value = cache.gett(key);
-     *     if (value != null) {
-     *         System.out.println("Key: " + key + ", Size: " + value.length);
-     *     }
-     * }
-     * }</pre>
-     *
-     * @return a set view of the keys currently in this cache (including expired but not yet evicted entries)
-     */
     @Override
     public Set<K> keySet() {
         return _pool.keySet();
     }
 
-    /**
-     * Returns the number of entries in the cache.
-     * This method delegates to the underlying object pool's size() method and returns
-     * the total count of entries stored in both memory (SlotWrapper/MultiSlotsWrapper)
-     * and on disk (StoreWrapper).
-     * <br><br>
-     * Important notes:
-     * <ul>
-     * <li>The count includes expired entries until they are evicted by the background
-     *     eviction task or removed</li>
-     * <li>The returned value is a point-in-time snapshot; concurrent modifications may occur</li>
-     * <li>This is a lightweight operation that does not access actual entry data</li>
-     * </ul>
-     * <br>
-     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Using concrete implementation
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * cache.put("key1", "value1".getBytes());
-     * cache.put("key2", "value2".getBytes());
-     * System.out.println("Cache size: " + cache.size());  // prints: Cache size: 2
-     *
-     * // Monitor cache growth
-     * int sizeBefore = cache.size();
-     * cache.put("key3", "value3".getBytes());
-     * int sizeAfter = cache.size();
-     * System.out.println("Added " + (sizeAfter - sizeBefore) + " entries");
-     * }</pre>
-     *
-     * @return the number of entries currently in the cache (including expired but not yet evicted entries)
-     */
     @Override
     public int size() {
         return _pool.size();
     }
 
-    /**
-     * Removes all entries from the cache and releases all associated resources.
-     * This operation clears all entries stored in both memory (SlotWrapper/MultiSlotsWrapper)
-     * and on disk (StoreWrapper via the offHeapStore if configured). The underlying object pool's
-     * clear() method handles the cleanup and calls destroy() on all wrappers, which in turn:
-     * <ul>
-     * <li>For SlotWrapper: Releases the memory slot back to the segment</li>
-     * <li>For MultiSlotsWrapper: Releases all allocated slots back to their segments</li>
-     * <li>For StoreWrapper: Removes the value from the offHeapStore</li>
-     * </ul>
-     * <br>
-     * All statistics counters (totalOccupiedMemorySize, totalDataSize, dataSizeOnDisk, sizeOnDisk)
-     * are automatically updated to reflect the freed resources. After calling this method, the cache
-     * will be empty but still usable for new entries.
-     * <br><br>
-     * Thread safety: This method is thread-safe and can be called concurrently with other operations.
-     * The object pool handles concurrent clear operations safely.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Using concrete implementation
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * cache.put("key1", "value1".getBytes());
-     * cache.put("key2", "value2".getBytes());
-     * cache.clear();  // Removes all entries and frees resources
-     * System.out.println("Size after clear: " + cache.size());  // prints: Size after clear: 0
-     *
-     * // Clear and reuse
-     * cache.put("new_key", "new_value".getBytes());
-     * System.out.println("Size after new entry: " + cache.size());  // prints: Size after new entry: 1
-     * }</pre>
-     */
     @Override
     public void clear() {
         _pool.clear();
@@ -1297,57 +986,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
     }
 
-    /**
-     * Closes the cache and releases all resources including off-heap memory and disk storage.
-     * This method performs a complete shutdown of the cache in the following order:
-     * <ol>
-     * <li>Cancels the scheduled eviction task (if configured)</li>
-     * <li>Removes the shutdown hook from the JVM runtime</li>
-     * <li>Closes the underlying object pool, which:
-     *     <ul>
-     *     <li>Clears all entries by calling destroy() on each wrapper</li>
-     *     <li>Releases memory slots and removes disk-stored values</li>
-     *     <li>Updates all statistics counters</li>
-     *     </ul>
-     * </li>
-     * <li>Deallocates the off-heap memory via the abstract deallocate() method</li>
-     * </ol>
-     * <br>
-     * The method uses nested finally blocks to ensure that each cleanup step is attempted even
-     * if previous steps fail, guaranteeing that native memory is always released.
-     * <br><br>
-     * Important notes:
-     * <ul>
-     * <li>This method is thread-safe and synchronized to prevent concurrent close operations</li>
-     * <li>This method is idempotent - calling close() multiple times has no additional effect
-     *     beyond the first call</li>
-     * <li>After calling close(), the cache cannot be used again and any subsequent operations
-     *     (put, gett, etc.) will fail</li>
-     * <li>It is critical to call close() to release native off-heap memory, as it won't be
-     *     automatically freed by the garbage collector</li>
-     * </ul>
-     * <br>
-     * Thread safety: This method is synchronized and thread-safe. Only one thread will execute
-     * the close logic, while other concurrent callers will wait.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Manual close
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * try {
-     *     cache.put("key1", "value1".getBytes());
-     *     // Use cache...
-     * } finally {
-     *     cache.close();  // Always close to free native memory
-     * }
-     *
-     * // Or use try-with-resources (recommended):
-     * try (OffHeapCache<String, byte[]> cache2 = new OffHeapCache<>(100)) {
-     *     cache2.put("key1", "value1".getBytes());
-     *     // Use cache...
-     * }  // Automatically closed
-     * }</pre>
-     */
     @Override
     public synchronized void close() {
         if (_pool.isClosed()) {
@@ -1378,36 +1016,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /**
-     * Checks if the cache has been closed.
-     * This method delegates to the underlying object pool's isClosed() method to determine
-     * whether the cache has been shut down via the close() method.
-     * <br><br>
-     * Important notes:
-     * <ul>
-     * <li>Once closed, the cache cannot be reopened and any operations (put, gett, etc.) will fail</li>
-     * <li>The off-heap memory has been deallocated once the cache is closed</li>
-     * <li>This is a lightweight check that simply returns a boolean flag</li>
-     * </ul>
-     * <br>
-     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * // Using concrete implementation
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * System.out.println("Is closed: " + cache.isClosed());  // prints: Is closed: false
-     * cache.close();
-     * System.out.println("Is closed: " + cache.isClosed());  // prints: Is closed: true
-     *
-     * // Check before using
-     * if (!cache.isClosed()) {
-     *     cache.put("key1", "value1".getBytes());
-     * }
-     * }</pre>
-     *
-     * @return true if {@link #close()} has been called and the cache is shut down, false otherwise
-     */
     @Override
     public boolean isClosed() {
         return _pool.isClosed();
@@ -1677,25 +1285,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             this.slotStartPtr = slotStartPtr;
         }
 
-        /**
-         * Reads the value from off-heap memory and deserializes it.
-         * The read operation:
-         * <ol>
-         * <li>Allocates a byte array of the actual data size</li>
-         * <li>Copies bytes from off-heap memory at slotStartPtr to the byte array</li>
-         * <li>Deserializes based on type:
-         *     <ul>
-         *     <li>byte[]: Returns the byte array directly</li>
-         *     <li>ByteBuffer: Converts byte array to ByteBuffer</li>
-         *     <li>Other types: Applies the configured deserializer</li>
-         *     </ul>
-         * </li>
-         * </ol>
-         * <br>
-         * Thread safety: This method is synchronized and thread-safe.
-         *
-         * @return the deserialized value
-         */
         @Override
         V read() {
             synchronized (this) {
@@ -1713,19 +1302,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
-        /**
-         * Releases the memory slot and updates statistics.
-         * This method is called by the object pool when the entry is evicted, removed, or
-         * during cache shutdown. It releases the slot back to its parent segment and updates
-         * the totalOccupiedMemorySize and totalDataSize counters.
-         * <br><br>
-         * This method is idempotent - calling it multiple times has no additional effect
-         * after the first call (slot becomes null).
-         * <br><br>
-         * Thread safety: This method is synchronized and thread-safe.
-         *
-         * @param caller the source of the destroy call (EVICT, VACATE, REMOVE_REPLACE_CLEAR, etc.)
-         */
         @Override
         public void destroy(final Caller caller) {
             synchronized (this) {
@@ -1774,34 +1350,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             slots = segments;
         }
 
-        /**
-         * Reads the value from multiple off-heap memory slots and deserializes it.
-         * The read operation:
-         * <ol>
-         * <li>Allocates a byte array of the total data size</li>
-         * <li>Iterates through all slots in order:
-         *     <ul>
-         *     <li>Calculates the slot's memory address (segmentStartPtr + slotIndex * sizeOfSlot)</li>
-         *     <li>Determines the chunk size to copy (min of remaining size and slot size)</li>
-         *     <li>Copies bytes from the slot's memory to the destination array at the current offset</li>
-         *     <li>Updates the destination offset and decrements remaining size</li>
-         *     </ul>
-         * </li>
-         * <li>Validates all bytes were copied (remaining size should be 0)</li>
-         * <li>Deserializes based on type:
-         *     <ul>
-         *     <li>byte[]: Returns the byte array directly</li>
-         *     <li>ByteBuffer: Converts byte array to ByteBuffer</li>
-         *     <li>Other types: Applies the configured deserializer</li>
-         *     </ul>
-         * </li>
-         * </ol>
-         * <br>
-         * Thread safety: This method is synchronized and thread-safe.
-         *
-         * @return the deserialized value
-         * @throws RuntimeException if not all bytes could be copied from slots (indicates a bug)
-         */
         @Override
         V read() {
             synchronized (this) {
@@ -1838,19 +1386,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
-        /**
-         * Releases all memory slots and updates statistics.
-         * This method is called by the object pool when the entry is evicted, removed, or
-         * during cache shutdown. It releases all slots back to their parent segments and updates
-         * the totalOccupiedMemorySize and totalDataSize counters.
-         * <br><br>
-         * This method is idempotent - calling it multiple times has no additional effect
-         * after the first call (slots becomes null).
-         * <br><br>
-         * Thread safety: This method is synchronized and thread-safe.
-         *
-         * @param caller the source of the destroy call (EVICT, VACATE, REMOVE_REPLACE_CLEAR, etc.)
-         */
         @Override
         public void destroy(final Caller caller) {
             synchronized (this) {
@@ -1906,27 +1441,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             totalDataSize.addAndGet(size);
         }
 
-        /**
-         * Reads the value from disk via offHeapStore and deserializes it.
-         * The read operation:
-         * <ol>
-         * <li>Retrieves the raw bytes from offHeapStore using the permanentKey</li>
-         * <li>Returns null if the value is not found on disk</li>
-         * <li>Validates the retrieved byte array size matches the expected size</li>
-         * <li>Deserializes based on type:
-         *     <ul>
-         *     <li>byte[]: Returns the byte array directly</li>
-         *     <li>ByteBuffer: Converts byte array to ByteBuffer</li>
-         *     <li>Other types: Applies the configured deserializer</li>
-         *     </ul>
-         * </li>
-         * </ol>
-         * <br>
-         * Thread safety: This method is synchronized and thread-safe.
-         *
-         * @return the deserialized value, or null if not found on disk
-         * @throws RuntimeException if the retrieved byte array size doesn't match expected size (indicates corruption or a bug)
-         */
         @Override
         V read() {
             synchronized (this) {
@@ -1952,20 +1466,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
-        /**
-         * Removes the value from disk and updates statistics.
-         * This method is called by the object pool when the entry is evicted, removed, or
-         * during cache shutdown. It removes the value from offHeapStore and updates the
-         * sizeOnDisk, dataSizeOnDisk, and totalDataSize counters. If the caller is EVICT or
-         * VACATE, also increments the evictionCountFromDisk counter.
-         * <br><br>
-         * This method is idempotent - calling it multiple times has no additional effect
-         * after the first call (permanentKey becomes null).
-         * <br><br>
-         * Thread safety: This method is synchronized and thread-safe.
-         *
-         * @param caller the source of the destroy call (EVICT, VACATE, REMOVE_REPLACE_CLEAR, etc.)
-         */
         @Override
         public void destroy(final Caller caller) {
             synchronized (this) {

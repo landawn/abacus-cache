@@ -765,7 +765,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key to convert, must not be {@code null}
      * @return the UTF-8 encoded byte array representation of the key, never {@code null}
-     * @throws NullPointerException if {@code key} is {@code null}
      * @see #encode(Object)
      * @see #decode(byte[])
      */

@@ -226,7 +226,6 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * @param d the cached data to decode and deserialize (must not be null)
      * @return the deserialized object of type T (can be null if null was encoded)
-     * @throws NullPointerException if {@code d} is null
      * @throws RuntimeException if the deserialization fails (e.g., corrupt data, class not found, incompatible class version)
      * @see #encode(Object)
      * @see CachedData#getData()

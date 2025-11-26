@@ -170,7 +170,6 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @param k the cache key to look up (must not be null for most implementations)
      * @return an Optional containing the cached value if present and not expired, or an empty Optional otherwise
-     * @throws NullPointerException if the key is null and the implementation does not support null keys
      * @throws IllegalStateException if the cache has been closed
      * @see #gett(Object)
      * @see #asyncGet(Object)
@@ -218,7 +217,6 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @param k the cache key to store the value under (must not be null for most implementations)
      * @param v the value to cache (may be null depending on implementation, check implementation docs)
      * @return true if the operation was successful, false otherwise (e.g., cache full, closed, or write failure)
-     * @throws NullPointerException if the key is null and the implementation does not support null keys
      * @throws IllegalStateException if the cache has been closed
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)

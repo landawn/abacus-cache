@@ -103,7 +103,6 @@ public interface Cache<K, V> extends Closeable {
      *
      * @param k the cache key to look up (must not be null for most implementations)
      * @return an Optional containing the cached value if present and not expired, or an empty Optional otherwise
-     * @throws NullPointerException if the key is null and the implementation does not support null keys
      * @throws IllegalStateException if the cache has been closed
      * @see #gett(Object)
      * @see #asyncGet(Object)
@@ -148,7 +147,6 @@ public interface Cache<K, V> extends Closeable {
      *
      * @param k the cache key to look up (must not be null for most implementations)
      * @return the cached value if present and not expired, or null if the key is not found or has expired
-     * @throws NullPointerException if the key is null and the implementation does not support null keys
      * @throws IllegalStateException if the cache has been closed
      * @see #get(Object)
      * @see #asyncGett(Object)
@@ -193,7 +191,6 @@ public interface Cache<K, V> extends Closeable {
      * @param k the cache key to store the value under (must not be null for most implementations)
      * @param v the value to cache (may be null depending on implementation, check implementation docs)
      * @return true if the operation was successful, false otherwise (e.g., cache full, closed, or write failure)
-     * @throws NullPointerException if the key is null and the implementation does not support null keys
      * @throws IllegalStateException if the cache has been closed
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
@@ -239,7 +236,6 @@ public interface Cache<K, V> extends Closeable {
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout).
      *                    <b>Note:</b> Not supported by all implementations - check implementation documentation.
      * @return true if the operation was successful, false otherwise (e.g., cache full, closed, or write failure)
-     * @throws NullPointerException if the key is null and the implementation does not support null keys
      * @throws IllegalStateException if the cache has been closed
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
@@ -284,7 +280,6 @@ public interface Cache<K, V> extends Closeable {
      * }</pre>
      *
      * @param k the cache key to remove (must not be null for most implementations)
-     * @throws NullPointerException if the key is null and the implementation does not support null keys
      * @throws IllegalStateException if the cache has been closed
      * @see #clear()
      * @see #asyncRemove(Object)
@@ -333,7 +328,6 @@ public interface Cache<K, V> extends Closeable {
      *
      * @param k the cache key to check for (must not be null for most implementations)
      * @return true if the key exists in the cache and is not expired, false otherwise
-     * @throws NullPointerException if the key is null and the implementation does not support null keys
      * @throws IllegalStateException if the cache has been closed
      * @see #get(Object)
      * @see #asyncContainsKey(Object)
@@ -950,7 +944,6 @@ public interface Cache<K, V> extends Closeable {
      * @param propName the property name to look up (must not be null)
      * @return the property value cast to type T, or null if not found
      * @throws ClassCastException if the property exists but cannot be cast to type T
-     * @throws NullPointerException if propName is null
      * @throws IllegalStateException if the cache has been closed (implementation-specific)
      * @see #getProperties()
      * @see #setProperty(String, Object)
@@ -1001,7 +994,6 @@ public interface Cache<K, V> extends Closeable {
      * @param propValue the property value to set (can be any object type, including null)
      * @return the previous value associated with the property, or null if there was no previous value
      * @throws ClassCastException if a previous value exists but cannot be cast to type T
-     * @throws NullPointerException if propName is null
      * @throws IllegalStateException if the cache has been closed (implementation-specific)
      * @see #getProperty(String)
      * @see #removeProperty(String)
@@ -1051,7 +1043,6 @@ public interface Cache<K, V> extends Closeable {
      * @param propName the property name to remove (must not be null)
      * @return the removed value, or null if the property didn't exist
      * @throws ClassCastException if the property exists but cannot be cast to type T
-     * @throws NullPointerException if propName is null
      * @throws IllegalStateException if the cache has been closed (implementation-specific)
      * @see #getProperty(String)
      * @see #setProperty(String, Object)
