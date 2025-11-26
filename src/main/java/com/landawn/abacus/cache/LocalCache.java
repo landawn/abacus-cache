@@ -51,7 +51,7 @@ import com.landawn.abacus.pool.PoolableWrapper;
  *
  * // Get cache statistics
  * CacheStats stats = cache.stats();
- * System.out.println("Hit rate: " + (double) stats.hitCount() / stats.getCount());
+ * System.out.println("Hit rate: " + (double) stats.hitCount() / (stats.hitCount() + stats.missCount()));
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -174,13 +174,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * User user = new User("John");
      * cache.put("user:123", user, 3600000, 1800000); // 1h TTL, 30min idle
+     * cache.put("temp:data", data, 5000, 0); // 5s TTL, no idle timeout
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated
      * @param value the cache value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds (0 for no expiration)
      * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout)
-     * @return true if the entry was successfully stored
+     * @return true if the entry was successfully stored, false otherwise
      * @throws IllegalArgumentException if key is null
      */
     @Override
@@ -292,9 +293,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * CacheStats stats = cache.stats();
-     * double hitRate = (double) stats.hitCount() / stats.getCount();
-     * System.out.println("Hit rate: " + hitRate);
+     * long totalRequests = stats.hitCount() + stats.missCount();
+     * if (totalRequests > 0) {
+     *     double hitRate = (double) stats.hitCount() / totalRequests;
+     *     System.out.println("Hit rate: " + String.format("%.2f%%", hitRate * 100));
+     * }
+     * System.out.println("Cache size: " + stats.size() + "/" + stats.capacity());
      * }</pre>
      *
      * @return a snapshot of current cache statistics

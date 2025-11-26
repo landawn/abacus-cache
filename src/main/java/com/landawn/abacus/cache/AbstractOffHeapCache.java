@@ -216,6 +216,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param testerForLoadingItemFromDiskToMemory the predicate for loading from disk to memory
      * @param storeSelector the function to determine storage location (0=default, 1=memory only, 2=disk only)
      * @param logger the logger instance for this cache
+     * @throws IllegalArgumentException if maxBlockSize is less than 1024 or greater than SEGMENT_SIZE (1MB)
      */
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
@@ -325,6 +326,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Handles both memory and disk storage. For values stored on disk, this method
      * may automatically promote them to memory based on access frequency and I/O timing,
      * as determined by the testerForLoadingItemFromDiskToMemory predicate if configured.
+     * This method is thread-safe and can be called concurrently from multiple threads.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -336,7 +338,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param k the cache key
+     * @param k the cache key to retrieve
      * @return the cached value, or null if not found or expired
      */
     @Override
@@ -468,7 +470,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * The value is serialized and stored either in memory, on disk, or both
      * based on size and configuration. If memory is not available and disk spillover
      * is configured, the value will be stored on disk. Returns false if neither
-     * memory nor disk storage is available.
+     * memory nor disk storage is available. This method is thread-safe and can be
+     * called concurrently from multiple threads.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -481,10 +484,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param k the cache key
-     * @param v the value to cache
-     * @param liveTime the time-to-live in milliseconds
-     * @param maxIdleTime the maximum idle time in milliseconds
+     * @param k the cache key to associate with the value
+     * @param v the value to cache, must not be null
+     * @param liveTime the time-to-live in milliseconds (0 or negative means use default)
+     * @param maxIdleTime the maximum idle time in milliseconds (0 or negative means use default)
      * @return true if the operation was successful, false otherwise
      */
     @Override
@@ -625,14 +628,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores a value to disk when memory is unavailable or based on storage policy.
+     * This is an internal method called by put() when memory allocation fails or when
+     * the storeSelector determines the value should be stored on disk. The method creates
+     * a StoreWrapper to track the disk-stored value.
      *
-     * @param k the cache key
+     * @param k the cache key to associate with the disk-stored value
      * @param liveTime the time-to-live in milliseconds
      * @param maxIdleTime the maximum idle time in milliseconds
-     * @param type the value type information
-     * @param bytes the serialized value bytes
-     * @param size the size of the serialized data
-     * @return a wrapper for the disk-stored value, or null if storage failed
+     * @param type the value type information for deserialization
+     * @param bytes the serialized value bytes to store on disk
+     * @param size the size of the serialized data in bytes
+     * @return a StoreWrapper for the disk-stored value, or null if storage failed
      */
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
         if (offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size))) {
@@ -647,9 +653,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Uses a best-fit strategy within size-segregated segment queues. If no suitable
      * slot exists in an existing segment, a new segment is allocated from the pool.
      * Slot sizes are rounded up to the nearest multiple of MIN_BLOCK_SIZE (64 bytes).
+     * This is an internal method called by put() during memory allocation. The method
+     * is thread-safe and uses fine-grained locking on segment queues.
      *
-     * @param size the required slot size in bytes
-     * @return the allocated slot, or null if no space available in the cache
+     * @param size the required slot size in bytes, must be positive
+     * @return the allocated Slot, or null if no space is available in the cache
      */
     private Slot getAvailableSlot(final int size) {
         int slotSize = 0;
@@ -736,7 +744,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Triggers asynchronous vacating to free up memory space.
      * This method is called when memory allocation fails. It delegates to the pool's
      * vacate() method to evict entries, then runs eviction to release empty segments.
-     * Only one vacating task runs at a time to avoid redundant work.
+     * Only one vacating task runs at a time to avoid redundant work. The method returns
+     * immediately after scheduling the vacating task, allowing the caller to continue.
+     * After the vacating task completes, it sleeps for 3 seconds to allow memory to stabilize.
      */
     private void vacate() {
         if (_activeVacationTaskCount.incrementAndGet() > 1) {
@@ -992,7 +1002,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Performs periodic eviction of empty segments to release them back to the pool.
      * This method is called by the scheduled eviction task and also by the vacate() method.
      * It checks all segments and releases those that have no allocated slots, making them
-     * available for reuse with different slot sizes.
+     * available for reuse with different slot sizes. This is an internal method that should
+     * not be called directly by users. The method uses double-checked locking to ensure
+     * thread safety while minimizing lock contention.
      */
     protected void evict() {
         synchronized (_segmentBitSet) {
@@ -1019,7 +1031,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Represents a memory segment that can be divided into fixed-size slots.
      * Each segment is SEGMENT_SIZE bytes (1MB) and can be configured with a specific slot size.
      * A segment can be reset and reused with a different slot size when all its slots are freed.
-     * Uses a BitSet to track which slots are allocated.
+     * Uses a BitSet to track which slots are allocated, providing efficient allocation and
+     * deallocation operations. This is an internal class used by AbstractOffHeapCache for
+     * memory management.
      */
     static final class Segment {
 
@@ -1068,6 +1082,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Represents an allocated memory slot within a segment.
      * This record encapsulates the slot index and its parent segment,
      * providing a convenient way to release the slot when no longer needed.
+     * This is an internal record used by AbstractOffHeapCache for memory management.
+     * The slot must be released explicitly to free the memory for reuse.
      */
     record Slot(int indexOfSlot, Segment segment) {
 
@@ -1080,6 +1096,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Base wrapper class for cached values with metadata.
      * Extends AbstractPoolable to support TTL and idle time tracking.
      * Each wrapper stores the value's type information and serialized size.
+     * This is an internal abstract class with concrete implementations for
+     * different storage strategies (single slot, multiple slots, or disk).
      */
     abstract static class Wrapper<T> extends AbstractPoolable {
         final Type<T> type;
@@ -1098,7 +1116,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Wrapper for values stored in a single memory slot.
      * Used for values that fit within the maximum block size. The slot reference
-     * is used to release the memory when the entry is evicted or removed.
+     * is used to release the memory when the entry is evicted or removed. This is
+     * an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
+     * with synchronized access to read and destroy operations.
      */
     final class SlotWrapper extends Wrapper<V> {
 
@@ -1146,6 +1166,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Wrapper for values stored across multiple memory slots.
      * Used for large values that exceed the maximum block size. The value is split
      * across multiple slots, and all slots are released together when evicted or removed.
+     * This is an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
+     * with synchronized access to read and destroy operations.
      */
     final class MultiSlotsWrapper extends Wrapper<V> {
 
@@ -1214,7 +1236,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Wrapper for values stored on disk via OffHeapStore.
      * Used when memory is full or when the storeSelector determines the value
      * should be stored on disk. The permanentKey is used to retrieve and remove
-     * the value from the disk store.
+     * the value from the disk store. This is an internal class used by AbstractOffHeapCache.
+     * The wrapper is thread-safe with synchronized access to read and destroy operations.
      */
     final class StoreWrapper extends Wrapper<V> {
         private K permanentKey;

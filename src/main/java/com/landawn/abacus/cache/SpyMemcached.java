@@ -261,7 +261,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Stores an object in the cache with a specified time-to-live.
-     * This operation replaces any existing value for the key.
+     * This operation replaces any existing value for the key. The method blocks until
+     * the operation completes or times out.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -271,7 +272,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the object value to cache
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration)
+     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact)
      * @return {@code true} if the operation was successful, {@code false} otherwise
      */
     @Override
@@ -281,7 +282,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously stores an object in the cache with a specified time-to-live.
-     * The returned Future can be used to check if the operation succeeded.
+     * The returned Future can be used to check if the operation succeeded. This method
+     * returns immediately without blocking.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -291,7 +293,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the object value to cache
-     * @param liveTime the time-to-live in milliseconds
+     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact)
      * @return a Future that will indicate success ({@code true}) or failure ({@code false})
      */
     public Future<Boolean> asyncSet(final String key, final T obj, final long liveTime) {
@@ -300,7 +302,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Adds an object to the cache only if the key doesn't already exist.
-     * This operation is atomic.
+     * This operation is atomic. The method blocks until the operation completes or times out.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -311,7 +313,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the object value to cache
-     * @param liveTime the time-to-live in milliseconds
+     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact)
      * @return {@code true} if the object was added, {@code false} if the key already exists
      */
     public boolean add(final String key, final T obj, final long liveTime) {
@@ -320,7 +322,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously adds an object to the cache only if the key doesn't already exist.
-     * This operation is atomic.
+     * This operation is atomic. The method returns immediately without blocking.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -330,7 +332,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the object value to cache
-     * @param liveTime the time-to-live in milliseconds
+     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact)
      * @return a Future that will indicate {@code true} if the add succeeded, {@code false} if the key already exists
      */
     public Future<Boolean> asyncAdd(final String key, final T obj, final long liveTime) {
@@ -339,7 +341,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Replaces an object in the cache only if the key already exists.
-     * This operation is atomic.
+     * This operation is atomic. The method blocks until the operation completes or times out.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -350,7 +352,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the object value to cache
-     * @param liveTime the time-to-live in milliseconds
+     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact)
      * @return {@code true} if the object was replaced, {@code false} if the key doesn't exist
      */
     public boolean replace(final String key, final T obj, final long liveTime) {
@@ -359,7 +361,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously replaces an object in the cache only if the key already exists.
-     * This operation is atomic.
+     * This operation is atomic. The method returns immediately without blocking.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -369,7 +371,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the object value to cache
-     * @param liveTime the time-to-live in milliseconds
+     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact)
      * @return a Future that will indicate {@code true} if the replacement succeeded, {@code false} if the key doesn't exist
      */
     public Future<Boolean> asyncReplace(final String key, final T obj, final long liveTime) {
@@ -378,8 +380,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Removes an object from the cache.
-     * The return value indicates whether the operation was acknowledged by the server,
-     * not whether the key existed. This operation succeeds whether or not the key exists.
+     * The method blocks until the operation completes or times out. The return value indicates
+     * whether the operation was acknowledged by the server, not necessarily whether the key existed.
+     * This operation succeeds whether or not the key exists.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -397,7 +400,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously removes an object from the cache.
-     * The returned Future indicates if the operation succeeded.
+     * The method returns immediately without blocking. The returned Future indicates if the
+     * operation succeeded.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -581,8 +585,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Flushes all data from all connected Memcached servers immediately.
-     * This operation removes all keys from all servers.
-     * Use with extreme caution in production environments as this is a destructive operation.
+     * This operation removes all keys from all servers. The method blocks until the
+     * flush completes or times out. Use with extreme caution in production environments
+     * as this is a destructive operation.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -598,7 +603,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously flushes all data from all servers.
-     * The returned Future can be used to check when the operation completes.
+     * The method returns immediately without blocking. The returned Future can be used to
+     * check when the operation completes.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -614,14 +620,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Flushes all data from all servers after a specified delay.
-     * The flush will occur on all servers after the delay expires.
+     * The method blocks until the scheduling completes or times out. The flush will occur
+     * on all servers after the delay expires.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * cache.flushAll(5000); // Flush after 5 seconds
      * }</pre>
      *
-     * @param delay the delay in milliseconds before the flush operation is executed
+     * @param delay the delay in milliseconds before the flush operation is executed (converted to seconds, rounded up if not exact)
      * @return {@code true} if the flush was scheduled successfully, {@code false} otherwise
      */
     public boolean flushAll(final long delay) {
@@ -630,7 +637,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously schedules a flush after a delay.
-     * The flush will occur on all servers after the delay expires.
+     * The method returns immediately without blocking. The flush will occur on all servers
+     * after the delay expires.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -638,7 +646,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * future.get(); // Wait for scheduled flush
      * }</pre>
      *
-     * @param delay the delay in milliseconds before the flush operation is executed
+     * @param delay the delay in milliseconds before the flush operation is executed (converted to seconds, rounded up if not exact)
      * @return a Future that will indicate if the flush was scheduled successfully
      */
     public Future<Boolean> asyncFlushAll(final long delay) {

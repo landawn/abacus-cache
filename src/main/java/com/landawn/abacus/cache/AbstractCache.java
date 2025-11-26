@@ -134,7 +134,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Retrieves a value from the cache wrapped in an Optional.
-     * This method provides a null-safe alternative to gett().
+     * This method provides a null-safe alternative to {@link #gett(Object)} by
+     * wrapping the result in an Optional.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -154,6 +155,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     /**
      * Stores a key-value pair using default expiration settings.
      * The default TTL and idle time specified in the constructor are used.
+     * This method delegates to {@link #put(Object, Object, long, long)} with
+     * defaultLiveTime and defaultMaxIdleTime.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -173,7 +176,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Asynchronously retrieves a value from the cache.
-     * The operation is executed on the shared thread pool.
+     * The operation is executed on the shared async executor thread pool.
+     * This method delegates to {@link #get(Object)} asynchronously.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -192,7 +196,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Asynchronously retrieves a value from the cache directly.
-     * The operation is executed on the shared thread pool.
+     * The operation is executed on the shared async executor thread pool.
+     * This method delegates to {@link #gett(Object)} asynchronously.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -211,7 +216,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Asynchronously stores a key-value pair using default expiration.
-     * The operation is executed on the shared thread pool.
+     * The operation is executed on the shared async executor thread pool.
+     * This method delegates to {@link #put(Object, Object)} asynchronously.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -231,7 +237,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Asynchronously stores a key-value pair with custom expiration.
-     * The operation is executed on the shared thread pool.
+     * The operation is executed on the shared async executor thread pool.
+     * This method delegates to {@link #put(Object, Object, long, long)} asynchronously.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -253,7 +260,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Asynchronously removes an entry from the cache.
-     * The operation is executed on the shared thread pool.
+     * The operation is executed on the shared async executor thread pool.
+     * This method delegates to {@link #remove(Object)} asynchronously.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -276,7 +284,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Asynchronously checks if the cache contains a key.
-     * The operation is executed on the shared thread pool.
+     * The operation is executed on the shared async executor thread pool.
+     * This method delegates to {@link #containsKey(Object)} asynchronously.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -347,7 +356,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @param <T> the type of the previous property value to be returned
      * @param propName the property name
      * @param propValue the property value
-     * @return the previous value, or null if none existed
+     * @return the previous value associated with the property, or null if none existed
      */
     @Override
     public <T> T setProperty(final String propName, final Object propValue) {

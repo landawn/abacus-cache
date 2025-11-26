@@ -131,7 +131,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Stores a key-value pair in the cache with a specified time-to-live.
      * The value is serialized using Kryo before storage. If the key already exists,
-     * its value will be replaced.
+     * its value will be replaced. The operation uses Redis SETEX command which atomically
+     * sets the value and expiration time.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -141,8 +142,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated
      * @param obj the cache value to be associated with the specified key
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration)
-     * @return {@code true} if the operation was successful, {@code false} otherwise
+     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact)
+     * @return {@code true} if the Redis server responds with "OK", {@code false} otherwise
      */
     @Override
     public boolean set(final String key, final T obj, final long liveTime) {
@@ -151,9 +152,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Removes the mapping for a key from the cache if it is present.
-     * The return value indicates whether the operation was acknowledged by the server,
-     * not whether the key existed. This method always returns {@code true} if the delete
-     * command was successfully sent to the Redis server.
+     * This method uses the Redis DEL command to remove the key. The operation succeeds
+     * regardless of whether the key exists or not. The return value always indicates
+     * that the command was successfully executed (not whether the key existed).
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -162,7 +163,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache
-     * @return {@code true} if the delete operation was successfully sent to the server
+     * @return always {@code true} indicating the delete command was successfully executed
      */
     @Override
     public boolean delete(final String key) {

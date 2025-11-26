@@ -244,9 +244,10 @@ public final class CacheFactory {
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param provider the cache provider specification string
+     * @param provider the cache provider specification string (must not be null or empty)
      * @return the new Cache instance
-     * @throws IllegalArgumentException if the provider specification is invalid or has incorrect parameters
+     * @throws IllegalArgumentException if the provider specification is invalid, has incorrect parameters, or missing required parameters
+     * @throws RuntimeException if custom class instantiation fails (class not found, reflection errors, etc.)
      */
     @SuppressWarnings("unchecked")
     public static <K, V> Cache<K, V> createCache(final String provider) {

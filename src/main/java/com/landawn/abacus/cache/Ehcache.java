@@ -42,11 +42,18 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  *
  * <p><b>Usage Examples:</b></p>
  * <pre>{@code
- * Cache<String, Person> ehcache = CacheBuilder.newBuilder()
- *     .build();
+ * // Create cache using Ehcache 3.x API
+ * CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
+ *     .withCache("personCache",
+ *         CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, Person.class,
+ *             ResourcePoolsBuilder.heap(100)))
+ *     .build(true);
+ * Cache<String, Person> ehcache = cacheManager.getCache("personCache", String.class, Person.class);
+ *
+ * // Wrap with Abacus Cache interface
  * Ehcache<String, Person> cache = new Ehcache<>(ehcache);
  * Person person = new Person();
- * cache.put("key1", person, 3600000, 1800000); // 1 hour TTL, 30 min idle
+ * cache.put("key1", person, 3600000, 1800000); // Note: TTL params ignored, use cache-level config
  * Person retrieved = cache.gett("key1");
  * }</pre>
  *
@@ -68,7 +75,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * Cache<String, User> ehcache = CacheBuilder.newBuilder().build();
+     * CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
+     *     .withCache("userCache",
+     *         CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, User.class,
+     *             ResourcePoolsBuilder.heap(1000)))
+     *     .build(true);
+     * Cache<String, User> ehcache = cacheManager.getCache("userCache", String.class, User.class);
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * }</pre>
      *
@@ -86,6 +98,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Retrieves a value from the cache by its key.
      * This method may trigger a cache loader if configured in the underlying Ehcache.
      * The operation may update access time depending on the eviction policy.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * User user = cache.gett("userId123");
+     * if (user != null) {
+     *     // Process the retrieved user
+     * }
+     * }</pre>
      *
      * @param k the cache key whose associated value is to be returned
      * @return the value associated with the specified key, or null if not found, expired, or evicted
@@ -107,6 +128,14 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Note: Ehcache's expiration policy is configured at cache creation time.
      * The liveTime and maxIdleTime parameters are ignored by this implementation.
      * All entries use the cache-wide expiration settings.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * User user = new User("John", "john@example.com");
+     * // Note: liveTime and maxIdleTime are ignored by Ehcache
+     * cache.put("userId123", user, 0, 0);
+     * }</pre>
      *
      * @param k the cache key with which the specified value is to be associated
      * @param v the cache value to be associated with the specified key
@@ -133,6 +162,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes the mapping for a key from the cache if it is present.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * cache.remove("userId123");
+     * // The entry is now removed from the cache
+     * }</pre>
+     *
      * @param k the cache key whose mapping is to be removed from the cache
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
@@ -146,6 +182,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a mapping for the specified key.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * if (cache.containsKey("userId123")) {
+     *     User user = cache.gett("userId123");
+     *     // Process the user
+     * }
+     * }</pre>
      *
      * @param k the cache key whose presence in the cache is to be tested
      * @return true if the cache contains a mapping for the specified key
@@ -199,7 +244,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * Set<String> keys = N.asSet("key1", "key2", "key3");
+     * Set<String> keys = new HashSet<>(Arrays.asList("key1", "key2", "key3"));
      * Map<String, User> results = cache.getAll(keys);
      * }</pre>
      *
@@ -229,7 +274,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * User user1 = new User();
      * User user2 = new User();
-     * Map<String, User> users = N.asMap("user1", user1, "user2", user2);
+     * Map<String, User> users = new HashMap<>();
+     * users.put("user1", user1);
+     * users.put("user2", user2);
      * cache.putAll(users);
      * }</pre>
      *
@@ -256,7 +303,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * Set<String> keysToRemove = N.asSet("key1", "key2", "key3");
+     * Set<String> keysToRemove = new HashSet<>(Arrays.asList("key1", "key2", "key3"));
      * cache.removeAll(keysToRemove);
      * }</pre>
      *
@@ -307,6 +354,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Removes all entries from the cache.
      * This operation invalidates all cached key-value pairs immediately.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * cache.clear();
+     * // All entries are now removed from the cache
+     * }</pre>
+     *
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -321,6 +375,17 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
      * This method is thread-safe but NOT idempotent - calling it multiple times will throw IllegalStateException.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * try {
+     *     cache.put("userId123", user, 0, 0);
+     *     // Use the cache
+     * } finally {
+     *     cache.close();
+     * }
+     * }</pre>
+     *
      * @throws IllegalStateException if the cache has already been closed
      */
     @Override
@@ -334,6 +399,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache has been closed.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * if (!cache.isClosed()) {
+     *     User user = cache.gett("userId123");
+     *     // Process the user
+     * }
+     * }</pre>
      *
      * @return {@code true} if the cache is closed, {@code false} otherwise
      */

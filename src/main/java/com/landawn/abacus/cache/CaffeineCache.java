@@ -92,6 +92,16 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * This method uses Caffeine's getIfPresent which doesn't trigger cache loading.
      * The operation may update access time depending on the eviction policy.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * cache.put("user:123", user);
+     * User retrieved = cache.gett("user:123");
+     * if (retrieved != null) {
+     *     System.out.println("Found user: " + retrieved.getName());
+     * }
+     * }</pre>
+     *
      * @param k the cache key whose associated value is to be returned
      * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
      * @throws IllegalStateException if the cache has been closed
@@ -111,6 +121,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Note: Caffeine's expiration policy is configured at cache creation time.
      * The liveTime and maxIdleTime parameters are ignored by this implementation.
      * All entries use the cache-wide expiration settings.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * cache.put("user:123", user, 0, 0); // liveTime and maxIdleTime are ignored
+     * // Expiration is controlled by the underlying Caffeine cache configuration
+     * }</pre>
      *
      * @param k the cache key with which the specified value is to be associated
      * @param v the cache value to be associated with the specified key
@@ -137,6 +154,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Removes the mapping for a key from the cache if it is present.
      * This triggers immediate removal rather than just marking for eviction.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * cache.put("user:123", user);
+     * cache.remove("user:123");
+     * User retrieved = cache.gett("user:123"); // returns null
+     * }</pre>
+     *
      * @param k the cache key whose mapping is to be removed from the cache
      * @throws IllegalStateException if the cache has been closed
      */
@@ -150,6 +175,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Checks if the cache contains a mapping for the specified key.
      * This method performs a cache lookup and may affect access-based eviction.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * cache.put("user:123", user);
+     * if (cache.containsKey("user:123")) {
+     *     System.out.println("User exists in cache");
+     * }
+     * }</pre>
      *
      * @param k the cache key whose presence in the cache is to be tested
      * @return {@code true} if the cache contains a mapping for the specified key
@@ -167,6 +201,16 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * This operation is not supported by the CaffeineCache wrapper as Caffeine doesn't provide
      * efficient key iteration for performance reasons.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * try {
+     *     Set<String> keys = cache.keySet(); // throws UnsupportedOperationException
+     * } catch (UnsupportedOperationException e) {
+     *     System.out.println("Key iteration is not supported");
+     * }
+     * }</pre>
+     *
      * @return never returns normally
      * @throws UnsupportedOperationException always thrown
      * @deprecated Unsupported operation
@@ -180,6 +224,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns the estimated number of entries in the cache.
      * This is an approximation and may not be exact due to concurrent modifications.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * cache.put("user:123", user1);
+     * cache.put("user:456", user2);
+     * int count = cache.size(); // approximately 2
+     * System.out.println("Cache contains " + count + " entries");
+     * }</pre>
      *
      * @return the estimated number of cache entries
      * @throws IllegalStateException if the cache has been closed
@@ -195,6 +248,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Removes all entries from the cache.
      * This operation invalidates all cached key-value pairs immediately.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * cache.put("user:123", user1);
+     * cache.put("user:456", user2);
+     * cache.clear();
+     * int size = cache.size(); // returns 0
+     * }</pre>
+     *
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -208,6 +270,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Closes the cache and releases resources.
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
      * This method is thread-safe but NOT idempotent - calling it multiple times will throw IllegalStateException.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * cache.put("user:123", user);
+     * cache.close();
+     * // cache.gett("user:123"); // throws IllegalStateException
+     * }</pre>
      *
      * @throws IllegalStateException if the cache has already been closed
      */

@@ -32,7 +32,6 @@ import com.landawn.abacus.util.function.TriFunction;
 import com.landawn.abacus.util.function.TriPredicate;
 
 import lombok.Data;
-import lombok.NoArgsConstructor;
 import lombok.experimental.Accessors;
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
@@ -73,7 +72,7 @@ import lombok.experimental.Accessors;
  *     .build();
  * 
  * cache.put("key1", largeByteArray);
- * byte[] cached = cache.get("key1");
+ * byte[] cached = cache.gett("key1");
  *
  * OffHeapCacheStats stats = cache.stats();
  * System.out.println("Memory utilization: " + 
@@ -251,6 +250,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * Builder class for creating OffHeapCache25 instances with custom configuration.
      * Provides a fluent API for setting all cache parameters including capacity,
      * eviction policies, serialization, and disk spillover options.
+     * All builder properties start with their default values and can be customized
+     * using the fluent setter methods.
      *
      * <br><br>
      * Example usage:
@@ -269,14 +270,17 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * @param <V> the type of values stored in the cache being built
      */
     @Data
-    /**
-     * Constructs a new Builder with default values.
-     * All builder properties start with their default values and can be customized
-     * using the fluent setter methods.
-     */
-    @NoArgsConstructor
     @Accessors(chain = true, fluent = true)
     public static class Builder<K, V> {
+
+        /**
+         * Creates a new Builder with default values.
+         * All fields start with their default values and can be customized using the fluent setter methods.
+         */
+        public Builder() {
+            // Default constructor with default values
+        }
+
         /**
          * The total off-heap memory capacity in megabytes.
          */

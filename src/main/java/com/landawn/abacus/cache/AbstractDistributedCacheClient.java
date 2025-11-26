@@ -56,6 +56,15 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * The server URL format is implementation-specific but typically includes
      * host and port information.
      *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // Single server
+     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+     *
+     * // Multiple servers (format depends on implementation)
+     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("server1:11211,server2:11211");
+     * }</pre>
+     *
      * @param serverUrl the server URL(s) for connecting to the distributed cache
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
@@ -65,6 +74,13 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
     /**
      * Returns the server URL(s) this client is connected to.
      * The format is implementation-specific and may include multiple servers.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+     * String url = client.serverUrl();
+     * System.out.println("Connected to: " + url); // Output: "Connected to: localhost:11211"
+     * }</pre>
      *
      * @return the server URL(s) for this client
      */
@@ -77,6 +93,14 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Retrieves multiple objects from the cache using varargs.
      * This default implementation throws UnsupportedOperationException.
      * Subclasses that support bulk operations should override this method.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // In a subclass that implements this method:
+     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+     * Map<String, User> users = client.getBulk("user:123", "user:456", "user:789");
+     * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));
+     * }</pre>
      *
      * @param keys the cache keys
      * @return the map of cache keys to values (never returns normally in default implementation)
@@ -91,6 +115,15 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Retrieves multiple objects from the cache using a collection.
      * This default implementation throws UnsupportedOperationException.
      * Subclasses that support bulk operations should override this method.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // In a subclass that implements this method:
+     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+     * List<String> userKeys = Arrays.asList("user:123", "user:456", "user:789");
+     * Map<String, User> users = client.getBulk(userKeys);
+     * System.out.println("Retrieved " + users.size() + " users");
+     * }</pre>
      *
      * @param keys the collection of cache keys
      * @return the map of cache keys to values (never returns normally in default implementation)
@@ -107,6 +140,15 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Subclasses that support flush operations should override this method.
      *
      * Warning: This is a destructive operation that removes all data.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * // In a subclass that implements this method:
+     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+     * // WARNING: This removes ALL data from all cache servers!
+     * client.flushAll();
+     * System.out.println("All cache data cleared");
+     * }</pre>
      *
      * @throws UnsupportedOperationException always thrown by this default implementation
      */
