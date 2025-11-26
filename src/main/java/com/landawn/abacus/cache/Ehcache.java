@@ -30,7 +30,14 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * This class provides a bridge between Ehcache's API and the standardized Cache interface,
  * allowing Ehcache to be used seamlessly within the Abacus caching framework.
  *
- * <br><br>
+ * <p>
+ * <b>Important Note:</b> Ehcache configures expiration policies at the cache level during
+ * cache creation, not per-entry. Therefore, the {@code liveTime} and {@code maxIdleTime}
+ * parameters in the {@link #put(Object, Object, long, long)} method are ignored.
+ * Configure expiration settings when building the Ehcache instance instead.
+ * </p>
+ *
+ * <p>
  * Ehcache features exposed through this wrapper:
  * <ul>
  * <li>Multi-tier storage (on-heap, off-heap, disk)</li>
@@ -53,7 +60,7 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * // Wrap with Abacus Cache interface
  * Ehcache<String, Person> cache = new Ehcache<>(ehcache);
  * Person person = new Person();
- * cache.put("key1", person, 3600000, 1800000); // Note: TTL params ignored, use cache-level config
+ * cache.put("key1", person, 0, 0); // TTL params ignored, use cache-level config
  * Person retrieved = cache.gett("key1");
  * }</pre>
  *
@@ -207,20 +214,35 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Atomically puts a value if the key is not already present.
      * This operation is atomic and thread-safe, ensuring that concurrent operations
      * maintain consistency. If the key already exists, the existing value is returned
-     * unchanged.
+     * unchanged and the cache is not modified. This is useful for implementing
+     * cache-based locking or ensuring single initialization of cached values.
+     *
+     * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
+     * leveraging Ehcache's native atomic operations for optimal performance.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * V newValue = createNewValue();
-     * V existingValue = cache.putIfAbsent("key1", newValue);
-     * if (existingValue == null) {
-     *     // Value was successfully added
+     * // Simple conditional caching
+     * User newUser = createUser();
+     * User existingUser = cache.putIfAbsent("user:123", newUser);
+     * if (existingUser == null) {
+     *     System.out.println("User was added to cache");
+     * } else {
+     *     System.out.println("User already exists, using existing: " + existingUser);
      * }
+     *
+     * // Cache-based initialization (ensures single initialization)
+     * ExpensiveObject obj = cache.putIfAbsent("config:main", () -> {
+     *     return loadExpensiveConfiguration();
+     * });
+     *
+     * // Thread-safe counter initialization
+     * AtomicInteger counter = cache.putIfAbsent("counter", new AtomicInteger(0));
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated
      * @param value the cache value to be associated with the specified key
-     * @return the previous value associated with the specified key, or null if there was no mapping
+     * @return the previous value associated with the specified key, or {@code null} if there was no mapping
      * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
@@ -237,19 +259,36 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Retrieves multiple values from the cache in a single operation.
-     * This is more efficient than multiple individual get operations, particularly
-     * when fetching many entries. The returned map only includes keys that were found
-     * in the cache; missing keys are not included.
+     * Retrieves multiple values from the cache in a single bulk operation.
+     * This is significantly more efficient than multiple individual get operations, particularly
+     * when fetching many entries or when using remote storage tiers. The returned map only includes
+     * keys that were found in the cache; missing or expired keys are not included in the result.
+     * If a cache loader is configured, missing keys may be loaded automatically.
+     *
+     * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
+     * providing optimized batch retrieval capabilities.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * Set<String> keys = new HashSet<>(Arrays.asList("key1", "key2", "key3"));
+     * // Batch retrieval
+     * Set<String> keys = new HashSet<>(Arrays.asList("user:1", "user:2", "user:3"));
      * Map<String, User> results = cache.getAll(keys);
+     * for (Map.Entry<String, User> entry : results.entrySet()) {
+     *     System.out.println("Found: " + entry.getKey() + " -> " + entry.getValue());
+     * }
+     *
+     * // Handle missing keys
+     * Set<String> requestedKeys = Set.of("key1", "key2", "key3");
+     * Map<String, Value> cached = cache.getAll(requestedKeys);
+     * for (String key : requestedKeys) {
+     *     if (!cached.containsKey(key)) {
+     *         System.out.println("Missing key: " + key);
+     *     }
+     * }
      * }</pre>
      *
      * @param keys the set of cache keys to retrieve
-     * @return a map of key-value pairs found in the cache
+     * @return a map of key-value pairs found in the cache (does not include missing keys)
      * @throws IllegalArgumentException if keys is null
      * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheLoadingException if the bulk cache loader fails
@@ -265,19 +304,29 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Stores multiple key-value pairs in the cache in a single operation.
-     * This is more efficient than multiple individual put operations, particularly
-     * when storing many entries. All key-value pairs are stored in a single batch
-     * operation for optimal performance.
+     * Stores multiple key-value pairs in the cache in a single bulk operation.
+     * This is significantly more efficient than multiple individual put operations, particularly
+     * when storing many entries or when using remote storage tiers. All key-value pairs are stored
+     * in a single batch operation for optimal performance. If a cache writer is configured, all
+     * writes are performed in a single batch. Existing entries are overwritten.
+     *
+     * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
+     * providing optimized batch storage capabilities.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * User user1 = new User();
-     * User user2 = new User();
+     * // Batch insertion
      * Map<String, User> users = new HashMap<>();
-     * users.put("user1", user1);
-     * users.put("user2", user2);
+     * users.put("user:1", new User("John"));
+     * users.put("user:2", new User("Jane"));
+     * users.put("user:3", new User("Bob"));
      * cache.putAll(users);
+     *
+     * // Bulk update from database
+     * List<Product> products = loadProductsFromDatabase();
+     * Map<String, Product> productMap = products.stream()
+     *     .collect(Collectors.toMap(p -> "product:" + p.getId(), p -> p));
+     * cache.putAll(productMap);
      * }</pre>
      *
      * @param entries the map of key-value pairs to store
@@ -296,15 +345,28 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes multiple keys from the cache in a single operation.
-     * This is more efficient than multiple individual remove operations, particularly
-     * when removing many entries. All keys are removed in a single batch operation
-     * for optimal performance.
+     * Removes multiple keys from the cache in a single bulk operation.
+     * This is significantly more efficient than multiple individual remove operations, particularly
+     * when removing many entries or when using remote storage tiers. All keys are removed in a single
+     * batch operation for optimal performance. The operation is idempotent - non-existent keys are
+     * silently ignored. If a cache writer is configured, all deletions are performed in a single batch.
+     *
+     * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
+     * providing optimized batch removal capabilities.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * Set<String> keysToRemove = new HashSet<>(Arrays.asList("key1", "key2", "key3"));
+     * // Batch removal
+     * Set<String> keysToRemove = new HashSet<>(Arrays.asList("user:1", "user:2", "user:3"));
      * cache.removeAll(keysToRemove);
+     *
+     * // Remove all keys matching a pattern
+     * Set<String> allKeys = findKeysMatchingPattern("temp:*");
+     * cache.removeAll(allKeys);
+     *
+     * // Cleanup expired session keys
+     * Set<String> expiredSessions = getExpiredSessionKeys();
+     * cache.removeAll(expiredSessions);
      * }</pre>
      *
      * @param keys the set of cache keys to remove
@@ -419,16 +481,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Ensures the cache is not closed before performing operations.
      * This is a utility method called by all cache operations to verify that
-     * the cache is still in an operational state.
-     *
-     * <p><b>Usage Examples:</b></p>
-     * <pre>{@code
-     * @Override
-     * public V gett(final K key) {
-     *     assertNotClosed();  // Verify cache is still open
-     *     return cacheImpl.get(key);
-     * }
-     * }</pre>
+     * the cache is still in an operational state. It provides a consistent
+     * way to enforce the "closed" state across all cache methods.
      *
      * @throws IllegalStateException if the cache has been closed
      */

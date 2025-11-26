@@ -21,44 +21,76 @@ package com.landawn.abacus.cache;
  * This record provides comprehensive metrics about cache performance and usage,
  * including hit rates, miss counts, evictions, and memory consumption.
  *
- * <br><br>
- * All accessor methods ({@code capacity()}, {@code size()}, {@code putCount()}, etc.) are automatically generated
- * by the record and return the corresponding field values. This class is immutable and
- * thread-safe.
- *
- * <br><br>
- * The statistics captured in this record include:
+ * <p>As a Java record, this class automatically generates the following methods:
  * <ul>
- *   <li><b>Capacity metrics:</b> Maximum and current cache size</li>
- *   <li><b>Operation counts:</b> Number of put and get operations</li>
- *   <li><b>Performance metrics:</b> Hit and miss counts for calculating cache efficiency</li>
- *   <li><b>Eviction metrics:</b> Number of entries removed due to capacity or expiration</li>
- *   <li><b>Memory metrics:</b> Maximum allowed memory and current memory usage</li>
+ *   <li>Accessor methods: {@code capacity()}, {@code size()}, {@code putCount()}, {@code getCount()},
+ *       {@code hitCount()}, {@code missCount()}, {@code evictionCount()}, {@code maxMemory()}, {@code dataSize()}</li>
+ *   <li>{@code equals(Object)}: Compares all fields for equality</li>
+ *   <li>{@code hashCode()}: Generates hash code based on all fields</li>
+ *   <li>{@code toString()}: Returns a string representation of all fields</li>
  * </ul>
  *
- * <br>
- * Part of this code is copied from <a href="https://github.com/ben-manes/caffeine">caffeine</a> under Apache License 2.0.
+ * <p>This class is immutable and thread-safe. Once created, its values cannot be changed.
+ * To get updated statistics, call the {@code stats()} method on the cache again to
+ * obtain a new snapshot.
+ *
+ * <p><b>Statistics Categories:</b>
+ * <ul>
+ *   <li><b>Capacity metrics:</b> {@code capacity()} - Maximum cache size, {@code size()} - Current number of entries</li>
+ *   <li><b>Operation counts:</b> {@code putCount()} - Total puts, {@code getCount()} - Total gets</li>
+ *   <li><b>Performance metrics:</b> {@code hitCount()} - Successful gets, {@code missCount()} - Failed gets</li>
+ *   <li><b>Eviction metrics:</b> {@code evictionCount()} - Total entries removed</li>
+ *   <li><b>Memory metrics:</b> {@code maxMemory()} - Maximum allowed memory, {@code dataSize()} - Current memory usage</li>
+ * </ul>
+ *
+ * <p><b>Thread Safety:</b> This class is immutable and thread-safe. Multiple threads can
+ * safely read the statistics without synchronization.
+ *
+ * <p>Part of this code is copied from <a href="https://github.com/ben-manes/caffeine">caffeine</a> under Apache License 2.0.
  *
  * <p><b>Usage Examples:</b></p>
  * <pre>{@code
- * LocalCache<String, Object> cache = CacheFactory.createLocalCache(1000, 60000);
- * // ... perform cache operations ...
+ * // Create a cache and perform operations
+ * LocalCache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
+ * cache.put("user1", new User("Alice", 25));
+ * cache.put("user2", new User("Bob", 30));
+ * cache.get("user1"); // hit
+ * cache.get("user3"); // miss
+ *
+ * // Get statistics snapshot
  * CacheStats stats = cache.stats();
  *
  * // Calculate cache hit rate
- * double hitRate = (double) stats.hitCount() / (stats.hitCount() + stats.missCount());
- * System.out.println("Cache hit rate: " + hitRate);
+ * long totalRequests = stats.hitCount() + stats.missCount();
+ * double hitRate = totalRequests > 0 ? (double) stats.hitCount() / totalRequests : 0.0;
+ * System.out.printf("Cache hit rate: %.2f%%\n", hitRate * 100);
  *
  * // Check cache utilization
  * double utilizationPercent = (double) stats.size() / stats.capacity() * 100;
- * System.out.println("Cache utilization: " + utilizationPercent + "%");
+ * System.out.printf("Cache utilization: %d/%d entries (%.1f%%)\n",
+ *     stats.size(), stats.capacity(), utilizationPercent);
  *
  * // Monitor memory usage
- * System.out.println("Memory used: " + stats.dataSize() + " / " + stats.maxMemory() + " bytes");
+ * if (stats.maxMemory() > 0) {
+ *     double memoryUsagePercent = (double) stats.dataSize() / stats.maxMemory() * 100;
+ *     System.out.printf("Memory usage: %d/%d bytes (%.1f%%)\n",
+ *         stats.dataSize(), stats.maxMemory(), memoryUsagePercent);
+ * }
  *
- * // Check if evictions are occurring
+ * // Check if evictions are occurring (indicates cache pressure)
  * if (stats.evictionCount() > 0) {
- *     System.out.println("Cache is experiencing evictions: " + stats.evictionCount());
+ *     System.out.println("Warning: Cache is experiencing evictions: " + stats.evictionCount());
+ *     System.out.println("Consider increasing cache capacity or memory limit");
+ * }
+ *
+ * // Verify cache invariants
+ * assert stats.getCount() == stats.hitCount() + stats.missCount() :
+ *     "Get count should equal sum of hits and misses";
+ * assert stats.size() <= stats.capacity() :
+ *     "Current size should not exceed capacity";
+ * if (stats.maxMemory() > 0) {
+ *     assert stats.dataSize() <= stats.maxMemory() :
+ *         "Data size should not exceed max memory";
  * }
  * }</pre>
  *

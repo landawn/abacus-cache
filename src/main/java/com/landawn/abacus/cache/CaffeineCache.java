@@ -27,14 +27,21 @@ import com.landawn.abacus.util.Numbers;
  * allowing Caffeine to be used seamlessly within the Abacus caching framework.
  *
  * <p>
+ * <b>Important Note:</b> Caffeine configures expiration policies at the cache level during
+ * cache creation, not per-entry. Therefore, the {@code liveTime} and {@code maxIdleTime}
+ * parameters in the {@link #put(Object, Object, long, long)} method are ignored.
+ * Configure expiration settings when building the Caffeine cache instance instead.
+ * </p>
+ *
+ * <p>
  * Caffeine features exposed through this wrapper:
  * <ul>
  * <li>Automatic eviction based on size, time, or references</li>
  * <li>Concurrent performance close to ConcurrentHashMap</li>
- * <li>Comprehensive statistics collection</li>
- * <li>Asynchronous cache operations</li>
+ * <li>Comprehensive statistics collection via {@link #stats()}</li>
+ * <li>Window TinyLFU eviction policy for near-optimal hit rate</li>
  * </ul>
- * 
+ *
  * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * import com.github.benmanes.caffeine.cache.Cache;
@@ -322,18 +329,35 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns Caffeine-specific cache statistics.
-     * Statistics are only available if the cache was created with recordStats() enabled.
-     * The returned statistics provide detailed metrics about cache performance including
-     * hit rate, miss rate, load count, and eviction count.
+     * Statistics are only available if the cache was created with {@code recordStats()} enabled
+     * in the Caffeine builder. The returned statistics provide detailed metrics about cache
+     * performance including hit rate, miss rate, load count, eviction count, and average load time.
+     *
+     * <p><b>Note:</b> This is a Caffeine-specific method not present in the base Cache interface.
+     * If stats recording was not enabled, this method returns a stats object with all zero values.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Create cache with stats enabled
+     * Cache<String, User> caffeine = Caffeine.newBuilder()
+     *     .maximumSize(1000)
+     *     .recordStats()  // Enable stats recording
+     *     .build();
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
+     *
+     * // Perform operations
+     * cache.put("user:123", user, 0, 0);
+     * User retrieved = cache.gett("user:123");
+     *
+     * // Get statistics
      * CacheStats stats = cache.stats();
      * System.out.println("Hit rate: " + stats.hitRate());
+     * System.out.println("Miss rate: " + stats.missRate());
      * System.out.println("Eviction count: " + stats.evictionCount());
+     * System.out.println("Load success count: " + stats.loadSuccessCount());
      * }</pre>
      *
-     * @return cache statistics snapshot
+     * @return a snapshot of the cache statistics at the time of invocation
      * @see Cache#stats()
      * @see com.github.benmanes.caffeine.cache.stats.CacheStats
      */
@@ -343,6 +367,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Ensures the cache is not closed before performing operations.
+     * This is a utility method called by all cache operations to verify that
+     * the cache is still in an operational state. It provides a consistent
+     * way to enforce the "closed" state across all cache methods.
      *
      * @throws IllegalStateException if the cache has been closed
      */

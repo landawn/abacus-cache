@@ -583,8 +583,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *     <li>Return value 2: Disk only (always store to disk via offHeapStore)</li>
      *     </ul>
      * </li>
-     * <li>If value size <= maxBlockSize: Stores in a single memory slot (SlotWrapper)</li>
-     * <li>If value size > maxBlockSize: Splits across multiple slots (MultiSlotsWrapper)</li>
+     * <li>If value size &lt;= maxBlockSize: Stores in a single memory slot (SlotWrapper)</li>
+     * <li>If value size &gt; maxBlockSize: Splits across multiple slots (MultiSlotsWrapper)</li>
      * <li>If memory allocation fails: Falls back to disk storage if offHeapStore is configured</li>
      * <li>If both memory and disk storage fail: Returns false and triggers vacate() for cleanup</li>
      * </ul>

@@ -181,7 +181,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * if (success) {
      *     System.out.println("Entry cached successfully");
      * }
-     * cache.put("temp:data", data, 5000, 0); // 5s TTL, no idle timeout
+     * User tempUser = new User("Temp");
+     * cache.put("temp:data", tempUser, 5000, 0); // 5s TTL, no idle timeout
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
@@ -317,6 +318,19 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * the underlying pool. Use this method to monitor cache effectiveness and
      * tune configuration parameters for optimal performance.
      *
+     * <p>Statistics include:</p>
+     * <ul>
+     * <li>capacity - Maximum number of entries the cache can hold</li>
+     * <li>size - Current number of entries in the cache</li>
+     * <li>putCount - Total number of put operations</li>
+     * <li>getCount - Total number of get operations</li>
+     * <li>hitCount - Number of successful cache hits</li>
+     * <li>missCount - Number of cache misses</li>
+     * <li>evictionCount - Number of entries evicted</li>
+     * <li>maxMemory - Maximum memory available</li>
+     * <li>dataSize - Current data size</li>
+     * </ul>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
@@ -329,6 +343,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }
      * System.out.println("Cache size: " + stats.size() + "/" + stats.capacity());
      * System.out.println("Evictions: " + stats.evictionCount());
+     * System.out.println("Total get operations: " + stats.getCount());
+     * System.out.println("Total put operations: " + stats.putCount());
      * }</pre>
      *
      * @return a snapshot of current cache statistics including capacity, size, hit/miss counts, and eviction metrics
@@ -343,23 +359,32 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes the cache and releases all resources.
+     * Closes the cache and releases all associated resources.
      * Stops the eviction scheduler, clears all entries, and releases the underlying object pool.
      * After closing, the cache cannot be used - subsequent operations may throw IllegalStateException
-     * or behave unexpectedly. This method is idempotent and thread-safe - multiple calls have no
-     * additional effect beyond the first invocation.
+     * or have undefined behavior depending on the implementation.
+     *
+     * <p>This method is idempotent and thread-safe - multiple calls have no additional effect
+     * beyond the first invocation. It is strongly recommended to always close the cache when
+     * it's no longer needed to prevent resource leaks.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Try-with-resources (recommended)
+     * try (LocalCache<String, User> cache = new LocalCache<>(1000, 60000)) {
+     *     cache.put("user:123", user);
+     *     User cached = cache.gett("user:123");
+     *     // Cache is automatically closed
+     * }
+     *
+     * // Try-finally
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * try {
-     *     cache.put("key", value);
-     *     User user = cache.gett("key");
-     *     // ... use cache
+     *     cache.put("user:123", user);
+     *     User cached = cache.gett("user:123");
      * } finally {
      *     cache.close(); // Always close to release resources
      * }
-     * // Or with try-with-resources if cache implements AutoCloseable
      * }</pre>
      */
     @Override

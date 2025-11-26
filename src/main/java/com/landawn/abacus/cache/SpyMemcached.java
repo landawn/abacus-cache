@@ -154,17 +154,31 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * This is a synchronous operation that blocks until complete or timeout is reached.
      * The operation timeout is configured during client construction.
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.
+     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple get operation
      * User user = cache.get("user:123");
      * if (user != null) {
      *     System.out.println("Found user: " + user.getName());
+     * } else {
+     *     System.out.println("User not found in cache");
+     * }
+     *
+     * // Get with fallback to database
+     * User user = cache.get("user:123");
+     * if (user == null) {
+     *     user = database.findUser(123);
+     *     cache.set("user:123", user, 3600000);
      * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
-     * @return the cached object of type T, or {@code null} if not found or expired
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @return the cached object of type T, or {@code null} if not found, expired, or evicted
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -179,15 +193,27 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * and retrieve the result when available. The operation timeout is configured during
      * client construction.
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple async get
      * Future<User> future = cache.asyncGet("user:123");
      * User user = future.get(); // Blocks until complete
+     *
+     * // Async get with timeout
+     * Future<User> future = cache.asyncGet("user:123");
+     * try {
+     *     User user = future.get(1000, TimeUnit.MILLISECONDS);
+     * } catch (TimeoutException e) {
+     *     System.out.println("Get operation timed out");
+     * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
-     * @return a Future that will contain the cached object of type T, or {@code null} if not found or expired
-     * @throws RuntimeException if the key is invalid
+     * @return a Future that will contain the cached object of type T, or {@code null} if not found, expired, or evicted
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the operation fails to initiate
      */
     @SuppressWarnings("unchecked")
     public Future<T> asyncGet(final String key) {
@@ -201,17 +227,31 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * will not be present in the returned map. This is a synchronous operation that blocks until
      * complete or timeout.
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.
+     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Basic bulk get
      * Map<String, User> users = cache.getBulk("user:1", "user:2", "user:3");
-     * for (Map.Entry<String, User> entry : users.entrySet()) {
-     *     System.out.println("Found: " + entry.getKey());
-     * }
+     * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));
+     *
+     * // Bulk get with missing key handling
+     * Map<String, Product> products = cache.getBulk("prod:1", "prod:2", "prod:3");
+     * System.out.println("Found " + products.size() + " out of 3 products");
+     *
+     * // Identify missing keys
+     * String[] requestedKeys = {"user:1", "user:2", "user:3"};
+     * Map<String, User> found = cache.getBulk(requestedKeys);
+     * Arrays.stream(requestedKeys)
+     *       .filter(key -> !found.containsKey(key))
+     *       .forEach(key -> System.out.println("Missing: " + key));
      * }</pre>
      *
-     * @param keys the cache keys whose associated values are to be retrieved. Must not be {@code null}.
+     * @param keys the cache keys whose associated values are to be retrieved. Must not be {@code null} or contain {@code null} elements.
      * @return a map containing the found key-value pairs. Never {@code null}, but may be empty if no keys are found.
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -226,15 +266,28 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * in the returned map. This operation is more efficient than multiple individual async get
      * operations as it uses a single network round-trip.
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple async bulk get
      * Future<Map<String, User>> future = cache.asyncGetBulk("user:1", "user:2");
      * Map<String, User> users = future.get(); // Blocks until complete
+     *
+     * // Async bulk get with timeout
+     * Future<Map<String, User>> future = cache.asyncGetBulk("user:1", "user:2", "user:3");
+     * try {
+     *     Map<String, User> users = future.get(2000, TimeUnit.MILLISECONDS);
+     *     System.out.println("Retrieved " + users.size() + " users");
+     * } catch (TimeoutException e) {
+     *     future.cancel(true);
+     * }
      * }</pre>
      *
-     * @param keys the cache keys whose associated values are to be retrieved. Must not be {@code null}.
+     * @param keys the cache keys whose associated values are to be retrieved. Must not be {@code null} or contain {@code null} elements.
      * @return a Future that will contain the map of found key-value pairs. The map is never {@code null}, but may be empty.
-     * @throws RuntimeException if the keys parameter is invalid
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
+     * @throws RuntimeException if the operation fails to initiate
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public final Future<Map<String, T>> asyncGetBulk(final String... keys) {
@@ -248,16 +301,31 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * will not be present in the returned map. This is a synchronous operation that blocks until
      * complete or timeout.
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.
+     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * List<String> keys = Arrays.asList("user:1", "user:2", "user:3");
+     * // Using a List
+     * List<String> userKeys = Arrays.asList("user:123", "user:456", "user:789");
+     * Map<String, User> users = cache.getBulk(userKeys);
+     *
+     * // Using a Set (useful when keys come from various sources)
+     * Set<String> keySet = new HashSet<>(Arrays.asList("session:1", "session:2"));
+     * Map<String, Session> sessions = cache.getBulk(keySet);
+     *
+     * // Dynamically built key collection
+     * List<Integer> userIds = List.of(101, 102, 103);
+     * List<String> keys = userIds.stream()
+     *                            .map(id -> "user:" + id)
+     *                            .collect(Collectors.toList());
      * Map<String, User> users = cache.getBulk(keys);
-     * System.out.println("Found " + users.size() + " users");
      * }</pre>
      *
-     * @param keys the collection of cache keys whose associated values are to be retrieved. Must not be {@code null}.
+     * @param keys the collection of cache keys whose associated values are to be retrieved. Must not be {@code null} or contain {@code null} elements.
      * @return a map containing the found key-value pairs. Never {@code null}, but may be empty if no keys are found.
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -272,16 +340,25 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * in the returned map. This operation is more efficient than multiple individual async get
      * operations as it uses a single network round-trip.
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple async bulk get with collection
      * Set<String> keys = Set.of("user:1", "user:2");
      * Future<Map<String, User>> future = cache.asyncGetBulk(keys);
      * Map<String, User> users = future.get(); // Blocks until complete
+     *
+     * // Async bulk get from dynamically generated keys
+     * List<String> productKeys = generateProductKeys();
+     * Future<Map<String, Product>> future = cache.asyncGetBulk(productKeys);
+     * Map<String, Product> products = future.get(3000, TimeUnit.MILLISECONDS);
      * }</pre>
      *
-     * @param keys the collection of cache keys whose associated values are to be retrieved. Must not be {@code null}.
+     * @param keys the collection of cache keys whose associated values are to be retrieved. Must not be {@code null} or contain {@code null} elements.
      * @return a Future that will contain the map of found key-value pairs. The map is never {@code null}, but may be empty.
-     * @throws RuntimeException if the keys parameter is invalid
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
+     * @throws RuntimeException if the operation fails to initiate
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
     public Future<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
@@ -294,20 +371,39 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * the operation completes or times out. The liveTime is converted from milliseconds to
      * seconds for Memcached (rounded up if not exact).
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.
+     * The implementation handles concurrent access safely across distributed cache clients.
+     * When multiple clients set the same key concurrently, the last write wins.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Cache with 1 hour TTL
      * User user = new User("John", "john@example.com");
-     * boolean success = cache.set("user:123", user, 3600000); // 1 hour TTL
+     * boolean success = cache.set("user:123", user, 3600000);
      * if (success) {
      *     System.out.println("User cached successfully");
      * }
+     *
+     * // Cache session data with 30 minute TTL
+     * Session session = new Session("abc123", user);
+     * cache.set("session:" + session.getId(), session, 1800000);
+     *
+     * // Cache with no expiration
+     * Config config = loadConfig();
+     * cache.set("app:config", config, 0); // No expiration
+     *
+     * // Updating existing value
+     * Product product = cache.get("product:456");
+     * product.setPrice(99.99);
+     * cache.set("product:456", product, 7200000); // 2 hour TTL
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param obj the object value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return {@code true} if the operation was successful, {@code false} otherwise
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
     public boolean set(final String key, final T obj, final long liveTime) {
@@ -320,20 +416,33 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * returns immediately without blocking. The liveTime is converted from milliseconds to
      * seconds for Memcached (rounded up if not exact).
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple async set
      * Future<Boolean> future = cache.asyncSet("user:123", user, 3600000);
      * boolean success = future.get(); // Blocks until complete
      * if (success) {
      *     System.out.println("Set operation succeeded");
      * }
+     *
+     * // Async set with timeout
+     * Future<Boolean> future = cache.asyncSet("product:456", product, 7200000);
+     * try {
+     *     boolean success = future.get(1000, TimeUnit.MILLISECONDS);
+     * } catch (TimeoutException e) {
+     *     future.cancel(true);
+     *     System.err.println("Set operation timed out");
+     * }
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param obj the object value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return a Future that will indicate success ({@code true}) or failure ({@code false})
-     * @throws RuntimeException if the key is invalid
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncSet(final String key, final T obj, final long liveTime) {
         return mc.set(key, toSeconds(liveTime), obj);
@@ -341,25 +450,43 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Adds an object to the cache only if the key doesn't already exist.
-     * This operation is atomic and thread-safe across all clients. The method blocks until
+     * This operation is atomic and thread-safe across all distributed cache clients. The method blocks until
      * the operation completes or times out. If the key already exists, this operation will
      * fail and return {@code false}. The liveTime is converted from milliseconds to seconds
      * for Memcached (rounded up if not exact).
      *
+     * <p>This operation is atomic, ensuring that in concurrent scenarios, only one client
+     * will successfully add the key while others will receive {@code false}.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple conditional add
      * if (cache.add("user:123", user, 3600000)) {
      *     System.out.println("User added successfully");
      * } else {
      *     System.out.println("User already exists in cache");
      * }
+     *
+     * // Distributed locking pattern
+     * String lockKey = "lock:resource:123";
+     * if (cache.add(lockKey, "locked", 30000)) { // 30 second lock
+     *     try {
+     *         // Critical section - only one client can execute this
+     *         performCriticalOperation();
+     *     } finally {
+     *         cache.delete(lockKey);
+     *     }
+     * } else {
+     *     System.out.println("Resource is locked by another process");
+     * }
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param obj the object value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return {@code true} if the object was added, {@code false} if the key already exists
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean add(final String key, final T obj, final long liveTime) {
         return resultOf(mc.add(key, toSeconds(liveTime), obj));
@@ -367,25 +494,39 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously adds an object to the cache only if the key doesn't already exist.
-     * This operation is atomic and thread-safe across all clients. The method returns immediately
+     * This operation is atomic and thread-safe across all distributed cache clients. The method returns immediately
      * without blocking. If the key already exists, the Future will contain {@code false}. The liveTime
      * is converted from milliseconds to seconds for Memcached (rounded up if not exact).
      *
+     * <p>This operation is atomic, ensuring that in concurrent scenarios, only one client
+     * will successfully add the key while others will receive {@code false}.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple async add
      * Future<Boolean> future = cache.asyncAdd("user:123", user, 3600000);
      * if (future.get()) {
      *     System.out.println("Added");
      * } else {
      *     System.out.println("Key already exists");
      * }
+     *
+     * // Async add with timeout
+     * Future<Boolean> future = cache.asyncAdd("session:abc", session, 1800000);
+     * try {
+     *     boolean added = future.get(500, TimeUnit.MILLISECONDS);
+     *     System.out.println("Add successful: " + added);
+     * } catch (TimeoutException e) {
+     *     future.cancel(true);
+     * }
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param obj the object value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return a Future that will indicate {@code true} if the add succeeded, {@code false} if the key already exists
-     * @throws RuntimeException if the key is invalid
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncAdd(final String key, final T obj, final long liveTime) {
         return mc.add(key, toSeconds(liveTime), obj);
@@ -393,25 +534,39 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Replaces an object in the cache only if the key already exists.
-     * This operation is atomic and thread-safe across all clients. The method blocks until
+     * This operation is atomic and thread-safe across all distributed cache clients. The method blocks until
      * the operation completes or times out. If the key doesn't exist, this operation will
      * fail and return {@code false}. The liveTime is converted from milliseconds to seconds
      * for Memcached (rounded up if not exact).
      *
+     * <p>This operation is atomic, ensuring that updates are applied atomically even in
+     * concurrent scenarios.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple replace operation
      * if (cache.replace("user:123", updatedUser, 3600000)) {
      *     System.out.println("User updated");
      * } else {
      *     System.out.println("User not found in cache");
      * }
+     *
+     * // Update existing cache entry
+     * User user = cache.get("user:456");
+     * if (user != null) {
+     *     user.setLastAccess(System.currentTimeMillis());
+     *     if (cache.replace("user:456", user, 7200000)) {
+     *         System.out.println("User access time updated");
+     *     }
+     * }
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param obj the object value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return {@code true} if the object was replaced, {@code false} if the key doesn't exist
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean replace(final String key, final T obj, final long liveTime) {
         return resultOf(mc.replace(key, toSeconds(liveTime), obj));
@@ -419,24 +574,38 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously replaces an object in the cache only if the key already exists.
-     * This operation is atomic and thread-safe across all clients. The method returns immediately
+     * This operation is atomic and thread-safe across all distributed cache clients. The method returns immediately
      * without blocking. If the key doesn't exist, the Future will contain {@code false}. The liveTime
      * is converted from milliseconds to seconds for Memcached (rounded up if not exact).
      *
+     * <p>This operation is atomic, ensuring that updates are applied atomically even in
+     * concurrent scenarios.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple async replace
      * Future<Boolean> future = cache.asyncReplace("user:123", updatedUser, 3600000);
      * boolean replaced = future.get();
      * if (replaced) {
      *     System.out.println("Replaced successfully");
      * }
+     *
+     * // Async replace with timeout
+     * Future<Boolean> future = cache.asyncReplace("config:app", newConfig, 86400000);
+     * try {
+     *     boolean replaced = future.get(1000, TimeUnit.MILLISECONDS);
+     *     System.out.println("Config replaced: " + replaced);
+     * } catch (TimeoutException e) {
+     *     future.cancel(true);
+     * }
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param obj the object value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return a Future that will indicate {@code true} if the replacement succeeded, {@code false} if the key doesn't exist
-     * @throws RuntimeException if the key is invalid
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncReplace(final String key, final T obj, final long liveTime) {
         return mc.replace(key, toSeconds(liveTime), obj);
@@ -448,17 +617,36 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * whether the operation was acknowledged by the server, not necessarily whether the key existed
      * before deletion. This operation succeeds whether or not the key exists in the cache.
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.
+     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple delete
      * boolean success = cache.delete("user:123");
-     * if (success) {
-     *     System.out.println("Delete operation sent successfully");
+     * System.out.println("Delete operation sent: " + success);
+     *
+     * // Delete after update
+     * User user = cache.get("user:456");
+     * if (user != null && user.isInactive()) {
+     *     cache.delete("user:456");
+     * }
+     *
+     * // Delete multiple keys
+     * String[] keysToDelete = {"session:1", "session:2", "session:3"};
+     * Arrays.stream(keysToDelete).forEach(cache::delete);
+     *
+     * // Invalidate cache on entity update
+     * void updateUser(User user) {
+     *     database.save(user);
+     *     cache.delete("user:" + user.getId()); // Invalidate cache
      * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
-     * @return {@code true} if the delete operation was successfully acknowledged by the server
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @return {@code true} if the delete operation was successfully sent to the server, {@code false} otherwise
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
     public boolean delete(final String key) {
@@ -471,18 +659,31 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * operation was acknowledged by the server, not necessarily whether the key existed before
      * deletion. This operation succeeds whether or not the key exists in the cache.
      *
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple async delete
      * Future<Boolean> future = cache.asyncDelete("user:123");
      * boolean deleted = future.get();
      * if (deleted) {
      *     System.out.println("Delete operation acknowledged");
      * }
+     *
+     * // Async delete with timeout
+     * Future<Boolean> future = cache.asyncDelete("session:abc");
+     * try {
+     *     boolean deleted = future.get(500, TimeUnit.MILLISECONDS);
+     *     System.out.println("Session deleted: " + deleted);
+     * } catch (TimeoutException e) {
+     *     future.cancel(true);
+     * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
      * @return a Future that will indicate success ({@code true}) or failure ({@code false})
-     * @throws RuntimeException if the key is invalid
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncDelete(final String key) {
         return mc.delete(key);
@@ -490,21 +691,37 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value by 1.
-     * If the key doesn't exist, the behavior depends on the Memcached server implementation
-     * (typically returns -1 or NOT_FOUND). This operation is atomic and thread-safe across all
-     * clients. Only works with string representations of 64-bit unsigned integers stored in Memcached.
+     * If the key doesn't exist, returns -1 (Memcached-specific behavior). This operation is
+     * atomic and thread-safe across all distributed cache clients. Only works with string
+     * representations of 64-bit unsigned integers stored in Memcached.
+     *
+     * <p>This operation is atomic and thread-safe across all distributed cache clients.
+     * Multiple concurrent increment operations are guaranteed to be serialized correctly,
+     * ensuring no increments are lost.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple counter
      * long pageViews = cache.incr("page:views");
      * if (pageViews != -1) {
      *     System.out.println("Page views: " + pageViews);
+     * } else {
+     *     // Initialize counter if it doesn't exist
+     *     cache.set("page:views", 1L, 0);
+     * }
+     *
+     * // Rate limiting
+     * String key = "rate:limit:" + userId;
+     * long attempts = cache.incr(key);
+     * if (attempts > MAX_ATTEMPTS) {
+     *     throw new RateLimitException("Too many requests");
      * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @return the value after increment, or -1 if the key doesn't exist
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
     public long incr(final String key) {
@@ -513,22 +730,41 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value by a specified amount.
-     * If the key doesn't exist, the behavior depends on the Memcached server implementation
-     * (typically returns -1 or NOT_FOUND). This operation is atomic and thread-safe across all
-     * clients. Only works with string representations of 64-bit unsigned integers stored in Memcached.
+     * If the key doesn't exist, returns -1 (Memcached-specific behavior). This operation is
+     * atomic and thread-safe across all distributed cache clients. Only works with string
+     * representations of 64-bit unsigned integers stored in Memcached.
+     *
+     * <p>This operation is atomic and thread-safe across all distributed cache clients.
+     * Multiple concurrent increment operations are guaranteed to be serialized correctly,
+     * ensuring no increments are lost.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Game score increment
      * long score = cache.incr("player:score", 10);
      * if (score != -1) {
      *     System.out.println("New score: " + score);
      * }
+     *
+     * // Batch processing counter
+     * long processed = cache.incr("batch:processed", 100);
+     *
+     * // Points system
+     * int points = calculatePoints(action);
+     * long totalPoints = cache.incr("user:points:" + userId, points);
+     *
+     * // Bandwidth tracking
+     * long bytesTransferred = cache.incr("bandwidth:today", fileSize);
+     * if (bytesTransferred > QUOTA) {
+     *     logger.warn("Bandwidth quota exceeded");
+     * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the amount by which to increment the value (must be non-negative)
+     * @param delta the amount by which to increment the value (positive value), must be non-negative
      * @return the value after increment, or -1 if the key doesn't exist
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
     public long incr(final String key, final int delta) {
@@ -539,20 +775,30 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Atomically increments a numeric value with a default value if key doesn't exist.
      * If the key doesn't exist, it is created with the defaultValue, then incremented by delta.
      * The value will not expire (passing -1 as expiration to SpyMemcached means no expiration).
-     * This operation is atomic and thread-safe across all clients. Works with 64-bit unsigned integers.
+     * This operation is atomic and thread-safe across all distributed cache clients. Works with
+     * 64-bit unsigned integers.
+     *
+     * <p>This operation is atomic and thread-safe across all distributed cache clients.
+     * Multiple concurrent increment operations are guaranteed to be serialized correctly,
+     * ensuring no increments are lost.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Initialize counter to 0 if not exists, then increment by 1
      * long count = cache.incr("counter:views", 1, 0);
      * System.out.println("View count: " + count);
+     *
+     * // Auto-initializing counter
+     * long requestCount = cache.incr("api:requests:" + endpoint, 1, 0);
+     * System.out.println("Request " + requestCount + " to " + endpoint);
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @param delta the amount by which to increment the value (must be non-negative)
      * @param defaultValue the initial value to set if the key doesn't exist, which will then be incremented by delta
      * @return the value after increment (defaultValue + delta if key didn't exist, otherwise existing value + delta)
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final int delta, final long defaultValue) {
         return mc.incr(key, delta, defaultValue, -1);
@@ -562,22 +808,33 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Atomically increments a numeric value with default value and expiration.
      * If the key doesn't exist, it's created with the defaultValue, then incremented by delta,
      * and the expiration time is set to the specified liveTime. This operation is atomic and
-     * thread-safe across all clients. Works with 64-bit unsigned integers. The liveTime is
-     * converted from milliseconds to seconds for Memcached (rounded up if not exact).
+     * thread-safe across all distributed cache clients. Works with 64-bit unsigned integers.
+     * The liveTime is converted from milliseconds to seconds for Memcached (rounded up if not exact).
+     *
+     * <p>This operation is atomic and thread-safe across all distributed cache clients.
+     * Multiple concurrent increment operations are guaranteed to be serialized correctly,
+     * ensuring no increments are lost.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Hourly counter that expires after 1 hour
      * long count = cache.incr("counter:hourly", 1, 0, 3600000);
      * System.out.println("Hourly count: " + count);
+     *
+     * // Daily quota counter
+     * long dailyRequests = cache.incr("quota:daily:" + userId, 1, 0, 86400000);
+     * if (dailyRequests > DAILY_LIMIT) {
+     *     throw new QuotaExceededException("Daily limit reached");
+     * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @param delta the amount by which to increment the value (must be non-negative)
      * @param defaultValue the initial value to set if the key doesn't exist, which will then be incremented by delta
-     * @param liveTime the time-to-live in milliseconds for the key (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param liveTime the time-to-live in milliseconds for the key (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return the value after increment (defaultValue + delta if key didn't exist, otherwise existing value + delta)
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative, or {@code liveTime} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
         return mc.incr(key, delta, defaultValue, toSeconds(liveTime));
@@ -585,22 +842,35 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value by 1.
-     * If the key doesn't exist, the behavior depends on the Memcached server implementation
-     * (typically returns -1 or NOT_FOUND). Values cannot go below 0 (Memcached prevents underflow).
-     * This operation is atomic and thread-safe across all clients. Only works with string
-     * representations of 64-bit unsigned integers stored in Memcached.
+     * If the key doesn't exist, returns -1 (Memcached-specific behavior). Values cannot go below 0
+     * (Memcached prevents underflow). This operation is atomic and thread-safe across all distributed
+     * cache clients. Only works with string representations of 64-bit unsigned integers stored in Memcached.
+     *
+     * <p>This operation is atomic and thread-safe across all distributed cache clients.
+     * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
+     * ensuring no decrements are lost.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * long remainingTokens = cache.decr("api:tokens");
+     * // Token bucket rate limiting
+     * long remainingTokens = cache.decr("api:tokens:" + userId);
      * if (remainingTokens != -1 && remainingTokens <= 0) {
-     *     System.out.println("Rate limit exceeded");
+     *     throw new RateLimitException("Rate limit exceeded");
+     * }
+     *
+     * // Inventory management
+     * long stock = cache.decr("product:stock:123");
+     * if (stock != -1 && stock < 0) {
+     *     // Handle out of stock
+     *     cache.incr("product:stock:123"); // Revert
+     *     throw new OutOfStockException();
      * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @return the value after decrement (cannot be negative), or -1 if the key doesn't exist
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
     public long decr(final String key) {
@@ -609,23 +879,43 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value by a specified amount.
-     * If the key doesn't exist, the behavior depends on the Memcached server implementation
-     * (typically returns -1 or NOT_FOUND). Values cannot go below 0 (Memcached prevents underflow).
-     * This operation is atomic and thread-safe across all clients. Only works with string
-     * representations of 64-bit unsigned integers stored in Memcached.
+     * If the key doesn't exist, returns -1 (Memcached-specific behavior). Values cannot go below 0
+     * (Memcached prevents underflow). This operation is atomic and thread-safe across all distributed
+     * cache clients. Only works with string representations of 64-bit unsigned integers stored in Memcached.
+     *
+     * <p>This operation is atomic and thread-safe across all distributed cache clients.
+     * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
+     * ensuring no decrements are lost.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * long inventory = cache.decr("product:stock", 5);
+     * // Bulk inventory decrement
+     * long inventory = cache.decr("product:stock:456", 5);
      * if (inventory != -1) {
      *     System.out.println("Remaining inventory: " + inventory);
+     * }
+     *
+     * // API quota management
+     * int requestCost = calculateCost(request);
+     * long quotaRemaining = cache.decr("quota:" + apiKey, requestCost);
+     * if (quotaRemaining != -1 && quotaRemaining < 0) {
+     *     throw new QuotaExceededException();
+     * }
+     *
+     * // Reservation system
+     * long availableSeats = cache.decr("event:seats:789", numberOfTickets);
+     * if (availableSeats != -1 && availableSeats < 0) {
+     *     // Revert the decrement
+     *     cache.incr("event:seats:789", numberOfTickets);
+     *     throw new NotEnoughSeatsException();
      * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the amount by which to decrement the value (must be non-negative)
+     * @param delta the amount by which to decrement the value (positive value), must be non-negative
      * @return the value after decrement (cannot be negative), or -1 if the key doesn't exist
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
     public long decr(final String key, final int delta) {
@@ -637,20 +927,31 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * If the key doesn't exist, it is created with the defaultValue, then decremented by delta.
      * The value will not expire (passing -1 as expiration to SpyMemcached means no expiration).
      * Values cannot go below 0 (Memcached prevents underflow). This operation is atomic and
-     * thread-safe across all clients. Works with 64-bit unsigned integers.
+     * thread-safe across all distributed cache clients. Works with 64-bit unsigned integers.
+     *
+     * <p>This operation is atomic and thread-safe across all distributed cache clients.
+     * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
+     * ensuring no decrements are lost.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Initialize inventory to 100 if not exists, then decrement by 1
      * long remaining = cache.decr("inventory:item123", 1, 100);
      * System.out.println("Items remaining: " + remaining);
+     *
+     * // Auto-initializing quota
+     * long quotaRemaining = cache.decr("quota:user:" + userId, 1, 1000);
+     * if (quotaRemaining == 0) {
+     *     System.out.println("Quota exhausted");
+     * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @param delta the amount by which to decrement the value (must be non-negative)
      * @param defaultValue the initial value to set if the key doesn't exist, which will then be decremented by delta
      * @return the value after decrement (defaultValue - delta if key didn't exist, otherwise existing value - delta). Cannot be negative.
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final int delta, final long defaultValue) {
         return mc.decr(key, delta, defaultValue, -1);
@@ -660,23 +961,34 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Atomically decrements a numeric value with default value and expiration.
      * If the key doesn't exist, it's created with the defaultValue, then decremented by delta,
      * and the expiration time is set to the specified liveTime. Values cannot go below 0
-     * (Memcached prevents underflow). This operation is atomic and thread-safe across all clients.
-     * Works with 64-bit unsigned integers. The liveTime is converted from milliseconds to seconds
-     * for Memcached (rounded up if not exact).
+     * (Memcached prevents underflow). This operation is atomic and thread-safe across all distributed
+     * cache clients. Works with 64-bit unsigned integers. The liveTime is converted from milliseconds
+     * to seconds for Memcached (rounded up if not exact).
+     *
+     * <p>This operation is atomic and thread-safe across all distributed cache clients.
+     * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
+     * ensuring no decrements are lost.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Daily quota that expires after 24 hours
      * long remaining = cache.decr("quota:user:123", 1, 1000, 86400000);
      * System.out.println("Remaining quota: " + remaining);
+     *
+     * // Hourly rate limit
+     * long hourlyLimit = cache.decr("rate:hourly:" + userId, 1, 100, 3600000);
+     * if (hourlyLimit == 0) {
+     *     throw new RateLimitException("Hourly limit reached");
+     * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @param delta the amount by which to decrement the value (must be non-negative)
      * @param defaultValue the initial value to set if the key doesn't exist, which will then be decremented by delta
-     * @param liveTime the time-to-live in milliseconds for the key (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param liveTime the time-to-live in milliseconds for the key (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return the value after decrement (defaultValue - delta if key didn't exist, otherwise existing value - delta). Cannot be negative.
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative, or {@code liveTime} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
         return mc.decr(key, delta, defaultValue, toSeconds(liveTime));
@@ -688,14 +1000,36 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * flush completes or times out. Use with extreme caution in production environments
      * as this is a destructive operation that cannot be undone.
      *
+     * <p>This method is thread-safe but its effects are visible immediately to all clients.
+     * Once executed, all cached data will be permanently lost. There is no way to recover
+     * the data after this operation completes.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * // Warning: This removes ALL data from ALL connected servers!
+     * // WARNING: This removes ALL data from ALL cache servers!
      * cache.flushAll();
      * System.out.println("All cache data cleared");
+     *
+     * // Safe usage in testing
+     * @After
+     * public void cleanupCache() {
+     *     if (isTestEnvironment()) {
+     *         cache.flushAll();
+     *     }
+     * }
+     *
+     * // Production usage with confirmation
+     * public void clearCache(String confirmationToken) {
+     *     if (!"CONFIRM_FLUSH_ALL".equals(confirmationToken)) {
+     *         throw new IllegalArgumentException("Invalid confirmation");
+     *     }
+     *     logger.warn("Flushing all cache data");
+     *     cache.flushAll();
+     *     auditLog.record("CACHE_FLUSH_ALL", user);
+     * }
      * }</pre>
      *
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
     public void flushAll() {
@@ -708,12 +1042,25 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * check when the operation completes. This is a destructive operation that removes all
      * keys from all servers and cannot be undone. Use with extreme caution in production.
      *
+     * <p>This method is thread-safe but its effects are visible immediately to all clients
+     * once the flush completes.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Simple async flush
      * Future<Boolean> future = cache.asyncFlushAll();
      * boolean flushed = future.get();
      * if (flushed) {
      *     System.out.println("All data flushed");
+     * }
+     *
+     * // Async flush with timeout
+     * Future<Boolean> future = cache.asyncFlushAll();
+     * try {
+     *     boolean flushed = future.get(2000, TimeUnit.MILLISECONDS);
+     *     System.out.println("Flush completed: " + flushed);
+     * } catch (TimeoutException e) {
+     *     logger.warn("Flush operation timed out");
      * }
      * }</pre>
      *
@@ -730,6 +1077,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * all keys from all servers and cannot be undone. The delay is converted from milliseconds
      * to seconds for Memcached (rounded up if not exact).
      *
+     * <p>This method is thread-safe but its effects are visible immediately to all clients
+     * after the delay period expires.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Schedule a flush to happen in 5 seconds
@@ -737,11 +1087,19 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * if (scheduled) {
      *     System.out.println("Flush scheduled for 5 seconds from now");
      * }
+     *
+     * // Delayed flush for maintenance window
+     * long delayUntilMaintenance = calculateDelayToMaintenance();
+     * boolean scheduled = cache.flushAll(delayUntilMaintenance);
+     * if (scheduled) {
+     *     logger.info("Cache flush scheduled for maintenance window");
+     * }
      * }</pre>
      *
-     * @param delay the delay in milliseconds before the flush operation is executed (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param delay the delay in milliseconds before the flush operation is executed (converted to seconds, rounded up if not exact). Must not be negative.
      * @return {@code true} if the flush was scheduled successfully, {@code false} otherwise
-     * @throws RuntimeException if the operation times out or encounters an error
+     * @throws IllegalArgumentException if {@code delay} is negative
+     * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean flushAll(final long delay) {
         return resultOf(mc.flush(toSeconds(delay)));
@@ -754,15 +1112,28 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * from all servers and cannot be undone. The delay is converted from milliseconds to seconds
      * for Memcached (rounded up if not exact).
      *
+     * <p>This method is thread-safe but its effects are visible immediately to all clients
+     * after the delay period expires.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Schedule a flush to happen in 10 seconds
      * Future<Boolean> future = cache.asyncFlushAll(10000);
      * boolean scheduled = future.get(); // Wait for scheduling confirmation
+     *
+     * // Async delayed flush with timeout
+     * Future<Boolean> future = cache.asyncFlushAll(30000);
+     * try {
+     *     boolean scheduled = future.get(1000, TimeUnit.MILLISECONDS);
+     *     System.out.println("Flush scheduled: " + scheduled);
+     * } catch (TimeoutException e) {
+     *     logger.warn("Failed to schedule flush");
+     * }
      * }</pre>
      *
-     * @param delay the delay in milliseconds before the flush operation is executed (converted to seconds, rounded up if not exact). Must be non-negative.
+     * @param delay the delay in milliseconds before the flush operation is executed (converted to seconds, rounded up if not exact). Must not be negative.
      * @return a Future that will indicate if the flush was scheduled successfully ({@code true}) or failed ({@code false})
+     * @throws IllegalArgumentException if {@code delay} is negative
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
         return mc.flush(toSeconds(delay));
@@ -774,14 +1145,38 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * operations will fail. Uses the default shutdown timeout from SpyMemcached. This method
      * is idempotent - calling it multiple times has no additional effect.
      *
+     * <p>This method should be called when the client is no longer needed to ensure
+     * proper cleanup of network connections, thread pools, and other resources. It is
+     * safe to call this method multiple times; subsequent calls will have no effect.</p>
+     *
+     * <p>This method is thread-safe, but once called, no other operations should be
+     * attempted on this client instance.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Try-finally pattern
+     * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211");
      * try {
-     *     // Use cache...
+     *     cache.set("user:123", user, 3600000);
+     *     User cached = cache.get("user:123");
      * } finally {
      *     cache.disconnect();
      *     System.out.println("Cache client disconnected");
      * }
+     *
+     * // Spring Bean destruction
+     * @PreDestroy
+     * public void cleanup() {
+     *     if (cache != null) {
+     *         cache.disconnect();
+     *     }
+     * }
+     *
+     * // Application shutdown hook
+     * Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+     *     logger.info("Shutting down cache client");
+     *     cache.disconnect();
+     * }));
      * }</pre>
      */
     @Override
@@ -799,16 +1194,32 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * any subsequent operations will fail. This method is idempotent - calling it multiple
      * times has no additional effect.
      *
+     * <p>This method should be called when the client is no longer needed to ensure
+     * proper cleanup of network connections, thread pools, and other resources. The timeout
+     * allows pending operations to complete gracefully.</p>
+     *
+     * <p>This method is thread-safe, but once called, no other operations should be
+     * attempted on this client instance.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Graceful shutdown with timeout
      * try {
      *     // Use cache...
      * } finally {
      *     cache.disconnect(5000); // Wait up to 5 seconds for cleanup
      * }
+     *
+     * // Application shutdown with graceful timeout
+     * public void shutdown() {
+     *     logger.info("Shutting down cache client");
+     *     cache.disconnect(10000); // Wait up to 10 seconds
+     *     logger.info("Cache client shutdown complete");
+     * }
      * }</pre>
      *
-     * @param timeout the maximum time to wait for shutdown in milliseconds. Must be non-negative.
+     * @param timeout the maximum time to wait for shutdown in milliseconds. Must not be negative.
+     * @throws IllegalArgumentException if {@code timeout} is negative
      */
     public synchronized void disconnect(final long timeout) {
         if (!isShutdown) {
@@ -824,14 +1235,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * When an InterruptedException occurs, the thread's interrupted status is restored
      * before throwing the runtime exception.
      *
+     * <p>This is a utility method used internally to convert asynchronous operations
+     * to synchronous ones by blocking on the Future result.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Internal usage pattern
      * Future<Boolean> future = mc.set("key", "value", 3600);
      * Boolean result = resultOf(future);
      * }</pre>
      *
      * @param <R> the type of result returned by the Future
-     * @param future the Future whose result is to be retrieved
+     * @param future the Future whose result is to be retrieved. Must not be {@code null}.
      * @return the result value from the Future
      * @throws RuntimeException if the Future execution fails or is interrupted
      */
