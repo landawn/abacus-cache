@@ -9,7 +9,9 @@
       "Bash(mvn clean compile javadoc:javadoc:*)",
       "Bash(mvn clean compile:*)",
       "Bash(dir:*)",
-      "Bash(mvn compile:*)"
+      "Bash(mvn compile:*)",
+      "Bash(findstr:*)",
+      "Bash(javac:*)"
     ],
     "deny": [],
     "ask": []

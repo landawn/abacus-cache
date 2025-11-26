@@ -24,34 +24,42 @@ import com.landawn.abacus.util.Strings;
 
 /**
  * A wrapper cache implementation that provides a standardized Cache interface for distributed cache clients.
- * This class adds key prefixing, error handling with retry logic, and adapts distributed cache
+ * This class adds key prefixing, error handling with circuit breaker pattern, and adapts distributed cache
  * client operations to the standard Cache interface. It's designed to work with any
  * DistributedCacheClient implementation like Memcached or Redis.
- * 
- * <br><br>
- * Key features:
+ *
+ * <p><b>Key Features:</b></p>
  * <ul>
  * <li>Automatic key prefixing for namespace isolation</li>
- * <li>Base64 encoding of keys for compatibility</li>
- * <li>Retry logic with configurable failure threshold</li>
- * <li>Transparent error recovery</li>
- * <li>Adaptation of TTL-only expiration to TTL+idle interface</li>
+ * <li>Base64 encoding of keys for compatibility with cache systems that restrict key characters</li>
+ * <li>Circuit breaker pattern on read operations to protect against cascading failures</li>
+ * <li>Transparent error recovery with configurable retry behavior</li>
+ * <li>Adaptation of TTL-only expiration to TTL+idle interface (maxIdleTime ignored)</li>
  * </ul>
- * 
+ *
+ * <p><b>Thread Safety:</b></p>
+ * This class is thread-safe. The circuit breaker state (failure counter and last failure time)
+ * is managed using atomic variables, and the close operation is synchronized. Multiple threads
+ * can safely perform concurrent cache operations.
  *
  * <p><b>Usage Examples:</b></p>
  * <pre>{@code
+ * // Create cache with full configuration
  * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
  * DistributedCache<String, User> cache = new DistributedCache<>(
  *     client,
- *     "myapp:",           // key prefix
- *     100,                // max failures before stopping retries
- *     1000                // retry delay in ms
+ *     "myapp:",           // key prefix for namespace isolation
+ *     100,                // max consecutive failures before circuit opens
+ *     1000                // retry delay in ms after circuit opens
  * );
  *
+ * // Basic operations
  * User user = new User("John");
- * cache.put("user:123", user, 3600000, 1800000);
+ * cache.put("user:123", user, 3600000, 0); // 1 hour TTL, maxIdleTime ignored
  * User cached = cache.gett("user:123");
+ *
+ * // Always close to release resources
+ * cache.close();
  * }</pre>
  *
  * @param <K> the key type
@@ -63,12 +71,15 @@ import com.landawn.abacus.util.Strings;
 public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
-     * Default maximum number of consecutive failures before stopping retry attempts.
+     * Default maximum number of consecutive failures before opening the circuit breaker.
+     * When failures exceed this threshold, the circuit opens and subsequent operations
+     * return immediately without attempting cache access until the retry delay expires.
      */
     protected static final int DEFAULT_MAX_FAILED_NUMBER = 100;
 
     /**
-     * Default delay in milliseconds between retry attempts after failures.
+     * Default delay in milliseconds before attempting to retry after the circuit breaker opens.
+     * When the circuit is open, operations fail fast until this delay has elapsed since the last failure.
      */
     protected static final long DEFAULT_RETRY_DELAY = 1000;
 
@@ -90,12 +101,16 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Creates a DistributedCache with default retry configuration.
-     * Uses an empty key prefix and default retry parameters (max 100 failures, 1000ms retry delay).
+     * Uses an empty key prefix and default circuit breaker parameters (max 100 consecutive failures, 1000ms retry delay).
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client);
+     *
+     * // Cache operations will use circuit breaker protection
+     * cache.put("key", new User("John"), 3600000, 0);
+     * User user = cache.gett("key");
      * }</pre>
      *
      * @param dcc the distributed cache client to wrap, must not be null
@@ -106,14 +121,18 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Creates a DistributedCache with a key prefix and default retry configuration.
-     * All keys will be prefixed for namespace isolation. Uses default retry parameters
-     * (max 100 failures, 1000ms retry delay).
+     * Creates a DistributedCache with a key prefix and default circuit breaker configuration.
+     * All keys will be prefixed for namespace isolation. Uses default circuit breaker parameters
+     * (max 100 consecutive failures, 1000ms retry delay).
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     *
+     * // All keys will be prefixed with "myapp:" and Base64 encoded
+     * cache.put("user:123", new User("John"), 3600000, 0);
+     * // Actual cache key: "myapp:" + Base64("user:123")
      * }</pre>
      *
      * @param dcc the distributed cache client to wrap, must not be null
@@ -125,25 +144,42 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Creates a DistributedCache with full configuration.
-     * Allows customization of key prefix and retry behavior. This is the most flexible
-     * constructor allowing full control over all cache parameters.
+     * Creates a DistributedCache with full configuration including circuit breaker parameters.
+     * This is the most flexible constructor allowing full control over key prefixing and
+     * circuit breaker behavior. Use this constructor when you need fine-grained control over
+     * error handling and retry logic.
+     *
+     * <p><b>Circuit Breaker Parameters:</b></p>
+     * <ul>
+     * <li>{@code maxFailedNumForRetry}: Number of consecutive failures before circuit opens</li>
+     * <li>{@code retryDelay}: Milliseconds to wait before attempting retry after circuit opens</li>
+     * </ul>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(
+     *
+     * // More aggressive circuit breaker (opens faster, retries sooner)
+     * DistributedCache<String, User> aggressiveCache = new DistributedCache<>(
      *     client,
      *     "myapp:",  // key prefix for namespace isolation
-     *     100,       // max consecutive failures
-     *     1000       // retry delay in milliseconds
+     *     10,        // open circuit after just 10 consecutive failures
+     *     500        // retry after 500ms
+     * );
+     *
+     * // More tolerant circuit breaker (slower to open, longer retry delay)
+     * DistributedCache<String, User> tolerantCache = new DistributedCache<>(
+     *     client,
+     *     "myapp:",
+     *     200,       // allow up to 200 consecutive failures
+     *     5000       // wait 5 seconds before retry
      * );
      * }</pre>
      *
      * @param dcc the distributed cache client to wrap, must not be null
      * @param keyPrefix the prefix to prepend to all keys (empty string or null for no prefix)
-     * @param maxFailedNumForRetry maximum consecutive failures before stopping retries (must be positive)
-     * @param retryDelay delay in milliseconds between retry attempts after failure threshold is reached (must be non-negative)
+     * @param maxFailedNumForRetry maximum consecutive failures before opening circuit breaker (should be positive)
+     * @param retryDelay delay in milliseconds before attempting retry after circuit opens (should be non-negative)
      * @throws IllegalArgumentException if dcc is null
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
@@ -159,29 +195,39 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Retrieves a value from the distributed cache by its key.
-     * This method implements automatic retry logic with circuit breaker pattern to protect
-     * against cascading failures. Keys are automatically prefixed and Base64 encoded for
-     * compatibility with distributed cache systems that have key format restrictions.
+     * This method implements circuit breaker pattern to protect against cascading failures
+     * when the distributed cache becomes unavailable. Keys are automatically prefixed and
+     * Base64 encoded for compatibility with distributed cache systems that have key format restrictions.
      *
-     * <p><b>Retry Mechanism (Circuit Breaker):</b></p>
+     * <p><b>Circuit Breaker Behavior:</b></p>
+     * The circuit breaker has three states:
      * <ul>
-     * <li>Tracks consecutive failures and time of last failure</li>
-     * <li>When failures exceed {@code maxFailedNumForRetry}, enters "open circuit" state</li>
-     * <li>During open circuit (within {@code retryDelay} ms of last failure), returns {@code null} immediately</li>
-     * <li>After retry delay expires, attempts operation again (half-open state)</li>
-     * <li>Successful operations reset failure counter to zero (closed circuit)</li>
-     * <li>All exceptions from underlying cache client are caught and {@code null} returned</li>
+     * <li><b>Closed (Normal):</b> Operations proceed normally. Tracks failure count.</li>
+     * <li><b>Open (Failing Fast):</b> When {@code failedCounter > maxFailedNumForRetry} AND within {@code retryDelay}
+     *     milliseconds of last failure, returns {@code null} immediately without attempting cache access.</li>
+     * <li><b>Half-Open (Testing):</b> After {@code retryDelay} expires, attempts one operation to test if cache recovered.</li>
      * </ul>
+     *
+     * <p><b>State Transitions:</b></p>
+     * <ul>
+     * <li>Successful operation: Resets {@code failedCounter} to 0 and {@code lastFailedTime} to 0 (closes circuit)</li>
+     * <li>Failed operation: Increments {@code failedCounter} and updates {@code lastFailedTime} to current time</li>
+     * <li>All exceptions from underlying cache client are caught and treated as failures</li>
+     * </ul>
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is thread-safe. The failure counter and last failure time are managed using
+     * {@link AtomicInteger} and {@link AtomicLong} respectively, allowing safe concurrent access.
      *
      * <p><b>Key Processing:</b></p>
      * The key is transformed as follows: {@code key -> keyPrefix + Base64(UTF8(toString(k)))}.
      * Base64 encoding ensures compatibility with cache systems that restrict key characters
-     * (e.g., spaces, special characters).
+     * (e.g., spaces, special characters, Unicode).
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:", 100, 1000);
      *
      * // Basic retrieval with null check
      * User user = cache.gett("user:123");
@@ -194,10 +240,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     cache.put("user:123", user, 3600000, 0);
      * }
      *
-     * // Cache-aside pattern
+     * // Cache-aside pattern with circuit breaker protection
      * User getUser(String userId) {
      *     User user = cache.gett("user:" + userId);
      *     if (user == null) {
+     *         // Fallback to database (could be cache miss or circuit breaker open)
      *         user = database.findUser(userId);
      *         if (user != null) {
      *             cache.put("user:" + userId, user, 3600000, 0);
@@ -262,7 +309,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Only {@code liveTime} affects expiration ({@code maxIdleTime} is ignored)</li>
      * <li>Returns {@code false} on network errors or timeouts</li>
      * <li>Does not implement circuit breaker logic (unlike {@link #gett(Object)})</li>
+     * <li>Does not affect or reset the circuit breaker failure counter</li>
      * </ul>
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is thread-safe and can be called concurrently from multiple threads.
+     * The underlying distributed cache client handles thread-safe operations.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -274,20 +326,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * boolean success = cache.put("user:123", user, 3600000, 0);
      * if (success) {
      *     System.out.println("User cached successfully");
+     * } else {
+     *     System.out.println("Failed to cache user (network error or timeout)");
      * }
      *
      * // Session caching with 30 minute TTL
      * Session session = new Session("abc123");
      * cache.put("session:" + session.getId(), session, 1800000, 1800000); // idle time ignored
      *
-     * // No expiration (permanent until manually deleted)
+     * // No expiration (permanent until manually deleted or evicted)
      * Config config = loadConfig();
      * cache.put("app:config", config, 0, 0);
      *
      * // Update existing cache entry with new TTL
      * User updated = cache.gett("user:123");
-     * updated.setLastLogin(System.currentTimeMillis());
-     * cache.put("user:123", updated, 7200000, 0); // 2 hour TTL
+     * if (updated != null) {
+     *     updated.setLastLogin(System.currentTimeMillis());
+     *     cache.put("user:123", updated, 7200000, 0); // 2 hour TTL
+     * }
      * }</pre>
      *
      * @param k the cache key, must not be null
@@ -309,7 +365,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes a key-value pair from the distributed cache.
-     * This operation is idempotent and thread-safe - it succeeds whether the key exists or not.
+     * This operation is idempotent - it succeeds whether the key exists or not.
      * Keys are automatically prefixed and Base64 encoded before deletion.
      *
      * <p><b>Behavior:</b></p>
@@ -317,9 +373,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Removes the entry if the key exists</li>
      * <li>Silently succeeds if the key does not exist (no error)</li>
      * <li>Returns void (does not indicate success/failure or key existence)</li>
-     * <li>Safe to call multiple times with the same key</li>
+     * <li>Safe to call multiple times with the same key (idempotent)</li>
      * <li>Network errors are silently ignored (no exception thrown)</li>
+     * <li>Does not implement circuit breaker logic</li>
      * </ul>
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is thread-safe and can be called concurrently from multiple threads.
+     * However, in a distributed environment, concurrent removes from different clients
+     * may race, which is inherent to distributed systems.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -329,11 +391,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Basic removal
      * cache.remove("user:123"); // Removes if exists, no-op if doesn't exist
      *
-     * // Safe to call multiple times
+     * // Safe to call multiple times (idempotent)
      * cache.remove("user:123");
      * cache.remove("user:123"); // No exception thrown
      *
-     * // Cache invalidation on update
+     * // Cache invalidation on update (write-through pattern)
      * void updateUser(User user) {
      *     database.save(user);
      *     cache.remove("user:" + user.getId()); // Invalidate cache
@@ -378,7 +440,16 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>May return {@code false} on network errors (exceptions are caught)</li>
      * <li>Returns {@code false} for expired entries</li>
      * <li>Returns {@code false} if the cached value is null</li>
+     * <li>Subject to circuit breaker state (same as {@link #gett(Object)})</li>
      * </ul>
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is thread-safe and inherits the thread-safety guarantees of {@link #gett(Object)}.
+     *
+     * <p><b>Performance Consideration:</b></p>
+     * Since this method performs a full GET operation, if you need the value afterward,
+     * it's more efficient to call {@link #gett(Object)} directly and check for null
+     * rather than calling {@code containsKey()} followed by {@code gett()}.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -392,21 +463,22 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     System.out.println("User not in cache (or circuit breaker open)");
      * }
      *
-     * // Avoid redundant retrieval
+     * // Conditional caching
      * if (!cache.containsKey("config:settings")) {
      *     Config config = loadConfigFromFile();
      *     cache.put("config:settings", config, 0, 0);
      * }
      *
-     * // Note: This performs a GET, so you might as well use the value
-     * // Less efficient:
+     * // INEFFICIENT - performs GET twice:
      * if (cache.containsKey("user:123")) {
-     *     User user = cache.gett("user:123"); // Second GET operation
+     *     User user = cache.gett("user:123"); // Second GET operation!
+     *     processUser(user);
      * }
-     * // More efficient:
+     *
+     * // EFFICIENT - performs GET once:
      * User user = cache.gett("user:123");
      * if (user != null) {
-     *     // Use user
+     *     processUser(user);
      * }
      * }</pre>
      *
@@ -430,9 +502,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Rationale for not supporting this operation:</b></p>
      * <ul>
      * <li>Distributed caches like Memcached and Redis do not efficiently support key enumeration</li>
-     * <li>Retrieving all keys would require scanning entire cache servers, causing performance issues</li>
+     * <li>Retrieving all keys would require scanning entire cache servers, causing severe performance degradation</li>
      * <li>The result would be inconsistent across concurrent operations in distributed environments</li>
      * <li>Key prefixing and Base64 encoding makes key filtering complex and inefficient</li>
+     * <li>Would return keys from all applications sharing the cache servers, not just this instance</li>
      * </ul>
      *
      * @return never returns normally
@@ -453,10 +526,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Rationale for not supporting this operation:</b></p>
      * <ul>
      * <li>Distributed caches typically do not track total entry count</li>
-     * <li>Counting entries would require scanning all cache servers, causing performance issues</li>
+     * <li>Counting entries would require scanning all cache servers, causing severe performance degradation</li>
      * <li>The count would include entries from all applications sharing the cache servers</li>
      * <li>Key prefixing makes it impossible to count only this cache instance's entries efficiently</li>
      * <li>The result would be immediately stale in concurrent distributed environments</li>
+     * <li>No efficient way to distinguish this instance's keys from others without full server scan</li>
      * </ul>
      *
      * @return never returns normally
@@ -479,9 +553,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Flushes <b>ALL</b> data from all cache servers (not just keys with this instance's prefix)</li>
      * <li>Affects all applications sharing the same cache servers</li>
      * <li>Cannot be undone - all cached data is permanently lost</li>
-     * <li>May cause sudden load spike on backend systems as all caches are cold</li>
+     * <li>May cause sudden load spike on backend systems as all caches become cold simultaneously</li>
      * <li>Should typically only be used in testing or with dedicated cache servers</li>
+     * <li>Does not reset the circuit breaker state</li>
      * </ul>
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is thread-safe. However, due to the global impact, concurrent calls from
+     * multiple threads will all trigger flush operations on the distributed cache servers.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -500,7 +579,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     }
      * }
      *
-     * // Production usage - AVOID or require confirmation
+     * // Production usage - AVOID or require explicit confirmation
      * public void clearProductionCache(String confirmationToken) {
      *     if (!"CONFIRM_FLUSH_ALL_PRODUCTION".equals(confirmationToken)) {
      *         throw new IllegalArgumentException("Invalid confirmation");
@@ -513,6 +592,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * @throws IllegalStateException if the cache has been closed
      * @see DistributedCacheClient#flushAll()
+     * @see #remove(Object)
      */
     @Override
     public void clear() {
@@ -529,11 +609,17 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Resource Cleanup:</b></p>
      * <ul>
      * <li>Disconnects from all cache servers</li>
-     * <li>Releases network connections and thread pools</li>
+     * <li>Releases network connections and thread pools managed by the underlying cache client</li>
      * <li>Marks cache as closed ({@link #isClosed()} returns true)</li>
-     * <li>Does not flush cached data from servers (data remains until expired)</li>
+     * <li>Does not flush cached data from servers (data remains until expired or evicted)</li>
+     * <li>Does not reset circuit breaker state (failure counters remain in their current state)</li>
      * <li>Safe to call multiple times (idempotent)</li>
      * </ul>
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is synchronized to ensure thread-safe closure. Multiple threads calling {@code close()}
+     * concurrently will be serialized, and only the first call will perform the actual disconnection.
+     * Subsequent calls return immediately without additional work.
      *
      * <p><b>Post-Close Behavior:</b></p>
      * After closing, all operations except {@link #isClosed()} and {@link #close()} will throw
@@ -541,7 +627,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * // Try-with-resources (recommended)
+     * // Try-with-resources (recommended - implements AutoCloseable)
      * try (DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:")) {
      *     cache.put("user:123", user, 3600000, 0);
      *     User cached = cache.gett("user:123");
@@ -565,9 +651,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     }
      * }));
      *
-     * // Safe to call multiple times
+     * // Safe to call multiple times (idempotent)
      * cache.close();
      * cache.close(); // No exception thrown
+     *
+     * // Verify operations fail after close
+     * cache.close();
+     * cache.gett("key"); // Throws IllegalStateException
      * }</pre>
      *
      * @see DistributedCacheClient#disconnect()
@@ -596,7 +686,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Thread-safe and can be called from multiple threads concurrently</li>
      * <li>Does not throw exceptions even if the cache is in an error state</li>
      * <li>Once true, will always remain true (caches cannot be reopened)</li>
+     * <li>Reads the volatile {@code isClosed} field, ensuring visibility across threads</li>
      * </ul>
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is thread-safe. The {@code isClosed} field is declared as {@code volatile},
+     * ensuring that changes made by {@link #close()} are immediately visible to all threads
+     * calling this method.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -625,7 +721,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     }
      * }
      *
-     * // Conditional cleanup
+     * // Conditional cleanup in shutdown hooks
      * public void shutdown() {
      *     if (!cache.isClosed()) {
      *         cache.close();
@@ -648,6 +744,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Transformation Process:</b></p>
      * <ol>
+     * <li>Validate key is not null (throws {@link IllegalArgumentException} if null)</li>
      * <li>Convert key to string: {@code N.stringOf(k)}</li>
      * <li>Encode to UTF-8 bytes: {@code toString(k).getBytes(Charsets.UTF_8)}</li>
      * <li>Base64 encode: {@code Strings.base64Encode(bytes)}</li>
@@ -658,9 +755,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <ul>
      * <li>Ensures keys are ASCII-safe for Memcached (which restricts key characters)</li>
      * <li>Handles Unicode characters in keys safely</li>
-     * <li>Avoids issues with special characters (spaces, newlines, etc.)</li>
+     * <li>Avoids issues with special characters (spaces, newlines, control characters, etc.)</li>
      * <li>Provides consistent key format across different cache systems</li>
+     * <li>Eliminates risk of key injection or parsing issues in cache protocols</li>
      * </ul>
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is thread-safe and stateless. Multiple threads can call this method
+     * concurrently without synchronization.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -681,6 +783,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // With spaces and special characters
      * String specialKey = cache.generateKey("my key with spaces!");
      * // Result: "myapp:bXkga2V5IHdpdGggc3BhY2VzIQ==" (safe for all cache systems)
+     *
+     * // Integer key (converted to string first)
+     * String intKey = cache.generateKey(12345);
+     * // Result: "myapp:MTIzNDU=" (prefix + Base64 of "12345")
      * }</pre>
      *
      * @param k the original key, must not be null
@@ -701,12 +807,17 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     /**
      * Ensures the cache is not closed before performing operations.
      * This method is called at the beginning of most cache operations to prevent
-     * operations on a closed cache, which could lead to resource leaks or undefined behavior.
+     * operations on a closed cache, which could lead to resource leaks, network errors,
+     * or undefined behavior.
      *
      * <p><b>Usage:</b></p>
      * This is a protected utility method used internally by cache operation methods
      * ({@link #gett(Object)}, {@link #put(Object, Object, long, long)}, {@link #remove(Object)}, {@link #clear()})
-     * to validate cache state before proceeding.
+     * to validate cache state before proceeding with operations.
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method is thread-safe and reads the volatile {@code isClosed} field to ensure
+     * visibility of close operations across threads.
      *
      * @throws IllegalStateException if the cache has been closed (i.e., {@link #isClosed()} returns true)
      * @see #isClosed()

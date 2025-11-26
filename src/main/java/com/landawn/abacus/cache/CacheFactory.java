@@ -87,7 +87,7 @@ public final class CacheFactory {
      * // Create cache with 1000 entries capacity, checking for expired entries every minute
      * LocalCache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.put("user:123", user);
-     * User retrieved = cache.get("user:123");
+     * User retrieved = cache.gett("user:123");
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -95,6 +95,7 @@ public final class CacheFactory {
      * @param capacity the maximum number of entries the cache can hold (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
      * @return a new LocalCache instance with the specified configuration
+     * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      * @see #createLocalCache(int, long, long, long)
      * @see #createLocalCache(long, long, KeyedObjectPool)
      */
@@ -126,9 +127,10 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param capacity the maximum number of entries the cache can hold (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
-     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (must be positive)
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (must be positive)
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 for no expiration)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 for no idle timeout)
      * @return a new LocalCache instance with the specified configuration
+     * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      * @see #createLocalCache(int, long)
      * @see #createLocalCache(long, long, KeyedObjectPool)
      */
@@ -163,8 +165,8 @@ public final class CacheFactory {
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (must be positive)
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (must be positive)
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 for no expiration)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 for no idle timeout)
      * @param pool the pre-configured KeyedObjectPool to use for managing cache entries (must not be null)
      * @return a new LocalCache instance configured with the specified pool
      * @throws IllegalArgumentException if pool is null
@@ -184,7 +186,7 @@ public final class CacheFactory {
      * <p>This is the simplest way to create a distributed cache, using default settings:
      * <ul>
      * <li>No key prefix (keys used as-is)</li>
-     * <li>Default retry configuration from DistributedCache</li>
+     * <li>Default retry configuration: max 100 consecutive failures, 1000ms retry delay</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b></p>
@@ -215,7 +217,7 @@ public final class CacheFactory {
      * Creates a DistributedCache with a key prefix for namespace isolation.
      * All cache keys will be automatically prefixed with the specified string,
      * allowing multiple applications or modules to share the same cache server
-     * without key collisions.
+     * without key collisions. Uses default retry configuration: max 100 consecutive failures, 1000ms retry delay.
      *
      * <p>Key prefixing is useful for:
      * <ul>
@@ -241,9 +243,9 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap (must not be null)
-     * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix, must not be null)
+     * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
      * @return a new DistributedCache instance with key prefixing enabled
-     * @throws IllegalArgumentException if dcc or keyPrefix is null
+     * @throws IllegalArgumentException if dcc is null
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String, int, long)
      * @see #createCache(String)
@@ -284,11 +286,11 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap (must not be null)
-     * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix, must not be null)
-     * @param maxFailedNumForRetry the maximum number of consecutive failures before giving up on retries (must be non-negative, 0 to disable retries)
-     * @param retryDelay the delay in milliseconds between retry attempts (must be non-negative)
+     * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
+     * @param maxFailedNumForRetry the maximum number of consecutive failures before giving up on retries (must be positive)
+     * @param retryDelay the delay in milliseconds between retry attempts after failure threshold is reached (must be non-negative)
      * @return a new DistributedCache instance with custom retry configuration
-     * @throws IllegalArgumentException if dcc or keyPrefix is null, or if maxFailedNumForRetry or retryDelay is negative
+     * @throws IllegalArgumentException if dcc is null
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createCache(String)
@@ -313,11 +315,11 @@ public final class CacheFactory {
      *
      * <p><b>Supported formats:</b>
      * <ul>
-     * <li>{@code Memcached(serverUrl)} - Creates SpyMemcached client with default timeout</li>
-     * <li>{@code Memcached(serverUrl,keyPrefix)} - With key prefix for namespace isolation</li>
+     * <li>{@code Memcached(serverUrl)} - Creates SpyMemcached client with default timeout (1000ms)</li>
+     * <li>{@code Memcached(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code Memcached(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
-     * <li>{@code Redis(serverUrl)} - Creates JRedis client with default timeout</li>
-     * <li>{@code Redis(serverUrl,keyPrefix)} - With key prefix for namespace isolation</li>
+     * <li>{@code Redis(serverUrl)} - Creates JRedis client with default timeout (1000ms)</li>
+     * <li>{@code Redis(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code Redis(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
      * <li>{@code com.example.CustomCache(params...)} - Custom implementation with fully qualified class name</li>
      * </ul>
@@ -349,11 +351,11 @@ public final class CacheFactory {
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param provider the cache provider specification string (must not be null or empty)
+     * @param provider the cache provider specification string in format "ClassName(param1,param2,...)" (must not be null or empty)
      * @return a new Cache instance configured according to the specification
-     * @throws IllegalArgumentException if the provider specification is invalid, has incorrect number of parameters,
-     *         missing required parameters, or contains invalid parameter values (e.g., non-numeric timeout)
-     * @throws RuntimeException if custom class instantiation fails (class not found, reflection errors, constructor issues, etc.)
+     * @throws IllegalArgumentException if provider is null or empty, missing required parameters, has unsupported number of parameters
+     *         (more than 3 for Memcached/Redis), or contains invalid timeout value (non-numeric)
+     * @throws RuntimeException if custom class cannot be instantiated (class not found, no suitable constructor, instantiation fails, etc.)
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createLocalCache(int, long)

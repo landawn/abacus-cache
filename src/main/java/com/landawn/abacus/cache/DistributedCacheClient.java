@@ -181,7 +181,7 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Stores a key-value pair in the cache with a specified time-to-live.
-     * If the key already exists, its value will be replaced. The liveTime parameter
+     * If the key already exists, its value will be replaced. The {@code liveTime} parameter
      * is converted from milliseconds to seconds (rounded up if not exact) for storage.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
@@ -506,7 +506,7 @@ public interface DistributedCacheClient<T> {
      * }
      *
      * // Try-with-resources pattern (if implementing AutoCloseable)
-     * try (AutoCloseable closeable = client::disconnect) {
+     * try (AutoCloseable closeable = () -> client.disconnect()) {
      *     client.set("key", value, 3600000);
      *     // Client will be disconnected automatically
      * }

@@ -104,8 +104,10 @@ public interface OffHeapStore<K> {
      * Retrieves the byte array associated with the specified key.
      * Returns {@code null} if the key is not found or if an error occurs during retrieval.
      * Implementations should consider returning a defensive copy to prevent external
-     * modifications, though this is implementation-specific. This method should be
-     * thread-safe and support concurrent access.
+     * modifications, though this is implementation-specific.
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method must be thread-safe and support concurrent access from multiple threads.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -119,8 +121,9 @@ public interface OffHeapStore<K> {
      * }
      * }</pre>
      *
-     * @param key the key whose associated value is to be retrieved
+     * @param key the key whose associated value is to be retrieved; must not be {@code null}
      * @return the stored byte array, or {@code null} if not found or an error occurs
+     * @throws NullPointerException if the key is {@code null} (implementation-dependent)
      */
     byte[] get(K key);
 
@@ -129,7 +132,9 @@ public interface OffHeapStore<K> {
      * If a value already exists for the key, it should be replaced.
      * Implementations should consider making a defensive copy of the byte array
      * if necessary to prevent external modifications, though this is implementation-specific.
-     * This method should be thread-safe and support concurrent access.
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method must be thread-safe and support concurrent access from multiple threads.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -144,17 +149,20 @@ public interface OffHeapStore<K> {
      * }
      * }</pre>
      *
-     * @param key the key with which the specified value is to be associated
-     * @param value the byte array value to store; must not be null
+     * @param key the key with which the specified value is to be associated; must not be {@code null}
+     * @param value the byte array value to store; must not be {@code null}
      * @return {@code true} if the value was successfully stored, {@code false} otherwise
+     * @throws NullPointerException if the key or value is {@code null} (implementation-dependent)
      */
     boolean put(K key, byte[] value);
 
     /**
      * Removes the value associated with the specified key.
      * Returns {@code true} if a value was removed, {@code false} if the key was not found
-     * or if an error occurred during removal. This method should be thread-safe and
-     * support concurrent access. It is safe to call remove() for a non-existent key.
+     * or if an error occurred during removal. It is safe to call this method for a non-existent key.
+     *
+     * <p><b>Thread Safety:</b></p>
+     * This method must be thread-safe and support concurrent access from multiple threads.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -166,8 +174,9 @@ public interface OffHeapStore<K> {
      * }
      * }</pre>
      *
-     * @param key the key whose associated value is to be removed
+     * @param key the key whose associated value is to be removed; must not be {@code null}
      * @return {@code true} if a value was removed, {@code false} otherwise
+     * @throws NullPointerException if the key is {@code null} (implementation-dependent)
      */
     boolean remove(K key);
 

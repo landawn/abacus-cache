@@ -27,6 +27,10 @@ import java.util.Map;
  * providing server URL management, default implementations for optional bulk
  * operations and flush functionality, and utility methods for time conversion.</p>
  *
+ * <p><b>Thread Safety:</b> This class is thread-safe. The {@code serverUrl} field is
+ * immutable after construction. Subclasses must ensure their implementations of abstract
+ * methods are thread-safe to maintain the overall thread safety guarantee.</p>
+ *
  * <br><br>
  * Key features:
  * <ul>
@@ -58,17 +62,60 @@ import java.util.Map;
  * <pre>{@code
  * // Example custom implementation
  * public class MyDistributedCache<T> extends AbstractDistributedCacheClient<T> {
+ *     private final MyClient client;
+ *
  *     public MyDistributedCache(String serverUrl) {
  *         super(serverUrl);
+ *         this.client = new MyClient(serverUrl);
  *     }
  *
  *     @Override
  *     public T get(String key) {
  *         // Implementation-specific logic
- *         return null;
+ *         return client.retrieve(key);
  *     }
  *
- *     // ... implement other abstract methods
+ *     @Override
+ *     public boolean set(String key, T obj, long liveTime) {
+ *         int ttl = toSeconds(liveTime); // Use utility method
+ *         return client.store(key, obj, ttl);
+ *     }
+ *
+ *     @Override
+ *     public boolean delete(String key) {
+ *         return client.remove(key);
+ *     }
+ *
+ *     @Override
+ *     public long incr(String key) {
+ *         return client.increment(key, 1);
+ *     }
+ *
+ *     @Override
+ *     public long incr(String key, int delta) {
+ *         return client.increment(key, delta);
+ *     }
+ *
+ *     @Override
+ *     public long decr(String key) {
+ *         return client.decrement(key, 1);
+ *     }
+ *
+ *     @Override
+ *     public long decr(String key, int delta) {
+ *         return client.decrement(key, delta);
+ *     }
+ *
+ *     @Override
+ *     public void disconnect() {
+ *         client.close();
+ *     }
+ *
+ *     // Optionally override bulk operations if supported
+ *     @Override
+ *     public Map<String, T> getBulk(String... keys) {
+ *         return client.multiGet(keys);
+ *     }
  * }
  * }</pre>
  *
@@ -91,6 +138,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * space-separated values, or other formats. Consult the specific implementation
      * documentation for the exact format.</p>
      *
+     * <p><b>Thread Safety:</b> This constructor is safe to call from any thread.
+     * The {@code serverUrl} parameter is stored as an immutable field.</p>
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Single server
@@ -101,6 +151,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * }</pre>
      *
      * @param serverUrl the server URL(s) for connecting to the distributed cache, must not be {@code null}
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null} (implementation-specific)
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
         this.serverUrl = serverUrl;
@@ -133,9 +184,20 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * This is more efficient than multiple individual get operations.
      * Keys not found in the cache will not be present in the returned map.
      *
-     * <p>This default implementation throws {@code UnsupportedOperationException}.
-     * Subclasses that support bulk operations should override this method to provide
-     * the actual implementation. Implementations should be thread-safe and handle
+     * <p><b>Default Implementation:</b> This default implementation throws {@code UnsupportedOperationException}.
+     * Subclasses should override this method if the underlying cache system supports bulk retrieval
+     * operations (such as Memcached's getMulti or Redis's MGET). If the underlying system does not
+     * provide native bulk operations, subclasses may choose to implement this by performing multiple
+     * individual get operations, though this defeats the performance benefit.</p>
+     *
+     * <p><b>When to Override:</b>
+     * <ul>
+     * <li>The underlying cache system provides native bulk retrieval operations</li>
+     * <li>Performance optimization is needed for multi-key retrieval scenarios</li>
+     * <li>Your use case frequently requires retrieving multiple related cache entries</li>
+     * </ul>
+     *
+     * <p><b>Thread Safety:</b> Implementations must be thread-safe and handle
      * concurrent access safely across distributed cache clients.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -144,13 +206,19 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * Map<String, User> users = client.getBulk("user:123", "user:456", "user:789");
      * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));
+     *
+     * // Handling missing keys
+     * String[] requestedKeys = {"user:1", "user:2", "user:3"};
+     * Map<String, User> result = client.getBulk(requestedKeys);
+     * System.out.println("Retrieved " + result.size() + " out of " + requestedKeys.length + " users");
      * }</pre>
      *
      * @param keys the cache keys to retrieve values for (variable number of String arguments),
      *             must not be {@code null} or contain {@code null} elements
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
-     * @throws UnsupportedOperationException if this operation is not supported by the implementation
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
+     * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements (implementation-specific)
+     * @throws RuntimeException if a network error or timeout occurs (implementation-specific)
      * @see #getBulk(Collection)
      */
     @Override
@@ -163,9 +231,25 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * This is more efficient than multiple individual get operations.
      * Keys not found in the cache will not be present in the returned map.
      *
-     * <p>This default implementation throws {@code UnsupportedOperationException}.
-     * Subclasses that support bulk operations should override this method to provide
-     * the actual implementation. Implementations should be thread-safe and handle
+     * <p><b>Default Implementation:</b> This default implementation throws {@code UnsupportedOperationException}.
+     * Subclasses should override this method if the underlying cache system supports bulk retrieval
+     * operations (such as Memcached's getMulti or Redis's MGET). If the underlying system does not
+     * provide native bulk operations, subclasses may choose to implement this by performing multiple
+     * individual get operations, though this defeats the performance benefit.</p>
+     *
+     * <p><b>When to Override:</b>
+     * <ul>
+     * <li>The underlying cache system provides native bulk retrieval operations</li>
+     * <li>Performance optimization is needed for multi-key retrieval scenarios</li>
+     * <li>Your use case frequently requires retrieving multiple related cache entries</li>
+     * <li>You need to accept dynamically generated key collections (Lists, Sets, etc.)</li>
+     * </ul>
+     *
+     * <p><b>Implementation Note:</b> If you override this method, you should typically also
+     * override {@link #getBulk(String...)} and potentially implement it by delegating to this
+     * method using {@code Arrays.asList(keys)} for consistency.</p>
+     *
+     * <p><b>Thread Safety:</b> Implementations must be thread-safe and handle
      * concurrent access safely across distributed cache clients.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -175,13 +259,21 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * List<String> userKeys = Arrays.asList("user:123", "user:456", "user:789");
      * Map<String, User> users = client.getBulk(userKeys);
      * System.out.println("Retrieved " + users.size() + " users");
+     *
+     * // Using with dynamically generated keys
+     * List<Integer> productIds = Arrays.asList(101, 102, 103);
+     * Set<String> productKeys = productIds.stream()
+     *         .map(id -> "product:" + id)
+     *         .collect(Collectors.toSet());
+     * Map<String, Product> products = client.getBulk(productKeys);
      * }</pre>
      *
      * @param keys the collection of cache keys to retrieve values for,
      *             must not be {@code null} or contain {@code null} elements
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
-     * @throws UnsupportedOperationException if this operation is not supported by the implementation
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
+     * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements (implementation-specific)
+     * @throws RuntimeException if a network error or timeout occurs (implementation-specific)
      * @see #getBulk(String...)
      */
     @Override
@@ -194,14 +286,29 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * This is a destructive operation that affects all data across all servers.
      * Use with extreme caution in production environments.
      *
-     * <p>This default implementation throws {@code UnsupportedOperationException}.
-     * Subclasses that support flush operations should override this method to provide
-     * the actual implementation. Implementations should be thread-safe but note that
+     * <p><b>Default Implementation:</b> This default implementation throws {@code UnsupportedOperationException}.
+     * Subclasses should override this method if the underlying cache system supports flush/clear operations
+     * (such as Memcached's flush_all or Redis's FLUSHALL/FLUSHDB). This operation is typically used for
+     * testing purposes or administrative maintenance.</p>
+     *
+     * <p><b>When to Override:</b>
+     * <ul>
+     * <li>The underlying cache system provides flush/clear operations</li>
+     * <li>You need to support testing scenarios that require a clean cache state</li>
+     * <li>Administrative operations require the ability to clear all cached data</li>
+     * </ul>
+     *
+     * <p><b>Implementation Note:</b> Implementations should ensure this operation affects all
+     * connected servers when using a multi-server configuration. The operation should be idempotent
+     * (safe to call multiple times).</p>
+     *
+     * <p><b>Thread Safety:</b> Implementations must be thread-safe. However, note that
      * once executed, all cached data will be permanently lost and the effects are
-     * visible immediately to all clients.</p>
+     * visible immediately to all clients connected to the same cache servers.</p>
      *
      * <p><b>Warning:</b> This is a destructive operation that removes all data
-     * from all connected cache servers. Use with extreme caution.</p>
+     * from all connected cache servers. There is no way to undo this operation.
+     * Use with extreme caution in production environments.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -210,9 +317,20 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * // WARNING: This removes ALL data from all cache servers!
      * client.flushAll();
      * System.out.println("All cache data cleared");
+     *
+     * // Safe usage in testing
+     * @After
+     * public void cleanupCache() {
+     *     try {
+     *         cacheClient.flushAll();
+     *     } catch (UnsupportedOperationException e) {
+     *         // Cache implementation doesn't support flush
+     *     }
+     * }
      * }</pre>
      *
-     * @throws UnsupportedOperationException if this operation is not supported by the implementation
+     * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
+     * @throws RuntimeException if a network error or timeout occurs (implementation-specific)
      */
     @Override
     public void flushAll() throws UnsupportedOperationException {
@@ -225,13 +343,22 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * so this utility method converts milliseconds (used by the Cache interface) to seconds.
      * The method rounds up to ensure the TTL is not shorter than requested.
      *
-     * <p>Rounding behavior:
+     * <p><b>Rounding Behavior:</b>
      * <ul>
      * <li>Exact seconds (e.g., 2000ms) are converted exactly (2000ms → 2s)</li>
      * <li>Fractional seconds are rounded up (e.g., 1500ms → 2s, 999ms → 1s)</li>
      * <li>This ensures cached items live at least as long as requested</li>
+     * <li>Zero milliseconds returns zero seconds (no expiration)</li>
      * </ul>
      * </p>
+     *
+     * <p><b>Implementation Details:</b> The conversion algorithm uses integer division
+     * and modulo operations to efficiently round up fractional seconds. If the millisecond
+     * value is evenly divisible by 1000, it performs exact division. Otherwise, it adds 1
+     * to round up. This ensures that a TTL of 1ms becomes 1s, not 0s.</p>
+     *
+     * <p><b>Thread Safety:</b> This method is thread-safe as it has no side effects
+     * and operates only on method parameters.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -248,11 +375,19 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * int seconds2 = toSeconds(2000);  // Returns 2 (exactly 2s)
      * int seconds3 = toSeconds(999);   // Returns 1 (rounds up to 1s)
      * int seconds4 = toSeconds(0);     // Returns 0 (no expiration)
+     * int seconds5 = toSeconds(3600000); // Returns 3600 (1 hour)
+     *
+     * // Common TTL values:
+     * int oneMinute = toSeconds(60000);      // 60 seconds
+     * int oneHour = toSeconds(3600000);      // 3600 seconds
+     * int oneDay = toSeconds(86400000);      // 86400 seconds
+     * int oneWeek = toSeconds(604800000);    // 604800 seconds
      * }</pre>
      *
      * @param liveTime the time-to-live in milliseconds, must not be negative
      * @return the time-to-live in seconds, rounded up if there's a fractional second
-     * @throws IllegalArgumentException if the time value is negative or exceeds Integer.MAX_VALUE seconds
+     * @throws IllegalArgumentException if the time value exceeds Integer.MAX_VALUE seconds
+     *         (approximately 68 years when converted from milliseconds)
      */
     protected int toSeconds(final long liveTime) {
         final long seconds = (liveTime % 1000 == 0) ? (liveTime / 1000) : (liveTime / 1000) + 1;

@@ -26,8 +26,7 @@ import net.spy.memcached.transcoders.Transcoder;
  * performance and smaller serialized sizes compared to Java's default serialization.
  * This transcoder integrates Kryo with SpyMemcached for optimal caching performance.
  *
- * <br><br>
- * Benefits of using Kryo:
+ * <p>Benefits of using Kryo:
  * <ul>
  * <li>Faster serialization/deserialization</li>
  * <li>Smaller serialized data size</li>
@@ -35,13 +34,11 @@ import net.spy.memcached.transcoders.Transcoder;
  * <li>No requirement for Serializable interface</li>
  * </ul>
  *
- * <br>
- * <b>Thread Safety:</b> This class is thread-safe. The underlying KryoParser
+ * <p><b>Thread Safety:</b> This class is thread-safe. The underlying KryoParser
  * handles thread-safety internally using ThreadLocal for Kryo instances,
  * ensuring safe concurrent access from multiple threads.
  *
- * <br><br>
- * Example usage:
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * // Create a custom connection factory with Kryo transcoder
  * ConnectionFactory connFactory = new DefaultConnectionFactory() {
@@ -57,7 +54,6 @@ import net.spy.memcached.transcoders.Transcoder;
  * @param <T> the type of objects to transcode
  * @see Transcoder
  * @see KryoParser
- * @see SpyMemcached
  */
 public class KryoTranscoder<T> implements Transcoder<T> {
 

@@ -417,12 +417,30 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <li>For disk-stored values: Data is read from the offHeapStore and may be promoted to memory if:
      *     <ul>
      *     <li>The testerForLoadingItemFromDiskToMemory predicate is configured</li>
-     *     <li>The predicate returns true based on access patterns and I/O timing</li>
+     *     <li>The predicate returns true based on access patterns, data size, and I/O elapsed time</li>
      *     <li>Sufficient memory is available for the promotion</li>
+     *     <li>The entry has not expired (liveTime &gt; 0)</li>
      *     </ul>
      * </li>
      * <li>Returns null if the key is not found or the entry has expired</li>
      * </ul>
+     * <br>
+     * Promotion algorithm for disk-stored values:
+     * <ol>
+     * <li>If statsTimeOnDisk or testerForLoadingItemFromDiskToMemory is enabled, tracks the read I/O time</li>
+     * <li>Reads the value from offHeapStore and updates readCountFromDisk counter</li>
+     * <li>If testerForLoadingItemFromDiskToMemory returns true:
+     *     <ul>
+     *     <li>Calculates remaining liveTime based on creation time</li>
+     *     <li>Fetches the raw bytes from offHeapStore if liveTime &gt; 0</li>
+     *     <li>Attempts to allocate memory slots (single or multiple based on size)</li>
+     *     <li>Copies data to allocated slots and creates appropriate wrapper (SlotWrapper or MultiSlotsWrapper)</li>
+     *     <li>Removes the old StoreWrapper and adds the new memory-based wrapper</li>
+     *     <li>Updates statistics counters (totalOccupiedMemorySize, totalDataSize)</li>
+     *     <li>If promotion fails (memory unavailable), returns the value without promotion</li>
+     *     </ul>
+     * </li>
+     * </ol>
      * <br>
      * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
      * The underlying object pool handles concurrent access, and each wrapper type (SlotWrapper,
@@ -571,34 +589,60 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores a key-value pair in the cache with specified expiration settings.
-     * This method serializes the value and stores it either in off-heap memory, on disk, or both,
+     * This method serializes the value and stores it either in off-heap memory, on disk,
      * based on size constraints, memory availability, and the configured storeSelector policy.
      * <br><br>
-     * Storage decision logic:
-     * <ul>
-     * <li>If storeSelector is configured: Consults the selector to determine storage location
+     * Storage decision algorithm:
+     * <ol>
+     * <li>Determines value type and prepares serialized bytes:
      *     <ul>
-     *     <li>Return value 0: Try memory first, fallback to disk if memory unavailable</li>
-     *     <li>Return value 1: Memory only (fail if memory unavailable)</li>
-     *     <li>Return value 2: Disk only (always store to disk via offHeapStore)</li>
+     *     <li>byte[] values: Used directly without serialization</li>
+     *     <li>ByteBuffer values: Converted to byte array without using custom serializer</li>
+     *     <li>Other types: Serialized using the configured serializer (Kryo or JSON by default) to ByteArrayOutputStream</li>
      *     </ul>
      * </li>
-     * <li>If value size &lt;= maxBlockSize: Stores in a single memory slot (SlotWrapper)</li>
-     * <li>If value size &gt; maxBlockSize: Splits across multiple slots (MultiSlotsWrapper)</li>
-     * <li>If memory allocation fails: Falls back to disk storage if offHeapStore is configured</li>
-     * <li>If both memory and disk storage fail: Returns false and triggers vacate() for cleanup</li>
-     * </ul>
+     * <li>Consults storeSelector (if configured) to determine storage location policy:
+     *     <ul>
+     *     <li>Return value 0 or null selector: Try memory first, fallback to disk if memory unavailable (canBeStoredInMemory=true, canBeStoredToDisk=true)</li>
+     *     <li>Return value 1: Memory only (fail if memory unavailable) (canBeStoredInMemory=true, canBeStoredToDisk=false)</li>
+     *     <li>Return value 2: Disk only (always store to disk via offHeapStore) (canBeStoredInMemory=false, canBeStoredToDisk=true)</li>
+     *     </ul>
+     * </li>
+     * <li>For values where size &lt;= maxBlockSize:
+     *     <ul>
+     *     <li>If canBeStoredInMemory: Attempts to allocate a single memory slot via getAvailableSlot()</li>
+     *     <li>If slot allocated: Copies bytes to off-heap memory and creates SlotWrapper</li>
+     *     <li>If allocation fails and canBeStoredToDisk: Falls back to putToDisk() to create StoreWrapper</li>
+     *     </ul>
+     * </li>
+     * <li>For values where size &gt; maxBlockSize:
+     *     <ul>
+     *     <li>If canBeStoredInMemory: Attempts to allocate multiple slots iteratively</li>
+     *     <li>For each chunk of data (up to maxBlockSize per slot):
+     *         <ul>
+     *         <li>Calls getAvailableSlot(sizeToCopy) to allocate next slot</li>
+     *         <li>Copies the chunk to the slot's memory region</li>
+     *         <li>Tracks occupied memory and adds slot to list</li>
+     *         </ul>
+     *     </li>
+     *     <li>If all slots allocated successfully: Creates MultiSlotsWrapper with the slot list</li>
+     *     <li>If any allocation fails: Releases all allocated slots and falls back to putToDisk() if canBeStoredToDisk</li>
+     *     </ul>
+     * </li>
+     * <li>If both memory and disk storage fail: Cleans up resources, removes any partial entry from pool, triggers vacate(), returns false</li>
+     * <li>If wrapper created successfully: Calls _pool.put(k, w) to add entry to the pool, updates statistics counters</li>
+     * <li>If _pool.put() fails: Calls wrapper.destroy() to clean up allocated resources</li>
+     * </ol>
      * <br>
-     * Serialization handling:
+     * Statistics updated:
      * <ul>
-     * <li>byte[] values: Stored directly without serialization</li>
-     * <li>ByteBuffer values: Converted to byte array without using custom serializer</li>
-     * <li>Other types: Serialized using the configured serializer (Kryo or JSON by default)</li>
+     * <li>For memory-stored values: totalOccupiedMemorySize incremented by sum of slot sizes, totalDataSize incremented by actual data size</li>
+     * <li>For disk-stored values: writeCountToDisk incremented, totalWriteToDiskTimeStats updated if statsTimeOnDisk enabled</li>
      * </ul>
      * <br>
      * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
      * Memory allocation uses fine-grained locking on segment queues, and the object pool handles
-     * concurrent put operations safely.
+     * concurrent put operations safely. The ByteArrayOutputStream from Objectory is recycled after use.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -1154,6 +1198,47 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Provides detailed insights into memory utilization, disk usage, hit/miss rates,
      * eviction counts, and I/O performance metrics. This is essential for monitoring
      * and optimizing off-heap cache behavior.
+     * <br><br>
+     * Statistics collection algorithm:
+     * <ol>
+     * <li>Retrieves pool statistics from the underlying _pool.stats()</li>
+     * <li>Collects occupied slot information by:
+     *     <ul>
+     *     <li>Streaming all segment queues from segmentQueueMap</li>
+     *     <li>For each segment, extracting sizeOfSlot, index, and slot cardinality (number of occupied slots)</li>
+     *     <li>Grouping by slot size, then mapping segment index to occupied slot count</li>
+     *     <li>Sorting by slot size and segment index for organized presentation</li>
+     *     </ul>
+     * </li>
+     * <li>Validates no duplicate segment indices exist (debug check, throws RuntimeException if found)</li>
+     * <li>Calculates disk I/O time statistics (min/max/avg) from totalWriteToDiskTimeStats and totalReadFromDiskTimeStats</li>
+     * <li>Creates and returns OffHeapCacheStats with all collected data:
+     *     <ul>
+     *     <li>Pool capacity and size (entry count in memory)</li>
+     *     <li>sizeOnDisk (entry count on disk)</li>
+     *     <li>Put/get/hit/miss counts for memory and disk</li>
+     *     <li>Eviction counts for memory and disk</li>
+     *     <li>Memory metrics: capacityInBytes, totalOccupiedMemorySize, totalDataSize, dataSizeOnDisk</li>
+     *     <li>I/O timing statistics if statsTimeOnDisk is enabled</li>
+     *     <li>Detailed slot occupancy map by segment size and index</li>
+     *     </ul>
+     * </li>
+     * </ol>
+     * <br>
+     * The returned OffHeapCacheStats object provides methods to access:
+     * <ul>
+     * <li>capacity(), size(), sizeOnDisk() - Entry counts</li>
+     * <li>putCount(), writeCountToDisk() - Write operation counts</li>
+     * <li>getCount(), hitCount(), readCountFromDisk(), missCount() - Read operation counts and hit rates</li>
+     * <li>evictionCount(), evictionCountFromDisk() - Eviction counts</li>
+     * <li>capacityInBytes(), totalOccupiedMemorySize(), totalDataSize(), dataSizeOnDisk() - Memory usage</li>
+     * <li>writeToDiskTimeStats(), readFromDiskTimeStats() - I/O performance metrics (min/max/avg)</li>
+     * <li>segmentSize() - Size of each segment (constant 1MB)</li>
+     * <li>occupiedSlots() - Detailed map of slot occupancy per segment</li>
+     * </ul>
+     * <br>
+     * Thread safety: This method is thread-safe. Segment queues are locked individually during iteration
+     * to ensure consistent snapshots, though the overall statistics represent a point-in-time view.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -1165,12 +1250,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * cache.put("key2", data2);
      *
      * OffHeapCacheStats stats = cache.stats();
-     * System.out.println("Size in memory: " + stats.sizeInMemory());
-     * System.out.println("Size on disk: " + stats.sizeOnDisk());
+     * System.out.println("Entries in memory: " + stats.size());
+     * System.out.println("Entries on disk: " + stats.sizeOnDisk());
      * System.out.println("Hit rate: " + stats.hitCount() + "/" + stats.getCount());
+     * System.out.println("Memory usage: " + stats.totalDataSize() + "/" + stats.capacityInBytes());
+     *
+     * // Check I/O performance (if statsTimeOnDisk enabled)
+     * if (stats.readFromDiskTimeStats().count() > 0) {
+     *     System.out.println("Avg read time: " + stats.readFromDiskTimeStats().avg() + "ms");
+     * }
      * }</pre>
      *
-     * @return the cache statistics snapshot containing memory, disk, and performance metrics
+     * @return the cache statistics snapshot containing memory, disk, and performance metrics.
+     *         Never returns null.
      */
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();
@@ -1381,8 +1473,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Each segment is SEGMENT_SIZE bytes (1MB) and can be configured with a specific slot size.
      * A segment can be reset and reused with a different slot size when all its slots are freed.
      * Uses a BitSet to track which slots are allocated, providing efficient allocation and
-     * deallocation operations. This is an internal class used by AbstractOffHeapCache for
-     * memory management.
+     * deallocation operations.
+     * <br><br>
+     * This is an internal class used by AbstractOffHeapCache for memory management.
+     * Segments are allocated from the fixed array of segments created during cache initialization.
+     * The sizeOfSlot field can be reconfigured to different multiples of MIN_BLOCK_SIZE (64, 128,
+     * 256, 512, 1024, 2048, 4096, 8192, etc.) when the segment becomes empty and is reused.
+     * <br><br>
+     * Thread safety: All public methods are synchronized on the slotBitSet to ensure thread-safe
+     * slot allocation and deallocation.
      */
     static final class Segment {
 
@@ -1392,15 +1491,37 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // It can be reset/reused by set sizeOfSlot to: 64, 128, 256, 512, 1024, 2048, 4096, 8192....
         private int sizeOfSlot;
 
+        /**
+         * Constructs a new Segment at the specified memory address and array index.
+         *
+         * @param segmentStartPtr the starting memory address of this segment in off-heap memory
+         * @param index the index of this segment in the segments array (0 to segments.length-1)
+         */
         public Segment(final long segmentStartPtr, final int index) {
             this.segmentStartPtr = segmentStartPtr;
             this.index = index;
         }
 
+        /**
+         * Returns the segment's index in the segments array.
+         *
+         * @return the segment index
+         */
         public int index() {
             return index;
         }
 
+        /**
+         * Allocates a slot in this segment using the first available position.
+         * This method finds the first clear bit in the slotBitSet (indicating an unallocated slot),
+         * marks it as allocated, and returns the slot index. The maximum number of slots in a segment
+         * is SEGMENT_SIZE / sizeOfSlot.
+         * <br><br>
+         * Thread safety: This method is synchronized on slotBitSet and thread-safe.
+         *
+         * @return the index of the allocated slot (0 to SEGMENT_SIZE/sizeOfSlot-1),
+         *         or -1 if no slots are available (segment is full)
+         */
         public int allocateSlot() {
             synchronized (slotBitSet) {
                 final int result = slotBitSet.nextClearBit(0);
@@ -1415,6 +1536,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
+        /**
+         * Releases a previously allocated slot, making it available for reuse.
+         * This method clears the bit at the specified slot index in the slotBitSet.
+         * <br><br>
+         * Thread safety: This method is synchronized on slotBitSet and thread-safe.
+         *
+         * @param slotIndex the index of the slot to release (0 to SEGMENT_SIZE/sizeOfSlot-1)
+         */
         public void releaseSlot(final int slotIndex) {
             synchronized (slotBitSet) {
                 slotBitSet.clear(slotIndex);
@@ -1431,11 +1560,27 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Represents an allocated memory slot within a segment.
      * This record encapsulates the slot index and its parent segment,
      * providing a convenient way to release the slot when no longer needed.
+     * <br><br>
      * This is an internal record used by AbstractOffHeapCache for memory management.
-     * The slot must be released explicitly to free the memory for reuse.
+     * The slot must be released explicitly by calling release() to free the memory for reuse.
+     * If a slot is allocated but not properly released, it will result in a memory leak within
+     * the segment (the slot remains marked as occupied in the segment's BitSet).
+     * <br><br>
+     * Thread safety: The release() method is thread-safe as it delegates to the thread-safe
+     * Segment.releaseSlot() method.
+     *
+     * @param indexOfSlot the slot index within the parent segment (0 to SEGMENT_SIZE/sizeOfSlot-1)
+     * @param segment the parent Segment that contains this slot
      */
     record Slot(int indexOfSlot, Segment segment) {
 
+        /**
+         * Releases this slot back to its parent segment, making it available for reuse.
+         * This method delegates to the segment's releaseSlot() method to clear the
+         * corresponding bit in the segment's allocation BitSet.
+         * <br><br>
+         * Thread safety: This method is thread-safe.
+         */
         void release() {
             segment.releaseSlot(indexOfSlot);
         }
@@ -1443,15 +1588,38 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Base wrapper class for cached values with metadata.
-     * Extends AbstractPoolable to support TTL and idle time tracking.
+     * Extends AbstractPoolable to support TTL and idle time tracking through the object pool.
      * Each wrapper stores the value's type information and serialized size.
-     * This is an internal abstract class with concrete implementations for
-     * different storage strategies (single slot, multiple slots, or disk).
+     * <br><br>
+     * This is an internal abstract class with three concrete implementations for
+     * different storage strategies:
+     * <ul>
+     * <li>SlotWrapper - Values stored in a single memory slot (size &lt;= maxBlockSize)</li>
+     * <li>MultiSlotsWrapper - Values stored across multiple memory slots (size &gt; maxBlockSize)</li>
+     * <li>StoreWrapper - Values stored on disk via OffHeapStore</li>
+     * </ul>
+     * <br>
+     * All wrappers are managed by the KeyedObjectPool which handles expiration and eviction
+     * based on liveTime and maxIdleTime settings. The destroy() method is called by the pool
+     * when entries are evicted, removed, or during cache shutdown to release resources.
+     * <br><br>
+     * Thread safety: Concrete implementations must ensure thread-safe read() and destroy()
+     * operations, typically through synchronization.
+     *
+     * @param <T> the value type
      */
     abstract static class Wrapper<T> extends AbstractPoolable {
         final Type<T> type;
         final int size;
 
+        /**
+         * Constructs a new Wrapper with the specified metadata.
+         *
+         * @param type the value type information for deserialization
+         * @param liveTime the time-to-live in milliseconds (0 or negative for default)
+         * @param maxIdleTime the maximum idle time in milliseconds (0 or negative for default)
+         * @param size the serialized size of the value in bytes
+         */
         Wrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size) {
             super(liveTime, maxIdleTime);
 
@@ -1459,21 +1627,49 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             this.size = size;
         }
 
+        /**
+         * Reads and deserializes the cached value.
+         * Concrete implementations retrieve the raw bytes from their storage location
+         * (memory or disk) and deserialize them based on the value type.
+         * <br><br>
+         * Thread safety: Implementations must be thread-safe.
+         *
+         * @return the deserialized value, or null if the value cannot be retrieved
+         */
         abstract T read();
     }
 
     /**
      * Wrapper for values stored in a single memory slot.
-     * Used for values that fit within the maximum block size. The slot reference
-     * is used to release the memory when the entry is evicted or removed. This is
-     * an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
+     * Used for values that fit within the maximum block size (maxBlockSize). The slot reference
+     * is used to release the memory when the entry is evicted or removed.
+     * <br><br>
+     * This is an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
      * with synchronized access to read and destroy operations.
+     * <br><br>
+     * Memory layout: The value's serialized bytes are stored at the memory address
+     * calculated as slotStartPtr = segment.segmentStartPtr + slot.indexOfSlot * segment.sizeOfSlot.
+     * The actual data size may be less than the slot size (segment.sizeOfSlot), with the
+     * difference being wasted space (internal fragmentation).
+     * <br><br>
+     * Thread safety: Both read() and destroy() methods are synchronized on the wrapper instance
+     * to prevent concurrent access issues.
      */
     final class SlotWrapper extends Wrapper<V> {
 
         private Slot slot;
         private final long slotStartPtr;
 
+        /**
+         * Constructs a new SlotWrapper for a memory-stored value.
+         *
+         * @param type the value type information for deserialization
+         * @param liveTime the time-to-live in milliseconds
+         * @param maxIdleTime the maximum idle time in milliseconds
+         * @param size the actual serialized size of the value in bytes
+         * @param slot the allocated memory slot
+         * @param slotStartPtr the starting memory address where the value is stored
+         */
         SlotWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final Slot slot, final long slotStartPtr) {
             super(type, liveTime, maxIdleTime, size);
 
@@ -1481,6 +1677,25 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             this.slotStartPtr = slotStartPtr;
         }
 
+        /**
+         * Reads the value from off-heap memory and deserializes it.
+         * The read operation:
+         * <ol>
+         * <li>Allocates a byte array of the actual data size</li>
+         * <li>Copies bytes from off-heap memory at slotStartPtr to the byte array</li>
+         * <li>Deserializes based on type:
+         *     <ul>
+         *     <li>byte[]: Returns the byte array directly</li>
+         *     <li>ByteBuffer: Converts byte array to ByteBuffer</li>
+         *     <li>Other types: Applies the configured deserializer</li>
+         *     </ul>
+         * </li>
+         * </ol>
+         * <br>
+         * Thread safety: This method is synchronized and thread-safe.
+         *
+         * @return the deserialized value
+         */
         @Override
         V read() {
             synchronized (this) {
@@ -1498,6 +1713,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
+        /**
+         * Releases the memory slot and updates statistics.
+         * This method is called by the object pool when the entry is evicted, removed, or
+         * during cache shutdown. It releases the slot back to its parent segment and updates
+         * the totalOccupiedMemorySize and totalDataSize counters.
+         * <br><br>
+         * This method is idempotent - calling it multiple times has no additional effect
+         * after the first call (slot becomes null).
+         * <br><br>
+         * Thread safety: This method is synchronized and thread-safe.
+         *
+         * @param caller the source of the destroy call (EVICT, VACATE, REMOVE_REPLACE_CLEAR, etc.)
+         */
         @Override
         public void destroy(final Caller caller) {
             synchronized (this) {
@@ -1513,21 +1741,67 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Wrapper for values stored across multiple memory slots.
-     * Used for large values that exceed the maximum block size. The value is split
-     * across multiple slots, and all slots are released together when evicted or removed.
+     * Used for large values that exceed the maximum block size (maxBlockSize). The value is split
+     * across multiple slots (potentially in different segments), and all slots are released together
+     * when evicted or removed.
+     * <br><br>
      * This is an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
      * with synchronized access to read and destroy operations.
+     * <br><br>
+     * Memory layout: The value's serialized bytes are split into chunks of up to maxBlockSize each.
+     * Each chunk is stored in a separate slot, which may be in a different segment. The slots list
+     * maintains the order of chunks, so during read(), the bytes are reassembled in the correct order.
+     * <br><br>
+     * Thread safety: Both read() and destroy() methods are synchronized on the wrapper instance
+     * to prevent concurrent access issues.
      */
     final class MultiSlotsWrapper extends Wrapper<V> {
 
         private List<Slot> slots;
 
+        /**
+         * Constructs a new MultiSlotsWrapper for a large value stored across multiple slots.
+         *
+         * @param type the value type information for deserialization
+         * @param liveTime the time-to-live in milliseconds
+         * @param maxIdleTime the maximum idle time in milliseconds
+         * @param size the actual serialized size of the value in bytes
+         * @param segments the list of allocated slots in order (note: parameter name is misleading, should be 'slots')
+         */
         MultiSlotsWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slot> segments) {
             super(type, liveTime, maxIdleTime, size);
 
             slots = segments;
         }
 
+        /**
+         * Reads the value from multiple off-heap memory slots and deserializes it.
+         * The read operation:
+         * <ol>
+         * <li>Allocates a byte array of the total data size</li>
+         * <li>Iterates through all slots in order:
+         *     <ul>
+         *     <li>Calculates the slot's memory address (segmentStartPtr + slotIndex * sizeOfSlot)</li>
+         *     <li>Determines the chunk size to copy (min of remaining size and slot size)</li>
+         *     <li>Copies bytes from the slot's memory to the destination array at the current offset</li>
+         *     <li>Updates the destination offset and decrements remaining size</li>
+         *     </ul>
+         * </li>
+         * <li>Validates all bytes were copied (remaining size should be 0)</li>
+         * <li>Deserializes based on type:
+         *     <ul>
+         *     <li>byte[]: Returns the byte array directly</li>
+         *     <li>ByteBuffer: Converts byte array to ByteBuffer</li>
+         *     <li>Other types: Applies the configured deserializer</li>
+         *     </ul>
+         * </li>
+         * </ol>
+         * <br>
+         * Thread safety: This method is synchronized and thread-safe.
+         *
+         * @return the deserialized value
+         * @throws RuntimeException if not all bytes could be copied from slots (indicates a bug)
+         */
         @Override
         V read() {
             synchronized (this) {
@@ -1564,6 +1838,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
+        /**
+         * Releases all memory slots and updates statistics.
+         * This method is called by the object pool when the entry is evicted, removed, or
+         * during cache shutdown. It releases all slots back to their parent segments and updates
+         * the totalOccupiedMemorySize and totalDataSize counters.
+         * <br><br>
+         * This method is idempotent - calling it multiple times has no additional effect
+         * after the first call (slots becomes null).
+         * <br><br>
+         * Thread safety: This method is synchronized and thread-safe.
+         *
+         * @param caller the source of the destroy call (EVICT, VACATE, REMOVE_REPLACE_CLEAR, etc.)
+         */
         @Override
         public void destroy(final Caller caller) {
             synchronized (this) {
@@ -1585,12 +1872,30 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Wrapper for values stored on disk via OffHeapStore.
      * Used when memory is full or when the storeSelector determines the value
      * should be stored on disk. The permanentKey is used to retrieve and remove
-     * the value from the disk store. This is an internal class used by AbstractOffHeapCache.
-     * The wrapper is thread-safe with synchronized access to read and destroy operations.
+     * the value from the disk store.
+     * <br><br>
+     * This is an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
+     * with synchronized access to read and destroy operations.
+     * <br><br>
+     * Statistics: Upon construction, this wrapper increments sizeOnDisk, dataSizeOnDisk, and
+     * totalDataSize counters. Upon destruction, these counters are decremented accordingly.
+     * <br><br>
+     * Thread safety: Both read() and destroy() methods are synchronized on the wrapper instance
+     * to prevent concurrent access issues.
      */
     final class StoreWrapper extends Wrapper<V> {
         private K permanentKey;
 
+        /**
+         * Constructs a new StoreWrapper for a disk-stored value.
+         * Immediately updates disk-related statistics counters upon construction.
+         *
+         * @param type the value type information for deserialization
+         * @param liveTime the time-to-live in milliseconds
+         * @param maxIdleTime the maximum idle time in milliseconds
+         * @param size the actual serialized size of the value in bytes
+         * @param permanentKey the key used to store and retrieve the value from offHeapStore
+         */
         StoreWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final K permanentKey) {
             super(type, liveTime, maxIdleTime, size);
 
@@ -1601,6 +1906,27 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             totalDataSize.addAndGet(size);
         }
 
+        /**
+         * Reads the value from disk via offHeapStore and deserializes it.
+         * The read operation:
+         * <ol>
+         * <li>Retrieves the raw bytes from offHeapStore using the permanentKey</li>
+         * <li>Returns null if the value is not found on disk</li>
+         * <li>Validates the retrieved byte array size matches the expected size</li>
+         * <li>Deserializes based on type:
+         *     <ul>
+         *     <li>byte[]: Returns the byte array directly</li>
+         *     <li>ByteBuffer: Converts byte array to ByteBuffer</li>
+         *     <li>Other types: Applies the configured deserializer</li>
+         *     </ul>
+         * </li>
+         * </ol>
+         * <br>
+         * Thread safety: This method is synchronized and thread-safe.
+         *
+         * @return the deserialized value, or null if not found on disk
+         * @throws RuntimeException if the retrieved byte array size doesn't match expected size (indicates corruption or a bug)
+         */
         @Override
         V read() {
             synchronized (this) {
@@ -1626,6 +1952,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
+        /**
+         * Removes the value from disk and updates statistics.
+         * This method is called by the object pool when the entry is evicted, removed, or
+         * during cache shutdown. It removes the value from offHeapStore and updates the
+         * sizeOnDisk, dataSizeOnDisk, and totalDataSize counters. If the caller is EVICT or
+         * VACATE, also increments the evictionCountFromDisk counter.
+         * <br><br>
+         * This method is idempotent - calling it multiple times has no additional effect
+         * after the first call (permanentKey becomes null).
+         * <br><br>
+         * Thread safety: This method is synchronized and thread-safe.
+         *
+         * @param caller the source of the destroy call (EVICT, VACATE, REMOVE_REPLACE_CLEAR, etc.)
+         */
         @Override
         public void destroy(final Caller caller) {
             synchronized (this) {

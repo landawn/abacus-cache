@@ -101,6 +101,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * @param serverUrl the Memcached server URL(s) to connect to (must not be null)
      * @throws IllegalArgumentException if serverUrl is null or invalid
+     * @throws RuntimeException if connection to the Memcached server(s) fails
      */
     public MemcachedLock(final String serverUrl) {
         mc = new SpyMemcached<>(serverUrl);
@@ -112,13 +113,11 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * The lock will be automatically released after the specified live time expires, ensuring that
      * locks don't persist indefinitely if a holder crashes or fails to release them.
      *
-     * <br><br>
-     * This is a non-blocking operation that returns immediately. If the lock is already
+     * <p>This is a non-blocking operation that returns immediately. If the lock is already
      * held by another client, this method returns {@code false} without waiting. The implementation
      * uses Memcached's atomic add operation to ensure only one client can acquire the lock.
      *
-     * <br><br>
-     * Important considerations:
+     * <p>Important considerations:
      * <ul>
      * <li>The lock is not reentrant - the same client cannot acquire the same lock twice</li>
      * <li>Choose an appropriate liveTime to balance between deadlock prevention and operational needs</li>
@@ -147,6 +146,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws IllegalArgumentException if target is null or liveTime is not positive
      * @throws RuntimeException if a communication error occurs with Memcached
+     * @see #lock(Object, Object, long)
+     * @see #unlock(Object)
      */
     public boolean lock(final K target, final long liveTime) {
         if (target == null) {
@@ -167,13 +168,11 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * Memcached's atomic add operation (via mc.add) which only succeeds if the key
      * doesn't already exist, ensuring mutual exclusion.
      *
-     * <br><br>
-     * The value can be retrieved using {@link #get(Object)} while the lock is held.
+     * <p>The value can be retrieved using {@link #get(Object)} while the lock is held.
      * This is useful for debugging or for implementing more complex locking protocols
      * where knowing the lock holder is important.
      *
-     * <br><br>
-     * Common use cases for the value parameter:
+     * <p>Common use cases for the value parameter:
      * <ul>
      * <li>Storing the hostname or IP address of the lock holder</li>
      * <li>Recording the thread ID or process ID that acquired the lock</li>
@@ -212,6 +211,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws IllegalArgumentException if target is null or liveTime is not positive
      * @throws RuntimeException if a communication error occurs with Memcached
+     * @see #get(Object)
+     * @see #unlock(Object)
      */
     public boolean lock(final K target, final V value, final long liveTime) {
         if (target == null) {
@@ -236,16 +237,14 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * attempting to acquire or modify the lock. Returns true if a value exists for the
      * lock key, false otherwise.
      *
-     * <br><br>
-     * Important: Due to the distributed nature and timing, a lock could expire or be
+     * <p>Important: Due to the distributed nature and timing, a lock could expire or be
      * acquired between checking and subsequent operations. This is a point-in-time check
      * and should not be relied upon for critical synchronization logic. Always use the
      * return value of {@link #lock(Object, long)} or {@link #lock(Object, Object, long)}
      * to determine if you successfully acquired the lock rather than checking first with
      * this method.
      *
-     * <br><br>
-     * This method is primarily useful for:
+     * <p>This method is primarily useful for:
      * <ul>
      * <li>Monitoring and diagnostics</li>
      * <li>Logging and alerting when resources are locked</li>
@@ -283,6 +282,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * @return {@code true} if the lock is currently held, {@code false} otherwise
      * @throws IllegalArgumentException if target is null
      * @throws RuntimeException if a communication error occurs with Memcached
+     * @see #lock(Object, long)
+     * @see #lock(Object, Object, long)
      */
     public boolean isLocked(final K target) {
         if (target == null) {
@@ -298,8 +299,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * If the lock stores an empty byte array (the default when using {@link #lock(Object, long)}),
      * {@code null} is returned for convenience to distinguish empty values from actual data.
      *
-     * <br><br>
-     * This method is useful for:
+     * <p>This method is useful for:
      * <ul>
      * <li>Identifying which client holds a lock</li>
      * <li>Storing lock metadata or state information</li>
@@ -307,8 +307,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Debugging distributed locking issues</li>
      * </ul>
      *
-     * <br><br>
-     * Important considerations:
+     * <p>Important considerations:
      * <ul>
      * <li>This method performs an unchecked cast from Object to V. Ensure the type parameter V
      * matches the actual type of the stored value to avoid ClassCastException at runtime.</li>
@@ -357,6 +356,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalArgumentException if target is null
      * @throws ClassCastException if V doesn't match the actual stored value type
      * @throws RuntimeException if a communication error occurs with Memcached
+     * @see #lock(Object, Object, long)
+     * @see #isLocked(Object)
      */
     @SuppressWarnings("unchecked")
     public V get(final K target) {
@@ -375,14 +376,12 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * making the target available for other clients to acquire. It's important to always unlock
      * in a finally block to ensure locks are released even if exceptions occur.
      *
-     * <br><br>
-     * Important: This implementation does not verify lock ownership. Any client can
+     * <p>Important: This implementation does not verify lock ownership. Any client can
      * unlock any lock, even if they don't hold it. For applications requiring ownership
      * verification, implement additional logic using the value stored with the lock (e.g.,
      * check if {@link #get(Object)} returns your identifier before unlocking).
      *
-     * <br><br>
-     * Best practices:
+     * <p>Best practices:
      * <ul>
      * <li>Always call unlock() in a finally block to ensure cleanup</li>
      * <li>Consider implementing ownership verification in critical applications</li>
@@ -426,6 +425,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * @return {@code true} if the lock was successfully removed, {@code false} if it didn't exist
      * @throws IllegalArgumentException if target is null
      * @throws RuntimeException if a communication error occurs with Memcached
+     * @see #lock(Object, long)
+     * @see #lock(Object, Object, long)
      */
     public boolean unlock(final K target) {
         if (target == null) {
@@ -445,8 +446,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * generation strategies, such as adding prefixes, namespaces, or applying
      * hashing algorithms for key normalization.
      *
-     * <br><br>
-     * The default implementation uses {@link N#stringOf(Object)} to convert
+     * <p>The default implementation uses {@link N#stringOf(Object)} to convert
      * the target to a string representation. Subclasses may override this to:
      * <ul>
      * <li>Add namespace prefixes to avoid key collisions</li>
@@ -502,8 +502,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * operations or diagnostics. Use with caution as direct manipulation of
      * the client could interfere with lock operations.
      *
-     * <br><br>
-     * Common uses include:
+     * <p>Common uses include:
      * <ul>
      * <li>Checking connection status</li>
      * <li>Performing bulk operations</li>
@@ -512,8 +511,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Implementing custom caching logic independent of locking</li>
      * </ul>
      *
-     * <br><br>
-     * Warning: Direct use of the client bypasses the lock abstraction. Be careful not to:
+     * <p>Warning: Direct use of the client bypasses the lock abstraction. Be careful not to:
      * <ul>
      * <li>Delete lock keys using the client directly (use {@link #unlock(Object)} instead)</li>
      * <li>Modify lock keys in ways that could break the locking protocol</li>
@@ -556,8 +554,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * cannot be used anymore. This method is idempotent - calling it multiple times has no
      * additional effect because disconnect() handles multiple calls gracefully.
      *
-     * <br><br>
-     * Important notes:
+     * <p>Important notes:
      * <ul>
      * <li>Closing the lock does NOT automatically release any held locks</li>
      * <li>Locks will remain in Memcached until they expire or are explicitly unlocked</li>
@@ -565,8 +562,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>After close(), any method calls will likely throw exceptions</li>
      * </ul>
      *
-     * <br><br>
-     * It's strongly recommended to use this class with try-with-resources to ensure proper cleanup:
+     * <p>It's strongly recommended to use this class with try-with-resources to ensure proper cleanup:
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
