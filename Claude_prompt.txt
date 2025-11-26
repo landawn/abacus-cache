@@ -200,5 +200,3 @@ Requirements:
 
 -- ==========================================================
 
-
-Use multiple agents to fix all javadoc issues reported by running: mvn javadoc:javadoc.
