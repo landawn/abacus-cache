@@ -49,6 +49,7 @@ import com.landawn.abacus.util.Strings;
  *     1000                // retry delay in ms
  * );
  *
+ * User user = new User("John");
  * cache.put("user:123", user, 3600000, 1800000);
  * User cached = cache.gett("user:123");
  * }</pre>
@@ -89,7 +90,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Creates a DistributedCache with default retry configuration.
-     * Uses an empty key prefix and default retry parameters.
+     * Uses an empty key prefix and default retry parameters (max 100 failures, 1000ms retry delay).
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -97,7 +98,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCache<String, User> cache = new DistributedCache<>(client);
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap
+     * @param dcc the distributed cache client to wrap, must not be null
      * @throws IllegalArgumentException if dcc is null
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc) {
@@ -105,8 +106,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Creates a DistributedCache with a key prefix.
-     * All keys will be prefixed for namespace isolation.
+     * Creates a DistributedCache with a key prefix and default retry configuration.
+     * All keys will be prefixed for namespace isolation. Uses default retry parameters
+     * (max 100 failures, 1000ms retry delay).
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -114,7 +116,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap
+     * @param dcc the distributed cache client to wrap, must not be null
      * @param keyPrefix the prefix to prepend to all keys (empty string or null for no prefix)
      * @throws IllegalArgumentException if dcc is null
      */
@@ -124,18 +126,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Creates a DistributedCache with full configuration.
-     * Allows customization of key prefix and retry behavior.
+     * Allows customization of key prefix and retry behavior. This is the most flexible
+     * constructor allowing full control over all cache parameters.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:", 100, 1000);
+     * DistributedCache<String, User> cache = new DistributedCache<>(
+     *     client,
+     *     "myapp:",  // key prefix for namespace isolation
+     *     100,       // max consecutive failures
+     *     1000       // retry delay in milliseconds
+     * );
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap
+     * @param dcc the distributed cache client to wrap, must not be null
      * @param keyPrefix the prefix to prepend to all keys (empty string or null for no prefix)
-     * @param maxFailedNumForRetry maximum consecutive failures before stopping retries
-     * @param retryDelay delay in milliseconds between retry attempts
+     * @param maxFailedNumForRetry maximum consecutive failures before stopping retries (must be positive)
+     * @param retryDelay delay in milliseconds between retry attempts after failure threshold is reached (must be non-negative)
      * @throws IllegalArgumentException if dcc is null
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
@@ -152,23 +160,29 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     /**
      * Retrieves a value from the distributed cache by its key.
      * Includes retry logic that temporarily disables operations after too many failures.
-     * Keys are automatically prefixed and Base64 encoded.
+     * Keys are automatically prefixed and Base64 encoded before retrieval.
      *
      * <br><br>
-     * When the failure count exceeds maxFailedNumForRetry and within the retry delay period,
-     * this method returns null immediately without attempting the operation. Exceptions are
-     * caught and null is returned, with the failure counter incremented.
+     * <b>Retry Mechanism:</b> When the failure count exceeds {@code maxFailedNumForRetry} and
+     * the current time is within {@code retryDelay} milliseconds of the last failure, this method
+     * returns {@code null} immediately without attempting the operation to prevent cascading failures.
+     * After the retry delay period expires, operations will be attempted again. All exceptions from
+     * the underlying cache client are caught and {@code null} is returned, with the failure counter
+     * incremented. Successful operations reset the failure counter to zero.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
      * User user = cache.gett("user:123");
      * if (user != null) {
      *     System.out.println("Found: " + user.getName());
+     * } else {
+     *     System.out.println("Not found or cache error");
      * }
      * }</pre>
      *
-     * @param k the cache key
+     * @param k the cache key, must not be null
      * @return the cached value, or {@code null} if not found, expired, evicted, retry threshold exceeded, or on error
      * @throws IllegalStateException if the cache has been closed
      */
@@ -213,16 +227,17 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
      * User user = new User("John");
      * cache.put("user:123", user, 3600000, 0); // 1 hour TTL, idle time ignored
      * }</pre>
      *
-     * @param k the cache key
-     * @param v the value to cache
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration)
+     * @param k the cache key, must not be null
+     * @param v the value to cache, may be null (behavior depends on underlying cache client)
+     * @param liveTime the time-to-live in milliseconds (0 or negative values mean no expiration)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored by distributed caches)
-     * @return {@code true} if the operation was successful
+     * @return {@code true} if the operation was successful, {@code false} otherwise
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -235,14 +250,16 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes a key-value pair from the distributed cache.
      * This operation returns void regardless of whether the key existed or the operation succeeded.
+     * If the key does not exist, this operation silently succeeds.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
-     * cache.remove("user:123"); // Removes if exists
+     * cache.remove("user:123"); // Removes if exists, no-op if doesn't exist
      * }</pre>
      *
-     * @param k the cache key
+     * @param k the cache key, must not be null
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -254,18 +271,19 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a specific key with a non-null value.
-     * This is implemented by attempting to retrieve the value, so it may
-     * return {@code false} if retry threshold is exceeded or network errors occur.
+     * This is implemented by attempting to retrieve the value using {@link #gett(Object)},
+     * so it may return {@code false} if retry threshold is exceeded or network errors occur.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
      * if (cache.containsKey("user:123")) {
      *     System.out.println("User exists in cache");
      * }
      * }</pre>
      *
-     * @param k the cache key
+     * @param k the cache key, must not be null
      * @return {@code true} if the key exists and has a non-null value, {@code false} otherwise or on error
      */
     @Override
@@ -301,13 +319,16 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes all entries from all connected cache servers.
-     * This is a destructive operation that affects all data across all servers.
+     * This is a destructive operation that affects all data across all servers,
+     * not just entries with the configured key prefix.
      * Use with extreme caution in production environments.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
-     * cache.clear(); // WARNING: Flushes ALL data from all cache servers!
+     * // WARNING: This will flush ALL data from all cache servers, not just "myapp:" prefixed keys!
+     * cache.clear();
      * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
@@ -326,9 +347,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
      * try {
-     *     cache.put("key", value);
+     *     User value = new User("John");
+     *     cache.put("key", value, 3600000, 0);
      *     // ... use cache
      * } finally {
      *     cache.close(); // Always close to disconnect from servers
@@ -351,9 +374,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
      * if (!cache.isClosed()) {
-     *     cache.put("key", value);
+     *     User value = new User("John");
+     *     cache.put("key", value, 3600000, 0);
      * }
      * }</pre>
      *
@@ -366,9 +391,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Generates the actual cache key by applying prefix and Base64 encoding.
-     * The key is converted to string, UTF-8 encoded, then Base64 encoded
-     * to ensure compatibility with all distributed cache systems. The prefix
-     * is added before the Base64 encoded key if configured.
+     * The key is converted to string using {@code N.stringOf()}, UTF-8 encoded,
+     * then Base64 encoded to ensure compatibility with all distributed cache systems.
+     * The configured prefix is prepended to the Base64 encoded key if present.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -377,7 +402,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Result: "myapp:dXNlcjoxMjM=" (prefix + Base64 of "user:123")
      * }</pre>
      *
-     * @param k the original key
+     * @param k the original key, must not be null
      * @return the prefixed and Base64-encoded cache key
      * @throws IllegalArgumentException if k is null
      */

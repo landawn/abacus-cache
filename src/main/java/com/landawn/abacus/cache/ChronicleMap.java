@@ -18,9 +18,11 @@ package com.landawn.abacus.cache;
  * A placeholder class for Chronicle Map integration.
  * Chronicle Map is a high-performance, off-heap, key-value store that provides
  * concurrent access with strong consistency guarantees. This class is intended
- * to provide integration with Chronicle Map in the Abacus caching framework.
+ * to provide integration with Chronicle Map in the Abacus caching framework,
+ * similar to how CaffeineCache and Ehcache provide wrappers for their respective
+ * caching libraries.
  *
- * <br><br>
+ * <p>
  * Chronicle Map features that would be exposed through this wrapper:
  * <ul>
  * <li>Off-heap storage to reduce GC pressure</li>
@@ -31,13 +33,11 @@ package com.landawn.abacus.cache;
  * <li>Support for multi-key queries</li>
  * </ul>
  *
- * <br>
- * Note: This is currently a placeholder implementation. The actual implementation
- * would wrap Chronicle Map's functionality to conform to the Abacus Cache interface,
- * similar to how CaffeineCache and Ehcache provide wrappers for their respective
- * caching libraries.
+ * <p>
+ * <strong>Note:</strong> This is currently a placeholder implementation. The actual implementation
+ * would wrap Chronicle Map's functionality to conform to the Abacus Cache interface.
  *
- * <p><b>Planned Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * // Future implementation example
  * ChronicleMap<String, User> chronicleMap = ChronicleMapBuilder

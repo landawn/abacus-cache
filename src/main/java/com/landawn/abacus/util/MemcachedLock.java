@@ -119,12 +119,17 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     *
      * if (lock.lock("resource1", 30000)) {
      *     try {
-     *         // Critical section
+     *         // Critical section - perform exclusive operations
+     *         performOperation();
      *     } finally {
      *         lock.unlock("resource1");
      *     }
+     * } else {
+     *     System.out.println("Failed to acquire lock");
      * }
      * }</pre>
      *
@@ -160,9 +165,18 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     *
      * String lockHolder = InetAddress.getLocalHost().getHostName();
      * if (lock.lock("resource1", lockHolder, 60000)) {
-     *     System.out.println("Lock acquired by: " + lock.get("resource1"));
+     *     try {
+     *         System.out.println("Lock acquired by: " + lock.get("resource1"));
+     *         // Perform operations
+     *     } finally {
+     *         lock.unlock("resource1");
+     *     }
+     * } else {
+     *     System.out.println("Lock is held by: " + lock.get("resource1"));
      * }
      * }</pre>
      *
@@ -203,8 +217,12 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     *
      * if (lock.isLocked("resource1")) {
      *     System.out.println("Resource is currently locked");
+     * } else {
+     *     System.out.println("Resource is available");
      * }
      * }</pre>
      *
@@ -240,9 +258,13 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     *
      * String holder = lock.get("resource1");
      * if (holder != null) {
      *     System.out.println("Lock held by: " + holder);
+     * } else {
+     *     System.out.println("No lock exists or value is empty");
      * }
      * }</pre>
      *
@@ -276,11 +298,16 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     *
      * if (lock.lock("resource1", 30000)) {
      *     try {
      *         performOperation();
      *     } finally {
-     *         lock.unlock("resource1");
+     *         boolean unlocked = lock.unlock("resource1");
+     *         if (unlocked) {
+     *             System.out.println("Lock released successfully");
+     *         }
      *     }
      * }
      * }</pre>
@@ -313,16 +340,24 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Custom implementation with namespace prefix
      * class NamespacedLock<V> extends MemcachedLock<String, V> {
-     *     public NamespacedLock(String serverUrl) {
+     *     private final String namespace;
+     *
+     *     public NamespacedLock(String serverUrl, String namespace) {
      *         super(serverUrl);
+     *         this.namespace = namespace;
      *     }
      *
      *     @Override
      *     protected String toKey(String target) {
-     *         return "lock:myapp:" + target;
+     *         return "lock:" + namespace + ":" + target;
      *     }
      * }
+     *
+     * // Usage
+     * NamespacedLock<String> lock = new NamespacedLock<>("localhost:11211", "myapp");
+     * lock.lock("resource1", 30000); // Key in Memcached: "lock:myapp:resource1"
      * }</pre>
      *
      * @param target the target object to be converted to a key string (must not be null)
@@ -344,12 +379,19 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Checking connection status</li>
      * <li>Performing bulk operations</li>
      * <li>Accessing client statistics</li>
+     * <li>Storing additional metadata alongside locks</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     *
+     * // Access the underlying client for custom operations
      * SpyMemcached<String> client = lock.client();
      * client.set("custom:key", "value", 60000);
+     *
+     * // Store metadata alongside lock
+     * String metadata = client.get("custom:key");
      * }</pre>
      *
      * @return the SpyMemcached client instance

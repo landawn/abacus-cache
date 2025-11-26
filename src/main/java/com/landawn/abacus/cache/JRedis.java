@@ -68,6 +68,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,..."
+     * @throws IllegalArgumentException if no valid server addresses found in serverUrl
+     * @see #JRedis(String, long)
      */
     public JRedis(final String serverUrl) {
         this(serverUrl, DEFAULT_TIMEOUT);
@@ -89,6 +91,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,..."
      * @param timeout the connection timeout in milliseconds
      * @throws IllegalArgumentException if no valid server addresses found in serverUrl
+     * @see #JRedis(String)
      */
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);
@@ -122,6 +125,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key whose associated value is to be returned
      * @return the value associated with the specified key, or {@code null} if not found or expired
+     * @see #set(String, Object, long)
+     * @see #delete(String)
      */
     @Override
     public T get(final String key) {
@@ -144,6 +149,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @param obj the cache value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds (converted to seconds, rounded up if not exact)
      * @return {@code true} if the Redis server responds with "OK", {@code false} otherwise
+     * @see #get(String)
+     * @see #delete(String)
      */
     @Override
     public boolean set(final String key, final T obj, final long liveTime) {
@@ -164,6 +171,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key whose mapping is to be removed from the cache
      * @return always {@code true} indicating the delete command was successfully executed
+     * @see #get(String)
+     * @see #set(String, Object, long)
      */
     @Override
     public boolean delete(final String key) {
@@ -185,6 +194,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key whose associated value is to be incremented
      * @return the value after increment
+     * @see #incr(String, int)
+     * @see #decr(String)
+     * @see #decr(String, int)
      */
     @Override
     public long incr(final String key) {
@@ -205,6 +217,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key whose associated value is to be incremented
      * @param delta the amount by which to increment the value (positive value)
      * @return the value after increment
+     * @see #incr(String)
+     * @see #decr(String)
+     * @see #decr(String, int)
      */
     @Override
     public long incr(final String key, final int delta) {
@@ -226,6 +241,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key whose associated value is to be decremented
      * @return the value after decrement
+     * @see #decr(String, int)
+     * @see #incr(String)
+     * @see #incr(String, int)
      */
     @Override
     public long decr(final String key) {
@@ -246,6 +264,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key whose associated value is to be decremented
      * @param delta the amount by which to decrement the value (positive value)
      * @return the value after decrement
+     * @see #decr(String)
+     * @see #incr(String)
+     * @see #incr(String, int)
      */
     @Override
     public long decr(final String key, final int delta) {
@@ -282,6 +303,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * cache.disconnect();
      * System.out.println("Cache client disconnected");
      * }</pre>
+     *
+     * @see #flushAll()
      */
     @Override
     public void disconnect() {
@@ -294,6 +317,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key to convert
      * @return the UTF-8 encoded byte array representation of the key
+     * @see #encode(Object)
+     * @see #decode(byte[])
      */
     protected byte[] getKeyBytes(final String key) {
         return key.getBytes(Charsets.UTF_8);
@@ -306,6 +331,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param obj the object to encode
      * @return the serialized byte array representation of the object, or empty array if obj is {@code null}
+     * @see #decode(byte[])
+     * @see #getKeyBytes(String)
      */
     protected byte[] encode(final Object obj) {
         return obj == null ? N.EMPTY_BYTE_ARRAY : kryoParser.encode(obj);
@@ -318,6 +345,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param bytes the byte array to decode
      * @return the deserialized object, or {@code null} if the byte array is {@code null} or empty
+     * @see #encode(Object)
+     * @see #getKeyBytes(String)
      */
     protected T decode(final byte[] bytes) {
         if (bytes == null || N.isEmpty(bytes)) {

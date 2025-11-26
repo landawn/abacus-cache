@@ -25,7 +25,7 @@ import net.spy.memcached.transcoders.Transcoder;
  * Kryo is a fast and efficient serialization framework that provides better
  * performance and smaller serialized sizes compared to Java's default serialization.
  * This transcoder integrates Kryo with SpyMemcached for optimal caching performance.
- * 
+ *
  * <br><br>
  * Benefits of using Kryo:
  * <ul>
@@ -34,8 +34,13 @@ import net.spy.memcached.transcoders.Transcoder;
  * <li>Support for circular references</li>
  * <li>No requirement for Serializable interface</li>
  * </ul>
- * 
+ *
  * <br>
+ * <b>Thread Safety:</b> This class is thread-safe. The underlying KryoParser
+ * handles thread-safety internally using ThreadLocal for Kryo instances,
+ * ensuring safe concurrent access from multiple threads.
+ *
+ * <br><br>
  * Example usage:
  * <pre>{@code
  * // Create a custom connection factory with Kryo transcoder
@@ -45,7 +50,7 @@ import net.spy.memcached.transcoders.Transcoder;
  *         return new KryoTranscoder<>();
  *     }
  * };
- * 
+ *
  * MemcachedClient client = new MemcachedClient(connFactory, addresses);
  * }</pre>
  *
@@ -127,8 +132,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * }</pre>
      *
      * @param o the object to encode and serialize (can be null)
-     * @return the CachedData containing the serialized bytes
+     * @return the CachedData containing the serialized bytes and metadata, never null
      * @throws IllegalArgumentException if the serialized size exceeds maxSize
+     * @see #decode(CachedData)
      */
     @Override
     public CachedData encode(final T o) {
@@ -149,8 +155,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * }</pre>
      *
      * @param d the cached data to decode and deserialize (must not be null)
-     * @return the deserialized object (can be null if null was encoded)
+     * @return the deserialized object of type T (can be null if null was encoded)
      * @throws RuntimeException if the deserialization fails (e.g., corrupt data, class not found)
+     * @see #encode(Object)
      */
     @Override
     public T decode(final CachedData d) {

@@ -29,9 +29,8 @@ import com.landawn.abacus.util.TypeAttrParser;
  * This factory provides convenient methods to create local and distributed caches
  * with different configurations. It supports both programmatic creation and
  * string-based configuration for dynamic cache instantiation.
- * 
- * <br><br>
- * Supported cache types:
+ *
+ * <p>Supported cache types:
  * <ul>
  * <li>LocalCache - In-memory cache with eviction support</li>
  * <li>DistributedCache - Wrapper for distributed cache clients</li>
@@ -39,9 +38,8 @@ import com.landawn.abacus.util.TypeAttrParser;
  * <li>Redis - Via JRedis client</li>
  * <li>Custom implementations via class name</li>
  * </ul>
- * 
- * <br>
- * Example usage:
+ *
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * // Create local cache
  * LocalCache<String, User> localCache = CacheFactory.createLocalCache(
@@ -50,12 +48,12 @@ import com.landawn.abacus.util.TypeAttrParser;
  *     3600000,  // default TTL (1 hour)
  *     1800000   // default idle time (30 minutes)
  * );
- * 
+ *
  * // Create distributed cache with Memcached
  * Cache<String, User> memcached = CacheFactory.createCache(
  *     "Memcached(localhost:11211,localhost:11212)"
  * );
- * 
+ *
  * // Create distributed cache with Redis and key prefix
  * Cache<String, User> redis = CacheFactory.createCache(
  *     "Redis(localhost:6379,myapp:cache:,5000)"
@@ -91,6 +89,8 @@ public final class CacheFactory {
      * @param capacity the maximum number of entries the cache can hold
      * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction)
      * @return the new LocalCache instance
+     * @see #createLocalCache(int, long, long, long)
+     * @see #createLocalCache(long, long, KeyedObjectPool)
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay) {
         return new LocalCache<>(capacity, evictDelay);
@@ -113,6 +113,8 @@ public final class CacheFactory {
      * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time
      * @return the new LocalCache instance
+     * @see #createLocalCache(int, long)
+     * @see #createLocalCache(long, long, KeyedObjectPool)
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime) {
@@ -131,10 +133,13 @@ public final class CacheFactory {
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param defaultLiveTime the default time-to-live in milliseconds
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds
-     * @param pool the pre-configured KeyedObjectPool to use
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time
+     * @param pool the pre-configured KeyedObjectPool to use for managing cache entries (must not be null)
      * @return the new LocalCache instance
+     * @throws IllegalArgumentException if pool is null
+     * @see #createLocalCache(int, long)
+     * @see #createLocalCache(int, long, long, long)
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final long defaultLiveTime, final long defaultMaxIdleTime,
             final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
@@ -157,6 +162,9 @@ public final class CacheFactory {
      * @param dcc the distributed cache client to wrap (must not be null)
      * @return the new DistributedCache instance
      * @throws IllegalArgumentException if dcc is null
+     * @see #createDistributedCache(DistributedCacheClient, String)
+     * @see #createDistributedCache(DistributedCacheClient, String, int, long)
+     * @see #createCache(String)
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc) {
         return new DistributedCache<>(dcc);
@@ -181,6 +189,9 @@ public final class CacheFactory {
      * @param keyPrefix the key prefix to prepend to all keys (can be empty string for no prefix, must not be null)
      * @return the new DistributedCache instance
      * @throws IllegalArgumentException if dcc or keyPrefix is null
+     * @see #createDistributedCache(DistributedCacheClient)
+     * @see #createDistributedCache(DistributedCacheClient, String, int, long)
+     * @see #createCache(String)
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
         return new DistributedCache<>(dcc, keyPrefix);
@@ -206,6 +217,9 @@ public final class CacheFactory {
      * @param retryDelay the delay in milliseconds between retry attempts (must be non-negative)
      * @return the new DistributedCache instance
      * @throws IllegalArgumentException if dcc or keyPrefix is null, or if maxFailedNumForRetry or retryDelay is negative
+     * @see #createDistributedCache(DistributedCacheClient)
+     * @see #createDistributedCache(DistributedCacheClient, String)
+     * @see #createCache(String)
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix,
             final int maxFailedNumForRetry, final long retryDelay) {
@@ -218,8 +232,7 @@ public final class CacheFactory {
      * making it ideal for configuration-driven cache setup. The method parses the
      * provider string and instantiates the appropriate cache implementation.
      *
-     * <br><br>
-     * Supported formats:
+     * <p>Supported formats:
      * <ul>
      * <li>Memcached(serverUrl) - Creates SpyMemcached client with default timeout</li>
      * <li>Memcached(serverUrl,keyPrefix) - With key prefix</li>
@@ -248,6 +261,9 @@ public final class CacheFactory {
      * @return the new Cache instance
      * @throws IllegalArgumentException if the provider specification is invalid, has incorrect parameters, or missing required parameters
      * @throws RuntimeException if custom class instantiation fails (class not found, reflection errors, etc.)
+     * @see #createDistributedCache(DistributedCacheClient)
+     * @see #createDistributedCache(DistributedCacheClient, String)
+     * @see #createLocalCache(int, long)
      */
     @SuppressWarnings("unchecked")
     public static <K, V> Cache<K, V> createCache(final String provider) {

@@ -165,6 +165,25 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
                 null);
     }
 
+    /**
+     * Package-private constructor with complete configuration for use by the Builder.
+     * This constructor is called internally by the Builder's build() method and should not be
+     * invoked directly. It provides access to all advanced configuration options including
+     * custom serialization, disk spillover, and memory management tuning.
+     *
+     * @param capacityInMB the total off-heap memory to allocate in megabytes
+     * @param maxBlockSize maximum size of a single memory block in bytes for memory allocation efficiency
+     * @param evictDelay the delay between eviction runs in milliseconds
+     * @param defaultLiveTime default time-to-live for entries in milliseconds
+     * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds
+     * @param vacatingFactor factor (0.0-1.0) determining when to trigger memory defragmentation
+     * @param serializer custom serializer for converting values to byte streams, or null for default Kryo serialization
+     * @param deserializer custom deserializer for converting bytes to values, or null for default Kryo deserialization
+     * @param offHeapStore optional disk store for spillover when memory is full, or null for memory-only cache
+     * @param statsTimeOnDisk whether to collect detailed disk I/O timing statistics
+     * @param testerForLoadingItemFromDiskToMemory predicate to determine when to load items from disk back to memory, or null for default behavior
+     * @param storeSelector function to determine storage location (0=default, 1=memory only, 2=disk only), or null for default routing
+     */
     OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,

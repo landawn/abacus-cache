@@ -102,9 +102,10 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));
      * }</pre>
      *
-     * @param keys the cache keys
-     * @return the map of cache keys to values (never returns normally in default implementation)
+     * @param keys the cache keys to retrieve values for (variable number of String arguments)
+     * @return the map of cache keys to their corresponding cached values (never returns normally in default implementation)
      * @throws UnsupportedOperationException always thrown by this default implementation
+     * @see #getBulk(Collection)
      */
     @Override
     public Map<String, T> getBulk(final String... keys) throws UnsupportedOperationException {
@@ -125,9 +126,10 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * System.out.println("Retrieved " + users.size() + " users");
      * }</pre>
      *
-     * @param keys the collection of cache keys
-     * @return the map of cache keys to values (never returns normally in default implementation)
+     * @param keys the collection of cache keys to retrieve values for
+     * @return the map of cache keys to their corresponding cached values (never returns normally in default implementation)
      * @throws UnsupportedOperationException always thrown by this default implementation
+     * @see #getBulk(String...)
      */
     @Override
     public Map<String, T> getBulk(final Collection<String> keys) throws UnsupportedOperationException {

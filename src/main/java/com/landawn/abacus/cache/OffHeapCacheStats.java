@@ -18,8 +18,7 @@ import java.util.Map;
  * <li>Put metrics: putCount = size + sizeOnDisk + evictions (approximately)</li>
  * </ul>
  *
- * <br>
- * Example usage:
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * OffHeapCache<String, byte[]> cache = OffHeapCache.builder()
  *     .capacityInMB(100)
@@ -45,25 +44,56 @@ import java.util.Map;
  * System.out.println("Memory overhead: " + (overhead * 100) + "%");
  * }</pre>
  *
- * @param capacity the maximum number of entries the cache can hold
- * @param size the current number of entries in memory
- * @param sizeOnDisk the current number of entries stored on disk
- * @param putCount the total number of put operations since cache creation
- * @param putCountToDisk the number of put operations that went to disk
- * @param getCount the total number of get operations since cache creation
- * @param hitCount the number of successful get operations from memory
- * @param hitCountByDisk the number of successful get operations from disk
- * @param missCount the number of failed get operations (key not found or expired)
- * @param evictionCount the total number of evictions from memory
- * @param evictionCountFromDisk the number of evictions from disk
- * @param allocatedMemory the total allocated off-heap memory in bytes
- * @param occupiedMemory the currently occupied off-heap memory in bytes (including overhead)
- * @param dataSize the total size of actual data in memory in bytes (excluding overhead)
- * @param dataSizeOnDisk the total size of data on disk in bytes
- * @param writeToDiskTimeStats statistics for disk write operations (min/max/avg in milliseconds)
- * @param readFromDiskTimeStats statistics for disk read operations (min/max/avg in milliseconds)
- * @param segmentSize the size of each memory segment in bytes (typically 1MB)
- * @param occupiedSlots map of slot sizes to segment occupation details
+ * @param capacity the maximum number of entries the cache can hold. This is the configured capacity limit
+ *                 that determines when evictions start occurring. Once the total number of entries
+ *                 (size + sizeOnDisk) reaches this limit, older entries will be evicted to make room
+ *                 for new ones
+ * @param size the current number of entries stored in memory (off-heap). This count includes only
+ *             entries that are currently in the off-heap memory cache, not those that have been
+ *             persisted to disk
+ * @param sizeOnDisk the current number of entries stored on disk. These are entries that have been
+ *                   evicted from memory but are still accessible through disk I/O operations
+ * @param putCount the total number of put operations performed since cache creation. This is a cumulative
+ *                 counter that includes all successful and failed put attempts
+ * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
+ *                       when entries are evicted from memory due to capacity constraints or explicit
+ *                       eviction policies
+ * @param getCount the total number of get operations performed since cache creation. This equals the sum
+ *                 of hitCount, hitCountByDisk, and missCount
+ * @param hitCount the number of successful get operations where the entry was found in memory (off-heap).
+ *                 These are the fastest cache accesses as they don't require disk I/O
+ * @param hitCountByDisk the number of successful get operations where the entry was retrieved from disk.
+ *                       These operations are slower due to disk I/O but still count as cache hits
+ * @param missCount the number of failed get operations where the entry was not found in either memory or
+ *                  disk. This can occur when the key never existed, was explicitly removed, or has expired
+ * @param evictionCount the total number of entries that have been evicted from memory. Evictions occur
+ *                      when the cache reaches capacity or when entries are explicitly removed or expired
+ * @param evictionCountFromDisk the number of entries that have been permanently removed from disk storage.
+ *                              This typically happens when entries expire or are explicitly deleted
+ * @param allocatedMemory the total allocated off-heap memory in bytes. This represents the maximum memory
+ *                        that has been reserved for the cache, typically organized into fixed-size segments
+ * @param occupiedMemory the currently occupied off-heap memory in bytes, including both data and internal
+ *                       overhead. This value includes the actual data size plus any metadata and alignment
+ *                       padding required by the slot-based allocation system
+ * @param dataSize the total size of actual serialized data stored in memory in bytes, excluding any internal
+ *                 overhead or padding. This represents the raw size of the cached values without the
+ *                 slot allocation overhead
+ * @param dataSizeOnDisk the total size of data stored on disk in bytes. This includes all entries that
+ *                       have been persisted to disk storage
+ * @param writeToDiskTimeStats statistics for disk write operations, tracking the minimum, maximum, and
+ *                             average time in milliseconds for writing entries to disk. This helps monitor
+ *                             disk write performance and identify potential I/O bottlenecks
+ * @param readFromDiskTimeStats statistics for disk read operations, tracking the minimum, maximum, and
+ *                              average time in milliseconds for reading entries from disk. This helps
+ *                              monitor disk read performance and cache hit efficiency
+ * @param segmentSize the size of each memory segment in bytes. The off-heap memory is organized into
+ *                    fixed-size segments (typically 1MB = 1048576 bytes) to manage memory allocation
+ *                    and reduce fragmentation
+ * @param occupiedSlots a detailed map showing memory slot occupation across segments. The outer map's key
+ *                      is the slot size in bytes (e.g., 64, 128, 256, 512, 1024, 2048, 4096, 8192), and
+ *                      the inner map contains segment index as key and the number of occupied slots in
+ *                      that segment as value. This provides granular visibility into memory fragmentation
+ *                      and utilization patterns
  * @see OffHeapCache#stats()
  * @see OffHeapCache25#stats()
  * @see MinMaxAvg

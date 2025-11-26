@@ -76,8 +76,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.put("user:123", user);
      * }</pre>
      *
-     * @param capacity the maximum number of entries the cache can hold
-     * @param evictDelay the delay in milliseconds between eviction runs
+     * @param capacity the maximum number of entries the cache can hold (must be positive)
+     * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative)
+     * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      */
     public LocalCache(final int capacity, final long evictDelay) {
         this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -95,10 +96,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * // 5000 capacity, 30s eviction, 2h TTL, 30min idle
      * }</pre>
      *
-     * @param capacity the maximum number of entries the cache can hold
-     * @param evictDelay the delay in milliseconds between eviction runs
-     * @param defaultLiveTime the default time-to-live in milliseconds for entries
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries
+     * @param capacity the maximum number of entries the cache can hold (must be positive)
+     * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative)
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries (0 for no expiration)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries (0 for no idle timeout)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      */
     public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
@@ -126,9 +127,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * LocalCache<String, User> cache = new LocalCache<>(3600000, 1800000, customPool);
      * }</pre>
      *
-     * @param defaultLiveTime the default time-to-live in milliseconds for entries
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries
-     * @param pool the pre-configured KeyedObjectPool to use for storage
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries (0 for no expiration)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries (0 for no idle timeout)
+     * @param pool the pre-configured KeyedObjectPool to use for storage (must not be null)
      * @throws IllegalArgumentException if pool is null
      */
     public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
@@ -144,6 +145,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     /**
      * Retrieves a value from the cache by its key.
      * This operation updates the last access time for idle timeout calculation.
+     * If the entry has expired or been evicted, null will be returned.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -151,11 +153,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * User user = cache.gett("user:123");
      * if (user != null) {
      *     System.out.println("Found: " + user.getName());
+     * } else {
+     *     System.out.println("Cache miss");
      * }
      * }</pre>
      *
      * @param key the cache key whose associated value is to be returned
-     * @return the value associated with the specified key, or null if not found, expired, or evicted
+     * @return the value associated with the specified key, or null if the key is not found, has expired, or has been evicted
      */
     @Override
     public V gett(final K key) {
@@ -173,15 +177,18 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * User user = new User("John");
-     * cache.put("user:123", user, 3600000, 1800000); // 1h TTL, 30min idle
+     * boolean success = cache.put("user:123", user, 3600000, 1800000); // 1h TTL, 30min idle
+     * if (success) {
+     *     System.out.println("Entry cached successfully");
+     * }
      * cache.put("temp:data", data, 5000, 0); // 5s TTL, no idle timeout
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated
+     * @param key the cache key with which the specified value is to be associated (must not be null)
      * @param value the cache value to be associated with the specified key
-     * @param liveTime the time-to-live in milliseconds (0 for no expiration)
+     * @param liveTime the time-to-live in milliseconds (0 for no expiration based on time)
      * @param maxIdleTime the maximum idle time in milliseconds (0 for no idle timeout)
-     * @return true if the entry was successfully stored, false otherwise
+     * @return true if the entry was successfully stored; false if the cache is full and unable to evict entries, or if the underlying pool rejected the entry
      * @throws IllegalArgumentException if key is null
      */
     @Override
@@ -195,12 +202,15 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes the mapping for a key from the cache if it is present.
-     * This operation succeeds whether the key exists or not.
+     * This operation succeeds whether the key exists or not. If the key is not found,
+     * the operation completes silently without throwing an exception.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
-     * cache.remove("user:123"); // Removes if exists
+     * cache.put("user:123", user);
+     * cache.remove("user:123"); // Removes the entry
+     * cache.remove("user:123"); // No error, silent no-op
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache
@@ -212,19 +222,23 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a mapping for the specified key.
-     * Note: This method may check for key existence, but the underlying pool implementation
-     * may or may not update access time depending on the implementation.
+     * Note: This method checks for key existence but may or may not update the access time
+     * for idle timeout calculation, depending on the underlying pool implementation.
+     * Returns false if the entry has expired or been evicted.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.put("user:123", user);
      * if (cache.containsKey("user:123")) {
      *     System.out.println("User exists in cache");
+     * } else {
+     *     System.out.println("User not in cache");
      * }
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested
-     * @return true if the cache contains a mapping for the specified key and it hasn't expired
+     * @return true if the cache contains a mapping for the specified key and it has not expired; false otherwise
      */
     @Override
     public boolean containsKey(final K key) {
@@ -234,17 +248,20 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns a set of all keys currently in the cache.
      * The returned set is a snapshot and may include keys for expired entries
-     * that haven't been evicted yet. Modifications to the returned set do not
-     * affect the cache.
+     * that have not been evicted yet by the background eviction process.
+     * Modifications to the returned set do not affect the cache.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.put("user:1", user1);
+     * cache.put("user:2", user2);
      * Set<String> keys = cache.keySet();
+     * System.out.println("Cache contains " + keys.size() + " keys");
      * keys.forEach(key -> System.out.println("Cached key: " + key));
      * }</pre>
      *
-     * @return a set of all cache keys
+     * @return a set containing all cache keys (including potentially expired entries)
      */
     @Override
     public Set<K> keySet() {
@@ -253,16 +270,20 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns the current number of entries in the cache.
-     * This count may include expired entries that haven't been evicted yet.
+     * This count may include expired entries that have not been evicted yet
+     * by the background eviction process. For the maximum capacity of the cache,
+     * use {@link #stats()}.capacity().
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.put("user:1", user1);
+     * cache.put("user:2", user2);
      * int count = cache.size();
      * System.out.println("Cache contains " + count + " entries");
      * }</pre>
      *
-     * @return the number of entries in the cache
+     * @return the number of entries currently in the cache (including potentially expired entries)
      */
     @Override
     public int size() {
@@ -270,14 +291,18 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes all entries from the cache.
-     * This operation is atomic and thread-safe.
+     * Removes all entries from the cache immediately.
+     * This operation is atomic and thread-safe. After this operation completes,
+     * {@link #size()} will return 0 (unless concurrent puts occur during the clear).
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
+     * cache.put("user:1", user1);
+     * cache.put("user:2", user2);
+     * System.out.println("Before clear: " + cache.size());
      * cache.clear(); // Removes all cached entries
-     * System.out.println("Cache cleared, size: " + cache.size());
+     * System.out.println("After clear: " + cache.size()); // Should print 0
      * }</pre>
      */
     @Override
@@ -288,12 +313,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns comprehensive statistics about cache performance and usage.
      * The statistics include hit/miss rates, eviction counts, and memory usage.
-     * This is a relatively expensive operation as it gathers current metrics.
-     * Use this method to monitor cache effectiveness and tune configuration.
+     * This is a relatively expensive operation as it gathers current metrics from
+     * the underlying pool. Use this method to monitor cache effectiveness and
+     * tune configuration parameters for optimal performance.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
+     * // ... perform cache operations
      * CacheStats stats = cache.stats();
      * long totalRequests = stats.hitCount() + stats.missCount();
      * if (totalRequests > 0) {
@@ -301,10 +328,12 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *     System.out.println("Hit rate: " + String.format("%.2f%%", hitRate * 100));
      * }
      * System.out.println("Cache size: " + stats.size() + "/" + stats.capacity());
+     * System.out.println("Evictions: " + stats.evictionCount());
      * }</pre>
      *
-     * @return a snapshot of current cache statistics
+     * @return a snapshot of current cache statistics including capacity, size, hit/miss counts, and eviction metrics
      * @see CacheStats
+     * @see PoolStats
      */
     public CacheStats stats() {
         final PoolStats poolStats = pool.stats();
@@ -316,18 +345,21 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases all resources.
      * Stops the eviction scheduler, clears all entries, and releases the underlying object pool.
-     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
-     * This method is idempotent and thread-safe - multiple calls have no additional effect.
+     * After closing, the cache cannot be used - subsequent operations may throw IllegalStateException
+     * or behave unexpectedly. This method is idempotent and thread-safe - multiple calls have no
+     * additional effect beyond the first invocation.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * try {
      *     cache.put("key", value);
+     *     User user = cache.gett("key");
      *     // ... use cache
      * } finally {
      *     cache.close(); // Always close to release resources
      * }
+     * // Or with try-with-resources if cache implements AutoCloseable
      * }</pre>
      */
     @Override
@@ -337,16 +369,21 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache has been closed.
+     * Use this method to verify whether the cache is still operational before
+     * performing operations, especially in long-running applications or when
+     * sharing cache instances across components.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * if (!cache.isClosed()) {
      *     cache.put("key", value);
+     * } else {
+     *     System.out.println("Cache is closed, cannot perform operation");
      * }
      * }</pre>
      *
-     * @return true if {@link #close()} has been called
+     * @return true if {@link #close()} has been called on this cache; false if the cache is still operational
      */
     @Override
     public boolean isClosed() {

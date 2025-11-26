@@ -25,8 +25,8 @@ import com.landawn.abacus.util.Numbers;
  * Caffeine is a high-performance, near-optimal caching library based on Java 8.
  * This class provides a bridge between Caffeine's API and the standardized Cache interface,
  * allowing Caffeine to be used seamlessly within the Abacus caching framework.
- * 
- * <br><br>
+ *
+ * <p>
  * Caffeine features exposed through this wrapper:
  * <ul>
  * <li>Automatic eviction based on size, time, or references</li>
@@ -37,6 +37,10 @@ import com.landawn.abacus.util.Numbers;
  * 
  * <p><b>Usage Examples:</b></p>
  * <pre>{@code
+ * import com.github.benmanes.caffeine.cache.Cache;
+ * import com.github.benmanes.caffeine.cache.Caffeine;
+ * import java.util.concurrent.TimeUnit;
+ *
  * Cache<String, User> caffeine = Caffeine.newBuilder()
  *     .maximumSize(10000)
  *     .expireAfterWrite(10, TimeUnit.MINUTES)
@@ -44,7 +48,7 @@ import com.landawn.abacus.util.Numbers;
  *     .build();
  *
  * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
- * cache.put("user:123", user);
+ * cache.put("user:123", user, 0, 0);
  *
  * // Get Caffeine-specific statistics
  * CacheStats stats = cache.stats();
@@ -70,6 +74,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * import com.github.benmanes.caffeine.cache.Cache;
+     * import com.github.benmanes.caffeine.cache.Caffeine;
+     * import java.util.concurrent.TimeUnit;
+     *
      * Cache<String, User> caffeine = Caffeine.newBuilder()
      *     .maximumSize(1000)
      *     .expireAfterWrite(10, TimeUnit.MINUTES)
@@ -95,7 +103,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user);
+     * cache.put("user:123", user, 0, 0);
      * User retrieved = cache.gett("user:123");
      * if (retrieved != null) {
      *     System.out.println("Found user: " + retrieved.getName());
@@ -117,7 +125,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Stores a key-value pair in the cache.
      * If the key already exists, its value will be replaced.
      *
-     * <br><br>
+     * <p>
      * Note: Caffeine's expiration policy is configured at cache creation time.
      * The liveTime and maxIdleTime parameters are ignored by this implementation.
      * All entries use the cache-wide expiration settings.
@@ -157,7 +165,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user);
+     * cache.put("user:123", user, 0, 0);
      * cache.remove("user:123");
      * User retrieved = cache.gett("user:123"); // returns null
      * }</pre>
@@ -179,7 +187,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user);
+     * cache.put("user:123", user, 0, 0);
      * if (cache.containsKey("user:123")) {
      *     System.out.println("User exists in cache");
      * }
@@ -228,8 +236,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user1);
-     * cache.put("user:456", user2);
+     * cache.put("user:123", user1, 0, 0);
+     * cache.put("user:456", user2, 0, 0);
      * int count = cache.size(); // approximately 2
      * System.out.println("Cache contains " + count + " entries");
      * }</pre>
@@ -251,8 +259,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user1);
-     * cache.put("user:456", user2);
+     * cache.put("user:123", user1, 0, 0);
+     * cache.put("user:456", user2, 0, 0);
      * cache.clear();
      * int size = cache.size(); // returns 0
      * }</pre>
@@ -274,7 +282,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user);
+     * cache.put("user:123", user, 0, 0);
      * cache.close();
      * // cache.gett("user:123"); // throws IllegalStateException
      * }</pre>
@@ -292,6 +300,18 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache has been closed.
+     * This method can be used to verify cache state before performing operations,
+     * though most operations will throw IllegalStateException if the cache is closed.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
+     * if (!cache.isClosed()) {
+     *     cache.put("user:123", user, 0, 0);
+     * }
+     * cache.close();
+     * boolean closed = cache.isClosed(); // returns true
+     * }</pre>
      *
      * @return {@code true} if the cache is closed, {@code false} otherwise
      */

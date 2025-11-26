@@ -201,22 +201,68 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Constructs an AbstractOffHeapCache with the specified configuration.
      * This constructor initializes the memory segments, object pool, and eviction scheduling.
+     * The cache divides the total memory capacity into fixed-size segments (1MB each) and manages
+     * them using a sophisticated allocation strategy with size-based queuing and best-fit placement.
+     * <br><br>
+     * The constructor performs the following initialization steps:
+     * <ul>
+     * <li>Allocates off-heap memory of the specified capacity</li>
+     * <li>Creates memory segments and initializes the segment tracking structures</li>
+     * <li>Sets up the keyed object pool for cache entry management</li>
+     * <li>Configures serialization/deserialization handlers</li>
+     * <li>Schedules periodic eviction tasks if evictDelay is positive</li>
+     * <li>Registers a shutdown hook for graceful resource cleanup</li>
+     * </ul>
+     * <br>
+     * This constructor is thread-safe and all initialized data structures support concurrent access.
      *
-     * @param capacityInMB the total off-heap memory capacity in megabytes
-     * @param maxBlockSize the maximum size of a single memory block in bytes
-     * @param evictDelay the delay between eviction runs in milliseconds
-     * @param defaultLiveTime the default TTL for entries in milliseconds
-     * @param defaultMaxIdleTime the default max idle time for entries in milliseconds
-     * @param vacatingFactor the fraction of fragmented memory that triggers defragmentation
-     * @param arrayOffset the array base offset for memory operations
-     * @param serializer the custom serializer, or null for default
-     * @param deserializer the custom deserializer, or null for default
-     * @param offHeapStore the optional disk store for spillover
-     * @param statsTimeOnDisk whether to collect disk I/O timing statistics
-     * @param testerForLoadingItemFromDiskToMemory the predicate for loading from disk to memory
-     * @param storeSelector the function to determine storage location (0=default, 1=memory only, 2=disk only)
-     * @param logger the logger instance for this cache
-     * @throws IllegalArgumentException if maxBlockSize is less than 1024 or greater than SEGMENT_SIZE (1MB)
+     * @param capacityInMB the total off-heap memory capacity in megabytes. This determines the total
+     *                     number of segments (capacityInMB MB / 1MB per segment). Must be positive.
+     *                     The actual capacity will be exactly capacityInMB * 1048576 bytes.
+     * @param maxBlockSize the maximum size of a single memory block in bytes. Values that fit within
+     *                     this size will be stored in a single slot; larger values will be split across
+     *                     multiple slots. Must be between 1024 and SEGMENT_SIZE (1048576). The value
+     *                     will be rounded up to the nearest multiple of MIN_BLOCK_SIZE (64 bytes).
+     * @param evictDelay the delay between eviction runs in milliseconds. If positive, schedules a
+     *                   background task to periodically evict expired entries and release empty segments.
+     *                   Use 0 or negative to disable automatic eviction (manual eviction via vacate() still works).
+     * @param defaultLiveTime the default time-to-live for cache entries in milliseconds. Entries older
+     *                        than this will be considered expired. Use 0 or negative for no expiration.
+     *                        This can be overridden per entry when calling put().
+     * @param defaultMaxIdleTime the default maximum idle time for entries in milliseconds. Entries not
+     *                           accessed within this time will be considered expired. Use 0 or negative
+     *                           for no idle timeout. This can be overridden per entry when calling put().
+     * @param vacatingFactor the utilization threshold (0.0 to 1.0) that triggers defragmentation when
+     *                       memory becomes fragmented. When the pool reaches this level of fragmentation,
+     *                       the least recently used entries are evicted to free up space. Use 0.0 to apply
+     *                       the DEFAULT_VACATING_FACTOR (0.2). Typical values range from 0.1 to 0.3.
+     * @param arrayOffset the array base offset for memory operations, used to calculate the correct
+     *                    memory address when copying data to/from byte arrays. This is implementation-specific
+     *                    (e.g., Unsafe.ARRAY_BYTE_BASE_OFFSET for Unsafe-based implementations).
+     * @param serializer the custom serializer function for converting values to byte streams, or null to
+     *                   use the default serializer (Kryo if available, otherwise JSON). The serializer
+     *                   should write the complete serialized form to the provided ByteArrayOutputStream.
+     * @param deserializer the custom deserializer function for converting byte arrays back to values,
+     *                     or null to use the default deserializer. The function receives the byte array
+     *                     and type information, and should return the deserialized value.
+     * @param offHeapStore the optional disk-based store for spillover storage when memory is full, or
+     *                     null to disable disk spillover. When configured, values that don't fit in memory
+     *                     can be automatically stored to disk instead of being rejected.
+     * @param statsTimeOnDisk whether to collect detailed timing statistics for disk I/O operations.
+     *                        When true, tracks min/max/average read and write times to disk. This has
+     *                        minimal performance overhead but provides valuable monitoring data.
+     * @param testerForLoadingItemFromDiskToMemory the predicate function to determine whether a disk-stored
+     *                                             value should be promoted to memory based on access patterns.
+     *                                             Receives the activity print, size, and I/O elapsed time.
+     *                                             Return true to promote the value to memory. Use null to
+     *                                             disable automatic promotion.
+     * @param storeSelector the function to determine storage location for each put operation. Receives the
+     *                      key, value, and size, and should return: 0 for default (try memory, fallback to disk),
+     *                      1 for memory only (never store to disk), or 2 for disk only (always store to disk).
+     *                      Use null for default behavior (always try memory first).
+     * @param logger the logger instance for this cache, used to log warnings and errors during cache
+     *               operations. Should not be null.
+     * @throws IllegalArgumentException if maxBlockSize is less than 1024 or greater than SEGMENT_SIZE (1048576)
      */
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
@@ -287,59 +333,117 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Allocates the specified amount of off-heap memory.
-     * Implementation depends on the specific memory management approach
-     * (Unsafe vs Foreign Memory API).
+     * This is an abstract method that must be implemented by concrete subclasses
+     * based on their specific memory management approach (e.g., Unsafe API or Foreign Memory API).
+     * The allocated memory must remain valid until deallocate() is called.
+     * <br><br>
+     * Thread safety: This method is called only once during constructor initialization,
+     * so thread-safety is not required for the implementation.
      *
-     * @param capacityInBytes the number of bytes to allocate
-     * @return the base address of the allocated memory
+     * @param capacityInBytes the number of bytes to allocate in off-heap memory. Must be positive.
+     *                        Typically this will be a multiple of SEGMENT_SIZE (1048576 bytes).
+     * @return the base memory address (pointer) of the allocated off-heap memory region.
+     *         This address will be used for all subsequent memory access operations.
      */
     protected abstract long allocate(long capacityInBytes);
 
     /**
      * Deallocates all off-heap memory used by this cache.
-     * Called during shutdown to release native memory resources.
+     * This is an abstract method that must be implemented by concrete subclasses
+     * to properly release native memory resources allocated by allocate().
+     * After this method is called, the memory address returned by allocate() becomes invalid
+     * and must not be accessed.
+     * <br><br>
+     * This method is called during cache shutdown, specifically in the close() method's
+     * finally block to ensure memory is always released even if errors occur during cleanup.
+     * <br><br>
+     * Thread safety: This method is called only during the close() operation which is
+     * synchronized, so thread-safety is not required for the implementation.
      */
     protected abstract void deallocate();
 
     /**
      * Copies data from a byte array to off-heap memory.
+     * This is an abstract method that must be implemented by concrete subclasses
+     * to perform the low-level memory copy operation using the appropriate API
+     * (e.g., Unsafe.copyMemory() or MemorySegment operations).
+     * <br><br>
+     * Thread safety: This method may be called concurrently from multiple threads
+     * during put operations. The implementation must ensure that concurrent copies
+     * to different memory regions are safe.
      *
-     * @param bytes the source byte array
-     * @param srcOffset the offset in the source array
-     * @param startPtr the destination memory address
-     * @param len the number of bytes to copy
+     * @param bytes the source byte array containing the data to copy. Must not be null.
+     * @param srcOffset the starting offset in the source byte array. Together with the
+     *                  array base offset (arrayOffset), this determines the actual source address.
+     * @param startPtr the destination memory address in off-heap memory. Must be a valid
+     *                 address within the allocated memory region (between startPtr and startPtr + capacity).
+     * @param len the number of bytes to copy. Must be positive and must not exceed the
+     *            available space at the destination address.
      */
     protected abstract void copyToMemory(byte[] bytes, int srcOffset, long startPtr, int len);
 
     /**
      * Copies data from off-heap memory to a byte array.
+     * This is an abstract method that must be implemented by concrete subclasses
+     * to perform the low-level memory copy operation using the appropriate API
+     * (e.g., Unsafe.copyMemory() or MemorySegment operations).
+     * <br><br>
+     * Thread safety: This method may be called concurrently from multiple threads
+     * during gett operations. The implementation must ensure that concurrent copies
+     * from different memory regions are safe.
      *
-     * @param startPtr the source memory address
-     * @param bytes the destination byte array
-     * @param destOffset the offset in the destination array
-     * @param len the number of bytes to copy
+     * @param startPtr the source memory address in off-heap memory. Must be a valid
+     *                 address within the allocated memory region (between startPtr and startPtr + capacity).
+     * @param bytes the destination byte array to copy data into. Must not be null and
+     *              must have sufficient capacity to hold the copied data.
+     * @param destOffset the starting offset in the destination byte array. Together with the
+     *                   array base offset (arrayOffset), this determines the actual destination address.
+     * @param len the number of bytes to copy. Must be positive and must not exceed the
+     *            available space in the destination array starting from destOffset.
      */
     protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
 
     /**
      * Retrieves a value from the cache by its key.
-     * Handles both memory and disk storage. For values stored on disk, this method
-     * may automatically promote them to memory based on access frequency and I/O timing,
-     * as determined by the testerForLoadingItemFromDiskToMemory predicate if configured.
-     * This method is thread-safe and can be called concurrently from multiple threads.
+     * This method handles retrieval from both memory-based storage (SlotWrapper/MultiSlotsWrapper)
+     * and disk-based storage (StoreWrapper). For values stored on disk, this method may automatically
+     * promote them to memory based on access frequency and I/O timing, as determined by the
+     * testerForLoadingItemFromDiskToMemory predicate if configured. This adaptive behavior helps
+     * optimize performance for frequently accessed data.
+     * <br><br>
+     * Retrieval behavior:
+     * <ul>
+     * <li>For memory-stored values: Data is copied directly from off-heap memory and deserialized</li>
+     * <li>For disk-stored values: Data is read from the offHeapStore and may be promoted to memory if:
+     *     <ul>
+     *     <li>The testerForLoadingItemFromDiskToMemory predicate is configured</li>
+     *     <li>The predicate returns true based on access patterns and I/O timing</li>
+     *     <li>Sufficient memory is available for the promotion</li>
+     *     </ul>
+     * </li>
+     * <li>Returns null if the key is not found or the entry has expired</li>
+     * </ul>
+     * <br>
+     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
+     * The underlying object pool handles concurrent access, and each wrapper type (SlotWrapper,
+     * MultiSlotsWrapper, StoreWrapper) has synchronized read operations.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
      * cache.put("key1", "value1".getBytes());
      * byte[] value = cache.gett("key1");
      * if (value != null) {
      *     System.out.println("Found: " + new String(value));
+     * } else {
+     *     System.out.println("Key not found or expired");
      * }
      * }</pre>
      *
-     * @param k the cache key to retrieve
-     * @return the cached value, or null if not found or expired
+     * @param k the cache key to retrieve. Must not be null.
+     * @return the cached value associated with the key, or null if the key is not found,
+     *         the entry has expired, or an error occurred during retrieval
      */
     @Override
     public V gett(final K k) {
@@ -467,28 +571,62 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Stores a key-value pair in the cache with specified expiration settings.
-     * The value is serialized and stored either in memory, on disk, or both
-     * based on size and configuration. If memory is not available and disk spillover
-     * is configured, the value will be stored on disk. Returns false if neither
-     * memory nor disk storage is available. This method is thread-safe and can be
-     * called concurrently from multiple threads.
+     * This method serializes the value and stores it either in off-heap memory, on disk, or both,
+     * based on size constraints, memory availability, and the configured storeSelector policy.
+     * <br><br>
+     * Storage decision logic:
+     * <ul>
+     * <li>If storeSelector is configured: Consults the selector to determine storage location
+     *     <ul>
+     *     <li>Return value 0: Try memory first, fallback to disk if memory unavailable</li>
+     *     <li>Return value 1: Memory only (fail if memory unavailable)</li>
+     *     <li>Return value 2: Disk only (always store to disk via offHeapStore)</li>
+     *     </ul>
+     * </li>
+     * <li>If value size <= maxBlockSize: Stores in a single memory slot (SlotWrapper)</li>
+     * <li>If value size > maxBlockSize: Splits across multiple slots (MultiSlotsWrapper)</li>
+     * <li>If memory allocation fails: Falls back to disk storage if offHeapStore is configured</li>
+     * <li>If both memory and disk storage fail: Returns false and triggers vacate() for cleanup</li>
+     * </ul>
+     * <br>
+     * Serialization handling:
+     * <ul>
+     * <li>byte[] values: Stored directly without serialization</li>
+     * <li>ByteBuffer values: Converted to byte array without using custom serializer</li>
+     * <li>Other types: Serialized using the configured serializer (Kryo or JSON by default)</li>
+     * </ul>
+     * <br>
+     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
+     * Memory allocation uses fine-grained locking on segment queues, and the object pool handles
+     * concurrent put operations safely.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
      * byte[] data = "large data".getBytes();
+     *
      * // Store with 1 hour TTL and 30 minutes idle time
      * boolean success = cache.put("key1", data, 3600000, 1800000);
      * if (success) {
      *     System.out.println("Data cached successfully");
+     * } else {
+     *     System.out.println("Failed to cache - memory and disk full");
      * }
+     *
+     * // Store with default TTL and idle time
+     * cache.put("key2", "small data".getBytes(), 0, 0);
      * }</pre>
      *
-     * @param k the cache key to associate with the value
-     * @param v the value to cache, must not be null
-     * @param liveTime the time-to-live in milliseconds (0 or negative means use default)
-     * @param maxIdleTime the maximum idle time in milliseconds (0 or negative means use default)
-     * @return true if the operation was successful, false otherwise
+     * @param k the cache key to associate with the value. Must not be null.
+     * @param v the value to cache. Must not be null. Can be byte[], ByteBuffer, or any serializable object.
+     * @param liveTime the time-to-live in milliseconds. If 0 or negative, uses the default live time
+     *                 specified in the constructor. Entries older than this will be considered expired.
+     * @param maxIdleTime the maximum idle time in milliseconds. If 0 or negative, uses the default
+     *                    max idle time specified in the constructor. Entries not accessed within this
+     *                    time will be considered expired.
+     * @return true if the operation was successful and the value was stored (in memory or on disk),
+     *         false if storage failed due to insufficient space in both memory and disk
      */
     @Override
     public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
@@ -629,16 +767,29 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Stores a value to disk when memory is unavailable or based on storage policy.
      * This is an internal method called by put() when memory allocation fails or when
-     * the storeSelector determines the value should be stored on disk. The method creates
-     * a StoreWrapper to track the disk-stored value.
+     * the storeSelector determines the value should be stored on disk. The method delegates
+     * to the offHeapStore for actual disk persistence and creates a StoreWrapper to track
+     * the disk-stored value within the cache.
+     * <br><br>
+     * The StoreWrapper maintains metadata about the disk-stored value including its type,
+     * size, expiration settings, and the key needed to retrieve it from the offHeapStore.
+     * Statistics are automatically updated when creating the wrapper (sizeOnDisk, dataSizeOnDisk,
+     * totalDataSize).
+     * <br><br>
+     * Thread safety: This method may be called concurrently from multiple threads during put
+     * operations. The offHeapStore implementation must handle concurrent put operations safely.
      *
-     * @param k the cache key to associate with the disk-stored value
-     * @param liveTime the time-to-live in milliseconds
-     * @param maxIdleTime the maximum idle time in milliseconds
-     * @param type the value type information for deserialization
-     * @param bytes the serialized value bytes to store on disk
-     * @param size the size of the serialized data in bytes
-     * @return a StoreWrapper for the disk-stored value, or null if storage failed
+     * @param k the cache key to associate with the disk-stored value. Must not be null.
+     *          This key is stored in the StoreWrapper for later retrieval and removal.
+     * @param liveTime the time-to-live in milliseconds for the disk-stored entry
+     * @param maxIdleTime the maximum idle time in milliseconds for the disk-stored entry
+     * @param type the value type information needed for deserialization when reading from disk
+     * @param bytes the serialized value bytes to store on disk. The array may be larger than
+     *              the actual data size, so only the first 'size' bytes are stored.
+     * @param size the actual size of the serialized data in bytes. Must be positive and
+     *             must not exceed the length of the bytes array.
+     * @return a StoreWrapper for the disk-stored value if storage was successful,
+     *         or null if the offHeapStore.put() operation failed
      */
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
         if (offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size))) {
@@ -650,14 +801,31 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Finds and allocates an available memory slot of the specified size.
-     * Uses a best-fit strategy within size-segregated segment queues. If no suitable
-     * slot exists in an existing segment, a new segment is allocated from the pool.
-     * Slot sizes are rounded up to the nearest multiple of MIN_BLOCK_SIZE (64 bytes).
-     * This is an internal method called by put() during memory allocation. The method
-     * is thread-safe and uses fine-grained locking on segment queues.
+     * This method implements a sophisticated allocation strategy using size-segregated segment queues
+     * and a best-fit search pattern. The algorithm minimizes fragmentation while maintaining good
+     * performance through bidirectional searching and queue reordering.
+     * <br><br>
+     * Allocation algorithm:
+     * <ol>
+     * <li>Rounds the requested size up to the nearest multiple of MIN_BLOCK_SIZE (64 bytes),
+     *     with a maximum of maxBlockSize</li>
+     * <li>Determines the segment queue index based on the rounded slot size</li>
+     * <li>Searches the queue bidirectionally (from both ends toward the middle) for a segment
+     *     with an available slot</li>
+     * <li>If a slot is found in a segment that's not near the front of the queue (position > 3),
+     *     moves that segment to the front for faster future access</li>
+     * <li>If no slot is found in existing segments, allocates a new segment from the pool
+     *     (if capacity allows) and adds it to the queue</li>
+     * </ol>
+     * <br>
+     * Thread safety: This method is thread-safe and uses fine-grained locking on individual
+     * segment queues (not global locking). Multiple threads can allocate slots from different
+     * size queues concurrently.
      *
-     * @param size the required slot size in bytes, must be positive
-     * @return the allocated Slot, or null if no space is available in the cache
+     * @param size the required slot size in bytes. Must be positive. Will be rounded up to the
+     *             nearest multiple of MIN_BLOCK_SIZE (64 bytes) or capped at maxBlockSize.
+     * @return the allocated Slot containing the slot index and parent segment reference,
+     *         or null if no space is available in the cache (all segments are full)
      */
     private Slot getAvailableSlot(final int size) {
         int slotSize = 0;
@@ -742,11 +910,29 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Triggers asynchronous vacating to free up memory space.
-     * This method is called when memory allocation fails. It delegates to the pool's
-     * vacate() method to evict entries, then runs eviction to release empty segments.
-     * Only one vacating task runs at a time to avoid redundant work. The method returns
-     * immediately after scheduling the vacating task, allowing the caller to continue.
-     * After the vacating task completes, it sleeps for 3 seconds to allow memory to stabilize.
+     * This method is called when memory allocation fails during a put operation, indicating
+     * that the cache has reached capacity. It initiates a background cleanup process to evict
+     * least recently used entries and release empty memory segments.
+     * <br><br>
+     * Vacating process:
+     * <ol>
+     * <li>Checks if a vacating task is already running using an atomic counter</li>
+     * <li>If already running, returns immediately to avoid redundant work</li>
+     * <li>Otherwise, schedules an asynchronous task that:
+     *     <ul>
+     *     <li>Calls _pool.vacate() to evict LRU entries based on the vacatingFactor threshold</li>
+     *     <li>Calls evict() to release now-empty segments back to the pool</li>
+     *     <li>Sleeps for 3 seconds to allow memory to stabilize before allowing another vacation</li>
+     *     </ul>
+     * </li>
+     * </ol>
+     * <br>
+     * The method returns immediately after scheduling the vacating task, allowing the calling
+     * thread to continue. This non-blocking behavior ensures that put operations don't hang
+     * waiting for cleanup to complete.
+     * <br><br>
+     * Thread safety: This method is thread-safe and uses an atomic counter to ensure only
+     * one vacating task runs at a time, even when called concurrently from multiple threads.
      */
     private void vacate() {
         if (_activeVacationTaskCount.incrementAndGet() > 1) {
@@ -769,19 +955,34 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes an entry from the cache.
-     * Properly cleans up memory or disk resources associated with the entry.
-     * This operation is idempotent - removing a non-existent key has no effect.
+     * Removes an entry from the cache and releases all associated resources.
+     * This method properly cleans up resources based on the entry's storage type:
+     * <ul>
+     * <li>SlotWrapper: Releases the memory slot back to the segment for reuse</li>
+     * <li>MultiSlotsWrapper: Releases all allocated slots back to their segments</li>
+     * <li>StoreWrapper: Removes the value from the offHeapStore and updates disk statistics</li>
+     * </ul>
+     * <br>
+     * The entry is removed from the underlying object pool, and the wrapper's destroy() method
+     * is called with Caller.REMOVE_REPLACE_CLEAR to perform cleanup. Statistics counters are
+     * automatically updated to reflect the freed resources.
+     * <br><br>
+     * This operation is idempotent - removing a non-existent key has no effect and is safe.
+     * <br><br>
+     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
+     * The object pool handles concurrent remove operations safely, and each wrapper type has
+     * synchronized destroy operations.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
      * cache.put("key1", "value1".getBytes());
-     * cache.remove("key1");  // Removes and frees resources
+     * cache.remove("key1");  // Removes entry and frees resources
      * cache.remove("key1");  // Safe to call again, no effect
      * }</pre>
      *
-     * @param k the cache key to remove
+     * @param k the cache key to remove. Must not be null. If the key doesn't exist, no operation is performed.
      */
     @Override
     public void remove(final K k) {
@@ -794,20 +995,36 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a specific key.
-     * This method returns true for both memory and disk-stored entries.
-     * Note that it does not verify if the entry is expired - use gett() to check expiration.
+     * This method delegates to the underlying object pool's containsKey() method and returns
+     * true for entries stored in both memory (SlotWrapper/MultiSlotsWrapper) and on disk (StoreWrapper).
+     * <br><br>
+     * Important notes:
+     * <ul>
+     * <li>This method does not verify if the entry has expired. An expired entry will still
+     *     return true until it is evicted or accessed via gett()</li>
+     * <li>This is a lightweight check that does not access the actual value data</li>
+     * <li>The result is a point-in-time snapshot; concurrent modifications may occur</li>
+     * </ul>
+     * <br>
+     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
      * cache.put("key1", "value1".getBytes());
      * if (cache.containsKey("key1")) {
      *     System.out.println("Key exists");
      * }
+     *
+     * // Check before expensive operation
+     * if (!cache.containsKey("expensive_key")) {
+     *     // Compute expensive value and put it in cache
+     * }
      * }</pre>
      *
-     * @param k the cache key to check
-     * @return true if the key exists in the cache, false otherwise
+     * @param k the cache key to check. Must not be null.
+     * @return true if the key exists in the cache (regardless of expiration status), false otherwise
      */
     @Override
     public boolean containsKey(final K k) {
@@ -816,19 +1033,41 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns a set of all keys in the cache.
-     * The returned set includes keys for entries stored in both memory and on disk.
-     * Note that the set includes keys for expired entries until they are evicted.
+     * This method delegates to the underlying object pool's keySet() method and returns
+     * a set view containing keys for entries stored in both memory (SlotWrapper/MultiSlotsWrapper)
+     * and on disk (StoreWrapper).
+     * <br><br>
+     * Important notes:
+     * <ul>
+     * <li>The set includes keys for expired entries until they are evicted by the background
+     *     eviction task or accessed via gett()</li>
+     * <li>The returned set is a snapshot at the time of the call; subsequent modifications
+     *     to the cache are not reflected in the returned set</li>
+     * <li>Iterating over the set does not access the actual value data, so it's a lightweight operation</li>
+     * </ul>
+     * <br>
+     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
+     * The returned set is a snapshot and can be safely iterated without external synchronization.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
      * cache.put("key1", "value1".getBytes());
      * cache.put("key2", "value2".getBytes());
      * Set<String> keys = cache.keySet();
      * System.out.println("Cache contains " + keys.size() + " keys");
+     *
+     * // Iterate over all keys
+     * for (String key : cache.keySet()) {
+     *     byte[] value = cache.gett(key);
+     *     if (value != null) {
+     *         System.out.println("Key: " + key + ", Size: " + value.length);
+     *     }
+     * }
      * }</pre>
      *
-     * @return a set view of the keys in this cache
+     * @return a set view of the keys currently in this cache (including expired but not yet evicted entries)
      */
     @Override
     public Set<K> keySet() {
@@ -837,18 +1076,36 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns the number of entries in the cache.
-     * The count includes entries stored in both memory and on disk.
-     * Note that the count includes expired entries until they are evicted.
+     * This method delegates to the underlying object pool's size() method and returns
+     * the total count of entries stored in both memory (SlotWrapper/MultiSlotsWrapper)
+     * and on disk (StoreWrapper).
+     * <br><br>
+     * Important notes:
+     * <ul>
+     * <li>The count includes expired entries until they are evicted by the background
+     *     eviction task or removed</li>
+     * <li>The returned value is a point-in-time snapshot; concurrent modifications may occur</li>
+     * <li>This is a lightweight operation that does not access actual entry data</li>
+     * </ul>
+     * <br>
+     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
      * cache.put("key1", "value1".getBytes());
      * cache.put("key2", "value2".getBytes());
      * System.out.println("Cache size: " + cache.size());  // prints: Cache size: 2
+     *
+     * // Monitor cache growth
+     * int sizeBefore = cache.size();
+     * cache.put("key3", "value3".getBytes());
+     * int sizeAfter = cache.size();
+     * System.out.println("Added " + (sizeAfter - sizeBefore) + " entries");
      * }</pre>
      *
-     * @return the number of entries currently in the cache
+     * @return the number of entries currently in the cache (including expired but not yet evicted entries)
      */
     @Override
     public int size() {
@@ -856,18 +1113,35 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes all entries from the cache.
-     * This operation clears all entries stored in both memory and on disk (via the offHeapStore if configured).
-     * The underlying object pool's clear() method handles the cleanup and calls destroy() on all wrappers.
-     * After calling this method, the cache will be empty but still usable for new entries.
+     * Removes all entries from the cache and releases all associated resources.
+     * This operation clears all entries stored in both memory (SlotWrapper/MultiSlotsWrapper)
+     * and on disk (StoreWrapper via the offHeapStore if configured). The underlying object pool's
+     * clear() method handles the cleanup and calls destroy() on all wrappers, which in turn:
+     * <ul>
+     * <li>For SlotWrapper: Releases the memory slot back to the segment</li>
+     * <li>For MultiSlotsWrapper: Releases all allocated slots back to their segments</li>
+     * <li>For StoreWrapper: Removes the value from the offHeapStore</li>
+     * </ul>
+     * <br>
+     * All statistics counters (totalOccupiedMemorySize, totalDataSize, dataSizeOnDisk, sizeOnDisk)
+     * are automatically updated to reflect the freed resources. After calling this method, the cache
+     * will be empty but still usable for new entries.
+     * <br><br>
+     * Thread safety: This method is thread-safe and can be called concurrently with other operations.
+     * The object pool handles concurrent clear operations safely.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
      * cache.put("key1", "value1".getBytes());
      * cache.put("key2", "value2".getBytes());
      * cache.clear();  // Removes all entries and frees resources
      * System.out.println("Size after clear: " + cache.size());  // prints: Size after clear: 0
+     *
+     * // Clear and reuse
+     * cache.put("new_key", "new_value".getBytes());
+     * System.out.println("Size after new entry: " + cache.size());  // prints: Size after new entry: 1
      * }</pre>
      */
     @Override
@@ -932,20 +1206,53 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes the cache and releases all resources.
-     * Stops eviction scheduling, clears all entries, and deallocates memory.
-     * This method is thread-safe and idempotent - calling close() multiple times has no additional effect.
-     * After calling close(), the cache cannot be used again and any subsequent operations will fail.
+     * Closes the cache and releases all resources including off-heap memory and disk storage.
+     * This method performs a complete shutdown of the cache in the following order:
+     * <ol>
+     * <li>Cancels the scheduled eviction task (if configured)</li>
+     * <li>Removes the shutdown hook from the JVM runtime</li>
+     * <li>Closes the underlying object pool, which:
+     *     <ul>
+     *     <li>Clears all entries by calling destroy() on each wrapper</li>
+     *     <li>Releases memory slots and removes disk-stored values</li>
+     *     <li>Updates all statistics counters</li>
+     *     </ul>
+     * </li>
+     * <li>Deallocates the off-heap memory via the abstract deallocate() method</li>
+     * </ol>
+     * <br>
+     * The method uses nested finally blocks to ensure that each cleanup step is attempted even
+     * if previous steps fail, guaranteeing that native memory is always released.
+     * <br><br>
+     * Important notes:
+     * <ul>
+     * <li>This method is thread-safe and synchronized to prevent concurrent close operations</li>
+     * <li>This method is idempotent - calling close() multiple times has no additional effect
+     *     beyond the first call</li>
+     * <li>After calling close(), the cache cannot be used again and any subsequent operations
+     *     (put, gett, etc.) will fail</li>
+     * <li>It is critical to call close() to release native off-heap memory, as it won't be
+     *     automatically freed by the garbage collector</li>
+     * </ul>
+     * <br>
+     * Thread safety: This method is synchronized and thread-safe. Only one thread will execute
+     * the close logic, while other concurrent callers will wait.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Manual close
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * cache.put("key1", "value1".getBytes());
-     * // Use cache...
-     * cache.close();  // Always close to free native memory
-     * // Or use try-with-resources:
+     * try {
+     *     cache.put("key1", "value1".getBytes());
+     *     // Use cache...
+     * } finally {
+     *     cache.close();  // Always close to free native memory
+     * }
+     *
+     * // Or use try-with-resources (recommended):
      * try (OffHeapCache<String, byte[]> cache2 = new OffHeapCache<>(100)) {
      *     cache2.put("key1", "value1".getBytes());
+     *     // Use cache...
      * }  // Automatically closed
      * }</pre>
      */
@@ -981,17 +1288,33 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache has been closed.
-     * Once closed, the cache cannot be reopened and any operations will fail.
+     * This method delegates to the underlying object pool's isClosed() method to determine
+     * whether the cache has been shut down via the close() method.
+     * <br><br>
+     * Important notes:
+     * <ul>
+     * <li>Once closed, the cache cannot be reopened and any operations (put, gett, etc.) will fail</li>
+     * <li>The off-heap memory has been deallocated once the cache is closed</li>
+     * <li>This is a lightweight check that simply returns a boolean flag</li>
+     * </ul>
+     * <br>
+     * Thread safety: This method is thread-safe and can be called concurrently from multiple threads.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
+     * // Using concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
      * System.out.println("Is closed: " + cache.isClosed());  // prints: Is closed: false
      * cache.close();
      * System.out.println("Is closed: " + cache.isClosed());  // prints: Is closed: true
+     *
+     * // Check before using
+     * if (!cache.isClosed()) {
+     *     cache.put("key1", "value1".getBytes());
+     * }
      * }</pre>
      *
-     * @return true if {@link #close()} has been called, false otherwise
+     * @return true if {@link #close()} has been called and the cache is shut down, false otherwise
      */
     @Override
     public boolean isClosed() {
@@ -1000,11 +1323,37 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Performs periodic eviction of empty segments to release them back to the pool.
-     * This method is called by the scheduled eviction task and also by the vacate() method.
-     * It checks all segments and releases those that have no allocated slots, making them
-     * available for reuse with different slot sizes. This is an internal method that should
-     * not be called directly by users. The method uses double-checked locking to ensure
-     * thread safety while minimizing lock contention.
+     * This is an internal maintenance method that reclaims memory segments that have become
+     * completely empty (all slots freed) and makes them available for reuse with different slot sizes.
+     * This process is essential for memory management as it allows segments to be repurposed when
+     * workload patterns change.
+     * <br><br>
+     * Eviction process:
+     * <ol>
+     * <li>Iterates through all segments in the segment array</li>
+     * <li>For each segment with an empty slot BitSet (no allocated slots):
+     *     <ul>
+     *     <li>Locates the segment's queue in the segmentQueueMap</li>
+     *     <li>Uses double-checked locking to verify the segment is still empty</li>
+     *     <li>Removes the segment from its queue</li>
+     *     <li>Removes the segment from the segmentQueueMap</li>
+     *     <li>Clears the segment's bit in the segmentBitSet, marking it as available</li>
+     *     </ul>
+     * </li>
+     * </ol>
+     * <br>
+     * This method is called:
+     * <ul>
+     * <li>By the scheduled eviction task at regular intervals (if evictDelay > 0)</li>
+     * <li>By the vacate() method after evicting entries from the pool</li>
+     * </ul>
+     * <br>
+     * The method uses double-checked locking to minimize lock contention while ensuring thread safety.
+     * It first checks if a segment is empty without holding the queue lock, then re-checks after
+     * acquiring the lock to ensure the segment hasn't been allocated in the meantime.
+     * <br><br>
+     * Thread safety: This method is thread-safe and uses fine-grained locking on the segmentBitSet
+     * and individual segment queues. It can be called concurrently with allocation operations.
      */
     protected void evict() {
         synchronized (_segmentBitSet) {

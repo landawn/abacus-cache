@@ -108,16 +108,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param k the cache key whose associated value is to be returned
+     * @param key the cache key whose associated value is to be returned
      * @return the value associated with the specified key, or null if not found, expired, or evicted
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      */
     @Override
-    public V gett(final K k) {
+    public V gett(final K key) {
         assertNotClosed();
 
-        return cacheImpl.get(k);
+        return cacheImpl.get(key);
     }
 
     /**
@@ -137,24 +137,24 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.put("userId123", user, 0, 0);
      * }</pre>
      *
-     * @param k the cache key with which the specified value is to be associated
-     * @param v the cache value to be associated with the specified key
+     * @param key the cache key with which the specified value is to be associated
+     * @param value the cache value to be associated with the specified key
      * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration)
      * @return {@code true} always (operation always succeeds unless an exception is thrown)
-     * @throws IllegalArgumentException if k is null
+     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
-    public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
-        if (k == null) {
+        if (key == null) {
             throw new IllegalArgumentException("Key cannot be null");
         }
 
-        cacheImpl.put(k, v); // TODO
+        cacheImpl.put(key, value); // TODO
 
         return true;
     }
@@ -169,15 +169,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * // The entry is now removed from the cache
      * }</pre>
      *
-     * @param k the cache key whose mapping is to be removed from the cache
+     * @param key the cache key whose mapping is to be removed from the cache
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
-    public void remove(final K k) {
+    public void remove(final K key) {
         assertNotClosed();
 
-        cacheImpl.remove(k);
+        cacheImpl.remove(key);
     }
 
     /**
@@ -192,15 +192,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param k the cache key whose presence in the cache is to be tested
-     * @return true if the cache contains a mapping for the specified key
+     * @param key the cache key whose presence in the cache is to be tested
+     * @return {@code true} if the cache contains a mapping for the specified key, {@code false} otherwise
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
-    public boolean containsKey(final K k) {
+    public boolean containsKey(final K key) {
         assertNotClosed();
 
-        return cacheImpl.containsKey(k);
+        return cacheImpl.containsKey(key);
     }
 
     /**
@@ -418,6 +418,17 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Ensures the cache is not closed before performing operations.
+     * This is a utility method called by all cache operations to verify that
+     * the cache is still in an operational state.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * @Override
+     * public V gett(final K key) {
+     *     assertNotClosed();  // Verify cache is still open
+     *     return cacheImpl.get(key);
+     * }
+     * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
      */

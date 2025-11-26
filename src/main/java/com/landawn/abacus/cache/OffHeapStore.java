@@ -23,7 +23,7 @@ package com.landawn.abacus.cache;
  * use various storage technologies such as memory-mapped files, embedded databases,
  * or custom file formats.
  *
- * <br><br>
+ * <p>
  * Key characteristics:
  * <ul>
  * <li>Stores raw byte arrays associated with keys</li>
@@ -32,7 +32,7 @@ package com.landawn.abacus.cache;
  * <li>May implement compression or other optimizations</li>
  * </ul>
  *
- * <br>
+ * <p>
  * Implementation considerations:
  * <ul>
  * <li>Thread safety - implementations must handle concurrent operations safely</li>
@@ -42,8 +42,7 @@ package com.landawn.abacus.cache;
  * <li>Error handling - return null or false on failures rather than throwing exceptions</li>
  * </ul>
  *
- * <br>
- * Example implementation:
+ * <p><b>Usage Examples:</b></p>
  * <pre>{@code
  * public class FileBasedOffHeapStore<K> implements OffHeapStore<K> {
  *     private final Path storageDir;
