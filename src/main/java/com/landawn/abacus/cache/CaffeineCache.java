@@ -156,7 +156,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * // liveTime and maxIdleTime parameters are ignored
      * cache.put("user:123", user, 0, 0);
-     * cache.put("user:456", anotherUser, 3600000, 1800000); // Time params still ignored
+     * cache.put("user:456", anotherUser, 3600000, 1800000);  // Time params still ignored
      *
      * // All entries expire based on the cache-level configuration (10 minutes)
      * }</pre>
@@ -196,10 +196,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user, 0, 0);
      * cache.remove("user:123");
-     * User retrieved = cache.gett("user:123"); // returns null
+     * User retrieved = cache.gett("user:123");  // returns null
      *
      * // Removing non-existent key is safe
-     * cache.remove("user:999"); // No error, silent no-op
+     * cache.remove("user:999");  // No error, silent no-op
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache
@@ -254,7 +254,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * try {
-     *     Set<String> keys = cache.keySet(); // throws UnsupportedOperationException
+     *     Set<String> keys = cache.keySet();  // throws UnsupportedOperationException
      * } catch (UnsupportedOperationException e) {
      *     System.out.println("Key iteration is not supported in CaffeineCache");
      *     // Use a different cache implementation if key iteration is required
@@ -285,7 +285,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user1, 0, 0);
      * cache.put("user:456", user2, 0, 0);
-     * int count = cache.size(); // approximately 2
+     * int count = cache.size();  // approximately 2
      * System.out.println("Cache contains approximately " + count + " entries");
      * }</pre>
      *
@@ -315,8 +315,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * cache.put("user:123", user1, 0, 0);
      * cache.put("user:456", user2, 0, 0);
      * System.out.println("Before clear: " + cache.size());
-     * cache.clear(); // Removes all cached entries
-     * System.out.println("After clear: " + cache.size()); // Approximately 0
+     * cache.clear();  // Removes all cached entries
+     * System.out.println("After clear: " + cache.size());  // Approximately 0
      * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
@@ -352,12 +352,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * try {
      *     cache.put("user:123", user, 0, 0);
      * } finally {
-     *     cache.close(); // Always close to release resources
+     *     cache.close();  // Always close to release resources
      * }
      *
      * // After closing
      * try {
-     *     cache.gett("user:123"); // Throws IllegalStateException
+     *     cache.gett("user:123");  // Throws IllegalStateException
      * } catch (IllegalStateException e) {
      *     System.out.println("Cache is closed");
      * }
@@ -393,7 +393,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }
      *
      * cache.close();
-     * boolean closed = cache.isClosed(); // returns true
+     * boolean closed = cache.isClosed();  // returns true
      * }</pre>
      *
      * @return {@code true} if {@link #close()} has been called; {@code false} if the cache is still operational
@@ -428,8 +428,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * // Perform operations
      * cache.put("user:123", user, 0, 0);
-     * User retrieved = cache.gett("user:123"); // Hit
-     * User missing = cache.gett("user:999"); // Miss
+     * User retrieved = cache.gett("user:123");  // Hit
+     * User missing = cache.gett("user:999");  // Miss
      *
      * // Get statistics
      * CacheStats stats = cache.stats();

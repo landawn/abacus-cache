@@ -54,8 +54,8 @@ package com.landawn.abacus.cache;
  * LocalCache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
  * cache.put("user1", new User("Alice", 25));
  * cache.put("user2", new User("Bob", 30));
- * cache.get("user1"); // hit
- * cache.get("user3"); // miss
+ * cache.get("user1");  // hit
+ * cache.get("user3");  // miss
  *
  * // Get statistics snapshot
  * CacheStats stats = cache.stats();

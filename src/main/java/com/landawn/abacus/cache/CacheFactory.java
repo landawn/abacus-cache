@@ -120,7 +120,7 @@ public final class CacheFactory {
      *     1800000,   // defaultLiveTime: 30 minutes TTL
      *     900000     // defaultMaxIdleTime: 15 minutes idle timeout
      * );
-     * cache.put("session:abc123", session); // Uses default TTL and idle time
+     * cache.put("session:abc123", session);  // Uses default TTL and idle time
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -236,8 +236,8 @@ public final class CacheFactory {
      *     CacheFactory.createDistributedCache(redisClient, "myapp:sessions:");
      *
      * // Keys are automatically prefixed
-     * cache.put("user123", session);      // Stored as "myapp:sessions:user123"
-     * Session s = cache.get("user123");   // Retrieves "myapp:sessions:user123"
+     * cache.put("user123", session);  // Stored as "myapp:sessions:user123"
+     * Session s = cache.get("user123");  // Retrieves "myapp:sessions:user123"
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache

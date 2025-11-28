@@ -265,7 +265,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * // Example 2: INCORRECT usage - race condition
      * if (!lock.isLocked("resource1")) {
      *     // Lock could be acquired by another process here!
-     *     lock.lock("resource1", 30000); // Might fail
+     *     lock.lock("resource1", 30000);  // Might fail
      * }
      *
      * // Example 3: CORRECT usage - atomic check
@@ -474,7 +474,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * // Usage
      * NamespacedLock<String> lock = new NamespacedLock<>("localhost:11211", "myapp");
-     * lock.lock("resource1", 30000); // Key in Memcached: "lock:myapp:resource1"
+     * lock.lock("resource1", 30000);  // Key in Memcached: "lock:myapp:resource1"
      *
      * // Example 2: Custom implementation with MD5 hashing for long keys
      * class HashedLock<K, V> extends MemcachedLock<K, V> {
@@ -589,7 +589,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *         }
      *     }
      * } finally {
-     *     lock.close(); // Ensure close is called
+     *     lock.close();  // Ensure close is called
      * }
      *
      * // Example 3: Multiple locks with single client

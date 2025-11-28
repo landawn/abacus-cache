@@ -158,7 +158,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * OffHeapCache<Long, Data> cache = new OffHeapCache<>(200, 60000);
      *
      * Data data = new Data();
-     * cache.put(123L, data, 7200000, 3600000); // 2h TTL, 1h idle
+     * cache.put(123L, data, 7200000, 3600000);  // 2h TTL, 1h idle
      * Data retrieved = cache.gett(123L);
      *
      * cache.close();
@@ -659,7 +659,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *     cache.put("key", data);
          *     Data retrieved = cache.gett("key");
          * } finally {
-         *     cache.close(); // Always close to free native memory
+         *     cache.close();  // Always close to free native memory
          * }
          *
          * // Advanced cache with all options

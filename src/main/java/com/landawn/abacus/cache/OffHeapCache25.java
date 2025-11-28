@@ -103,7 +103,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * OffHeapCache25<String, byte[]> cache = new OffHeapCache25<>(100); // 100MB
+     * OffHeapCache25<String, byte[]> cache = new OffHeapCache25<>(100);  // 100MB
      * byte[] largeData = new byte[1024];
      * cache.put("key1", largeData);
      * byte[] retrieved = cache.gett("key1");
@@ -125,9 +125,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * OffHeapCache25<Long, Data> cache = new OffHeapCache25<>(200, 60000); // 200MB, 60s eviction
+     * OffHeapCache25<Long, Data> cache = new OffHeapCache25<>(200, 60000);  // 200MB, 60s eviction
      * Data data = new Data();
-     * cache.put(123L, data, 7200000, 3600000); // 2h TTL, 1h idle
+     * cache.put(123L, data, 7200000, 3600000);  // 2h TTL, 1h idle
      * Data retrieved = cache.gett(123L);
      * cache.close();
      * }</pre>

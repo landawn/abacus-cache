@@ -62,7 +62,7 @@ import redis.clients.jedis.JedisShardInfo;
  *
  * // Store and retrieve objects
  * User user = new User("John", "john@example.com");
- * cache.set("user:123", user, 3600000); // Cache for 1 hour
+ * cache.set("user:123", user, 3600000);  // Cache for 1 hour
  * User cached = cache.get("user:123");
  *
  * // Use atomic counters
@@ -133,14 +133,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * JRedis<Data> cache = new JRedis<>("redis1:6379,redis2:6379", 5000);
      *
      * // High-latency network with longer timeout
-     * JRedis<User> cache = new JRedis<>("remote-redis:6379", 10000); // 10 seconds
+     * JRedis<User> cache = new JRedis<>("remote-redis:6379", 10000);  // 10 seconds
      *
      * // Low-latency local network with short timeout
-     * JRedis<Session> cache = new JRedis<>("localhost:6379", 2000); // 2 seconds
+     * JRedis<Session> cache = new JRedis<>("localhost:6379", 2000);  // 2 seconds
      *
      * // Use the cache
      * Data data = new Data("value");
-     * cache.set("key", data, 7200000); // Cache for 2 hours
+     * cache.set("key", data, 7200000);  // Cache for 2 hours
      * Data retrieved = cache.get("key");
      * }</pre>
      *
@@ -248,17 +248,17 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * // Cache with very long expiration (30 days)
      * Config config = loadConfig();
-     * cache.set("app:config", config, 2592000000L); // 30 days
+     * cache.set("app:config", config, 2592000000L);  // 30 days
      *
      * // Updating existing value (replaces both value and TTL)
      * Product product = cache.get("product:456");
      * if (product != null) {
      *     product.setPrice(99.99);
-     *     cache.set("product:456", product, 7200000); // 2 hour TTL
+     *     cache.set("product:456", product, 7200000);  // 2 hour TTL
      * }
      *
      * // Cache null values
-     * cache.set("empty:key", null, 3600000); // Stores empty byte array
+     * cache.set("empty:key", null, 3600000);  // Stores empty byte array
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
@@ -307,7 +307,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Cache invalidation pattern (write-through)
      * void updateUser(User user) {
      *     database.save(user);
-     *     cache.delete("user:" + user.getId()); // Invalidate cache
+     *     cache.delete("user:" + user.getId());  // Invalidate cache
      *     logger.debug("Cache invalidated for user: {}", user.getId());
      * }
      *
@@ -470,7 +470,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Token bucket rate limiting
      * long remainingTokens = cache.decr("api:tokens:" + userId);
      * if (remainingTokens < 0) {
-     *     cache.incr("api:tokens:" + userId); // Restore the token
+     *     cache.incr("api:tokens:" + userId);  // Restore the token
      *     throw new RateLimitException("Rate limit exceeded");
      * }
      *
@@ -488,7 +488,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * if (remaining >= 0) {
      *     processDownload();
      * } else {
-     *     cache.incr("downloads:remaining:" + userId); // Revert
+     *     cache.incr("downloads:remaining:" + userId);  // Revert
      *     throw new QuotaExceededException("Download quota exceeded");
      * }
      *
@@ -537,7 +537,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * long inventory = cache.decr("product:stock:456", quantity);
      * System.out.println("Remaining inventory: " + inventory);
      * if (inventory < 0) {
-     *     cache.incr("product:stock:456", quantity); // Rollback
+     *     cache.incr("product:stock:456", quantity);  // Rollback
      *     throw new InsufficientStockException();
      * }
      *
@@ -545,7 +545,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * int requestCost = calculateCost(request);
      * long quotaRemaining = cache.decr("quota:" + apiKey, requestCost);
      * if (quotaRemaining < 0) {
-     *     cache.incr("quota:" + apiKey, requestCost); // Restore quota
+     *     cache.incr("quota:" + apiKey, requestCost);  // Restore quota
      *     throw new QuotaExceededException("Insufficient quota");
      * }
      *
@@ -626,7 +626,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Integration test cleanup
      * @BeforeEach
      * public void setUp() {
-     *     cache.flushAll(); // Clean slate for each test
+     *     cache.flushAll();  // Clean slate for each test
      * }
      *
      * // Production usage with confirmation and audit
@@ -738,7 +738,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Reconnection pattern (not recommended - create new instance instead)
      * public void reconnect() {
      *     oldCache.disconnect();
-     *     cache = new JRedis<>(serverUrl, timeout); // Create new instance
+     *     cache = new JRedis<>(serverUrl, timeout);  // Create new instance
      * }
      * }</pre>
      *

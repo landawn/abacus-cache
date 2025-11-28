@@ -44,7 +44,7 @@ import com.landawn.abacus.pool.PoolableWrapper;
  *
  * // Cache with custom TTL and idle time
  * User user = new User();
- * cache.put("user:123", user, 3600000, 1800000); // 1 hour TTL, 30 min idle
+ * cache.put("user:123", user, 3600000, 1800000);  // 1 hour TTL, 30 min idle
  *
  * // Retrieve from cache
  * User cached = cache.gett("user:123");
@@ -81,7 +81,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * // Create cache with 1000 max entries, check every 60 seconds for expired entries
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * User user = new User("John", 30);
-     * cache.put("user:123", user); // Uses 3h TTL, 30min idle by default
+     * cache.put("user:123", user);  // Uses 3h TTL, 30min idle by default
      *
      * // Retrieve the cached user
      * User cached = cache.gett("user:123");
@@ -284,10 +284,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * // Remove the entry
      * cache.remove("user:123");
-     * User removed = cache.gett("user:123"); // Returns null
+     * User removed = cache.gett("user:123");  // Returns null
      *
      * // Removing again is safe and has no effect
-     * cache.remove("user:123"); // No error, silent no-op
+     * cache.remove("user:123");  // No error, silent no-op
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache
@@ -421,14 +421,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.put("user:2", user2);
      * cache.put("user:3", user3);
      *
-     * System.out.println("Before clear: " + cache.size()); // Prints 3
-     * cache.clear(); // Removes all cached entries
-     * System.out.println("After clear: " + cache.size()); // Prints 0
+     * System.out.println("Before clear: " + cache.size());  // Prints 3
+     * cache.clear();  // Removes all cached entries
+     * System.out.println("After clear: " + cache.size());  // Prints 0
      *
      * // Common use case: invalidate cache after data update
      * void updateAllUsers() {
      *     updateDatabase();
-     *     cache.clear(); // Invalidate all cached users
+     *     cache.clear();  // Invalidate all cached users
      * }
      * }</pre>
      */
@@ -536,15 +536,15 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *     User cached = cache.gett("user:123");
      *     // ... use cache ...
      * } finally {
-     *     cache.close(); // Always close to release resources
+     *     cache.close();  // Always close to release resources
      * }
      *
      * // Verify cache is closed before operations
      * if (!cache.isClosed()) {
      *     cache.put("key", value);
      * }
-     * cache.close(); // Safe to call multiple times
-     * cache.close(); // No effect on subsequent calls
+     * cache.close();  // Safe to call multiple times
+     * cache.close();  // No effect on subsequent calls
      * }</pre>
      */
     @Override
@@ -584,7 +584,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * // Verify cache state after shutdown
      * cache.close();
-     * System.out.println("Cache closed: " + cache.isClosed()); // Prints true
+     * System.out.println("Cache closed: " + cache.isClosed());  // Prints true
      * }</pre>
      *
      * @return true if {@link #close()} has been called on this cache; false if the cache is still operational
