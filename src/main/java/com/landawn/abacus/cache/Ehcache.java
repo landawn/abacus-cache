@@ -60,7 +60,7 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * // Wrap with Abacus Cache interface
  * Ehcache<String, Person> cache = new Ehcache<>(ehcache);
  * Person person = new Person();
- * cache.put("key1", person, 0, 0);  // TTL params ignored, use cache-level config
+ * cache.put("key1", person, 0, 0);   // TTL params ignored, use cache-level config
  * Person retrieved = cache.gett("key1");
  * }</pre>
  *
@@ -249,7 +249,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * // Cache-based initialization (ensures single initialization)
      * ExpensiveObject obj = cache.putIfAbsent("config:main", loadExpensiveConfiguration());
      * if (obj == null) {
-     *     obj = cache.gett("config:main");  // Retrieve the newly stored value
+     *     obj = cache.gett("config:main");   // Retrieve the newly stored value
      * }
      *
      * // Thread-safe counter initialization
@@ -433,7 +433,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * try {
-     *     Set<String> keys = cache.keySet();  // throws UnsupportedOperationException
+     *     Set<String> keys = cache.keySet();   // throws UnsupportedOperationException
      * } catch (UnsupportedOperationException e) {
      *     System.out.println("Key iteration is not supported by Ehcache");
      *     // Alternative: maintain keys externally
@@ -477,7 +477,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * try {
-     *     int size = cache.size();  // throws UnsupportedOperationException
+     *     int size = cache.size();   // throws UnsupportedOperationException
      * } catch (UnsupportedOperationException e) {
      *     System.out.println("Size operation is not supported by Ehcache");
      *     // Alternative: track size externally

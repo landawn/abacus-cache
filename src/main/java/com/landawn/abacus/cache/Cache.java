@@ -50,7 +50,7 @@ import com.landawn.abacus.util.u.Optional;
  * future.thenAccept(success -> System.out.println("Cached: " + success));
  * 
  * // Custom expiration
- * cache.put("temp:data", data, 5000, 2000);  // 5s TTL, 2s idle timeout
+ * cache.put("temp:data", data, 5000, 2000);   // 5s TTL, 2s idle timeout
  * }</pre>
  *
  * @param <K> the key type
@@ -178,7 +178,7 @@ public interface Cache<K, V> extends Closeable {
      * }
      *
      * // Update existing entry
-     * cache.put("user:123", updatedUser);  // Replaces previous value
+     * cache.put("user:123", updatedUser);   // Replaces previous value
      *
      * // Cache-aside pattern
      * User user = cache.gett("user:123");
@@ -224,7 +224,7 @@ public interface Cache<K, V> extends Closeable {
      * cache.put("temp:data", data, 5000, 0);
      *
      * // Short-lived data that expires quickly if unused
-     * cache.put("otp:token", token, 300000, 60000);  // 5min TTL, 1min idle
+     * cache.put("otp:token", token, 300000, 60000);   // 5min TTL, 1min idle
      *
      * // No expiration (use with caution to avoid memory leaks)
      * cache.put("permanent:config", config, 0, 0);
@@ -261,16 +261,16 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * // Basic removal
-     * cache.remove("user:123");  // Removes if exists, no error if not
+     * cache.remove("user:123");   // Removes if exists, no error if not
      *
      * // Safe to call multiple times
      * cache.remove("user:123");
-     * cache.remove("user:123");  // No exception thrown
+     * cache.remove("user:123");   // No exception thrown
      *
      * // Remove on update failure
      * boolean updated = updateUser(userId);
      * if (!updated) {
-     *     cache.remove("user:" + userId);  // Invalidate stale cache entry
+     *     cache.remove("user:" + userId);   // Invalidate stale cache entry
      * }
      *
      * // Batch removal
@@ -743,11 +743,11 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * // Basic clear operation
-     * cache.clear();  // Removes all cached entries
+     * cache.clear();   // Removes all cached entries
      *
      * // Clear and verify
      * cache.clear();
-     * System.out.println("Cache size after clear: " + cache.size());  // Should be 0
+     * System.out.println("Cache size after clear: " + cache.size());   // Should be 0
      *
      * // Periodic cache refresh
      * cache.clear();
@@ -800,12 +800,12 @@ public interface Cache<K, V> extends Closeable {
      *     cache.put("key", value);
      *     processData(cache);
      * } finally {
-     *     cache.close();  // Always close to release resources
+     *     cache.close();   // Always close to release resources
      * }
      *
      * // Safe to call multiple times
      * cache.close();
-     * cache.close();  // No exception thrown
+     * cache.close();   // No exception thrown
      * }</pre>
      *
      * @see Closeable#close()
@@ -838,7 +838,7 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Verify state after closing
      * cache.close();
-     * System.out.println("Is closed: " + cache.isClosed());  // true
+     * System.out.println("Is closed: " + cache.isClosed());   // true
      *
      * // Safe operations with closed check
      * public void cacheUser(User user) {
@@ -931,7 +931,7 @@ public interface Cache<K, V> extends Closeable {
      * Boolean metrics = cache.getProperty("enableMetrics");
      *
      * // Returns null for non-existent properties
-     * String unknown = cache.getProperty("nonExistent");  // null
+     * String unknown = cache.getProperty("nonExistent");   // null
      *
      * // Use with null check
      * Integer maxRetries = cache.getProperty("maxRetries");
@@ -977,10 +977,10 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Update an existing property and get the old value
      * String oldDescription = cache.setProperty("description", "Updated description");
-     * System.out.println("Old: " + oldDescription);  // "User cache for session data"
+     * System.out.println("Old: " + oldDescription);   // "User cache for session data"
      *
      * // First set returns null
-     * String prev = cache.setProperty("newProperty", "value");  // prev is null
+     * String prev = cache.setProperty("newProperty", "value");   // prev is null
      *
      * // Use returned value to check if update was needed
      * Integer oldRetries = cache.setProperty("maxRetries", 5);
@@ -1023,14 +1023,14 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Remove and get the old value
      * String oldValue = cache.removeProperty("description");
-     * System.out.println("Removed: " + oldValue);  // "User cache"
+     * System.out.println("Removed: " + oldValue);   // "User cache"
      *
      * // Removing non-existent property returns null
-     * String notFound = cache.removeProperty("nonExistent");  // null
+     * String notFound = cache.removeProperty("nonExistent");   // null
      *
      * // Safe to call multiple times
      * cache.removeProperty("tempFlag");
-     * cache.removeProperty("tempFlag");  // No error, returns null
+     * cache.removeProperty("tempFlag");   // No error, returns null
      *
      * // Use returned value to check if removal was necessary
      * Boolean wasSet = cache.removeProperty("enableMetrics");

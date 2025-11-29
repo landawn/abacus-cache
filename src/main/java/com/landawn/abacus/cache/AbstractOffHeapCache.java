@@ -279,7 +279,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         _arrayOffset = arrayOffset;
 
-        _capacityInBytes = capacityInMB * (1024L * 1024L); // N.ONE_MB;
+        _capacityInBytes = capacityInMB * (1024L * 1024L);   // N.ONE_MB;
         _maxBlockSize = maxBlockSize % MIN_BLOCK_SIZE == 0 ? maxBlockSize : (maxBlockSize / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
         _segmentQueues = new Deque[_maxBlockSize / MIN_BLOCK_SIZE];
 

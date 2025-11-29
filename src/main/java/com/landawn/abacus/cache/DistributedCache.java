@@ -55,7 +55,7 @@ import com.landawn.abacus.util.Strings;
  *
  * // Basic operations
  * User user = new User("John");
- * cache.put("user:123", user, 3600000, 0);  // 1 hour TTL, maxIdleTime ignored
+ * cache.put("user:123", user, 3600000, 0);   // 1 hour TTL, maxIdleTime ignored
  * User cached = cache.gett("user:123");
  *
  * // Always close to release resources
@@ -332,7 +332,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // Session caching with 30 minute TTL
      * Session session = new Session("abc123");
-     * cache.put("session:" + session.getId(), session, 1800000, 1800000);  // idle time ignored
+     * cache.put("session:" + session.getId(), session, 1800000, 1800000);   // idle time ignored
      *
      * // No expiration (permanent until manually deleted or evicted)
      * Config config = loadConfig();
@@ -342,7 +342,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * User updated = cache.gett("user:123");
      * if (updated != null) {
      *     updated.setLastLogin(System.currentTimeMillis());
-     *     cache.put("user:123", updated, 7200000, 0);  // 2 hour TTL
+     *     cache.put("user:123", updated, 7200000, 0);   // 2 hour TTL
      * }
      * }</pre>
      *
@@ -389,16 +389,16 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
      *
      * // Basic removal
-     * cache.remove("user:123");  // Removes if exists, no-op if doesn't exist
+     * cache.remove("user:123");   // Removes if exists, no-op if doesn't exist
      *
      * // Safe to call multiple times (idempotent)
      * cache.remove("user:123");
-     * cache.remove("user:123");  // No exception thrown
+     * cache.remove("user:123");   // No exception thrown
      *
      * // Cache invalidation on update (write-through pattern)
      * void updateUser(User user) {
      *     database.save(user);
-     *     cache.remove("user:" + user.getId());  // Invalidate cache
+     *     cache.remove("user:" + user.getId());   // Invalidate cache
      * }
      *
      * // Batch removal
@@ -471,7 +471,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // INEFFICIENT - performs GET twice:
      * if (cache.containsKey("user:123")) {
-     *     User user = cache.gett("user:123");  // Second GET operation!
+     *     User user = cache.gett("user:123");   // Second GET operation!
      *     processUser(user);
      * }
      *
@@ -575,7 +575,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @After
      * public void cleanupCache() {
      *     if (isTestEnvironment()) {
-     *         testCache.clear();  // OK - dedicated test server
+     *         testCache.clear();   // OK - dedicated test server
      *     }
      * }
      *
@@ -585,7 +585,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         throw new IllegalArgumentException("Invalid confirmation");
      *     }
      *     logger.warn("DANGEROUS: Flushing ALL cache data from production servers");
-     *     cache.clear();  // Will affect all apps using these cache servers!
+     *     cache.clear();   // Will affect all apps using these cache servers!
      *     auditLog.record("CACHE_FLUSH_ALL", getCurrentUser());
      * }
      * }</pre>
@@ -641,7 +641,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     cache.put("key", value, 3600000, 0);
      *     // ... use cache
      * } finally {
-     *     cache.close();  // Always close to release resources
+     *     cache.close();   // Always close to release resources
      * }
      *
      * // Application shutdown hook
@@ -653,11 +653,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // Safe to call multiple times (idempotent)
      * cache.close();
-     * cache.close();  // No exception thrown
+     * cache.close();   // No exception thrown
      *
      * // Verify operations fail after close
      * cache.close();
-     * cache.gett("key");  // Throws IllegalStateException
+     * cache.gett("key");   // Throws IllegalStateException
      * }</pre>
      *
      * @see DistributedCacheClient#disconnect()
@@ -708,7 +708,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // Verify state after closing
      * cache.close();
-     * System.out.println("Is closed: " + cache.isClosed());  // true
+     * System.out.println("Is closed: " + cache.isClosed());   // true
      *
      * // Safe guard in long-running operations
      * public void processUsers(List<User> users) {

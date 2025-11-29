@@ -37,7 +37,7 @@ import java.util.Map;
  * <pre>{@code
  * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
  * User user = new User("John", "john@example.com");
- * client.set("user:123", user, 3600000);  // Cache for 1 hour
+ * client.set("user:123", user, 3600000);   // Cache for 1 hour
  * User cached = client.get("user:123");
  * long visits = client.incr("visits:123");
  * }</pre>
@@ -203,12 +203,12 @@ public interface DistributedCacheClient<T> {
      *
      * // Cache with no expiration
      * Config config = loadConfig();
-     * client.set("app:config", config, 0);  // No expiration
+     * client.set("app:config", config, 0);   // No expiration
      *
      * // Updating existing value
      * Product product = client.get("product:456");
      * product.setPrice(99.99);
-     * client.set("product:456", product, 7200000);  // 2 hour TTL
+     * client.set("product:456", product, 7200000);   // 2 hour TTL
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
@@ -248,7 +248,7 @@ public interface DistributedCacheClient<T> {
      * // Invalidate cache on entity update
      * void updateUser(User user) {
      *     database.save(user);
-     *     client.delete("user:" + user.getId());  // Invalidate cache
+     *     client.delete("user:" + user.getId());   // Invalidate cache
      * }
      * }</pre>
      *
@@ -369,7 +369,7 @@ public interface DistributedCacheClient<T> {
      * long stock = client.decr("product:stock:123");
      * if (stock < 0) {
      *     // Handle out of stock
-     *     client.incr("product:stock:123");  // Revert
+     *     client.incr("product:stock:123");   // Revert
      *     throw new OutOfStockException();
      * }
      *

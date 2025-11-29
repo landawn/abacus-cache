@@ -105,7 +105,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * ConnectionFactory connFactory = new DefaultConnectionFactory() {
      *     @Override
      *     public Transcoder<Object> getDefaultTranscoder() {
-     *         return new KryoTranscoder<>(512 * 1024);  // 512KB limit
+     *         return new KryoTranscoder<>(512 * 1024);   // 512KB limit
      *     }
      * };
      * }</pre>
@@ -133,7 +133,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * CachedData data = transcoder.encode(user);
      *
      * // Check if async decoding is supported
-     * boolean supportsAsync = transcoder.asyncDecode(data);  // Returns false
+     * boolean supportsAsync = transcoder.asyncDecode(data);   // Returns false
      *
      * // Decoding will be performed synchronously
      * User decoded = transcoder.decode(data);
@@ -214,7 +214,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * // Handling null values
      * CachedData nullCached = transcoder.encode(null);
-     * User nullDecoded = transcoder.decode(nullCached);  // Returns null
+     * User nullDecoded = transcoder.decode(nullCached);   // Returns null
      *
      * // With MemcachedClient
      * MemcachedClient client = new MemcachedClient(connFactory, addresses);
@@ -249,7 +249,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * KryoTranscoder<User> transcoder = new KryoTranscoder<>(1024 * 1024);
      *
      * // Query the max size
-     * int maxSize = transcoder.getMaxSize();  // Returns 1048576 (1MB)
+     * int maxSize = transcoder.getMaxSize();   // Returns 1048576 (1MB)
      *
      * // Check before encoding large objects
      * if (estimatedSize < transcoder.getMaxSize()) {

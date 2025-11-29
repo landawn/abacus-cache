@@ -120,7 +120,7 @@ public final class CacheFactory {
      *     1800000,   // defaultLiveTime: 30 minutes TTL
      *     900000     // defaultMaxIdleTime: 15 minutes idle timeout
      * );
-     * cache.put("session:abc123", session);  // Uses default TTL and idle time
+     * cache.put("session:abc123", session);   // Uses default TTL and idle time
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache

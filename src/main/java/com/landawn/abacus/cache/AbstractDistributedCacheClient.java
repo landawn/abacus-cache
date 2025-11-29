@@ -77,7 +77,7 @@ import java.util.Map;
  *
  *     @Override
  *     public boolean set(String key, T obj, long liveTime) {
- *         int ttl = toSeconds(liveTime);  // Use utility method
+ *         int ttl = toSeconds(liveTime);   // Use utility method
  *         return client.store(key, obj, ttl);
  *     }
  *
@@ -169,7 +169,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <pre>{@code
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * String url = client.serverUrl();
-     * System.out.println("Connected to: " + url);  // Output: "Connected to: localhost:11211"
+     * System.out.println("Connected to: " + url);   // Output: "Connected to: localhost:11211"
      * }</pre>
      *
      * @return the server URL(s) for this client, never {@code null}

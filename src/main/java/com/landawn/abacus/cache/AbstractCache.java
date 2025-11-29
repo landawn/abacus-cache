@@ -204,7 +204,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * }
      *
      * // Update existing entry
-     * cache.put("user:123", updatedUser);  // Replaces previous value
+     * cache.put("user:123", updatedUser);   // Replaces previous value
      *
      * // Cache-aside pattern
      * User user = cache.gett("user:123");
@@ -422,7 +422,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Integer retries = cache.getProperty("maxRetries");
      *
      * // Returns null for non-existent properties
-     * String unknown = cache.getProperty("nonExistent");  // null
+     * String unknown = cache.getProperty("nonExistent");   // null
      * }</pre>
      *
      * @param <T> the type of the property value to be returned (caller should ensure correct type)
@@ -452,7 +452,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * // Update an existing property and get the old value
      * String oldDescription = cache.setProperty("description", "Updated description");
-     * System.out.println("Old: " + oldDescription);  // "User cache for session data"
+     * System.out.println("Old: " + oldDescription);   // "User cache for session data"
      * }</pre>
      *
      * @param <T> the type of the previous property value to be returned (caller should ensure correct type)
@@ -479,10 +479,10 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * // Remove and get the old value
      * String oldValue = cache.removeProperty("description");
-     * System.out.println("Removed: " + oldValue);  // "User cache"
+     * System.out.println("Removed: " + oldValue);   // "User cache"
      *
      * // Removing non-existent property returns null
-     * String notFound = cache.removeProperty("nonExistent");  // null
+     * String notFound = cache.removeProperty("nonExistent");   // null
      * }</pre>
      *
      * @param <T> the type of the property value to be returned (caller should ensure correct type)
