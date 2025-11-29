@@ -315,8 +315,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * cache.put("user:123", user1, 0, 0);
      * cache.put("user:456", user2, 0, 0);
      * System.out.println("Before clear: " + cache.size());
-     * cache.clear();  // Removes all cached entries
-     * System.out.println("After clear: " + cache.size());  // Approximately 0
+     * cache.clear();                                        // Removes all cached entries
+     * System.out.println("After clear: " + cache.size());   // Approximately 0
      * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
@@ -428,8 +428,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * // Perform operations
      * cache.put("user:123", user, 0, 0);
-     * User retrieved = cache.gett("user:123");  // Hit
-     * User missing = cache.gett("user:999");  // Miss
+     * User retrieved = cache.gett("user:123");   // Hit
+     * User missing = cache.gett("user:999");     // Miss
      *
      * // Get statistics
      * CacheStats stats = cache.stats();

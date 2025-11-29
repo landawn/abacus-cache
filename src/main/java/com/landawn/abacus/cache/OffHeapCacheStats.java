@@ -165,8 +165,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * Map<Integer, Integer> segmentOccupation = new LinkedHashMap<>();
-     * segmentOccupation.put(0, 5);  // Segment 0 has 5 occupied slots
-     * segmentOccupation.put(1, 3);  // Segment 1 has 3 occupied slots
+     * segmentOccupation.put(0, 5);   // Segment 0 has 5 occupied slots
+     * segmentOccupation.put(1, 3);   // Segment 1 has 3 occupied slots
      * OccupiedSlot slotInfo = new OccupiedSlot(1024, segmentOccupation);
      * System.out.println("1KB slots: " + slotInfo.occupiedSlots().values().stream()
      *     .mapToInt(Integer::intValue).sum() + " total");

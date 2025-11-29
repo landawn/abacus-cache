@@ -236,8 +236,8 @@ public final class CacheFactory {
      *     CacheFactory.createDistributedCache(redisClient, "myapp:sessions:");
      *
      * // Keys are automatically prefixed
-     * cache.put("user123", session);  // Stored as "myapp:sessions:user123"
-     * Session s = cache.get("user123");  // Retrieves "myapp:sessions:user123"
+     * cache.put("user123", session);      // Stored as "myapp:sessions:user123"
+     * Session s = cache.get("user123");   // Retrieves "myapp:sessions:user123"
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache

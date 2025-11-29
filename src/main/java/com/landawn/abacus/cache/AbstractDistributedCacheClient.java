@@ -371,17 +371,17 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * }
      *
      * // Example conversions:
-     * int seconds1 = toSeconds(1500);  // Returns 2 (1.5s rounds up)
-     * int seconds2 = toSeconds(2000);  // Returns 2 (exactly 2s)
-     * int seconds3 = toSeconds(999);  // Returns 1 (rounds up to 1s)
-     * int seconds4 = toSeconds(0);  // Returns 0 (no expiration)
-     * int seconds5 = toSeconds(3600000);  // Returns 3600 (1 hour)
+     * int seconds1 = toSeconds(1500);       // Returns 2 (1.5s rounds up)
+     * int seconds2 = toSeconds(2000);       // Returns 2 (exactly 2s)
+     * int seconds3 = toSeconds(999);        // Returns 1 (rounds up to 1s)
+     * int seconds4 = toSeconds(0);          // Returns 0 (no expiration)
+     * int seconds5 = toSeconds(3600000);    // Returns 3600 (1 hour)
      *
      * // Common TTL values:
-     * int oneMinute = toSeconds(60000);  // 60 seconds
-     * int oneHour = toSeconds(3600000);  // 3600 seconds
-     * int oneDay = toSeconds(86400000);  // 86400 seconds
-     * int oneWeek = toSeconds(604800000);  // 604800 seconds
+     * int oneMinute = toSeconds(60000);     // 60 seconds
+     * int oneHour = toSeconds(3600000);     // 3600 seconds
+     * int oneDay = toSeconds(86400000);     // 86400 seconds
+     * int oneWeek = toSeconds(604800000);   // 604800 seconds
      * }</pre>
      *
      * @param liveTime the time-to-live in milliseconds, must not be negative

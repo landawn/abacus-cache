@@ -421,9 +421,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.put("user:2", user2);
      * cache.put("user:3", user3);
      *
-     * System.out.println("Before clear: " + cache.size());  // Prints 3
-     * cache.clear();  // Removes all cached entries
-     * System.out.println("After clear: " + cache.size());  // Prints 0
+     * System.out.println("Before clear: " + cache.size());   // Prints 3
+     * cache.clear();                                         // Removes all cached entries
+     * System.out.println("After clear: " + cache.size());    // Prints 0
      *
      * // Common use case: invalidate cache after data update
      * void updateAllUsers() {
@@ -543,8 +543,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * if (!cache.isClosed()) {
      *     cache.put("key", value);
      * }
-     * cache.close();  // Safe to call multiple times
-     * cache.close();  // No effect on subsequent calls
+     * cache.close();   // Safe to call multiple times
+     * cache.close();   // No effect on subsequent calls
      * }</pre>
      */
     @Override
