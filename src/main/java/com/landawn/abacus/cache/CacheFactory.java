@@ -186,7 +186,7 @@ public final class CacheFactory {
      * <p>This is the simplest way to create a distributed cache, using default settings:
      * <ul>
      * <li>No key prefix (keys used as-is)</li>
-     * <li>Default retry configuration: max 100 consecutive failures, 1000ms retry delay</li>
+     * <li>Default retry configuration from DistributedCache class defaults</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b></p>
@@ -217,7 +217,7 @@ public final class CacheFactory {
      * Creates a DistributedCache with a key prefix for namespace isolation.
      * All cache keys will be automatically prefixed with the specified string,
      * allowing multiple applications or modules to share the same cache server
-     * without key collisions. Uses default retry configuration: max 100 consecutive failures, 1000ms retry delay.
+     * without key collisions. Uses default retry configuration from DistributedCache class defaults.
      *
      * <p>Key prefixing is useful for:
      * <ul>
@@ -353,9 +353,11 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param provider the cache provider specification string in format "ClassName(param1,param2,...)" (must not be null or empty)
      * @return a new Cache instance configured according to the specification
-     * @throws IllegalArgumentException if provider is null or empty, missing required parameters, has unsupported number of parameters
-     *         (more than 3 for Memcached/Redis), or contains invalid timeout value (non-numeric)
-     * @throws RuntimeException if custom class cannot be instantiated (class not found, no suitable constructor, instantiation fails, etc.)
+     * @throws IllegalArgumentException if provider string is invalid: missing parameters (no parameters provided),
+     *         unsupported number of parameters (more than 3 for Memcached/Redis), or contains invalid timeout
+     *         value (non-numeric when timeout parameter is expected)
+     * @throws RuntimeException if custom class cannot be instantiated (class not found, no suitable constructor,
+     *         instantiation fails, security restrictions, etc.)
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createLocalCache(int, long)

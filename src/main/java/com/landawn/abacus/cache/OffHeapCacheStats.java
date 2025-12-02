@@ -147,8 +147,17 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
     public record MinMaxAvg(double min, double max, double avg) {
         /**
          * Returns a string representation of the statistics in JSON-like format.
+         * The format is: {@code {min: <value>, max: <value>, avg: <value>}} where
+         * each value is a double representing milliseconds.
          *
-         * @return formatted string showing min, max, and avg values
+         * <p><b>Usage Examples:</b></p>
+         * <pre>{@code
+         * MinMaxAvg stats = new MinMaxAvg(5.2, 150.8, 45.3);
+         * System.out.println(stats.toString());
+         * // Output: {min: 5.2, max: 150.8, avg: 45.3}
+         * }</pre>
+         *
+         * @return formatted string showing min, max, and avg values in JSON-like format
          */
         @Override
         public String toString() {
