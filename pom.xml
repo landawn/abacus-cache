@@ -5,7 +5,7 @@
 
 	<groupId>com.landawn</groupId>
 	<artifactId>abacus-cache</artifactId>
-	<version>1.26.8</version>
+	<version>2.0.1</version>
 	<packaging>jar</packaging>
 	<name>abacus-cache</name>
 	<description>Abacus Data Access and Analysis</description>
@@ -36,8 +36,8 @@
 		<maven.compiler.source>25</maven.compiler.source>
 		<maven.compiler.target>25</maven.compiler.target>
 		<maven.compiler.release>25</maven.compiler.release>
-		<junit.jupiter.version>5.14.1</junit.jupiter.version>
-		<junit.platform.version>1.14.1</junit.platform.version>
+		<junit.jupiter.version>6.1.0-M1</junit.jupiter.version>
+		<junit.platform.version>6.1.0-M1</junit.platform.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 	</properties>
@@ -46,7 +46,7 @@
 		<dependency>
 			<groupId>com.landawn</groupId>
 			<artifactId>abacus-common</artifactId>
-			<version>6.26.7</version>
+			<version>7.0.0</version>
 			<scope>provided</scope>
 		</dependency>
 
@@ -74,21 +74,21 @@
 		<dependency>
 			<groupId>com.github.ben-manes.caffeine</groupId>
 			<artifactId>caffeine</artifactId>
-			<version>3.2.0</version>
+			<version>3.2.3</version>
 			<scope>provided</scope>
 		</dependency>
 
 		<dependency>
-		    <groupId>org.ehcache</groupId>
-		    <artifactId>ehcache</artifactId>
+			<groupId>org.ehcache</groupId>
+			<artifactId>ehcache</artifactId>
     		<version>3.9.11</version>
 			<scope>provided</scope>
-		</dependency> 
+		</dependency>
 
 		<dependency>
 			<groupId>org.rocksdb</groupId>
 			<artifactId>rocksdbjni</artifactId>
-			<version>9.10.0</version>
+			<version>10.4.2</version>
 			<scope>provided</scope>
 		</dependency>
 
@@ -96,6 +96,27 @@
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
 			<version>1.18.42</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<version>2.0.17</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-api</artifactId>
+			<version>2.25.2</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-core</artifactId>
+			<version>2.25.2</version>
 			<scope>provided</scope>
 		</dependency>
 
@@ -143,13 +164,13 @@
 					<source>${maven.compiler.source}</source>
 					<target>${maven.compiler.target}</target>
 					<release>${maven.compiler.release}</release>
-			        <annotationProcessorPaths>
-			          <path>
-			            <groupId>org.projectlombok</groupId>
-			            <artifactId>lombok</artifactId>
-			            <version>1.18.42</version>
-			          </path>
-			        </annotationProcessorPaths>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+							<version>1.18.42</version>
+						</path>
+					</annotationProcessorPaths>
 				</configuration>
 			</plugin>
 
@@ -166,7 +187,7 @@
 					</execution>
 				</executions>
 			</plugin>
-			
+
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-javadoc-plugin</artifactId>
@@ -174,9 +195,9 @@
 				<configuration>
 					<doctitle>abacus-cache</doctitle>
 					<show>public</show>
-			        <source>25</source>
-			        <encoding>UTF-8</encoding>
-			        <doclint>all</doclint>    
+					<source>25</source>
+					<encoding>UTF-8</encoding>
+					<doclint>all</doclint>
 					<source>${maven.compiler.source}</source>
 					<detectJavaApiLink>false</detectJavaApiLink>
 				</configuration>
@@ -199,9 +220,10 @@
 						<include>**/AbacusCacheTestSuite.java</include>
 					</includes>
 					<useModulePath>false</useModulePath>
-					<testFailureIgnore>true</testFailureIgnore> <!-- set to false if you want failures to fail the build -->
+					<testFailureIgnore>true</testFailureIgnore> <!-- set to false
+					if you want failures to fail the build -->
 					<argLine>
-          				-Dfile.encoding=UTF-8
+						-Dfile.encoding=UTF-8
 						--add-opens java.base/java.lang=ALL-UNNAMED
 						--add-opens java.base/java.lang.reflect=ALL-UNNAMED
 						--add-opens java.base/java.io=ALL-UNNAMED
@@ -237,31 +259,31 @@
 				</executions>
 			</plugin>
 
-	        <plugin>
-	          <groupId>org.sonatype.central</groupId>
-	          <artifactId>central-publishing-maven-plugin</artifactId>
-	          <version>0.9.0</version>
-	          <extensions>true</extensions>
-	          <configuration>
-	             <publishingServerId>central</publishingServerId>
-	             <autoPublish>true</autoPublish>
-	          </configuration>
-	        </plugin>
+			<plugin>
+				<groupId>org.sonatype.central</groupId>
+				<artifactId>central-publishing-maven-plugin</artifactId>
+				<version>0.9.0</version>
+				<extensions>true</extensions>
+				<configuration>
+					<publishingServerId>central</publishingServerId>
+					<autoPublish>true</autoPublish>
+				</configuration>
+			</plugin>
 
-		    <plugin>
-		      <groupId>org.apache.maven.plugins</groupId>
-		      <artifactId>maven-gpg-plugin</artifactId>
-		      <version>3.2.8</version>
-		      <executions>
-		        <execution>
-		          <id>sign-artifacts</id>
-		          <phase>verify</phase> <!-- or deploy -->
-		          <goals>
-		            <goal>sign</goal>
-		          </goals>
-		        </execution>
-		      </executions>
-		    </plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-gpg-plugin</artifactId>
+				<version>3.2.8</version>
+				<executions>
+					<execution>
+						<id>sign-artifacts</id>
+						<phase>verify</phase> <!-- or deploy -->
+						<goals>
+							<goal>sign</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
 		</plugins>
 	</build>
 </project>
