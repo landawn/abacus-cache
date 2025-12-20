@@ -561,8 +561,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * This method can be used to verify cache state before performing operations,
      * though most operations will throw IllegalStateException if the cache is closed.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe due to the volatile modifier
-     * on the isClosed field, ensuring visibility across threads.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
+     * The field is declared volatile to ensure visibility across threads.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code

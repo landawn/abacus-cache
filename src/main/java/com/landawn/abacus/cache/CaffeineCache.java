@@ -108,7 +108,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * The operation may update access time depending on the eviction policy configured
      * when the Caffeine cache was created.
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe and can be called concurrently
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -188,7 +188,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * the entry for eviction. If the key is not found, the operation completes
      * silently without throwing an exception.
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe and can be called concurrently
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -218,7 +218,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * access-based eviction policies if configured in the underlying Caffeine cache.
      * Returns false if the entry has expired or been evicted.
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe and can be called concurrently
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -277,7 +277,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * and asynchronous cleanup operations. Caffeine uses probabilistic counting to
      * provide fast size estimates without blocking concurrent operations.
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe and can be called concurrently
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads without blocking.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -306,7 +306,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * may be performed asynchronously by Caffeine's cleanup process, but all entries
      * will be logically invalidated when this method returns.
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe. However, concurrent put operations
+     * <p><b>Thread Safety:</b> This method is thread-safe. However, concurrent put operations
      * may add new entries while the clear is in progress.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -335,7 +335,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * the underlying Caffeine cache instance is not explicitly closed (as Caffeine caches don't implement
      * Closeable), but all entries are invalidated.
      *
-     * <p><b>Thread-Safety:</b> This method is synchronized and thread-safe, but NOT idempotent.
+     * <p><b>Thread Safety:</b> This method is synchronized and thread-safe, but NOT idempotent.
      * Calling it multiple times will throw IllegalStateException on subsequent calls.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -380,7 +380,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * though most operations will throw IllegalStateException if the cache is closed.
      * Returns true if {@link #close()} has been called on this cache.
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe and can be called concurrently.
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      * The field is declared volatile to ensure visibility across threads.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -414,7 +414,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * with all zero values. Statistics recording has a small performance overhead, so it should
      * only be enabled when monitoring is required.</p>
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe and returns a consistent snapshot
+     * <p><b>Thread Safety:</b> This method is thread-safe and returns a consistent snapshot
      * of statistics at the time of invocation.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -457,7 +457,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * way to enforce the "closed" state across all cache methods. This method
      * checks the volatile {@code isClosed} field to ensure visibility across threads.
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe due to the volatile
+     * <p><b>Thread Safety:</b> This method is thread-safe due to the volatile
      * {@code isClosed} field.</p>
      *
      * @throws IllegalStateException if the cache has been closed via {@link #close()}

@@ -11,7 +11,8 @@
       "Bash(dir:*)",
       "Bash(mvn compile:*)",
       "Bash(findstr:*)",
-      "Bash(javac:*)"
+      "Bash(javac:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
