@@ -152,6 +152,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);
 
+        if (timeout > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("timeout exceeds maximum value: " + timeout + " (max: " + Integer.MAX_VALUE + ")");
+        }
+
         final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
 
         if (N.isEmpty(addressList)) {
@@ -272,7 +276,15 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public boolean set(final String key, final T obj, final long liveTime) {
-        return "OK".equals(jedis.setex(getKeyBytes(key), toSeconds(liveTime), encode(obj)));
+        final byte[] keyBytes = getKeyBytes(key);
+        final byte[] valueBytes = encode(obj);
+
+        if (liveTime <= 0) {
+            // liveTime <= 0 means no expiration, use SET instead of SETEX
+            return "OK".equals(jedis.set(keyBytes, valueBytes));
+        }
+
+        return "OK".equals(jedis.setex(keyBytes, toSeconds(liveTime), valueBytes));
     }
 
     /**

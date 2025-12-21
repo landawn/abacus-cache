@@ -1288,6 +1288,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         V read() {
             synchronized (this) {
+                if (slot == null) {
+                    return null; // Already destroyed by concurrent eviction
+                }
+
                 final byte[] bytes = new byte[size];
 
                 copyFromMemory(slotStartPtr, bytes, _arrayOffset, size);
@@ -1353,6 +1357,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         V read() {
             synchronized (this) {
+                if (slots == null) {
+                    return null; // Already destroyed by concurrent eviction
+                }
+
                 final byte[] bytes = new byte[size];
                 int size = this.size;
                 int destOffset = _arrayOffset;
@@ -1444,6 +1452,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         @Override
         V read() {
             synchronized (this) {
+                if (permanentKey == null) {
+                    return null; // Already destroyed by concurrent eviction
+                }
+
                 final byte[] bytes = offHeapStore.get(permanentKey);
 
                 if (bytes == null) {
