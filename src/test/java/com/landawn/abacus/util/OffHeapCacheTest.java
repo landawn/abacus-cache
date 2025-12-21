@@ -40,8 +40,6 @@ public class OffHeapCacheTest {
     private static final long start = System.currentTimeMillis();
     private static final AtomicInteger counter = new AtomicInteger();
 
-    /**
-     */
     @Test
     public void test_ByteBuffer() {
         ByteBuffer bb = ByteBuffer.allocate(1024);
@@ -70,8 +68,6 @@ public class OffHeapCacheTest {
         N.println(bbType.valueOf(bbType.stringOf(bb)));
     }
 
-    /**
-     */
     @Test
     public void test_put_get() {
         for (int i = 0; i < 1000; i++) {
@@ -109,8 +105,6 @@ public class OffHeapCacheTest {
         return N.fill(cls);
     }
 
-    /**
-     */
     @Test
     public void test_put_get_2() {
         final MultiLoopsStatistics result = Profiler.run(32, 3, 1, this::test_put_get);
@@ -120,8 +114,6 @@ public class OffHeapCacheTest {
         assertTrue(result.getAllFailedMethodStatisticsList().size() == 0);
     }
 
-    /**
-     */
     @Test
     public void test_perf() {
         Profiler.run(8, 10000, 1, () -> {
@@ -140,8 +132,6 @@ public class OffHeapCacheTest {
         }).printResult();
     }
 
-    /**
-     */
     @Test
     public void test_perf_big_Object() {
 

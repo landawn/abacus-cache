@@ -111,8 +111,6 @@ public class OffHeapCache25Test {
     private static final long start = System.currentTimeMillis();
     private static final AtomicInteger counter = new AtomicInteger();
 
-    /**
-     */
     @Test
     public void test_ByteBuffer() {
         ByteBuffer bb = ByteBuffer.allocate(1024);

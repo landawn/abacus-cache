@@ -49,8 +49,6 @@ public class JRedisTest {
         return account;
     }
 
-    /**
-     */
     @Test
     public void testSetGetBigArray() {
         int loops = 10;
@@ -92,8 +90,6 @@ public class JRedisTest {
         N.println(Arrays.toString(a[0]));
     }
 
-    /**
-     */
     @Test
     public void testSetGetManyObjects() {
         int loops = 10;
@@ -129,8 +125,6 @@ public class JRedisTest {
         // N.println(Arrays.toString(accounts));
     }
 
-    /**
-     */
     @Test
     public void testSetGetOneObject() {
         int loops = 10000;

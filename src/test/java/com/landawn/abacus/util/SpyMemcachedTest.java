@@ -86,8 +86,6 @@ public class SpyMemcachedTest {
         // N.println(Arrays.toString(accounts));
     }
 
-    /**
-     */
     @Test
     public void testSetGetBigArray() {
         int loops = 10;
