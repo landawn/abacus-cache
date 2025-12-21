@@ -9,22 +9,19 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
 import com.landawn.abacus.cache.SpyMemcached;
 
-import junit.framework.TestCase;
-
-/**
- * 
- * 
- */
-public class SpyMemcachedTest extends TestCase {
+@Tag("2025")
+public class SpyMemcachedTest {
     protected static final String FIRST_NAME = "firstName";
     protected static final String MIDDLE_NAME = "MN";
     protected static final String LAST_NAME = "lastName";
     private static final SpyMemcached<Object> client = new SpyMemcached<>("localhost:11211");
 
-    /**
-     */
+    @Test
     public void testSetGetOneObject() {
         int loops = 10000;
         Account account = null;
@@ -54,8 +51,7 @@ public class SpyMemcachedTest extends TestCase {
         N.println(account);
     }
 
-    /**
-     */
+    @Test
     public void testSetGetManyObjects() {
         int loops = 1000;
         int objectNum = 100;
@@ -92,6 +88,7 @@ public class SpyMemcachedTest extends TestCase {
 
     /**
      */
+    @Test
     public void testSetGetBigArray() {
         int loops = 10;
         int objectNum = 10000;
@@ -133,20 +130,20 @@ public class SpyMemcachedTest extends TestCase {
     }
 
     /**
-     * 
      *
-     * @return 
+     *
+     * @return
      */
     public static Account createAccount() {
         return createAccount(FIRST_NAME, LAST_NAME);
     }
 
     /**
-     * 
      *
-     * @param firstName 
-     * @param lastName 
-     * @return 
+     *
+     * @param firstName
+     * @param lastName
+     * @return
      */
     public static Account createAccount(String firstName, String lastName) {
         Account account = new Account();

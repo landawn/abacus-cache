@@ -4,11 +4,13 @@
 
 package com.landawn.abacus.util;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import junit.framework.TestCase;
-
-public class MemcachedLockTest extends TestCase {
+@Tag("2025")
+public class MemcachedLockTest {
     final String url = "localhost:11211";
     final MemcachedLock<String, Long> memcachedLock = new MemcachedLock<>(url);
 

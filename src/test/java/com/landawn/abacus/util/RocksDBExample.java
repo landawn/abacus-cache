@@ -1,11 +1,13 @@
 package com.landawn.abacus.util;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 
-class RocksDBExample {
+@Tag("2025")
+public class RocksDBExample {
 
     static {
         RocksDB.loadLibrary();

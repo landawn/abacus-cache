@@ -829,6 +829,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
+        if (delta < 0) {
+            throw new IllegalArgumentException("delta must be non-negative: " + delta);
+        }
         return mc.incr(key, delta);
     }
 
@@ -866,6 +869,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public long incr(final String key, final int delta, final long defaultValue) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
+        }
+        if (delta < 0) {
+            throw new IllegalArgumentException("delta must be non-negative: " + delta);
         }
         return mc.incr(key, delta, defaultValue, -1);
     }
@@ -908,6 +914,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
+        }
+        if (delta < 0) {
+            throw new IllegalArgumentException("delta must be non-negative: " + delta);
         }
         return mc.incr(key, delta, defaultValue, toSeconds(liveTime));
     }
@@ -1021,6 +1030,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
+        if (delta < 0) {
+            throw new IllegalArgumentException("delta must be non-negative: " + delta);
+        }
         return mc.decr(key, delta);
     }
 
@@ -1062,6 +1074,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public long decr(final String key, final int delta, final long defaultValue) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
+        }
+        if (delta < 0) {
+            throw new IllegalArgumentException("delta must be non-negative: " + delta);
         }
         return mc.decr(key, delta, defaultValue, -1);
     }
@@ -1106,6 +1121,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
+        }
+        if (delta < 0) {
+            throw new IllegalArgumentException("delta must be non-negative: " + delta);
         }
         return mc.decr(key, delta, defaultValue, toSeconds(liveTime));
     }

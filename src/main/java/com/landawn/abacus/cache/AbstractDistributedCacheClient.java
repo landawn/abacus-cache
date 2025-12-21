@@ -154,6 +154,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null} (implementation-specific)
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
+        if (serverUrl == null) {
+            throw new IllegalArgumentException("serverUrl cannot be null");
+        }
         this.serverUrl = serverUrl;
     }
 
@@ -390,6 +393,10 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *         (approximately 68 years when converted from milliseconds)
      */
     protected int toSeconds(final long liveTime) {
+        if (liveTime < 0) {
+            throw new IllegalArgumentException("liveTime must not be negative: " + liveTime);
+        }
+
         final long seconds = (liveTime % 1000 == 0) ? (liveTime / 1000) : (liveTime / 1000) + 1;
 
         if (seconds > Integer.MAX_VALUE) {

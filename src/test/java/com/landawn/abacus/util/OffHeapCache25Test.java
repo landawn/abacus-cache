@@ -4,8 +4,8 @@
 
 package com.landawn.abacus.util;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
@@ -22,6 +22,7 @@ import org.ehcache.config.builders.ResourcePoolsBuilder;
 import org.ehcache.config.units.EntryUnit;
 import org.ehcache.config.units.MemoryUnit;
 import org.ehcache.spi.serialization.SerializerException;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
@@ -37,6 +38,7 @@ import com.landawn.abacus.type.TypeFactory;
 
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
+@Tag("2025")
 public class OffHeapCache25Test {
     private static final Random rand = new Random();
     static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
