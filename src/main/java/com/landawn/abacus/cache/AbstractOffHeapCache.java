@@ -311,7 +311,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     // ignore
 
                     if (logger.isWarnEnabled()) {
-                        logger.warn(ExceptionUtil.getErrorMessage(e));
+                        logger.warn("Error during cache eviction: " + ExceptionUtil.getErrorMessage(e));
                     }
                 }
             };
@@ -320,12 +320,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         shutdownHook = new Thread(() -> {
-            logger.warn("Starting to shutdown task in OffHeapCache");
+            logger.info("Initiating OffHeapCache shutdown");
 
             try {
                 close();
             } finally {
-                logger.warn("Completed to shutdown task in OffHeapCache");
+                logger.info("OffHeapCache shutdown completed");
             }
         });
         Runtime.getRuntime().addShutdownHook(shutdownHook);
@@ -966,7 +966,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         // TODO check if there is duplicated segment size and index. for debug purpose and will be removed later.
         if (Stream.of(occupiedSlots.values()).flatmap(Map::keySet).hasDuplicates()) {
-            throw new RuntimeException("Duplicated segment size and index found");
+            throw new IllegalStateException("Internal error: duplicate segment size and index detected");
         }
 
         final long totalWriteToDiskCount = totalWriteToDiskTimeStats.getCount();
@@ -1371,8 +1371,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 // should never happen.
                 if (size != 0) {
-                    throw new RuntimeException(
-                            "Unknown error happening when retrieve value. The remaining size is " + size + " after finishing fetch data from all segments");
+                    throw new IllegalStateException(
+                            "Failed to retrieve value: " + size + " bytes remaining after reading all segments (data corruption detected)");
                 }
 
                 // it's destroyed after read from memory. dirty data may be read.
@@ -1452,8 +1452,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 // should never happen.
                 if (bytes.length != size) {
-                    throw new RuntimeException("Unknown error happening when retrieve value. The fetched byte array size: " + bytes.length
-                            + " is not equal to the expected size: " + size);
+                    throw new IllegalStateException(
+                            "Failed to retrieve value: fetched size (" + bytes.length + " bytes) does not match expected size (" + size + " bytes)");
                 }
 
                 if (type.isPrimitiveByteArray()) {

@@ -230,7 +230,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
         try {
             return mc.add(key, value, liveTime);
         } catch (final Exception e) {
-            throw new RuntimeException("Failed to lock target with key: " + key, e);
+            throw new RuntimeException("Failed to acquire lock for key: " + key, e);
         }
     }
 
@@ -441,7 +441,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
         try {
             return mc.delete(key);
         } catch (final Exception e) {
-            throw new RuntimeException("Failed to unlock target with key: " + key, e);
+            throw new RuntimeException("Failed to release lock for key: " + key, e);
         }
     }
 

@@ -100,7 +100,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
             ClassUtil.setAccessible(f, true);
             UNSAFE = (sun.misc.Unsafe) f.get(null);
         } catch (final Exception e) {
-            throw new RuntimeException("Failed to initialize Unsafe", e);
+            throw new RuntimeException("Failed to initialize sun.misc.Unsafe for off-heap memory allocation", e);
         }
     }
 

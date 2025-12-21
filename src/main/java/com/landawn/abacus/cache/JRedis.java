@@ -774,7 +774,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     protected byte[] getKeyBytes(final String key) {
         if (key == null) {
-            throw new IllegalArgumentException("key cannot be null");
+            throw new IllegalArgumentException("Key cannot be null");
         }
         return key.getBytes(Charsets.UTF_8);
     }

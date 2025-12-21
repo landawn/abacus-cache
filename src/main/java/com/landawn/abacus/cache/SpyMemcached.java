@@ -1423,7 +1423,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         try {
             return new MemcachedClient(connFactory, AddrUtil.getAddressList(serverUrl));
         } catch (final IOException e) {
-            throw new UncheckedIOException("Failed to create Memcached client.", e);
+            throw new UncheckedIOException("Failed to create Memcached client for server(s): " + serverUrl, e);
         }
     }
 }
