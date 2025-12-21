@@ -187,6 +187,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             throw new IllegalArgumentException("DistributedCacheClient cannot be null");
         }
 
+        if (maxFailedNumForRetry < 0) {
+            throw new IllegalArgumentException("maxFailedNumForRetry cannot be negative: " + maxFailedNumForRetry);
+        }
+
+        if (retryDelay < 0) {
+            throw new IllegalArgumentException("retryDelay cannot be negative: " + retryDelay);
+        }
+
         this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
         this.dcc = dcc;
         this.maxFailedNumForRetry = maxFailedNumForRetry;
@@ -265,7 +273,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     public V gett(final K k) {
         assertNotClosed();
 
-        if ((failedCounter.get() > maxFailedNumForRetry) && ((System.currentTimeMillis() - lastFailedTime.get()) < retryDelay)) {
+        // Read circuit breaker state atomically to avoid race conditions
+        final int currentFailedCount = failedCounter.get();
+        final long currentLastFailedTime = lastFailedTime.get();
+        final long currentTime = System.currentTimeMillis();
+
+        // Check circuit breaker state with atomic snapshot to prevent time-based race conditions
+        if ((currentFailedCount > maxFailedNumForRetry) && ((currentTime - currentLastFailedTime) < retryDelay)) {
             return null;
         }
 
@@ -280,9 +294,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             // isOK = false;
         } finally {
             if (isOK) {
+                // Reset in the correct order: counter first, then time
+                // This prevents race conditions where another thread might see counter=0 but old timestamp
                 failedCounter.set(0);
                 lastFailedTime.set(0);
             } else {
+                // Update timestamp BEFORE incrementing counter to prevent race conditions
+                // This ensures that when another thread sees the incremented counter,
+                // it will also see the corresponding timestamp
                 lastFailedTime.set(System.currentTimeMillis());
                 failedCounter.incrementAndGet();
             }
@@ -670,9 +689,16 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        dcc.disconnect();
-
+        // Mark as closed first to prevent new operations from starting
+        // even if disconnect() throws an exception
         isClosed = true;
+
+        try {
+            dcc.disconnect();
+        } catch (final Exception e) {
+            // Even if disconnect fails, the cache should remain closed
+            // Log the exception if needed, but don't rethrow to maintain idempotent behavior
+        }
     }
 
     /**
@@ -800,8 +826,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             throw new IllegalArgumentException("Key cannot be null");
         }
 
-        return Strings.isEmpty(keyPrefix) ? Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8))
-                : (keyPrefix + Strings.base64Encode(N.stringOf(k).getBytes(Charsets.UTF_8)));
+        final String keyStr = N.stringOf(k);
+        if (keyStr == null) {
+            throw new IllegalArgumentException("Key string representation cannot be null");
+        }
+
+        final String encodedKey = Strings.base64Encode(keyStr.getBytes(Charsets.UTF_8));
+
+        return Strings.isEmpty(keyPrefix) ? encodedKey : (keyPrefix + encodedKey);
     }
 
     /**

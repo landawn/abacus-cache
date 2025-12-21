@@ -527,8 +527,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
      * This method first clears all entries from the cache before marking it as closed.
      *
-     * <p><b>Thread Safety:</b> This method is synchronized and thread-safe. However, it is NOT
-     * idempotent - calling it multiple times will throw IllegalStateException on subsequent calls.</p>
+     * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
+     * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.</p>
      *
      * <p><b>Note:</b> This method only marks the wrapper as closed; it does not close or dispose
      * the underlying Ehcache instance. The underlying cache manager is responsible for managing
@@ -543,13 +543,17 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * } finally {
      *     cache.close();
      * }
-     * }</pre>
      *
-     * @throws IllegalStateException if the cache has already been closed
+     * // Safe to call multiple times
+     * cache.close();
+     * cache.close();   // No exception thrown
+     * }</pre>
      */
     @Override
     public synchronized void close() {
-        assertNotClosed();
+        if (isClosed) {
+            return;
+        }
 
         clear();
 

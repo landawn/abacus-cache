@@ -145,6 +145,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             tempMc = createSpyMemcachedClient(serverUrl, connFactory);
             this.mc = tempMc;
         } catch (final Exception e) {
+            if (tempMc != null) {
+                tempMc.shutdown();
+            }
             throw ExceptionUtil.toRuntimeException(e);
         }
     }
@@ -183,6 +186,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @SuppressWarnings("unchecked")
     @Override
     public T get(final String key) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return (T) mc.get(key);
     }
 
@@ -217,6 +223,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings("unchecked")
     public Future<T> asyncGet(final String key) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return (Future<T>) mc.asyncGet(key);
     }
 
@@ -256,6 +265,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @SuppressWarnings("unchecked")
     @Override
     public final Map<String, T> getBulk(final String... keys) {
+        if (keys == null) {
+            throw new IllegalArgumentException("keys cannot be null");
+        }
         return (Map<String, T>) mc.getBulk(keys);
     }
 
@@ -291,6 +303,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public final Future<Map<String, T>> asyncGetBulk(final String... keys) {
+        if (keys == null) {
+            throw new IllegalArgumentException("keys cannot be null");
+        }
         return (Future) mc.asyncGetBulk(keys);
     }
 
@@ -330,6 +345,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @SuppressWarnings("unchecked")
     @Override
     public Map<String, T> getBulk(final Collection<String> keys) {
+        if (keys == null) {
+            throw new IllegalArgumentException("keys cannot be null");
+        }
         return (Map<String, T>) mc.getBulk(keys);
     }
 
@@ -362,6 +380,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
     public Future<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
+        if (keys == null) {
+            throw new IllegalArgumentException("keys cannot be null");
+        }
         return (Future) mc.asyncGetBulk(keys);
     }
 
@@ -407,6 +428,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public boolean set(final String key, final T obj, final long liveTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return resultOf(mc.set(key, toSeconds(liveTime), obj));
     }
 
@@ -445,6 +469,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncSet(final String key, final T obj, final long liveTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.set(key, toSeconds(liveTime), obj);
     }
 
@@ -489,6 +516,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean add(final String key, final T obj, final long liveTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return resultOf(mc.add(key, toSeconds(liveTime), obj));
     }
 
@@ -529,6 +559,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncAdd(final String key, final T obj, final long liveTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.add(key, toSeconds(liveTime), obj);
     }
 
@@ -569,6 +602,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean replace(final String key, final T obj, final long liveTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return resultOf(mc.replace(key, toSeconds(liveTime), obj));
     }
 
@@ -608,6 +644,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncReplace(final String key, final T obj, final long liveTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.replace(key, toSeconds(liveTime), obj);
     }
 
@@ -650,6 +689,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public boolean delete(final String key) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return resultOf(mc.delete(key));
     }
 
@@ -686,6 +728,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncDelete(final String key) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.delete(key);
     }
 
@@ -731,6 +776,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long incr(final String key) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.incr(key, 1);
     }
 
@@ -778,6 +826,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long incr(final String key, final int delta) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.incr(key, delta);
     }
 
@@ -813,6 +864,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final int delta, final long defaultValue) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.incr(key, delta, defaultValue, -1);
     }
 
@@ -852,6 +906,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.incr(key, delta, defaultValue, toSeconds(liveTime));
     }
 
@@ -898,6 +955,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long decr(final String key) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.decr(key, 1);
     }
 
@@ -958,6 +1018,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long decr(final String key, final int delta) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.decr(key, delta);
     }
 
@@ -997,6 +1060,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final int delta, final long defaultValue) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.decr(key, delta, defaultValue, -1);
     }
 
@@ -1038,6 +1104,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return mc.decr(key, delta, defaultValue, toSeconds(liveTime));
     }
 
@@ -1298,10 +1367,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the Future execution fails or is interrupted
      */
     protected <R> R resultOf(final Future<R> future) {
+        if (future == null) {
+            throw new IllegalArgumentException("future cannot be null");
+        }
         try {
             return future.get();
         } catch (final InterruptedException e) {
-            Thread.currentThread().interrupt();   // Restore interrupt status
+            Thread.currentThread().interrupt(); // Restore interrupt status
             throw ExceptionUtil.toRuntimeException(e, true);
         } catch (final ExecutionException e) {
             final Throwable cause = e.getCause();

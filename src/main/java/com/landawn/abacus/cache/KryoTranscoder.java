@@ -186,7 +186,11 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      */
     @Override
     public CachedData encode(final T o) {
-        return new CachedData(0, kryoParser.encode(o), maxSize);
+        final byte[] encoded = kryoParser.encode(o);
+        if (encoded != null && encoded.length > maxSize) {
+            throw new IllegalArgumentException("Encoded data size (" + encoded.length + " bytes) exceeds maxSize (" + maxSize + " bytes)");
+        }
+        return new CachedData(0, encoded, maxSize);
     }
 
     /**
@@ -232,7 +236,14 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      */
     @Override
     public T decode(final CachedData d) {
-        return kryoParser.decode(d.getData());
+        if (d == null) {
+            return null;
+        }
+        final byte[] data = d.getData();
+        if (data == null || data.length == 0) {
+            return null;
+        }
+        return kryoParser.decode(data);
     }
 
     /**

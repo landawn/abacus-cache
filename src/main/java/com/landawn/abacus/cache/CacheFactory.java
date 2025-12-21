@@ -364,7 +364,15 @@ public final class CacheFactory {
      */
     @SuppressWarnings("unchecked")
     public static <K, V> Cache<K, V> createCache(final String provider) {
+        if (Strings.isEmpty(provider)) {
+            throw new IllegalArgumentException("Provider specification cannot be null or empty");
+        }
+
         final TypeAttrParser attrResult = TypeAttrParser.parse(provider);
+
+        if (attrResult == null) {
+            throw new IllegalArgumentException("Failed to parse provider specification: " + provider);
+        }
 
         final String[] parameters = attrResult.getParameters();
 
@@ -373,7 +381,17 @@ public final class CacheFactory {
         }
 
         final String url = parameters[0];
+
+        if (Strings.isEmpty(url)) {
+            throw new IllegalArgumentException("Invalid provider specification: server URL cannot be empty");
+        }
+
         final String className = attrResult.getClassName();
+
+        if (Strings.isEmpty(className)) {
+            throw new IllegalArgumentException("Invalid provider specification: class name cannot be empty");
+        }
+
         Class<?> cls = null;
 
         if (DistributedCacheClient.MEMCACHED.equalsIgnoreCase(className)) {
@@ -383,7 +401,11 @@ public final class CacheFactory {
                 return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
                 try {
-                    return new DistributedCache<>(new SpyMemcached<>(url, Numbers.toLong(parameters[2])), parameters[1]);
+                    final long timeout = Numbers.toLong(parameters[2]);
+                    if (timeout <= 0) {
+                        throw new IllegalArgumentException("Timeout must be positive: " + timeout);
+                    }
+                    return new DistributedCache<>(new SpyMemcached<>(url, timeout), parameters[1]);
                 } catch (final NumberFormatException e) {
                     throw new IllegalArgumentException("Invalid timeout parameter: " + parameters[2], e);
                 }
@@ -397,7 +419,11 @@ public final class CacheFactory {
                 return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
                 try {
-                    return new DistributedCache<>(new JRedis<>(url, Numbers.toLong(parameters[2])), parameters[1]);
+                    final long timeout = Numbers.toLong(parameters[2]);
+                    if (timeout <= 0) {
+                        throw new IllegalArgumentException("Timeout must be positive: " + timeout);
+                    }
+                    return new DistributedCache<>(new JRedis<>(url, timeout), parameters[1]);
                 } catch (final NumberFormatException e) {
                     throw new IllegalArgumentException("Invalid timeout parameter: " + parameters[2], e);
                 }
@@ -406,6 +432,10 @@ public final class CacheFactory {
             }
         } else {
             cls = ClassUtil.forClass(className);
+
+            if (cls == null) {
+                throw new IllegalArgumentException("Cannot find class: " + className);
+            }
 
             return TypeAttrParser.newInstance(cls, provider);
         }

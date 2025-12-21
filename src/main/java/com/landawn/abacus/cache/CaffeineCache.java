@@ -177,7 +177,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
             throw new IllegalArgumentException("Key cannot be null");
         }
 
-        cacheImpl.put(key, value);   // TODO: Support per-entry expiration
+        cacheImpl.put(key, value); // TODO: Support per-entry expiration
 
         return true;
     }
@@ -335,8 +335,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * the underlying Caffeine cache instance is not explicitly closed (as Caffeine caches don't implement
      * Closeable), but all entries are invalidated.
      *
-     * <p><b>Thread Safety:</b> This method is synchronized and thread-safe, but NOT idempotent.
-     * Calling it multiple times will throw IllegalStateException on subsequent calls.</p>
+     * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
+     * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.</p>
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -355,19 +355,23 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *     cache.close();   // Always close to release resources
      * }
      *
-     * // After closing
+     * // Safe to call multiple times
+     * cache.close();
+     * cache.close();   // No exception thrown
+     *
+     * // After closing, operations throw IllegalStateException
      * try {
      *     cache.gett("user:123");   // Throws IllegalStateException
      * } catch (IllegalStateException e) {
      *     System.out.println("Cache is closed");
      * }
      * }</pre>
-     *
-     * @throws IllegalStateException if the cache has already been closed
      */
     @Override
     public synchronized void close() {
-        assertNotClosed();
+        if (isClosed) {
+            return;
+        }
 
         clear();
 

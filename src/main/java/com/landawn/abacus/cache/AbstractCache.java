@@ -431,6 +431,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @see #setProperty(String, Object)
      * @see #getProperties()
      */
+    @SuppressWarnings("unchecked")
     @Override
     public <T> T getProperty(final String propName) {
         return (T) properties.get(propName);
@@ -462,6 +463,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @see #getProperty(String)
      * @see #removeProperty(String)
      */
+    @SuppressWarnings("unchecked")
     @Override
     public <T> T setProperty(final String propName, final Object propValue) {
         return (T) properties.put(propName, propValue);
@@ -491,6 +493,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @see #setProperty(String, Object)
      * @see #getProperty(String)
      */
+    @SuppressWarnings("unchecked")
     @Override
     public <T> T removeProperty(final String propName) {
         return (T) properties.remove(propName);

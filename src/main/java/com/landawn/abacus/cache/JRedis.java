@@ -666,8 +666,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public void flushAll() {
         final Collection<Jedis> allShards = jedis.getAllShards();
 
-        for (final Jedis j : allShards) {
-            j.flushAll();
+        if (allShards != null) {
+            for (final Jedis j : allShards) {
+                if (j != null) {
+                    j.flushAll();
+                }
+            }
         }
     }
 
@@ -769,6 +773,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @see #decode(byte[])
      */
     protected byte[] getKeyBytes(final String key) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
         return key.getBytes(Charsets.UTF_8);
     }
 
@@ -825,7 +832,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @see #getKeyBytes(String)
      */
     protected T decode(final byte[] bytes) {
-        if (bytes == null || N.isEmpty(bytes)) {
+        if (bytes == null || bytes.length == 0) {
             return null;
         }
         return kryoParser.decode(bytes);

@@ -104,6 +104,9 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * @throws RuntimeException if connection to the Memcached server(s) fails
      */
     public MemcachedLock(final String serverUrl) {
+        if (Strings.isEmpty(serverUrl)) {
+            throw new IllegalArgumentException("Server URL cannot be null or empty");
+        }
         mc = new SpyMemcached<>(serverUrl);
     }
 
@@ -433,10 +436,12 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
             throw new IllegalArgumentException("Target cannot be null");
         }
 
+        final String key = toKey(target);
+
         try {
-            return mc.delete(toKey(target));
+            return mc.delete(key);
         } catch (final Exception e) {
-            throw new RuntimeException("Failed to unlock with key: " + target, e);
+            throw new RuntimeException("Failed to unlock target with key: " + key, e);
         }
     }
 
@@ -611,8 +616,6 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      */
     @Override
     public void close() {
-        if (mc != null) {
-            mc.disconnect();
-        }
+        mc.disconnect();
     }
 }
