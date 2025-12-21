@@ -679,10 +679,22 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
         final Collection<Jedis> allShards = jedis.getAllShards();
 
         if (allShards != null) {
+            RuntimeException firstException = null;
+
             for (final Jedis j : allShards) {
                 if (j != null) {
-                    j.flushAll();
+                    try {
+                        j.flushAll();
+                    } catch (final RuntimeException e) {
+                        if (firstException == null) {
+                            firstException = e;
+                        }
+                    }
                 }
+            }
+
+            if (firstException != null) {
+                throw firstException;
             }
         }
     }

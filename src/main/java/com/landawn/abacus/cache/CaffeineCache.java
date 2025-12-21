@@ -373,9 +373,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        clear();
-
         isClosed = true;
+
+        clear();
     }
 
     /**

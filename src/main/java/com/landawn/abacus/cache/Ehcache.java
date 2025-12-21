@@ -555,9 +555,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        clear();
-
         isClosed = true;
+
+        clear();
     }
 
     /**
