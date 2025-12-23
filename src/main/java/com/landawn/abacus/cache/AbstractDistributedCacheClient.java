@@ -17,6 +17,8 @@ package com.landawn.abacus.cache;
 import java.util.Collection;
 import java.util.Map;
 
+import com.landawn.abacus.util.Strings;
+
 /**
  * Abstract base class for distributed cache client implementations.
  * This class provides common functionality and default implementations for methods
@@ -154,9 +156,10 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null} (implementation-specific)
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
-        if (serverUrl == null) {
-            throw new IllegalArgumentException("serverUrl cannot be null");
+        if (Strings.isEmpty(serverUrl)) {
+            throw new IllegalArgumentException("serverUrl cannot be empty");
         }
+
         this.serverUrl = serverUrl;
     }
 
