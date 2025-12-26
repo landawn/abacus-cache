@@ -1,3 +1,6 @@
+## 2.1.0
+* Improve Javadoc and bug fixes.
+
 ## 2.0.2
 * Improve Javadoc and bug fixes.
 
