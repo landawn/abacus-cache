@@ -462,7 +462,7 @@ public interface Cache<K, V> extends Closeable {
      * // Chain multiple operations
      * cache.asyncPut("user:123", user)
      *      .thenCompose(success -> success ? notifySubscribers(user) : handleFailure())
-     *      .thenRun(() -> log("Operation complete"));
+     *      .thenRunAsync(() -> log("Operation complete"));
      *
      * // Exception handling
      * cache.asyncPut("user:123", user)
@@ -514,7 +514,7 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Short-lived temporary data
      * cache.asyncPut("temp:data", data, 5000, 0)
-     *      .thenRun(() -> log("Temporary data cached for 5 seconds"));
+     *      .thenRunAsync(() -> log("Temporary data cached for 5 seconds"));
      *
      * // Exception handling
      * cache.asyncPut("otp:token", token, 300000, 60000)
@@ -559,12 +559,12 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Basic async removal
      * cache.asyncRemove("user:123")
-     *      .thenRun(() -> log("User removed from cache"));
+     *      .thenRunAsync(() -> log("User removed from cache"));
      *
      * // Chain with other operations
      * cache.asyncRemove("user:123")
      *      .thenCompose(v -> notifySubscribers("user:123"))
-     *      .thenRun(() -> log("Cache invalidation complete"));
+     *      .thenRunAsync(() -> log("Cache invalidation complete"));
      *
      * // Exception handling
      * cache.asyncRemove("user:123")

@@ -41,7 +41,7 @@ import com.landawn.abacus.type.TypeFactory;
 @Tag("2025")
 public class OffHeapCache25Test {
     private static final Random rand = new Random();
-    static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
+    static final Parser<?, ?> parser = ParserFactory.isAvroParserAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJsonParser();
     static final ByteBufferType bbType = (ByteBufferType) ((Type<?>) TypeFactory.getType(ByteBufferType.BYTE_BUFFER));
     static final OffHeapStore<String> offHeapStore;
     static {

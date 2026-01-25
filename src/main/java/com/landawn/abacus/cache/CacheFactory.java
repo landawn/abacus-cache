@@ -431,7 +431,7 @@ public final class CacheFactory {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
         } else {
-            cls = ClassUtil.forClass(className);
+            cls = ClassUtil.forName(className);
 
             if (cls == null) {
                 throw new IllegalArgumentException("Cannot find class: " + className);

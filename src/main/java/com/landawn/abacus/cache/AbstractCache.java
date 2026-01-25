@@ -341,7 +341,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.asyncRemove("user:123")
-     *      .thenRun(() -> log("User removed from cache"));
+     *      .thenRunAsync(() -> log("User removed from cache"));
      * }</pre>
      *
      * @param k the cache key to remove

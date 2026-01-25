@@ -99,7 +99,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Creates a new SpyMemcached instance with a specified timeout.
      * The timeout applies to all cache operations (get, set, delete, etc.). If Kryo is available
-     * on the classpath (checked via {@link ParserFactory#isKryoAvailable()}), it will be used for
+     * on the classpath (checked via {@link ParserFactory#isAvroParserAvailable()}), it will be used for
      * object serialization via {@link KryoTranscoder}; otherwise, the default SpyMemcached
      * serialization mechanism is used.
      *
@@ -124,7 +124,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
         MemcachedClient tempMc = null;
         try {
-            final Transcoder<Object> transcoder = ParserFactory.isKryoAvailable() ? new KryoTranscoder<>() : null;
+            final Transcoder<Object> transcoder = ParserFactory.isAvroParserAvailable() ? new KryoTranscoder<>() : null;
 
             final ConnectionFactory connFactory = new DefaultConnectionFactory() {
                 @Override

@@ -112,7 +112,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Default parser for serialization - uses Kryo if available, otherwise JSON.
      */
-    static final Parser<?, ?> parser = ParserFactory.isKryoAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJSONParser();
+    static final Parser<?, ?> parser = ParserFactory.isAvroParserAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJsonParser();
 
     /**
      * Default serializer using the configured parser.
