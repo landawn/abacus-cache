@@ -19,6 +19,7 @@ import java.util.Set;
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
 import com.landawn.abacus.pool.PoolStats;
+import com.landawn.abacus.pool.Poolable;
 import com.landawn.abacus.pool.PoolableWrapper;
 
 /**
@@ -265,7 +266,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
             throw new IllegalArgumentException("Key cannot be null");
         }
 
-        return pool.put(key, PoolableWrapper.of(value, liveTime, maxIdleTime));
+        return pool.put(key, Poolable.wrap(value, liveTime, maxIdleTime));
     }
 
     /**

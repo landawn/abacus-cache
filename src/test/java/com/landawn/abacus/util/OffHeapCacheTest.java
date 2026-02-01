@@ -102,7 +102,7 @@ public class OffHeapCacheTest {
     }
 
     private Account createAccount(final Class<Account> cls) {
-        return N.fill(cls);
+        return Beans.newRandom(cls);
     }
 
     @Test

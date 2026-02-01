@@ -311,7 +311,7 @@ public class OffHeapCache25Test {
     }
 
     private Account createAccount(final Class<Account> cls) {
-        return N.fill(cls);
+        return Beans.newBean(cls);
     }
 
     @Test
