@@ -56,7 +56,7 @@ import com.landawn.abacus.util.Strings;
  * // Basic operations
  * User user = new User("John");
  * cache.put("user:123", user, 3600000, 0);   // 1 hour TTL, maxIdleTime ignored
- * User cached = cache.gett("user:123");
+ * User cached = cache.getOrNull("user:123");
  *
  * // Always close to release resources
  * cache.close();
@@ -110,7 +110,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // Cache operations will use circuit breaker protection
      * cache.put("key", new User("John"), 3600000, 0);
-     * User user = cache.gett("key");
+     * User user = cache.getOrNull("key");
      * }</pre>
      *
      * @param dcc the distributed cache client to wrap, must not be null
@@ -228,7 +228,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * {@link AtomicInteger} and {@link AtomicLong} respectively, allowing safe concurrent access.
      *
      * <p><b>Key Processing:</b></p>
-     * The key is transformed as follows: {@code key -> keyPrefix + Base64(UTF8(toString(k)))}.
+     * The key is transformed as follows: {@code key -> keyPrefix + Base64(UTF8(toString(key)))}.
      * Base64 encoding ensures compatibility with cache systems that restrict key characters
      * (e.g., spaces, special characters, Unicode).
      *
@@ -238,7 +238,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:", 100, 1000);
      *
      * // Basic retrieval with null check
-     * User user = cache.gett("user:123");
+     * User user = cache.getOrNull("user:123");
      * if (user != null) {
      *     System.out.println("Found: " + user.getName());
      * } else {
@@ -250,7 +250,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // Cache-aside pattern with circuit breaker protection
      * User getUser(String userId) {
-     *     User user = cache.gett("user:" + userId);
+     *     User user = cache.getOrNull("user:" + userId);
      *     if (user == null) {
      *         // Fallback to database (could be cache miss or circuit breaker open)
      *         user = database.findUser(userId);
@@ -262,7 +262,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param k the cache key, must not be null
+     * @param key the cache key, must not be null
      * @return the cached value, or {@code null} if not found, expired, evicted, circuit breaker is open, or on error
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null (thrown by {@link #generateKey(Object)})
@@ -270,7 +270,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @see DistributedCacheClient#get(String)
      */
     @Override
-    public V gett(final K k) {
+    public V getOrNull(final K key) {
         assertNotClosed();
 
         // Read circuit breaker state atomically to avoid race conditions
@@ -287,7 +287,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         boolean isOK = false;
 
         try {
-            result = dcc.get(generateKey(k));
+            result = dcc.get(generateKey(key));
             isOK = true;
         } catch (final Exception e) {
             // Log the exception if needed, but don't rethrow
@@ -327,7 +327,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Resets TTL for existing entries</li>
      * <li>Only {@code liveTime} affects expiration ({@code maxIdleTime} is ignored)</li>
      * <li>Returns {@code false} on network errors or timeouts</li>
-     * <li>Does not implement circuit breaker logic (unlike {@link #gett(Object)})</li>
+     * <li>Does not implement circuit breaker logic (unlike {@link #getOrNull(Object)})</li>
      * <li>Does not affect or reset the circuit breaker failure counter</li>
      * </ul>
      *
@@ -358,15 +358,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * cache.put("app:config", config, 0, 0);
      *
      * // Update existing cache entry with new TTL
-     * User updated = cache.gett("user:123");
+     * User updated = cache.getOrNull("user:123");
      * if (updated != null) {
      *     updated.setLastLogin(System.currentTimeMillis());
      *     cache.put("user:123", updated, 7200000, 0);   // 2 hour TTL
      * }
      * }</pre>
      *
-     * @param k the cache key, must not be null
-     * @param v the value to cache (null handling depends on underlying cache client implementation)
+     * @param key the cache key, must not be null
+     * @param value the value to cache (null handling depends on underlying cache client implementation)
      * @param liveTime the time-to-live in milliseconds (0 or negative for no expiration)
      * @param maxIdleTime the maximum idle time in milliseconds (<b>IGNORED - not supported by distributed caches</b>)
      * @return {@code true} if the operation was successful, {@code false} on network errors or timeouts
@@ -376,10 +376,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @see DistributedCacheClient#set(String, Object, long)
      */
     @Override
-    public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
-        return dcc.set(generateKey(k), v, liveTime);
+        return dcc.set(generateKey(key), value, liveTime);
     }
 
     /**
@@ -431,7 +431,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param k the cache key, must not be null
+     * @param key the cache key, must not be null
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null (thrown by {@link #generateKey(Object)})
      * @see #clear()
@@ -439,36 +439,36 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @see DistributedCacheClient#delete(String)
      */
     @Override
-    public void remove(final K k) {
+    public void remove(final K key) {
         assertNotClosed();
 
-        dcc.delete(generateKey(k));
+        dcc.delete(generateKey(key));
     }
 
     /**
      * Checks if the cache contains a specific key with a non-null value.
-     * This is implemented by attempting to retrieve the value using {@link #gett(Object)},
+     * This is implemented by attempting to retrieve the value using {@link #getOrNull(Object)},
      * so it inherits all the same behaviors including circuit breaker logic, key transformation,
      * and error handling.
      *
      * <p><b>Implementation Note:</b></p>
-     * This method calls {@code gett(k) != null}, which means it:
+     * This method calls {@code getOrNull(key) != null}, which means it:
      * <ul>
      * <li>Performs a full GET operation (not a lightweight existence check)</li>
      * <li>May return {@code false} if circuit breaker is open</li>
      * <li>May return {@code false} on network errors (exceptions are caught)</li>
      * <li>Returns {@code false} for expired entries</li>
      * <li>Returns {@code false} if the cached value is null</li>
-     * <li>Subject to circuit breaker state (same as {@link #gett(Object)})</li>
+     * <li>Subject to circuit breaker state (same as {@link #getOrNull(Object)})</li>
      * </ul>
      *
      * <p><b>Thread Safety:</b></p>
-     * This method is thread-safe and inherits the thread-safety guarantees of {@link #gett(Object)}.
+     * This method is thread-safe and inherits the thread-safety guarantees of {@link #getOrNull(Object)}.
      *
      * <p><b>Performance Consideration:</b></p>
      * Since this method performs a full GET operation, if you need the value afterward,
-     * it's more efficient to call {@link #gett(Object)} directly and check for null
-     * rather than calling {@code containsKey()} followed by {@code gett()}.
+     * it's more efficient to call {@link #getOrNull(Object)} directly and check for null
+     * rather than calling {@code containsKey()} followed by {@code getOrNull()}.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -490,27 +490,27 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // INEFFICIENT - performs GET twice:
      * if (cache.containsKey("user:123")) {
-     *     User user = cache.gett("user:123");   // Second GET operation!
+     *     User user = cache.getOrNull("user:123");   // Second GET operation!
      *     processUser(user);
      * }
      *
      * // EFFICIENT - performs GET once:
-     * User user = cache.gett("user:123");
+     * User user = cache.getOrNull("user:123");
      * if (user != null) {
      *     processUser(user);
      * }
      * }</pre>
      *
-     * @param k the cache key, must not be null
+     * @param key the cache key, must not be null
      * @return {@code true} if the key exists and has a non-null value, {@code false} otherwise,
      *         on error, or when circuit breaker is open
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null (thrown by {@link #gett(Object)})
-     * @see #gett(Object)
+     * @throws IllegalArgumentException if the key is null (thrown by {@link #getOrNull(Object)})
+     * @see #getOrNull(Object)
      */
     @Override
-    public boolean containsKey(final K k) {
-        return gett(k) != null;
+    public boolean containsKey(final K key) {
+        return getOrNull(key) != null;
     }
 
     /**
@@ -649,7 +649,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Try-with-resources (recommended - implements AutoCloseable)
      * try (DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:")) {
      *     cache.put("user:123", user, 3600000, 0);
-     *     User cached = cache.gett("user:123");
+     *     User cached = cache.getOrNull("user:123");
      *     // Cache automatically closed when exiting try block
      * }
      *
@@ -676,7 +676,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // Verify operations fail after close
      * cache.close();
-     * cache.gett("key");   // Throws IllegalStateException
+     * cache.getOrNull("key");   // Throws IllegalStateException
      * }</pre>
      *
      * @see DistributedCacheClient#disconnect()
@@ -815,18 +815,18 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Result: "myapp:MTIzNDU=" (prefix + Base64 of "12345")
      * }</pre>
      *
-     * @param k the original key, must not be null
+     * @param key the original key, must not be null
      * @return the prefixed and Base64-encoded cache key suitable for distributed cache systems
-     * @throws IllegalArgumentException if k is null
+     * @throws IllegalArgumentException if key is null
      * @see Strings#base64Encode(byte[])
      * @see N#stringOf(Object)
      */
-    protected String generateKey(final K k) {
-        if (k == null) {
+    protected String generateKey(final K key) {
+        if (key == null) {
             throw new IllegalArgumentException("Key cannot be null");
         }
 
-        final String keyStr = N.stringOf(k);
+        final String keyStr = N.stringOf(key);
         if (keyStr == null) {
             throw new IllegalArgumentException("Key string representation cannot be null");
         }
@@ -844,7 +844,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage:</b></p>
      * This is a protected utility method used internally by cache operation methods
-     * ({@link #gett(Object)}, {@link #put(Object, Object, long, long)}, {@link #remove(Object)}, {@link #clear()})
+     * ({@link #getOrNull(Object)}, {@link #put(Object, Object, long, long)}, {@link #remove(Object)}, {@link #clear()})
      * to validate cache state before proceeding with operations.
      *
      * <p><b>Thread Safety:</b></p>

@@ -41,7 +41,7 @@ import com.landawn.abacus.util.u.Optional;
  * <br>
  * Subclasses must implement:
  * <ul>
- * <li>{@link #gett(Object)} - Direct value retrieval</li>
+ * <li>{@link #getOrNull(Object)} - Direct value retrieval</li>
  * <li>{@link #put(Object, Object, long, long)} - Storage with expiration</li>
  * <li>{@link #remove(Object)} - Entry removal</li>
  * <li>{@link #containsKey(Object)} - Key existence check</li>
@@ -59,7 +59,7 @@ import com.landawn.abacus.util.u.Optional;
  *     private final Map<K, V> storage = new ConcurrentHashMap<>();
  *     
  *     @Override
- *     public V gett(K key) {
+ *     public V getOrNull(K key) {
  *         return storage.get(key);
  *     }
  *     
@@ -168,15 +168,15 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *     .orElse("Unknown");
      * }</pre>
      *
-     * @param k the cache key to look up (must not be null for most implementations)
+     * @param key the cache key to look up (must not be null for most implementations)
      * @return an Optional containing the cached value if present and not expired, or an empty Optional otherwise
      * @throws IllegalStateException if the cache has been closed
-     * @see #gett(Object)
+     * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
     @Override
-    public Optional<V> get(final K k) {
-        return Optional.ofNullable(gett(k));
+    public Optional<V> get(final K key) {
+        return Optional.ofNullable(getOrNull(key));
     }
 
     /**
@@ -207,23 +207,23 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.put("user:123", updatedUser);   // Replaces previous value
      *
      * // Cache-aside pattern
-     * User user = cache.gett("user:123");
+     * User user = cache.getOrNull("user:123");
      * if (user == null) {
      *     user = loadFromDatabase("user:123");
      *     cache.put("user:123", user);
      * }
      * }</pre>
      *
-     * @param k the cache key to store the value under (must not be null for most implementations)
-     * @param v the value to cache (may be null depending on implementation, check implementation docs)
+     * @param key the cache key to store the value under (must not be null for most implementations)
+     * @param value the value to cache (may be null depending on implementation, check implementation docs)
      * @return true if the operation was successful, false otherwise (e.g., cache full, closed, or write failure)
      * @throws IllegalStateException if the cache has been closed
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
     @Override
-    public boolean put(final K k, final V v) {
-        return put(k, v, defaultLiveTime, defaultMaxIdleTime);
+    public boolean put(final K key, final V value) {
+        return put(key, value, defaultLiveTime, defaultMaxIdleTime);
     }
 
     /**
@@ -238,26 +238,26 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *      .thenAccept(opt -> opt.ifPresent(u -> System.out.println("Found: " + u.getName())));
      * }</pre>
      *
-     * @param k the cache key to look up
+     * @param key the cache key to look up
      * @return a ContinuableFuture that will complete with an Optional containing the cached value if present,
      *         or an empty Optional if the key is not found or has expired
      * @see #get(Object)
-     * @see #asyncGett(Object)
+     * @see #asyncGetOrNull(Object)
      */
     @Override
-    public ContinuableFuture<Optional<V>> asyncGet(final K k) {
-        return asyncExecutor.execute(() -> get(k));
+    public ContinuableFuture<Optional<V>> asyncGet(final K key) {
+        return asyncExecutor.execute(() -> get(key));
     }
 
     /**
      * Asynchronously retrieves a value from the cache directly without wrapping in Optional.
      * The operation is executed on a background thread from the shared async executor pool.
-     * This is the asynchronous version of {@link #gett(Object)}.
+     * This is the asynchronous version of {@link #getOrNull(Object)}.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
-     * cache.asyncGett("user:123")
+     * cache.asyncGetOrNull("user:123")
      *      .thenAccept(user -> {
      *          if (user != null) {
      *              process(user);
@@ -265,15 +265,15 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *      });
      * }</pre>
      *
-     * @param k the cache key to look up
+     * @param key the cache key to look up
      * @return a ContinuableFuture that will complete with the cached value if present,
      *         or null if the key is not found or has expired
-     * @see #gett(Object)
+     * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
     @Override
-    public ContinuableFuture<V> asyncGett(final K k) {
-        return asyncExecutor.execute(() -> gett(k));
+    public ContinuableFuture<V> asyncGetOrNull(final K key) {
+        return asyncExecutor.execute(() -> getOrNull(key));
     }
 
     /**
@@ -292,15 +292,15 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *      });
      * }</pre>
      *
-     * @param k the cache key to store the value under
-     * @param v the value to cache (may be null depending on implementation)
+     * @param key the cache key to store the value under
+     * @param value the value to cache (may be null depending on implementation)
      * @return a ContinuableFuture that will complete with true if the operation was successful, false otherwise
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
     @Override
-    public ContinuableFuture<Boolean> asyncPut(final K k, final V v) {
-        return asyncExecutor.execute(() -> put(k, v));
+    public ContinuableFuture<Boolean> asyncPut(final K key, final V value) {
+        return asyncExecutor.execute(() -> put(key, value));
     }
 
     /**
@@ -319,8 +319,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *      });
      * }</pre>
      *
-     * @param k the cache key to store the value under
-     * @param v the value to cache (may be null depending on implementation)
+     * @param key the cache key to store the value under
+     * @param value the value to cache (may be null depending on implementation)
      * @param liveTime the time-to-live in milliseconds from insertion (0 or negative for no TTL expiration)
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout)
      * @return a ContinuableFuture that will complete with true if the operation was successful, false otherwise
@@ -328,8 +328,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @see #asyncPut(Object, Object)
      */
     @Override
-    public ContinuableFuture<Boolean> asyncPut(final K k, final V v, final long liveTime, final long maxIdleTime) {
-        return asyncExecutor.execute(() -> put(k, v, liveTime, maxIdleTime));
+    public ContinuableFuture<Boolean> asyncPut(final K key, final V value, final long liveTime, final long maxIdleTime) {
+        return asyncExecutor.execute(() -> put(key, value, liveTime, maxIdleTime));
     }
 
     /**
@@ -344,15 +344,15 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *      .thenRunAsync(() -> log("User removed from cache"));
      * }</pre>
      *
-     * @param k the cache key to remove
+     * @param key the cache key to remove
      * @return a ContinuableFuture that completes when the operation finishes
      * @see #remove(Object)
      * @see #asyncContainsKey(Object)
      */
     @Override
-    public ContinuableFuture<Void> asyncRemove(final K k) {
+    public ContinuableFuture<Void> asyncRemove(final K key) {
         return asyncExecutor.execute(() -> {
-            remove(k);
+            remove(key);
 
             return null;
         });
@@ -370,15 +370,15 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *      .thenAccept(exists -> log("User exists in cache: " + exists));
      * }</pre>
      *
-     * @param k the cache key to check for
+     * @param key the cache key to check for
      * @return a ContinuableFuture that will complete with true if the key exists in the cache (and is not expired),
      *         false otherwise
      * @see #containsKey(Object)
      * @see #asyncGet(Object)
      */
     @Override
-    public ContinuableFuture<Boolean> asyncContainsKey(final K k) {
-        return asyncExecutor.execute(() -> containsKey(k));
+    public ContinuableFuture<Boolean> asyncContainsKey(final K key) {
+        return asyncExecutor.execute(() -> containsKey(key));
     }
 
     /**

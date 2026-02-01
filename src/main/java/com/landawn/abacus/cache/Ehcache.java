@@ -61,7 +61,7 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * Ehcache<String, Person> cache = new Ehcache<>(ehcache);
  * Person person = new Person();
  * cache.put("key1", person, 0, 0);   // TTL params ignored, use cache-level config
- * Person retrieved = cache.gett("key1");
+ * Person retrieved = cache.getOrNull("key1");
  * }</pre>
  *
  * @param <K> the key type
@@ -112,7 +112,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
-     * User user = cache.gett("userId123");
+     * User user = cache.getOrNull("userId123");
      * if (user != null) {
      *     // Process the retrieved user
      * }
@@ -124,7 +124,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws CacheLoadingException if the cache loader fails
      */
     @Override
-    public V gett(final K key) {
+    public V getOrNull(final K key) {
         assertNotClosed();
 
         return cacheImpl.get(key);
@@ -209,7 +209,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * if (cache.containsKey("userId123")) {
-     *     User user = cache.gett("userId123");
+     *     User user = cache.getOrNull("userId123");
      *     // Process the user
      * }
      * }</pre>
@@ -249,7 +249,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * // Cache-based initialization (ensures single initialization)
      * ExpensiveObject obj = cache.putIfAbsent("config:main", loadExpensiveConfiguration());
      * if (obj == null) {
-     *     obj = cache.gett("config:main");   // Retrieve the newly stored value
+     *     obj = cache.getOrNull("config:main");   // Retrieve the newly stored value
      * }
      *
      * // Thread-safe counter initialization
@@ -572,7 +572,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * if (!cache.isClosed()) {
-     *     User user = cache.gett("userId123");
+     *     User user = cache.getOrNull("userId123");
      *     // Process the user
      * }
      * }</pre>

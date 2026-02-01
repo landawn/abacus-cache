@@ -404,8 +404,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
 
     @Override
-    public V gett(final K k) {
-        final Wrapper<V> w = _pool.get(k);
+    public V getOrNull(final K key) {
+        final Wrapper<V> w = _pool.get(key);
 
         // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
         if (w != null && StoreWrapper.class.equals(w.getClass())) {
@@ -435,7 +435,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         final long liveTime = activityPrint.getLiveTime() - (System.currentTimeMillis() - activityPrint.getCreatedTime());
 
                         final int size = storeWrapper.size;
-                        final byte[] bytes = liveTime > 0 ? offHeapStore.get(k) : null;
+                        final byte[] bytes = liveTime > 0 ? offHeapStore.get(key) : null;
 
                         if (bytes != null && bytes.length == size) {
                             Slot slot = null;
@@ -502,13 +502,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                                 boolean result = false;
 
                                 try {
-                                    remove(k);
+                                    remove(key);
 
                                     totalOccupiedMemorySize.addAndGet(occupiedMemory);
 
                                     totalDataSize.addAndGet(size);
 
-                                    result = _pool.put(k, slotWrapper);
+                                    result = _pool.put(key, slotWrapper);
                                 } finally {
                                     if (!result) {
                                         slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
@@ -528,11 +528,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     @Override
-    public boolean put(final K k, final V v, final long liveTime, final long maxIdleTime) {
-        final Type<V> type = N.typeOf(v.getClass());
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+        final Type<V> type = N.typeOf(value.getClass());
         Wrapper<V> w = null;
 
-        // final byte[] bytes = parser.serialize(v).getBytes();
+        // final byte[] bytes = parser.serialize(value).getBytes();
         final long startTime = statsTimeOnDisk ? System.currentTimeMillis() : 0;
         ByteArrayOutputStream os = null;
         byte[] bytes = null;
@@ -540,20 +540,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         long occupiedMemory = 0;
 
         if (type.isPrimitiveByteArray()) {
-            bytes = (byte[]) v;
+            bytes = (byte[]) value;
             size = bytes.length;
         } else if (type.isByteBuffer()) {
-            bytes = ByteBufferType.byteArrayOf((ByteBuffer) v);
+            bytes = ByteBufferType.byteArrayOf((ByteBuffer) value);
             size = bytes.length;
         } else {
             os = Objectory.createByteArrayOutputStream();
-            serializer.accept(v, os);
+            serializer.accept(value, os);
             bytes = os.array();
             size = os.size();
         }
 
-        final boolean canBeStoredInMemory = storeSelector == null || storeSelector.apply(k, v, size) < 2;
-        final boolean canBeStoredToDisk = storeSelector == null || storeSelector.apply(k, v, size) != 1;
+        final boolean canBeStoredInMemory = storeSelector == null || storeSelector.apply(key, value, size) < 2;
+        final boolean canBeStoredToDisk = storeSelector == null || storeSelector.apply(key, value, size) != 1;
 
         Slot slot = null;
         List<Slot> slots = null;
@@ -571,7 +571,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                     w = new SlotWrapper(type, liveTime, maxIdleTime, size, slot, slotStartPtr);
                 } else if (canBeStoredToDisk && offHeapStore != null) {
-                    w = putToDisk(k, liveTime, maxIdleTime, type, bytes, size);
+                    w = putToDisk(key, liveTime, maxIdleTime, type, bytes, size);
                 }
             } else {
                 int copiedSize = 0;
@@ -603,7 +603,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 if (copiedSize == size) {
                     w = new MultiSlotsWrapper(type, liveTime, maxIdleTime, size, slots);
                 } else if (canBeStoredToDisk && offHeapStore != null) {
-                    w = putToDisk(k, liveTime, maxIdleTime, type, bytes, size);
+                    w = putToDisk(key, liveTime, maxIdleTime, type, bytes, size);
                 }
             }
         } finally {
@@ -623,7 +623,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
 
             if (w == null) {
-                _pool.remove(k);
+                _pool.remove(key);
 
                 vacate();
                 return false;
@@ -642,7 +642,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             totalDataSize.addAndGet(size);
 
-            result = _pool.put(k, w);
+            result = _pool.put(key, w);
         } finally {
             if (!result) {
                 w.destroy(Caller.PUT_ADD_FAILURE);
@@ -854,8 +854,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     @Override
-    public void remove(final K k) {
-        final Wrapper<V> w = _pool.remove(k);
+    public void remove(final K key) {
+        final Wrapper<V> w = _pool.remove(key);
 
         if (w != null) {
             w.destroy(Caller.REMOVE_REPLACE_CLEAR);
@@ -863,8 +863,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     @Override
-    public boolean containsKey(final K k) {
-        return _pool.containsKey(k);
+    public boolean containsKey(final K key) {
+        return _pool.containsKey(key);
     }
 
     @Override

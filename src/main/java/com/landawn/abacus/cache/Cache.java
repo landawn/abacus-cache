@@ -101,13 +101,13 @@ public interface Cache<K, V> extends Closeable {
      *     .orElse("Unknown");
      * }</pre>
      *
-     * @param k the cache key to look up (must not be null for most implementations)
+     * @param key the cache key to look up (must not be null for most implementations)
      * @return an Optional containing the cached value if present and not expired, or an empty Optional otherwise
      * @throws IllegalStateException if the cache has been closed
-     * @see #gett(Object)
+     * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
-    Optional<V> get(final K k);
+    Optional<V> get(final K key);
 
     /**
      * Retrieves a value from the cache directly without wrapping in Optional.
@@ -115,9 +115,9 @@ public interface Cache<K, V> extends Closeable {
      * traditional API for scenarios where Optional overhead is not desired or when working
      * with legacy code. The operation is thread-safe and does not block other cache operations.
      *
-     * <p><b>Note:</b> The method name uses double 't' (gett) to distinguish it from {@link #get(Object)},
-     * which returns {@code Optional<V>}. This naming convention allows both APIs to coexist
-     * while clearly indicating their different return types.</p>
+     * <p><b>Note:</b> This method is named {@code getOrNull} to distinguish it from {@link #get(Object)},
+     * which returns {@code Optional<V>}. This naming convention clearly indicates the nullable return type
+     * while allowing both APIs to coexist.</p>
      *
      * <p><b>Behavior:</b></p>
      * <ul>
@@ -132,26 +132,26 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * // Basic retrieval with null check
-     * User user = cache.gett("user:123");
+     * User user = cache.getOrNull("user:123");
      * if (user != null) {
      *     System.out.println(user.getName());
      * }
      *
      * // With default value fallback
-     * User result = cache.gett("user:123");
+     * User result = cache.getOrNull("user:123");
      * if (result == null) {
      *     result = loadFromDatabase("user:123");
      *     cache.put("user:123", result);
      * }
      * }</pre>
      *
-     * @param k the cache key to look up (must not be null for most implementations)
+     * @param key the cache key to look up (must not be null for most implementations)
      * @return the cached value if present and not expired, or null if the key is not found or has expired
      * @throws IllegalStateException if the cache has been closed
      * @see #get(Object)
-     * @see #asyncGett(Object)
+     * @see #asyncGetOrNull(Object)
      */
-    V gett(final K k);
+    V getOrNull(final K key);
 
     /**
      * Stores a key-value pair in the cache using default expiration settings.
@@ -181,21 +181,21 @@ public interface Cache<K, V> extends Closeable {
      * cache.put("user:123", updatedUser);   // Replaces previous value
      *
      * // Cache-aside pattern
-     * User user = cache.gett("user:123");
+     * User user = cache.getOrNull("user:123");
      * if (user == null) {
      *     user = loadFromDatabase("user:123");
      *     cache.put("user:123", user);
      * }
      * }</pre>
      *
-     * @param k the cache key to store the value under (must not be null for most implementations)
-     * @param v the value to cache (may be null depending on implementation, check implementation docs)
+     * @param key the cache key to store the value under (must not be null for most implementations)
+     * @param value the value to cache (may be null depending on implementation, check implementation docs)
      * @return true if the operation was successful, false otherwise (e.g., cache full, closed, or write failure)
      * @throws IllegalStateException if the cache has been closed
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
-    boolean put(final K k, final V v);
+    boolean put(final K key, final V value);
 
     /**
      * Stores a key-value pair in the cache with custom expiration settings.
@@ -230,8 +230,8 @@ public interface Cache<K, V> extends Closeable {
      * cache.put("permanent:config", config, 0, 0);
      * }</pre>
      *
-     * @param k the cache key to store the value under (must not be null for most implementations)
-     * @param v the value to cache (may be null depending on implementation, check implementation docs)
+     * @param key the cache key to store the value under (must not be null for most implementations)
+     * @param value the value to cache (may be null depending on implementation, check implementation docs)
      * @param liveTime the time-to-live in milliseconds from insertion (0 or negative for no TTL expiration)
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout).
      *                    <b>Note:</b> Not supported by all implementations - check implementation documentation.
@@ -240,7 +240,7 @@ public interface Cache<K, V> extends Closeable {
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
-    boolean put(final K k, final V v, long liveTime, long maxIdleTime);
+    boolean put(final K key, final V value, long liveTime, long maxIdleTime);
 
     /**
      * Removes an entry from the cache.
@@ -279,12 +279,12 @@ public interface Cache<K, V> extends Closeable {
      * }
      * }</pre>
      *
-     * @param k the cache key to remove (must not be null for most implementations)
+     * @param key the cache key to remove (must not be null for most implementations)
      * @throws IllegalStateException if the cache has been closed
      * @see #clear()
      * @see #asyncRemove(Object)
      */
-    void remove(final K k);
+    void remove(final K key);
 
     /**
      * Checks if the cache contains a specific key.
@@ -326,13 +326,13 @@ public interface Cache<K, V> extends Closeable {
      * }
      * }</pre>
      *
-     * @param k the cache key to check for (must not be null for most implementations)
+     * @param key the cache key to check for (must not be null for most implementations)
      * @return true if the key exists in the cache and is not expired, false otherwise
      * @throws IllegalStateException if the cache has been closed
      * @see #get(Object)
      * @see #asyncContainsKey(Object)
      */
-    boolean containsKey(final K k);
+    boolean containsKey(final K key);
 
     /**
      * Asynchronously retrieves a value from the cache wrapped in an Optional.
@@ -371,20 +371,20 @@ public interface Cache<K, V> extends Closeable {
      *      });
      * }</pre>
      *
-     * @param k the cache key to look up (must not be null for most implementations)
+     * @param key the cache key to look up (must not be null for most implementations)
      * @return a ContinuableFuture that will complete with an Optional containing the cached value if present,
      *         or an empty Optional if the key is not found or has expired. The future may complete exceptionally
      *         if an error occurs during the operation (e.g., NullPointerException for null keys,
      *         IllegalStateException if the cache is closed).
      * @see #get(Object)
-     * @see #asyncGett(Object)
+     * @see #asyncGetOrNull(Object)
      */
-    ContinuableFuture<Optional<V>> asyncGet(final K k);
+    ContinuableFuture<Optional<V>> asyncGet(final K key);
 
     /**
      * Asynchronously retrieves a value from the cache directly without wrapping in Optional.
      * The operation is executed on a background thread from the shared async executor pool,
-     * allowing non-blocking cache access. This is the asynchronous version of {@link #gett(Object)}.
+     * allowing non-blocking cache access. This is the asynchronous version of {@link #getOrNull(Object)}.
      * The returned ContinuableFuture provides functional composition capabilities for chaining
      * dependent operations.
      *
@@ -401,7 +401,7 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * // Basic async retrieval with null check
-     * cache.asyncGett("user:123")
+     * cache.asyncGetOrNull("user:123")
      *      .thenAccept(user -> {
      *          if (user != null) {
      *              process(user);
@@ -409,27 +409,27 @@ public interface Cache<K, V> extends Closeable {
      *      });
      *
      * // Chain multiple async operations
-     * cache.asyncGett("user:123")
+     * cache.asyncGetOrNull("user:123")
      *      .thenCompose(user -> user != null ? updateUser(user) : loadFromDatabase("user:123"))
      *      .thenAccept(user -> cache.put("user:123", user));
      *
      * // Exception handling
-     * cache.asyncGett("user:123")
+     * cache.asyncGetOrNull("user:123")
      *      .exceptionally(e -> {
      *          log("Error retrieving from cache", e);
      *          return null;
      *      });
      * }</pre>
      *
-     * @param k the cache key to look up (must not be null for most implementations)
+     * @param key the cache key to look up (must not be null for most implementations)
      * @return a ContinuableFuture that will complete with the cached value if present,
      *         or null if the key is not found or has expired. The future may complete exceptionally
      *         if an error occurs during the operation (e.g., NullPointerException for null keys,
      *         IllegalStateException if the cache is closed).
-     * @see #gett(Object)
+     * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
-    ContinuableFuture<V> asyncGett(final K k);
+    ContinuableFuture<V> asyncGetOrNull(final K key);
 
     /**
      * Asynchronously stores a key-value pair using default expiration settings.
@@ -472,8 +472,8 @@ public interface Cache<K, V> extends Closeable {
      *      });
      * }</pre>
      *
-     * @param k the cache key to store the value under (must not be null for most implementations)
-     * @param v the value to cache (may be null depending on implementation, check implementation docs)
+     * @param key the cache key to store the value under (must not be null for most implementations)
+     * @param value the value to cache (may be null depending on implementation, check implementation docs)
      * @return a ContinuableFuture that will complete with true if the operation was successful, false otherwise
      *         (e.g., cache full, closed, or write failure). The future may complete exceptionally if an error
      *         occurs during the operation (e.g., NullPointerException for null keys, IllegalStateException
@@ -481,7 +481,7 @@ public interface Cache<K, V> extends Closeable {
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
-    ContinuableFuture<Boolean> asyncPut(final K k, final V v);
+    ContinuableFuture<Boolean> asyncPut(final K key, final V value);
 
     /**
      * Asynchronously stores a key-value pair with custom expiration settings.
@@ -524,8 +524,8 @@ public interface Cache<K, V> extends Closeable {
      *      });
      * }</pre>
      *
-     * @param k the cache key to store the value under (must not be null for most implementations)
-     * @param v the value to cache (may be null depending on implementation, check implementation docs)
+     * @param key the cache key to store the value under (must not be null for most implementations)
+     * @param value the value to cache (may be null depending on implementation, check implementation docs)
      * @param liveTime the time-to-live in milliseconds from insertion (0 or negative for no TTL expiration)
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout).
      *                    <b>Note:</b> Not supported by all implementations - check implementation documentation.
@@ -536,7 +536,7 @@ public interface Cache<K, V> extends Closeable {
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
-    ContinuableFuture<Boolean> asyncPut(final K k, final V v, long liveTime, long maxIdleTime);
+    ContinuableFuture<Boolean> asyncPut(final K key, final V value, long liveTime, long maxIdleTime);
 
     /**
      * Asynchronously removes an entry from the cache.
@@ -574,14 +574,14 @@ public interface Cache<K, V> extends Closeable {
      *      });
      * }</pre>
      *
-     * @param k the cache key to remove (must not be null for most implementations)
+     * @param key the cache key to remove (must not be null for most implementations)
      * @return a ContinuableFuture that completes when the operation finishes. The future may complete
      *         exceptionally if an error occurs during the operation (e.g., NullPointerException for null keys,
      *         IllegalStateException if the cache is closed).
      * @see #remove(Object)
      * @see #asyncPut(Object, Object)
      */
-    ContinuableFuture<Void> asyncRemove(final K k);
+    ContinuableFuture<Void> asyncRemove(final K key);
 
     /**
      * Asynchronously checks if the cache contains a specific key.
@@ -609,7 +609,7 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Conditional operations based on existence
      * cache.asyncContainsKey("config:settings")
-     *      .thenCompose(exists -> exists ? cache.asyncGett("config:settings") : loadConfigAsync())
+     *      .thenCompose(exists -> exists ? cache.asyncGetOrNull("config:settings") : loadConfigAsync())
      *      .thenAccept(config -> processConfig(config));
      *
      * // Exception handling
@@ -620,14 +620,14 @@ public interface Cache<K, V> extends Closeable {
      *      });
      * }</pre>
      *
-     * @param k the cache key to check for (must not be null for most implementations)
+     * @param key the cache key to check for (must not be null for most implementations)
      * @return a ContinuableFuture that will complete with true if the key exists in the cache and is not expired,
      *         false otherwise. The future may complete exceptionally if an error occurs during the operation
      *         (e.g., NullPointerException for null keys, IllegalStateException if the cache is closed).
      * @see #containsKey(Object)
      * @see #asyncGet(Object)
      */
-    ContinuableFuture<Boolean> asyncContainsKey(final K k);
+    ContinuableFuture<Boolean> asyncContainsKey(final K key);
 
     /**
      * Returns a set of all keys currently in the cache.
@@ -664,7 +664,7 @@ public interface Cache<K, V> extends Closeable {
      * // Pattern matching
      * cache.keySet().stream()
      *     .filter(key -> key.startsWith("user:"))
-     *     .forEach(key -> processUser(cache.gett(key)));
+     *     .forEach(key -> processUser(cache.getOrNull(key)));
      * }</pre>
      *
      * @return a set of all cache keys (may or may not include expired entries depending on implementation)
@@ -790,7 +790,7 @@ public interface Cache<K, V> extends Closeable {
      * // Try-with-resources (recommended approach)
      * try (Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000)) {
      *     cache.put("key", value);
-     *     User user = cache.gett("key");
+     *     User user = cache.getOrNull("key");
      *     // Cache is automatically closed when exiting the try block
      * }
      *

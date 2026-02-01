@@ -73,7 +73,7 @@ import lombok.experimental.Accessors;
  *
  * byte[] largeByteArray = new byte[1024];
  * cache.put("key1", largeByteArray);
- * byte[] cached = cache.gett("key1");
+ * byte[] cached = cache.getOrNull("key1");
  *
  * OffHeapCacheStats stats = cache.stats();
  * System.out.println("Memory utilization: " +
@@ -106,7 +106,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * OffHeapCache25<String, byte[]> cache = new OffHeapCache25<>(100);   // 100MB
      * byte[] largeData = new byte[1024];
      * cache.put("key1", largeData);
-     * byte[] retrieved = cache.gett("key1");
+     * byte[] retrieved = cache.getOrNull("key1");
      * cache.close();
      * }</pre>
      *
@@ -128,7 +128,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * OffHeapCache25<Long, Data> cache = new OffHeapCache25<>(200, 60000);   // 200MB, 60s eviction
      * Data data = new Data();
      * cache.put(123L, data, 7200000, 3600000);   // 2h TTL, 1h idle
-     * Data retrieved = cache.gett(123L);
+     * Data retrieved = cache.getOrNull(123L);
      * cache.close();
      * }</pre>
      *
@@ -151,7 +151,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * // 500MB, 30s eviction, 1h TTL, 30min idle
      * OffHeapCache25<String, byte[]> cache = new OffHeapCache25<>(500, 30000, 3600000, 1800000);
      * cache.put("key1", "data".getBytes());
-     * byte[] data = cache.gett("key1");
+     * byte[] data = cache.getOrNull("key1");
      * cache.close();
      * }</pre>
      *

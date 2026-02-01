@@ -115,7 +115,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user, 0, 0);
-     * User retrieved = cache.gett("user:123");
+     * User retrieved = cache.getOrNull("user:123");
      * if (retrieved != null) {
      *     System.out.println("Found user: " + retrieved.getName());
      * } else {
@@ -128,7 +128,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
-    public V gett(final K key) {
+    public V getOrNull(final K key) {
         assertNotClosed();
 
         return cacheImpl.getIfPresent(key);
@@ -196,7 +196,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user, 0, 0);
      * cache.remove("user:123");
-     * User retrieved = cache.gett("user:123");   // returns null
+     * User retrieved = cache.getOrNull("user:123");   // returns null
      *
      * // Removing non-existent key is safe
      * cache.remove("user:999");   // No error, silent no-op
@@ -214,7 +214,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a mapping for the specified key.
-     * This method performs a cache lookup via {@link #gett(Object)} and may affect
+     * This method performs a cache lookup via {@link #getOrNull(Object)} and may affect
      * access-based eviction policies if configured in the underlying Caffeine cache.
      * Returns false if the entry has expired or been evicted.
      *
@@ -240,7 +240,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     public boolean containsKey(final K key) {
         assertNotClosed();
 
-        return gett(key) != null;
+        return getOrNull(key) != null;
     }
 
     /**
@@ -343,7 +343,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * // Try-with-resources pattern (recommended)
      * try (CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance)) {
      *     cache.put("user:123", user, 0, 0);
-     *     User retrieved = cache.gett("user:123");
+     *     User retrieved = cache.getOrNull("user:123");
      *     // Cache is automatically closed
      * }
      *
@@ -361,7 +361,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * // After closing, operations throw IllegalStateException
      * try {
-     *     cache.gett("user:123");   // Throws IllegalStateException
+     *     cache.getOrNull("user:123");   // Throws IllegalStateException
      * } catch (IllegalStateException e) {
      *     System.out.println("Cache is closed");
      * }
@@ -432,8 +432,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * // Perform operations
      * cache.put("user:123", user, 0, 0);
-     * User retrieved = cache.gett("user:123");   // Hit
-     * User missing = cache.gett("user:999");     // Miss
+     * User retrieved = cache.getOrNull("user:123");   // Hit
+     * User missing = cache.getOrNull("user:999");     // Miss
      *
      * // Get statistics
      * CacheStats stats = cache.stats();

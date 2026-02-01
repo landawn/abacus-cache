@@ -48,7 +48,7 @@ import com.landawn.abacus.pool.PoolableWrapper;
  * cache.put("user:123", user, 3600000, 1800000);   // 1 hour TTL, 30 min idle
  *
  * // Retrieve from cache
- * User cached = cache.gett("user:123");
+ * User cached = cache.getOrNull("user:123");
  *
  * // Get cache statistics
  * CacheStats stats = cache.stats();
@@ -85,7 +85,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.put("user:123", user);   // Uses 3h TTL, 30min idle by default
      *
      * // Retrieve the cached user
-     * User cached = cache.gett("user:123");
+     * User cached = cache.getOrNull("user:123");
      * if (cached != null) {
      *     System.out.println("Found user: " + cached);
      * }
@@ -167,7 +167,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * // Use the cache normally
      * cache.put("user:123", user);
-     * User retrieved = cache.gett("user:123");
+     * User retrieved = cache.getOrNull("user:123");
      * }</pre>
      *
      * @param defaultLiveTime the default time-to-live in milliseconds for entries (0 or negative for no TTL expiration)
@@ -200,7 +200,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.put("user:123", new User("John"));
      *
      * // Retrieve from cache
-     * User user = cache.gett("user:123");
+     * User user = cache.getOrNull("user:123");
      * if (user != null) {
      *     System.out.println("Found: " + user.getName());
      * } else {
@@ -212,7 +212,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @return the value associated with the specified key, or null if the key is not found, has expired, or has been evicted
      */
     @Override
-    public V gett(final K key) {
+    public V getOrNull(final K key) {
         final PoolableWrapper<V> w = pool.get(key);
 
         return w == null ? null : w.value();
@@ -222,7 +222,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Stores a key-value pair in the cache with custom expiration settings.
      * If the key already exists, its value and expiration settings will be replaced.
      * The entry will be evicted when either the TTL expires (time since creation)
-     * or the idle time is exceeded (time since last access via {@link #gett(Object)}
+     * or the idle time is exceeded (time since last access via {@link #getOrNull(Object)}
      * or {@link #containsKey(Object)}).
      *
      * <p>A liveTime of 0 or negative means the entry never expires based on age.
@@ -285,7 +285,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * // Remove the entry
      * cache.remove("user:123");
-     * User removed = cache.gett("user:123");   // Returns null
+     * User removed = cache.getOrNull("user:123");   // Returns null
      *
      * // Removing again is safe and has no effect
      * cache.remove("user:123");   // No error, silent no-op
@@ -314,7 +314,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * if (cache.containsKey("user:123")) {
      *     System.out.println("User exists in cache");
-     *     User cachedUser = cache.gett("user:123");
+     *     User cachedUser = cache.getOrNull("user:123");
      * } else {
      *     System.out.println("User not in cache - loading from database");
      *     User user = loadFromDatabase("user:123");
@@ -355,7 +355,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Set<String> keys = cache.keySet();
      * System.out.println("Cache contains " + keys.size() + " keys");
      * for (String key : keys) {
-     *     User user = cache.gett(key);
+     *     User user = cache.getOrNull(key);
      *     if (user != null) { // Entry may have expired
      *         System.out.println("Key: " + key + ", User: " + user.getName());
      *     }
@@ -526,7 +526,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * // Try-with-resources (recommended approach)
      * try (LocalCache<String, User> cache = new LocalCache<>(1000, 60000)) {
      *     cache.put("user:123", user);
-     *     User cached = cache.gett("user:123");
+     *     User cached = cache.getOrNull("user:123");
      *     // Cache is automatically closed when exiting try block
      * } // close() called automatically here
      *
@@ -534,7 +534,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * try {
      *     cache.put("user:123", user);
-     *     User cached = cache.gett("user:123");
+     *     User cached = cache.getOrNull("user:123");
      *     // ... use cache ...
      * } finally {
      *     cache.close();   // Always close to release resources

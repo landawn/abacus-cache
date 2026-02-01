@@ -420,18 +420,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param obj the object value to cache. May be {@code null}.
+     * @param value the value to cache. May be {@code null}.
      * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return {@code true} if the operation was successful, {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
-    public boolean set(final String key, final T obj, final long liveTime) {
+    public boolean set(final String key, final T value, final long liveTime) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return resultOf(mc.set(key, toSeconds(liveTime), obj));
+        return resultOf(mc.set(key, toSeconds(liveTime), value));
     }
 
     /**
@@ -462,17 +462,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param obj the object value to cache. May be {@code null}.
+     * @param value the value to cache. May be {@code null}.
      * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return a Future that will indicate success ({@code true}) or failure ({@code false})
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation fails to initiate
      */
-    public Future<Boolean> asyncSet(final String key, final T obj, final long liveTime) {
+    public Future<Boolean> asyncSet(final String key, final T value, final long liveTime) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return mc.set(key, toSeconds(liveTime), obj);
+        return mc.set(key, toSeconds(liveTime), value);
     }
 
     /**
@@ -509,17 +509,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param obj the object value to cache. May be {@code null}.
+     * @param value the value to cache. May be {@code null}.
      * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return {@code true} if the object was added, {@code false} if the key already exists
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
-    public boolean add(final String key, final T obj, final long liveTime) {
+    public boolean add(final String key, final T value, final long liveTime) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return resultOf(mc.add(key, toSeconds(liveTime), obj));
+        return resultOf(mc.add(key, toSeconds(liveTime), value));
     }
 
     /**
@@ -552,17 +552,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param obj the object value to cache. May be {@code null}.
+     * @param value the value to cache. May be {@code null}.
      * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return a Future that will indicate {@code true} if the add succeeded, {@code false} if the key already exists
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation fails to initiate
      */
-    public Future<Boolean> asyncAdd(final String key, final T obj, final long liveTime) {
+    public Future<Boolean> asyncAdd(final String key, final T value, final long liveTime) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return mc.add(key, toSeconds(liveTime), obj);
+        return mc.add(key, toSeconds(liveTime), value);
     }
 
     /**
@@ -595,17 +595,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param obj the object value to cache. May be {@code null}.
+     * @param value the value to cache. May be {@code null}.
      * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return {@code true} if the object was replaced, {@code false} if the key doesn't exist
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
-    public boolean replace(final String key, final T obj, final long liveTime) {
+    public boolean replace(final String key, final T value, final long liveTime) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return resultOf(mc.replace(key, toSeconds(liveTime), obj));
+        return resultOf(mc.replace(key, toSeconds(liveTime), value));
     }
 
     /**
@@ -637,17 +637,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param obj the object value to cache. May be {@code null}.
+     * @param value the value to cache. May be {@code null}.
      * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
      * @return a Future that will indicate {@code true} if the replacement succeeded, {@code false} if the key doesn't exist
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation fails to initiate
      */
-    public Future<Boolean> asyncReplace(final String key, final T obj, final long liveTime) {
+    public Future<Boolean> asyncReplace(final String key, final T value, final long liveTime) {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return mc.replace(key, toSeconds(liveTime), obj);
+        return mc.replace(key, toSeconds(liveTime), value);
     }
 
     /**

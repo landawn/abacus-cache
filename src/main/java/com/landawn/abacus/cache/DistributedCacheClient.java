@@ -212,13 +212,13 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @param obj the value to cache, may be {@code null} (if supported by the implementation)
+     * @param value the value to cache, may be {@code null} (if supported by the implementation)
      * @param liveTime the time-to-live in milliseconds (0 means no expiration), must not be negative
      * @return {@code true} if the operation was successful, {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if a network error or timeout occurs
      */
-    boolean set(String key, T obj, long liveTime);
+    boolean set(String key, T value, long liveTime);
 
     /**
      * Removes a key-value pair from the cache.

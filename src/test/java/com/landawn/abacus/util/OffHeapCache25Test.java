@@ -145,7 +145,7 @@ public class OffHeapCache25Test {
         final Account account = new Account();
         account.setFirstName("123");
         cache.put(key, account);
-        assertEquals(account, cache.gett(key));
+        assertEquals(account, cache.getOrNull(key));
     }
 
     @Test

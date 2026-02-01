@@ -266,7 +266,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @param obj the value to cache, may be {@code null} (stored as empty byte array)
+     * @param value the value to cache, may be {@code null} (stored as empty byte array)
      * @param liveTime the time-to-live in milliseconds, must be positive (0 or negative values may cause unexpected behavior)
      * @return {@code true} if the operation was successful (Redis responds with "OK"), {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
@@ -275,9 +275,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @see #delete(String)
      */
     @Override
-    public boolean set(final String key, final T obj, final long liveTime) {
+    public boolean set(final String key, final T value, final long liveTime) {
         final byte[] keyBytes = getKeyBytes(key);
-        final byte[] valueBytes = encode(obj);
+        final byte[] valueBytes = encode(value);
 
         if (liveTime <= 0) {
             // liveTime <= 0 means no expiration, use SET instead of SETEX
@@ -821,14 +821,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.</p>
      *
-     * @param obj the object to encode, may be {@code null}
-     * @return the serialized byte array representation of the object, or empty array if obj is {@code null}, never {@code null}
+     * @param value the value to encode, may be {@code null}
+     * @return the serialized byte array representation of the value, or empty array if value is {@code null}, never {@code null}
      * @throws RuntimeException if serialization fails due to incompatible object types or serialization errors
      * @see #decode(byte[])
      * @see #getKeyBytes(String)
      */
-    protected byte[] encode(final Object obj) {
-        return obj == null ? N.EMPTY_BYTE_ARRAY : kryoParser.encode(obj);
+    protected byte[] encode(final Object value) {
+        return value == null ? N.EMPTY_BYTE_ARRAY : kryoParser.encode(value);
     }
 
     /**

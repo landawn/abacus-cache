@@ -73,7 +73,7 @@ import lombok.experimental.Accessors;
  *
  * byte[] largeByteArray = new byte[1024];
  * cache.put("key1", largeByteArray);
- * byte[] cached = cache.gett("key1");
+ * byte[] cached = cache.getOrNull("key1");
  *
  * OffHeapCacheStats stats = cache.stats();
  * System.out.println("Memory utilization: " +
@@ -125,7 +125,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * byte[] largeData = new byte[1024];
      * cache.put("key1", largeData);
-     * byte[] retrieved = cache.gett("key1");
+     * byte[] retrieved = cache.getOrNull("key1");
      *
      * // Always close to free native memory
      * cache.close();
@@ -159,7 +159,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * Data data = new Data();
      * cache.put(123L, data, 7200000, 3600000);   // 2h TTL, 1h idle
-     * Data retrieved = cache.gett(123L);
+     * Data retrieved = cache.getOrNull(123L);
      *
      * cache.close();
      * }</pre>
@@ -190,7 +190,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(500, 30000, 3600000, 1800000);
      *
      * cache.put("key1", "data".getBytes());
-     * byte[] data = cache.gett("key1");
+     * byte[] data = cache.getOrNull("key1");
      *
      * cache.close();
      * }</pre>
@@ -657,7 +657,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *     .build();
          * try {
          *     cache.put("key", data);
-         *     Data retrieved = cache.gett("key");
+         *     Data retrieved = cache.getOrNull("key");
          * } finally {
          *     cache.close();   // Always close to free native memory
          * }

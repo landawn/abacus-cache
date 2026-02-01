@@ -87,7 +87,7 @@ public final class CacheFactory {
      * // Create cache with 1000 entries capacity, checking for expired entries every minute
      * LocalCache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.put("user:123", user);
-     * User retrieved = cache.gett("user:123");
+     * User retrieved = cache.getOrNull("user:123");
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
