@@ -96,6 +96,7 @@ package com.landawn.abacus.cache;
  *
  * @param <K> the type of keys used to identify and retrieve stored values
  * @see OffHeapCache
+ * @see OffHeapCache25
  * @see AbstractOffHeapCache
  */
 public interface OffHeapStore<K> {

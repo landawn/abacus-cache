@@ -95,10 +95,12 @@ import com.landawn.abacus.util.stream.Stream;
  * <li>Statistics tracking for monitoring and optimization</li>
  * </ul>
  *
- * @param <K> the key type
- * @param <V> the value type
+ * @param <K> the type of keys used to identify cache entries
+ * @param <V> the type of values stored in the cache
  * @see OffHeapCache
  * @see OffHeapCache25
+ * @see OffHeapCacheStats
+ * @see OffHeapStore
  */
 abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
@@ -389,7 +391,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * (e.g., Unsafe.copyMemory() or MemorySegment operations).
      * <br><br>
      * Thread safety: This method may be called concurrently from multiple threads
-     * during gett operations. The implementation must ensure that concurrent copies
+     * during get operations. The implementation must ensure that concurrent copies
      * from different memory regions are safe.
      *
      * @param startPtr the source memory address in off-heap memory. Must be a valid
@@ -917,10 +919,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * The returned OffHeapCacheStats object provides methods to access:
      * <ul>
      * <li>capacity(), size(), sizeOnDisk() - Entry counts</li>
-     * <li>putCount(), writeCountToDisk() - Write operation counts</li>
-     * <li>getCount(), hitCount(), readCountFromDisk(), missCount() - Read operation counts and hit rates</li>
+     * <li>putCount(), putCountToDisk() - Write operation counts</li>
+     * <li>getCount(), hitCount(), hitCountByDisk(), missCount() - Read operation counts and hit rates</li>
      * <li>evictionCount(), evictionCountFromDisk() - Eviction counts</li>
-     * <li>capacityInBytes(), totalOccupiedMemorySize(), totalDataSize(), dataSizeOnDisk() - Memory usage</li>
+     * <li>allocatedMemory(), occupiedMemory(), dataSize(), dataSizeOnDisk() - Memory usage</li>
      * <li>writeToDiskTimeStats(), readFromDiskTimeStats() - I/O performance metrics (min/max/avg)</li>
      * <li>segmentSize() - Size of each segment (constant 1MB)</li>
      * <li>occupiedSlots() - Detailed map of slot occupancy per segment</li>
@@ -942,10 +944,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * System.out.println("Entries in memory: " + stats.size());
      * System.out.println("Entries on disk: " + stats.sizeOnDisk());
      * System.out.println("Hit rate: " + stats.hitCount() + "/" + stats.getCount());
-     * System.out.println("Memory usage: " + stats.totalDataSize() + "/" + stats.capacityInBytes());
+     * System.out.println("Memory usage: " + stats.dataSize() + "/" + stats.allocatedMemory());
      *
      * // Check I/O performance (if statsTimeOnDisk enabled)
-     * if (stats.readFromDiskTimeStats().count() > 0) {
+     * if (stats.readFromDiskTimeStats().avg() > 0) {
      *     System.out.println("Avg read time: " + stats.readFromDiskTimeStats().avg() + "ms");
      * }
      * }</pre>

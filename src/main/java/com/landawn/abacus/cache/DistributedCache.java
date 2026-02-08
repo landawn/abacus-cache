@@ -113,7 +113,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * User user = cache.getOrNull("key");
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap, must not be null
+     * @param dcc the distributed cache client to wrap (must not be null)
      * @throws IllegalArgumentException if dcc is null
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc) {
@@ -135,8 +135,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Actual cache key: "myapp:" + Base64("user:123")
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap, must not be null
-     * @param keyPrefix the prefix to prepend to all keys (empty string or null for no prefix)
+     * @param dcc the distributed cache client to wrap (must not be null)
+     * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
      * @throws IllegalArgumentException if dcc is null
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
@@ -176,11 +176,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * );
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap, must not be null
-     * @param keyPrefix the prefix to prepend to all keys (empty string or null for no prefix)
-     * @param maxFailedNumForRetry maximum consecutive failures before opening circuit breaker (should be positive)
-     * @param retryDelay delay in milliseconds before attempting retry after circuit opens (should be non-negative)
-     * @throws IllegalArgumentException if dcc is null
+     * @param dcc the distributed cache client to wrap (must not be null)
+     * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
+     * @param maxFailedNumForRetry maximum consecutive failures before opening circuit breaker (must be non-negative)
+     * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative)
+     * @throws IllegalArgumentException if dcc is null, maxFailedNumForRetry is negative, or retryDelay is negative
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
         if (dcc == null) {

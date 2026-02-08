@@ -80,12 +80,13 @@ import lombok.experimental.Accessors;
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
  * }</pre>
  *
- * @param <K> the type of keys maintained by this cache
- * @param <V> the type of mapped values stored in this cache
+ * @param <K> the type of keys used to identify cache entries
+ * @param <V> the type of values stored in the cache
  * @see AbstractOffHeapCache
+ * @see OffHeapCache
  * @see OffHeapCacheStats
  * @see OffHeapStore
- * @see <a href="https://openjdk.org/jeps/471">JEP 471: Foreign Function &amp; Memory API</a>
+ * @see <a href="https://openjdk.org/jeps/454">JEP 454: Foreign Function &amp; Memory API</a>
  */
 @SuppressFBWarnings({ "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "JLM_JSR166_UTILCONCURRENT_MONITORENTER" })
 public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
@@ -98,8 +99,14 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Creates an OffHeapCache25 with the specified capacity in megabytes.
      * Uses default eviction delay of 3 seconds (3000 milliseconds) and default expiration times
-     * (3 hours TTL and 30 minutes idle time). Memory is allocated at construction time and held until close().
+     * ({@link Cache#DEFAULT_LIVE_TIME 3 hours TTL} and {@link Cache#DEFAULT_MAX_IDLE_TIME 30 minutes idle time}).
+     * Memory is allocated at construction time and held until {@link #close()}.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
+     *
+     * <p><b>Memory Management:</b></p>
+     * The memory is allocated immediately from native (off-heap) memory using the Foreign Memory API (Arena).
+     * This memory remains allocated until {@link #close()} is called. The actual allocation size is
+     * capacityInMB * 1048576 bytes (1MB = 1048576 bytes).
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -112,6 +119,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
      *                     The actual capacity will be capacityInMB * 1048576 bytes.
+     * @throws IllegalArgumentException if capacityInMB is not positive
+     * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache25(final int capacityInMB) {
         this(capacityInMB, 3000);
@@ -119,9 +128,16 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Creates an OffHeapCache25 with specified capacity and eviction delay.
-     * Uses default TTL of 3 hours and idle time of 30 minutes.
+     * Uses default {@link Cache#DEFAULT_LIVE_TIME TTL of 3 hours} and
+     * {@link Cache#DEFAULT_MAX_IDLE_TIME idle time of 30 minutes}.
      * The eviction delay controls how frequently the cache scans for expired entries and reclaims empty segments.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
+     *
+     * <p><b>Memory Management:</b></p>
+     * Memory is allocated immediately from native (off-heap) memory. The eviction process runs
+     * periodically at the specified interval to remove expired entries and reclaim memory from
+     * empty segments. Setting evictDelay to 0 or negative disables automatic eviction, but
+     * expired entries will still be removed lazily on access.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -135,6 +151,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
      *                     The actual capacity will be capacityInMB * 1048576 bytes.
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
+     * @throws IllegalArgumentException if capacityInMB is not positive
+     * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache25(final int capacityInMB, final long evictDelay) {
         this(capacityInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -142,9 +160,13 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Creates an OffHeapCache25 with fully specified basic parameters.
-     * Memory is allocated at construction time and held until close().
+     * Memory is allocated at construction time and held until {@link #close()}.
      * This constructor provides complete control over cache timing behavior.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
+     *
+     * <p><b>Memory Management:</b></p>
+     * Native memory is allocated immediately. The default max block size (8192 bytes) is used,
+     * and the default vacating factor (0.2) determines when LRU eviction triggers to free space.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -160,6 +182,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
      * @param defaultLiveTime default time-to-live for entries in milliseconds. Use 0 or negative for no TTL expiration.
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
+     * @throws IllegalArgumentException if capacityInMB is not positive
+     * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache25(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null,
@@ -172,9 +196,14 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * invoked directly. It provides access to all advanced configuration options including
      * custom serialization, disk spillover, and memory management tuning.
      * <br><br>
-     * This is the most flexible constructor, delegating to the parent AbstractOffHeapCache with all
-     * configuration parameters. For typical usage, prefer the public constructors or use the Builder
+     * This is the most flexible constructor, delegating to the parent {@link AbstractOffHeapCache} with all
+     * configuration parameters. For typical usage, prefer the simpler constructors or use the Builder
      * created via {@link #builder()}.
+     *
+     * <p><b>Memory Management:</b></p>
+     * Memory is allocated immediately using the Foreign Memory API (Arena). The maxBlockSize parameter
+     * controls how values are stored -- values larger than maxBlockSize are split across multiple blocks.
+     * The vacatingFactor determines when defragmentation is triggered to reclaim fragmented memory.
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
      *                     The actual capacity will be capacityInMB * 1048576 bytes.
@@ -205,6 +234,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *                      and size, and should return: 0 for default (try memory, fallback to disk), 1 for memory
      *                      only (never store to disk), or 2 for disk only (always store to disk). Use null for
      *                      default behavior (always try memory first).
+     * @throws IllegalArgumentException if capacityInMB is not positive, or if maxBlockSize is outside valid range
+     * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache25(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
@@ -309,6 +340,11 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * including capacity, eviction policies, serialization, and disk spillover.
      * This is the recommended way to create an OffHeapCache25 with custom configuration.
      *
+     * <p><b>Builder Pattern:</b></p>
+     * The builder uses Lombok's @Accessors(chain = true, fluent = true) to provide fluent setter methods.
+     * All configuration methods return the builder instance for method chaining. Call build() to create
+     * the configured cache instance.
+     *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Basic configuration
@@ -333,7 +369,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * @param <K> the type of keys used to identify cache entries
      * @param <V> the type of values stored in the cache
-     * @return a new Builder instance with default values that can be customized via fluent setters
+     * @return a new {@link Builder} instance with default values that can be customized via fluent setters
+     * @see Builder
+     * @see Builder#build()
      */
     public static <K, V> Builder<K, V> builder() {
         return new Builder<>();
@@ -345,11 +383,27 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * eviction policies, serialization, and disk spillover options. All setters
      * return the builder instance for method chaining.
      * <br><br>
-     * The builder uses Lombok's @Data and @Accessors annotations to generate fluent
+     * The builder uses Lombok's {@code @Data} and {@code @Accessors} annotations to generate fluent
      * setter methods automatically. All fields have sensible defaults and can be
-     * overridden as needed before calling build().
+     * overridden as needed before calling {@link #build()}.
      *
-     * <br><br>
+     * <p><b>Default Values:</b></p>
+     * <ul>
+     * <li>capacityInMB: required (must be set to a positive value)</li>
+     * <li>maxBlockSizeInBytes: 8192 (8KB)</li>
+     * <li>evictDelay: 0 (automatic eviction disabled)</li>
+     * <li>defaultLiveTime: 0 (no TTL expiration)</li>
+     * <li>defaultMaxIdleTime: 0 (no idle timeout)</li>
+     * <li>vacatingFactor: 0.2 (20%)</li>
+     * <li>serializer: {@code null} (use default Kryo or JSON)</li>
+     * <li>deserializer: {@code null} (use default Kryo or JSON)</li>
+     * <li>offHeapStore: {@code null} (memory-only mode)</li>
+     * <li>statsTimeOnDisk: {@code false}</li>
+     * <li>testerForLoadingItemFromDiskToMemory: {@code null} (no auto-promotion)</li>
+     * <li>storeSelector: {@code null} (default routing)</li>
+     * </ul>
+     *
+     * <br>
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Simple cache with basic settings
@@ -380,6 +434,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * @param <K> the type of keys used to identify cache entries
      * @param <V> the type of values stored in the cache
+     * @see OffHeapCache25#builder()
      */
     @Data
     @Accessors(chain = true, fluent = true)
@@ -388,7 +443,17 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * Creates a new Builder with default values.
          * All fields start with their default values and can be customized using the fluent setter methods
-         * generated by Lombok's @Accessors(chain = true, fluent = true).
+         * generated by Lombok's {@code @Accessors(chain = true, fluent = true)}. The {@code capacityInMB} field must be
+         * explicitly set to a positive value before calling {@link #build()}.
+         *
+         * <p><b>Usage Examples:</b></p>
+         * <pre>{@code
+         * Builder<String, Data> builder = new Builder<>();
+         * builder.capacityInMB(100)
+         *        .evictDelay(60000)
+         *        .defaultLiveTime(3600000);
+         * OffHeapCache25<String, Data> cache = builder.build();
+         * }</pre>
          */
         public Builder() {
             // Default constructor with default values
@@ -396,90 +461,125 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * The total off-heap memory capacity in megabytes.
-         * This is a required field and must be set before calling build().
+         * This is a required field and must be set to a positive value before calling {@link #build()}.
          * The actual capacity will be capacityInMB * 1048576 bytes.
+         * <br>
+         * Default: 0 (must be set to a positive value)
          */
         private int capacityInMB;
 
         /**
          * Maximum size of a single memory block in bytes.
          * Values larger than this will be split across multiple blocks.
-         * Default is 8192 bytes (8KB). Must be between 1024 and SEGMENT_SIZE (1048576).
+         * Must be between 1024 and SEGMENT_SIZE (1048576).
+         * Larger blocks reduce fragmentation but may waste space for small objects.
+         * <br>
+         * Default: 8192 bytes (8KB)
          */
         private int maxBlockSizeInBytes = DEFAULT_MAX_BLOCK_SIZE;
 
         /**
          * Delay between eviction runs in milliseconds.
          * Controls how frequently the cache scans for expired entries and reclaims empty segments.
-         * Use 0 or negative to disable automatic eviction.
+         * Use 0 or negative to disable automatic eviction (expired entries still removed on access).
+         * <br>
+         * Default: 0 (automatic eviction disabled)
          */
         private long evictDelay;
 
         /**
          * Default time-to-live for cache entries in milliseconds.
-         * Entries older than this will be considered expired.
+         * Entries older than this will be considered expired and removed.
          * Use 0 or negative for no TTL expiration.
+         * Can be overridden per entry in put() operations.
+         * <br>
+         * Default: 0 (no TTL expiration)
          */
         private long defaultLiveTime;
 
         /**
          * Default maximum idle time for cache entries in milliseconds.
-         * Entries not accessed within this time will be considered expired.
+         * Entries not accessed within this time will be considered expired and removed.
          * Use 0 or negative for no idle timeout.
+         * Can be overridden per entry in put() operations.
+         * <br>
+         * Default: 0 (no idle timeout)
          */
         private long defaultMaxIdleTime;
 
         /**
          * Factor (0.0-1.0) determining when to trigger memory defragmentation.
          * When the pool reaches this utilization threshold, LRU entries are evicted to free space.
-         * Default is 0.2 (20%). Typical values range from 0.1 to 0.3.
+         * Typical values range from 0.1 to 0.3. Higher values increase memory efficiency but may
+         * cause more frequent evictions when approaching capacity.
+         * <br>
+         * Default: 0.2 (20%)
          */
         private float vacatingFactor = DEFAULT_VACATING_FACTOR;
 
         /**
          * Custom serializer for converting values to byte streams.
-         * If null, uses default serialization (Kryo if available, otherwise JSON).
-         * The serializer should write the complete serialized form to the provided ByteArrayOutputStream.
+         * The serializer receives the value and a ByteArrayOutputStream, and should write
+         * the complete serialized form to the stream.
+         * <br>
+         * Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
         private BiConsumer<? super V, ByteArrayOutputStream> serializer;
 
         /**
          * Custom deserializer for converting byte arrays back to values.
-         * If null, uses default deserialization (Kryo if available, otherwise JSON).
-         * The function receives the byte array and type information, and should return the deserialized value.
+         * The function receives the byte array and type information, and should return
+         * the deserialized value instance.
+         * <br>
+         * Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
         private BiFunction<byte[], Type<V>, ? extends V> deserializer;
 
         /**
          * Optional disk store for spillover when memory is full.
          * When configured, values that don't fit in memory can be stored to disk instead of being rejected.
-         * If null, the cache operates in memory-only mode.
+         * The disk store manages persistence and retrieval of overflow entries.
+         * <br>
+         * Default: {@code null} (memory-only mode)
          */
         private OffHeapStore<K> offHeapStore;
 
         /**
          * Whether to collect detailed disk I/O timing statistics.
-         * When true, tracks min/max/average read and write times to disk.
-         * This has minimal performance overhead. Default is false.
+         * When {@code true}, tracks min/max/average read and write times to disk.
+         * This has minimal performance overhead and is useful for monitoring disk performance.
+         * Only applies when {@link #offHeapStore} is configured.
+         * <br>
+         * Default: {@code false}
          */
         private boolean statsTimeOnDisk;
 
         /**
          * Predicate to determine when to load items from disk back to memory based on access patterns.
-         * Receives the activity print, size, and I/O elapsed time. Return true to promote the value to memory.
-         * If null, automatic promotion from disk to memory is disabled.
+         * The predicate receives:
+         * <ul>
+         * <li>{@link ActivityPrint} - access pattern statistics for the entry</li>
+         * <li>{@link Integer} - size of the entry in bytes</li>
+         * <li>{@link Long} - I/O elapsed time in milliseconds</li>
+         * </ul>
+         * Return {@code true} to promote the value from disk to memory.
+         * Only applies when {@link #offHeapStore} is configured.
+         * <br>
+         * Default: {@code null} (automatic promotion disabled)
          */
         private TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
 
         /**
          * Function to determine storage location for each put operation.
-         * Receives the key, value, and size, and should return:
+         * The function receives the key, value, and size (in bytes), and should return:
          * <ul>
-         * <li>0 for default routing (try memory first, fallback to disk if memory unavailable)</li>
-         * <li>1 for memory only (never store to disk, fail if memory unavailable)</li>
-         * <li>2 for disk only (always store to disk via offHeapStore)</li>
+         * <li>0 - default routing (try memory first, fallback to disk if memory unavailable)</li>
+         * <li>1 - memory only (never store to disk, operation fails if memory unavailable)</li>
+         * <li>2 - disk only (always store to disk via {@link #offHeapStore}, skip memory)</li>
          * </ul>
-         * If null, uses default behavior (always try memory first, fallback to disk).
+         * Only applies when {@link #offHeapStore} is configured.
+         * <br>
+         * Default: {@code null} (default routing behavior)
          */
         private TriFunction<K, V, Integer, Integer> storeSelector;
 
@@ -490,8 +590,13 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
          * maxBlockSizeInBytes defaults to 8192 if set to 0) and delegates to the full
          * package-private constructor.
          * <br><br>
-         * <b>Important:</b> The capacityInMB field must be set before calling build(), as it is required
-         * for cache initialization. All other fields are optional and have sensible defaults.
+         * <b>Important:</b> The {@code capacityInMB} field must be set to a positive value before calling build(),
+         * as it is required for cache initialization. All other fields are optional and have sensible defaults.
+         *
+         * <p><b>Memory Management:</b></p>
+         * Calling build() immediately allocates the specified amount of native memory using the Foreign Memory API.
+         * This memory remains allocated until {@link OffHeapCache25#close()} is called on the returned cache instance.
+         * Failure to close the cache will result in a native memory leak.
          *
          * <p><b>Usage Examples:</b></p>
          * <pre>{@code
@@ -516,9 +621,11 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
          *     .build();
          * }</pre>
          *
-         * @return a new OffHeapCache25 instance configured with the builder's settings
-         * @throws IllegalArgumentException if maxBlockSizeInBytes is set but is less than 1024 or greater
-         *                                  than SEGMENT_SIZE (1048576), or if other validation fails
+         * @return a new {@link OffHeapCache25} instance configured with the builder's settings
+         * @throws IllegalArgumentException if capacityInMB is not positive, or if maxBlockSizeInBytes is set
+         *                                  but is less than 1024 or greater than SEGMENT_SIZE (1048576),
+         *                                  or if other validation fails
+         * @throws OutOfMemoryError if native memory allocation fails
          */
         public OffHeapCache25<K, V> build() {
             return new OffHeapCache25<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,

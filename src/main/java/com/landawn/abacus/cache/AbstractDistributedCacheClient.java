@@ -152,8 +152,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("server1:11211,server2:11211");
      * }</pre>
      *
-     * @param serverUrl the server URL(s) for connecting to the distributed cache, must not be {@code null}
-     * @throws IllegalArgumentException if {@code serverUrl} is {@code null} (implementation-specific)
+     * @param serverUrl the server URL(s) for connecting to the distributed cache, must not be {@code null} or empty
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null} or empty
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
         if (Strings.isEmpty(serverUrl)) {
@@ -392,8 +392,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * @param liveTime the time-to-live in milliseconds, must not be negative
      * @return the time-to-live in seconds, rounded up if there's a fractional second
-     * @throws IllegalArgumentException if the time value exceeds Integer.MAX_VALUE seconds
-     *         (approximately 68 years when converted from milliseconds)
+     * @throws IllegalArgumentException if {@code liveTime} is negative, or if the converted value
+     *         exceeds Integer.MAX_VALUE seconds (approximately 68 years)
      */
     protected int toSeconds(final long liveTime) {
         if (liveTime < 0) {

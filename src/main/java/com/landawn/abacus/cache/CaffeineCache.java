@@ -62,8 +62,8 @@ import com.landawn.abacus.util.Numbers;
  * System.out.println("Hit rate: " + stats.hitRate());
  * }</pre>
  *
- * @param <K> the key type
- * @param <V> the value type
+ * @param <K> the type of keys used to identify cache entries
+ * @param <V> the type of values stored in the cache
  * @see AbstractCache
  * @see com.github.benmanes.caffeine.cache.Cache
  * @see com.github.benmanes.caffeine.cache.Caffeine

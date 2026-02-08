@@ -189,7 +189,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Retrieves a value from the cache by its key.
      * This operation updates the last access time for idle timeout calculation,
      * resetting the idle timer for the entry. If the entry has expired (TTL exceeded
-     * or idle timeout reached) or been evicted, null will be returned and the entry
+     * or idle timeout reached) or been evicted, {@code null} will be returned and the entry
      * will be removed from the cache during the next eviction cycle.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
@@ -209,7 +209,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be returned
-     * @return the value associated with the specified key, or null if the key is not found, has expired, or has been evicted
+     * @return the value associated with the specified key, or {@code null} if the key is not found, has expired, or has been evicted
      */
     @Override
     public V getOrNull(final K key) {
@@ -257,7 +257,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param value the cache value to be associated with the specified key (can be null)
      * @param liveTime the time-to-live in milliseconds from entry creation (0 or negative for no TTL expiration)
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout)
-     * @return true if the entry was successfully stored; false if the cache is full and unable to evict entries, or if the underlying pool rejected the entry
+     * @return {@code true} if the entry was successfully stored; {@code false} if the cache is full and unable to evict entries, or if the underlying pool rejected the entry
      * @throws IllegalArgumentException if key is null
      */
     @Override
@@ -274,7 +274,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * This operation is idempotent - it succeeds whether the key exists or not.
      * If the key is not found, the operation completes silently without throwing
      * an exception. After this operation, {@link #containsKey(Object)} will return
-     * false for the specified key.
+     * {@code false} for the specified key.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
      *
@@ -300,8 +300,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a mapping for the specified key.
-     * This method verifies that the key exists and has not expired. Returns false
-     * if the entry has expired or been evicted. Note that this method may update
+     * This method verifies that the key exists and has not expired. Returns {@code false}
+     * if the entry has expired or been evicted. Note that this method may also update
      * the access time for idle timeout calculation, depending on the underlying
      * pool implementation, which could extend the entry's lifetime.
      *
@@ -323,7 +323,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested
-     * @return true if the cache contains a mapping for the specified key and it has not expired; false otherwise
+     * @return {@code true} if the cache contains a mapping for the specified key and it has not expired; {@code false} otherwise
      */
     @Override
     public boolean containsKey(final K key) {
@@ -339,7 +339,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>Use this method to enumerate all cached keys, inspect cache contents,
      * or perform bulk operations. Be aware that accessing values for returned keys
-     * may still return null if entries have expired between obtaining the key set
+     * may still return {@code null} if entries have expired between obtaining the key set
      * and accessing the values.</p>
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
@@ -510,7 +510,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Closes the cache and releases all associated resources.
      * Stops the eviction scheduler, clears all entries, and releases the underlying
      * object pool. After closing, the cache cannot be used - subsequent operations
-     * may throw IllegalStateException or have undefined behavior.
+     * may throw {@link IllegalStateException} or have undefined behavior.
      *
      * <p>This method is idempotent and thread-safe - multiple calls have no additional
      * effect beyond the first invocation. The method is synchronized to ensure proper
@@ -555,7 +555,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache has been closed.
-     * Returns true if {@link #close()} has been called on this cache, false otherwise.
+     * Returns {@code true} if {@link #close()} has been called on this cache, {@code false} otherwise.
      * Use this method to verify whether the cache is still operational before
      * performing operations, especially in long-running applications or when
      * sharing cache instances across components. Once closed, the cache cannot
@@ -588,7 +588,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * System.out.println("Cache closed: " + cache.isClosed());   // Prints true
      * }</pre>
      *
-     * @return true if {@link #close()} has been called on this cache; false if the cache is still operational
+     * @return {@code true} if {@link #close()} has been called on this cache; {@code false} if the cache is still operational
      */
     @Override
     public boolean isClosed() {

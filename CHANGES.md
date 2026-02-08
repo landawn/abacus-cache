@@ -1,3 +1,7 @@
+## 2.3.0
+* Naming convention improvements
+* Improvements and bug fixes
+
 ## 2.2.2
 * Naming convention improvements
 * Improvements and bug fixes

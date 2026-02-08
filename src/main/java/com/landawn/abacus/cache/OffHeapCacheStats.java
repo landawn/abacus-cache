@@ -56,8 +56,8 @@ import java.util.Map;
  * @param putCount the total number of put operations performed since cache creation. This is a cumulative
  *                 counter that includes all successful and failed put attempts
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
- *                       when entries are evicted from memory due to capacity constraints or explicit
- *                       eviction policies
+ *                       when off-heap memory is full and the value is stored to disk via the configured
+ *                       {@link OffHeapStore}, or when the storeSelector explicitly routes the value to disk
  * @param getCount the total number of get operations performed since cache creation. This equals the sum
  *                 of hitCount, hitCountByDisk, and missCount
  * @param hitCount the number of successful get operations where the entry was found in memory (off-heap).
@@ -94,8 +94,9 @@ import java.util.Map;
  *                      the inner map contains segment index as key and the number of occupied slots in
  *                      that segment as value. This provides granular visibility into memory fragmentation
  *                      and utilization patterns
- * @see OffHeapCache#stats()
- * @see OffHeapCache25#stats()
+ * @see AbstractOffHeapCache#stats()
+ * @see OffHeapCache
+ * @see OffHeapCache25
  * @see MinMaxAvg
  */
 public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long putCount, long putCountToDisk, long getCount, long hitCount, long hitCountByDisk,

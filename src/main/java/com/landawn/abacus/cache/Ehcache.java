@@ -64,8 +64,8 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * Person retrieved = cache.getOrNull("key1");
  * }</pre>
  *
- * @param <K> the key type
- * @param <V> the value type
+ * @param <K> the type of keys used to identify cache entries
+ * @param <V> the type of values stored in the cache
  * @see AbstractCache
  * @see org.ehcache.Cache
  */
@@ -119,7 +119,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be returned
-     * @return the value associated with the specified key, or null if not found, expired, or evicted
+     * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      */
@@ -151,10 +151,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.put("userId123", user, 0, 0);
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated
+     * @param key the cache key with which the specified value is to be associated (must not be null)
      * @param value the cache value to be associated with the specified key
-     * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration)
-     * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration)
+     * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration via Ehcache builder)
+     * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration via Ehcache builder)
      * @return {@code true} always (operation always succeeds unless an exception is thrown)
      * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
@@ -215,7 +215,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested
-     * @return {@code true} if the cache contains a mapping for the specified key, {@code false} otherwise
+     * @return {@code true} if the cache contains a mapping for the specified key and it has not expired; {@code false} otherwise
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -256,7 +256,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * AtomicInteger counter = cache.putIfAbsent("counter", new AtomicInteger(0));
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated
+     * @param key the cache key with which the specified value is to be associated (must not be null)
      * @param value the cache value to be associated with the specified key
      * @return the previous value associated with the specified key, or {@code null} if there was no mapping
      * @throws IllegalArgumentException if key is null
@@ -562,8 +562,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache has been closed.
+     * Returns {@code true} if {@link #close()} has been called on this cache, {@code false} otherwise.
      * This method can be used to verify cache state before performing operations,
-     * though most operations will throw IllegalStateException if the cache is closed.
+     * though most operations will throw {@link IllegalStateException} if the cache is closed.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      * The field is declared volatile to ensure visibility across threads.</p>
@@ -574,10 +575,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * if (!cache.isClosed()) {
      *     User user = cache.getOrNull("userId123");
      *     // Process the user
+     * } else {
+     *     System.out.println("Cache is closed, cannot perform operation");
      * }
+     *
+     * cache.close();
+     * boolean closed = cache.isClosed();   // returns true
      * }</pre>
      *
-     * @return {@code true} if the cache is closed, {@code false} otherwise
+     * @return {@code true} if {@link #close()} has been called on this cache; {@code false} if the cache is still operational
      */
     @Override
     public boolean isClosed() {

@@ -109,7 +109,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * cache.set("user:123", user, 3600000);
      * }</pre>
      *
-     * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...", must not be {@code null} or empty
+     * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or contains no valid server addresses
      * @see #JRedis(String, long)
      */
@@ -144,7 +144,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Data retrieved = cache.get("key");
      * }</pre>
      *
-     * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...", must not be {@code null} or empty
+     * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
      * @param timeout the connection and socket timeout in milliseconds, must be positive
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, contains no valid server addresses, or {@code timeout} is not positive
      * @see #JRedis(String)
@@ -209,7 +209,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key, must not be {@code null}
+     * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
      * @return the cached value, or {@code null} if not found, expired, or evicted
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or deserialization error occurs
@@ -227,10 +227,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * its value and TTL will be replaced. The appropriate Redis shard is automatically
      * determined based on the key's hash.
      *
-     * <p><b>Redis-specific behavior:</b> This operation uses the Redis SETEX command which atomically
-     * sets both the value and expiration time. The operation is O(1) time complexity. The TTL is
-     * converted from milliseconds to seconds (rounded down). If the key already exists, the previous
-     * value and TTL are completely replaced.</p>
+     * <p><b>Redis-specific behavior:</b> When {@code liveTime} is positive, this operation uses the
+     * Redis SETEX command which atomically sets both the value and expiration time. When
+     * {@code liveTime} is 0 or negative, the Redis SET command is used without expiration, meaning
+     * the key will persist until explicitly deleted. The operation is O(1) time complexity. If the
+     * key already exists, the previous value and TTL are completely replaced.</p>
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -265,9 +266,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * cache.set("empty:key", null, 3600000);   // Stores empty byte array
      * }</pre>
      *
-     * @param key the cache key, must not be {@code null}
-     * @param value the value to cache, may be {@code null} (stored as empty byte array)
-     * @param liveTime the time-to-live in milliseconds, must be positive (0 or negative values may cause unexpected behavior)
+     * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
+     * @param value the value to cache. May be {@code null} (stored as empty byte array).
+     * @param liveTime the time-to-live in milliseconds. Positive values set expiration via SETEX (converted to seconds). 0 or negative means no expiration (uses SET without TTL).
      * @return {@code true} if the operation was successful (Redis responds with "OK"), {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or serialization error occurs
@@ -331,7 +332,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key, must not be {@code null}
+     * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
      * @return {@code true} if the delete operation was successfully sent to the server (always returns {@code true} unless an exception occurs)
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
@@ -388,7 +389,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * long uniqueId = cache.incr("id:generator");
      * }</pre>
      *
-     * @param key the cache key, must not be {@code null}
+     * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @return the value after increment (will be 1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
@@ -445,7 +446,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * long totalErrors = cache.incr("errors:total", errorCount);
      * }</pre>
      *
-     * @param key the cache key, must not be {@code null}
+     * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @param delta the increment amount, can be positive or negative (negative delta effectively decrements)
      * @return the value after increment (will be equal to delta if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
@@ -511,7 +512,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key, must not be {@code null}
+     * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
@@ -589,7 +590,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key, must not be {@code null}
+     * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @param delta the decrement amount, can be positive or negative (negative delta effectively increments)
      * @return the value after decrement (can be negative in Redis, will be equal to -delta if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
@@ -791,8 +792,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * String.getBytes() creates a new byte array on each call, so there are no shared mutable state issues.</p>
      *
-     * @param key the cache key to convert, must not be {@code null}
+     * @param key the cache key to convert. Must not be {@code null}.
      * @return the UTF-8 encoded byte array representation of the key, never {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @see #encode(Object)
      * @see #decode(byte[])
      */
@@ -821,8 +823,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.</p>
      *
-     * @param value the value to encode, may be {@code null}
-     * @return the serialized byte array representation of the value, or empty array if value is {@code null}, never {@code null}
+     * @param value the value to encode. May be {@code null}.
+     * @return the serialized byte array representation of the value, or empty array if value is {@code null}. Never {@code null}.
      * @throws RuntimeException if serialization fails due to incompatible object types or serialization errors
      * @see #decode(byte[])
      * @see #getKeyBytes(String)
@@ -849,7 +851,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.</p>
      *
-     * @param bytes the byte array to decode, may be {@code null} or empty
+     * @param bytes the byte array to decode. May be {@code null} or empty.
      * @return the deserialized object, or {@code null} if the byte array is {@code null} or empty
      * @throws RuntimeException if deserialization fails due to missing classes, incompatible class versions, or corrupted data
      * @see #encode(Object)

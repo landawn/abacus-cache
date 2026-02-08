@@ -181,12 +181,13 @@ public final class CacheFactory {
     /**
      * Creates a DistributedCache wrapper for a distributed cache client.
      * The wrapper provides a Cache interface implementation around the distributed cache client,
-     * adding error handling and retry logic for resilience against transient failures.
+     * adding key prefixing (Base64 encoding) and a circuit breaker pattern on read operations
+     * for resilience against cascading failures.
      *
      * <p>This is the simplest way to create a distributed cache, using default settings:
      * <ul>
-     * <li>No key prefix (keys used as-is)</li>
-     * <li>Default retry configuration from DistributedCache class defaults</li>
+     * <li>No key prefix (keys are Base64-encoded only)</li>
+     * <li>Default circuit breaker configuration (max 100 consecutive failures, 1000ms retry delay)</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b></p>
@@ -196,8 +197,8 @@ public final class CacheFactory {
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(memcachedClient);
      *
      * // Use the cache
-     * cache.put("user:123", user);
-     * User retrieved = cache.get("user:123");
+     * cache.put("user:123", user, 3600000, 0);
+     * User retrieved = cache.getOrNull("user:123");
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -215,9 +216,10 @@ public final class CacheFactory {
 
     /**
      * Creates a DistributedCache with a key prefix for namespace isolation.
-     * All cache keys will be automatically prefixed with the specified string,
+     * All cache keys will be automatically prefixed and Base64-encoded,
      * allowing multiple applications or modules to share the same cache server
-     * without key collisions. Uses default retry configuration from DistributedCache class defaults.
+     * without key collisions. Uses default circuit breaker configuration
+     * (max 100 consecutive failures, 1000ms retry delay).
      *
      * <p>Key prefixing is useful for:
      * <ul>
@@ -235,9 +237,10 @@ public final class CacheFactory {
      * DistributedCache<String, Session> cache =
      *     CacheFactory.createDistributedCache(redisClient, "myapp:sessions:");
      *
-     * // Keys are automatically prefixed
-     * cache.put("user123", session);      // Stored as "myapp:sessions:user123"
-     * Session s = cache.get("user123");   // Retrieves "myapp:sessions:user123"
+     * // Keys are automatically prefixed and Base64-encoded
+     * cache.put("user123", session, 3600000, 0);
+     * // Actual cache key: "myapp:sessions:" + Base64("user123")
+     * Session s = cache.getOrNull("user123");
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -255,15 +258,18 @@ public final class CacheFactory {
     }
 
     /**
-     * Creates a DistributedCache with custom retry configuration.
-     * This method allows fine-tuning of error handling and retry behavior for distributed
-     * cache operations, which is useful for handling transient network failures or service disruptions.
+     * Creates a DistributedCache with custom circuit breaker configuration.
+     * This method allows fine-tuning of the circuit breaker pattern for distributed
+     * cache read operations, which protects against cascading failures when the
+     * distributed cache becomes unavailable.
      *
-     * <p>The retry mechanism works as follows:
+     * <p>The circuit breaker pattern works as follows:
      * <ul>
-     * <li>After each failed operation, the cache waits for {@code retryDelay} milliseconds before retrying</li>
-     * <li>If consecutive failures reach {@code maxFailedNumForRetry}, the cache stops retrying</li>
-     * <li>Successful operations reset the failure counter</li>
+     * <li>When consecutive failures exceed {@code maxFailedNumForRetry}, the circuit opens
+     *     and read operations return {@code null} immediately without attempting cache access</li>
+     * <li>After {@code retryDelay} milliseconds since the last failure, the circuit enters
+     *     a half-open state and allows one read attempt to test if the cache has recovered</li>
+     * <li>Successful operations reset the failure counter and close the circuit</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b></p>
@@ -271,26 +277,27 @@ public final class CacheFactory {
      * // Create Redis client
      * JRedis<User> redisClient = new JRedis<>("localhost:6379", 3000);
      *
-     * // Create cache with custom retry configuration
+     * // Create cache with custom circuit breaker configuration
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(
      *     redisClient,
      *     "app:",    // Key prefix for namespace isolation
-     *     3,         // Retry up to 3 times on consecutive failures
-     *     1000       // Wait 1 second between retry attempts
+     *     50,        // Open circuit after 50 consecutive failures
+     *     2000       // Wait 2 seconds before attempting retry after circuit opens
      * );
      *
-     * // Cache will retry automatically on transient failures
-     * cache.put("user:123", user);
+     * // Circuit breaker protects against cascading failures on reads
+     * User user = cache.getOrNull("user:123");
+     * cache.put("user:123", user, 3600000, 0);
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param dcc the distributed cache client to wrap (must not be null)
      * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
-     * @param maxFailedNumForRetry the maximum number of consecutive failures before giving up on retries (must be positive)
-     * @param retryDelay the delay in milliseconds between retry attempts after failure threshold is reached (must be non-negative)
-     * @return a new DistributedCache instance with custom retry configuration
-     * @throws IllegalArgumentException if dcc is null
+     * @param maxFailedNumForRetry the maximum number of consecutive failures before the circuit breaker opens (must be non-negative)
+     * @param retryDelay the delay in milliseconds before attempting a retry after the circuit breaker opens (must be non-negative)
+     * @return a new DistributedCache instance with custom circuit breaker configuration
+     * @throws IllegalArgumentException if dcc is null, maxFailedNumForRetry is negative, or retryDelay is negative
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createCache(String)
