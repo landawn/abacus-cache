@@ -143,7 +143,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * {@code maxIdleTime} parameters are ignored by this implementation. All entries use
      * the cache-wide expiration settings configured when building the Caffeine instance.</p>
      *
-     * <p><b>Thread-Safety:</b> This method is thread-safe and can be called concurrently
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads. The underlying Caffeine cache handles synchronization.</p>
      *
      * <p><b>Usage Examples:</b></p>
@@ -263,7 +263,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * @return never returns normally
      * @throws UnsupportedOperationException always thrown as this operation is not supported
-     * @deprecated This operation is not supported by CaffeineCache. Consider using {@link LocalCache} if you need key iteration.
+     * @deprecated Unsupported operation. Consider using {@link LocalCache} if key iteration is required.
      */
     @Deprecated
     @Override
@@ -331,7 +331,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases resources.
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
-     * This method clears all entries and marks the cache as closed. Unlike some other cache implementations,
+     * This method invalidates all entries and marks the wrapper as closed. Unlike some other cache implementations,
      * the underlying Caffeine cache instance is not explicitly closed (as Caffeine caches don't implement
      * Closeable), but all entries are invalidated.
      *
@@ -373,9 +373,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
+        cacheImpl.invalidateAll();
         isClosed = true;
-
-        clear();
     }
 
     /**

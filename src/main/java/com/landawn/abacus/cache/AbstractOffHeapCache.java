@@ -885,75 +885,28 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Returns comprehensive statistics about cache performance and resource usage.
-     * Provides detailed insights into memory utilization, disk usage, hit/miss rates,
-     * eviction counts, and I/O performance metrics. This is essential for monitoring
-     * and optimizing off-heap cache behavior.
+     * Returns a point-in-time snapshot of cache statistics.
+     * The snapshot includes entry counts, hit/miss counters, eviction counters, memory and disk usage,
+     * disk I/O timing aggregates, and segment-slot occupancy details.
      * <br><br>
-     * Statistics collection algorithm:
-     * <ol>
-     * <li>Retrieves pool statistics from the underlying _pool.stats()</li>
-     * <li>Collects occupied slot information by:
-     *     <ul>
-     *     <li>Streaming all segment queues from segmentQueueMap</li>
-     *     <li>For each segment, extracting sizeOfSlot, index, and slot cardinality (number of occupied slots)</li>
-     *     <li>Grouping by slot size, then mapping segment index to occupied slot count</li>
-     *     <li>Sorting by slot size and segment index for organized presentation</li>
-     *     </ul>
-     * </li>
-     * <li>Validates no duplicate segment indices exist (debug check, throws RuntimeException if found)</li>
-     * <li>Calculates disk I/O time statistics (min/max/avg) from totalWriteToDiskTimeStats and totalReadFromDiskTimeStats</li>
-     * <li>Creates and returns OffHeapCacheStats with all collected data:
-     *     <ul>
-     *     <li>Pool capacity and size (entry count in memory)</li>
-     *     <li>sizeOnDisk (entry count on disk)</li>
-     *     <li>Put/get/hit/miss counts for memory and disk</li>
-     *     <li>Eviction counts for memory and disk</li>
-     *     <li>Memory metrics: capacityInBytes, totalOccupiedMemorySize, totalDataSize, dataSizeOnDisk</li>
-     *     <li>I/O timing statistics if statsTimeOnDisk is enabled</li>
-     *     <li>Detailed slot occupancy map by segment size and index</li>
-     *     </ul>
-     * </li>
-     * </ol>
-     * <br>
-     * The returned OffHeapCacheStats object provides methods to access:
-     * <ul>
-     * <li>capacity(), size(), sizeOnDisk() - Entry counts</li>
-     * <li>putCount(), putCountToDisk() - Write operation counts</li>
-     * <li>getCount(), hitCount(), hitCountByDisk(), missCount() - Read operation counts and hit rates</li>
-     * <li>evictionCount(), evictionCountFromDisk() - Eviction counts</li>
-     * <li>allocatedMemory(), occupiedMemory(), dataSize(), dataSizeOnDisk() - Memory usage</li>
-     * <li>writeToDiskTimeStats(), readFromDiskTimeStats() - I/O performance metrics (min/max/avg)</li>
-     * <li>segmentSize() - Size of each segment (constant 1MB)</li>
-     * <li>occupiedSlots() - Detailed map of slot occupancy per segment</li>
-     * </ul>
-     * <br>
-     * Thread safety: This method is thread-safe. Segment queues are locked individually during iteration
-     * to ensure consistent snapshots, though the overall statistics represent a point-in-time view.
+     * This method collects statistics from the underlying pool and segment queues, then assembles
+     * an immutable {@link OffHeapCacheStats} view. Segment queues are synchronized while being read,
+     * so the returned values are internally consistent for the capture moment.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
-     * // Using a concrete implementation
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
-     * byte[] data1 = "value1".getBytes();
-     * byte[] data2 = "value2".getBytes();
-     * cache.put("key1", data1);
-     * cache.put("key2", data2);
+     * cache.put("key1", "value1".getBytes());
+     * cache.put("key2", "value2".getBytes());
      *
      * OffHeapCacheStats stats = cache.stats();
      * System.out.println("Entries in memory: " + stats.size());
      * System.out.println("Entries on disk: " + stats.sizeOnDisk());
      * System.out.println("Hit rate: " + stats.hitCount() + "/" + stats.getCount());
      * System.out.println("Memory usage: " + stats.dataSize() + "/" + stats.allocatedMemory());
-     *
-     * // Check I/O performance (if statsTimeOnDisk enabled)
-     * if (stats.readFromDiskTimeStats().avg() > 0) {
-     *     System.out.println("Avg read time: " + stats.readFromDiskTimeStats().avg() + "ms");
-     * }
      * }</pre>
      *
-     * @return the cache statistics snapshot containing memory, disk, and performance metrics.
-     *         Never returns null.
+     * @return the statistics snapshot for this cache instance; never {@code null}
      */
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();
@@ -1102,10 +1055,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         private int sizeOfSlot;
 
         /**
-         * Constructs a new Segment at the specified memory address and array index.
+         * Constructs a segment descriptor for the specified native-memory range.
          *
-         * @param segmentStartPtr the starting memory address of this segment in off-heap memory
-         * @param index the index of this segment in the segments array (0 to segments.length-1)
+         * @param segmentStartPtr the starting address of this segment in off-heap memory
+         * @param index the segment index in the cache segment array
          */
         public Segment(final long segmentStartPtr, final int index) {
             this.segmentStartPtr = segmentStartPtr;
@@ -1113,7 +1066,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         /**
-         * Returns the segment's index in the segments array.
+         * Returns this segment's index in the segment array.
          *
          * @return the segment index
          */
@@ -1122,15 +1075,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         /**
-         * Allocates a slot in this segment using the first available position.
-         * This method finds the first clear bit in the slotBitSet (indicating an unallocated slot),
-         * marks it as allocated, and returns the slot index. The maximum number of slots in a segment
-         * is SEGMENT_SIZE / sizeOfSlot.
-         * <br><br>
-         * Thread safety: This method is synchronized on slotBitSet and thread-safe.
+         * Allocates one slot from this segment.
+         * The first available slot index is selected, marked as occupied, and returned.
+         * If no slot is available for the current slot size, {@code -1} is returned.
          *
-         * @return the index of the allocated slot (0 to SEGMENT_SIZE/sizeOfSlot-1),
-         *         or -1 if no slots are available (segment is full)
+         * @return the allocated slot index, or {@code -1} if the segment is full
          */
         public int allocateSlot() {
             synchronized (slotBitSet) {
@@ -1147,12 +1096,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         /**
-         * Releases a previously allocated slot, making it available for reuse.
-         * This method clears the bit at the specified slot index in the slotBitSet.
-         * <br><br>
-         * Thread safety: This method is synchronized on slotBitSet and thread-safe.
+         * Releases an allocated slot so it can be reused.
          *
-         * @param slotIndex the index of the slot to release (0 to SEGMENT_SIZE/sizeOfSlot-1)
+         * @param slotIndex the slot index to release
          */
         public void releaseSlot(final int slotIndex) {
             synchronized (slotBitSet) {

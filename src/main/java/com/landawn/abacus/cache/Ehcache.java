@@ -446,7 +446,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @return never returns normally
      * @throws UnsupportedOperationException always thrown
-     * @deprecated Unsupported operation - Ehcache does not provide efficient key iteration
+     * @deprecated Unsupported operation. Ehcache does not provide efficient key iteration.
      */
     @Deprecated
     @Override
@@ -490,7 +490,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @return never returns normally
      * @throws UnsupportedOperationException always thrown
-     * @deprecated Unsupported operation - Ehcache does not provide a size reporting API
+     * @deprecated Unsupported operation. Ehcache does not provide a size-reporting API.
      */
     @Deprecated
     @Override
@@ -525,7 +525,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases resources.
      * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
-     * This method first clears all entries from the cache before marking it as closed.
+     * This method clears all entries and marks the wrapper as closed.
      *
      * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
      * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.</p>
@@ -555,9 +555,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
+        cacheImpl.clear();
         isClosed = true;
-
-        clear();
     }
 
     /**
