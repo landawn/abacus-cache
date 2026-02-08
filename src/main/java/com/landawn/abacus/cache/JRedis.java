@@ -152,6 +152,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);
 
+        if (timeout <= 0) {
+            throw new IllegalArgumentException("timeout must be positive: " + timeout);
+        }
+
         if (timeout > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("timeout exceeds maximum value: " + timeout + " (max: " + Integer.MAX_VALUE + ")");
         }

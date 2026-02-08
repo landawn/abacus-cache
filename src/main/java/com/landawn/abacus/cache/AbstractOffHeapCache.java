@@ -114,7 +114,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Default parser for serialization - uses Kryo if available, otherwise JSON.
      */
-    static final Parser<?, ?> parser = ParserFactory.isAvroParserAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJsonParser();
+    static final Parser<?, ?> parser = ParserFactory.isKryoParserAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJsonParser();
 
     /**
      * Default serializer using the configured parser.
@@ -531,6 +531,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+
+        if (value == null) {
+            throw new IllegalArgumentException("Value cannot be null");
+        }
+
         final Type<V> type = N.typeOf(value.getClass());
         Wrapper<V> w = null;
 
@@ -554,8 +562,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             size = os.size();
         }
 
-        final boolean canBeStoredInMemory = storeSelector == null || storeSelector.apply(key, value, size) < 2;
-        final boolean canBeStoredToDisk = storeSelector == null || storeSelector.apply(key, value, size) != 1;
+        final int storeSelection = storeSelector == null ? 0 : storeSelector.apply(key, value, size);
+        final boolean canBeStoredInMemory = storeSelection < 2;
+        final boolean canBeStoredToDisk = storeSelection != 1;
 
         Slot slot = null;
         List<Slot> slots = null;
@@ -731,7 +740,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private Slot getAvailableSlot(final int size) {
         int slotSize = 0;
 
-        if (size >= _maxBlockSize) {
+        if (size <= 0) {
+            slotSize = MIN_BLOCK_SIZE;
+        } else if (size >= _maxBlockSize) {
             slotSize = _maxBlockSize;
         } else {
             slotSize = size % MIN_BLOCK_SIZE == 0 ? size : (size / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
