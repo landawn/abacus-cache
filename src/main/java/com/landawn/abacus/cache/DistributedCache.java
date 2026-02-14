@@ -211,7 +211,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * The circuit breaker has three states:
      * <ul>
      * <li><b>Closed (Normal):</b> Operations proceed normally. Tracks failure count.</li>
-     * <li><b>Open (Failing Fast):</b> When {@code failedCounter > maxFailedNumForRetry} AND within {@code retryDelay}
+     * <li><b>Open (Failing Fast):</b> When {@code failedCounter >= maxFailedNumForRetry} AND within {@code retryDelay}
      *     milliseconds of last failure, returns {@code null} immediately without attempting cache access.</li>
      * <li><b>Half-Open (Testing):</b> After {@code retryDelay} expires, attempts one operation to test if cache recovered.</li>
      * </ul>
@@ -279,15 +279,17 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         final long currentTime = System.currentTimeMillis();
 
         // Check circuit breaker state with atomic snapshot to prevent time-based race conditions
-        if ((currentFailedCount > maxFailedNumForRetry) && ((currentTime - currentLastFailedTime) < retryDelay)) {
+        if ((currentFailedCount >= maxFailedNumForRetry) && ((currentTime - currentLastFailedTime) < retryDelay)) {
             return null;
         }
+
+        final String cacheKey = generateKey(key);
 
         V result = null;
         boolean isOK = false;
 
         try {
-            result = dcc.get(generateKey(key));
+            result = dcc.get(cacheKey);
             isOK = true;
         } catch (final Exception e) {
             // Log the exception if needed, but don't rethrow

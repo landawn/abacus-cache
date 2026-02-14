@@ -265,7 +265,7 @@ public final class CacheFactory {
      *
      * <p>The circuit breaker pattern works as follows:
      * <ul>
-     * <li>When consecutive failures exceed {@code maxFailedNumForRetry}, the circuit opens
+     * <li>When consecutive failures reach {@code maxFailedNumForRetry}, the circuit opens
      *     and read operations return {@code null} immediately without attempting cache access</li>
      * <li>After {@code retryDelay} milliseconds since the last failure, the circuit enters
      *     a half-open state and allows one read attempt to test if the cache has recovered</li>

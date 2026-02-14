@@ -782,15 +782,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     break;
                 }
 
-                segment = descendingIterator.next();
+                if (descendingIterator.hasNext()) {
+                    segment = descendingIterator.next();
 
-                if ((indexOfAvailableSlot = segment.allocateSlot()) >= 0) {
-                    if (cnt > 3) {
-                        descendingIterator.remove();
-                        queue.addFirst(segment);
+                    if ((indexOfAvailableSlot = segment.allocateSlot()) >= 0) {
+                        if (cnt > 3) {
+                            descendingIterator.remove();
+                            queue.addFirst(segment);
+                        }
+
+                        break;
                     }
-
-                    break;
                 }
             }
         }

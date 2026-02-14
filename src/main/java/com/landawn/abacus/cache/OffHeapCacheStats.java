@@ -1,6 +1,9 @@
 package com.landawn.abacus.cache;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * An immutable snapshot of off-heap cache statistics at a specific point in time.
@@ -103,6 +106,12 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
         long missCount, long evictionCount, long evictionCountFromDisk, long allocatedMemory, long occupiedMemory, long dataSize, long dataSizeOnDisk,
         MinMaxAvg writeToDiskTimeStats, MinMaxAvg readFromDiskTimeStats, int segmentSize, Map<Integer, Map<Integer, Integer>> occupiedSlots) {
 
+    public OffHeapCacheStats {
+        Objects.requireNonNull(writeToDiskTimeStats, "writeToDiskTimeStats cannot be null");
+        Objects.requireNonNull(readFromDiskTimeStats, "readFromDiskTimeStats cannot be null");
+        occupiedSlots = immutableCopyOf(Objects.requireNonNull(occupiedSlots, "occupiedSlots cannot be null"));
+    }
+
     /**
      * Returns a map of occupied memory slots organized by slot size.
      * The outer map's key is the slot size in bytes, and the inner map contains
@@ -110,8 +119,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * This provides detailed information about memory fragmentation and utilization.
      *
      * <br><br>
-     * Note: This is an accessor method for the record component. It simply returns
-     * the occupiedSlots map that was passed during record construction.
+     * Note: The map returned by this accessor is deeply unmodifiable. Both the outer map and
+     * nested maps are defensive copies captured during record construction.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
@@ -125,6 +134,24 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
     @Override
     public Map<Integer, Map<Integer, Integer>> occupiedSlots() {
         return occupiedSlots;
+    }
+
+    private static Map<Integer, Map<Integer, Integer>> immutableCopyOf(final Map<Integer, Map<Integer, Integer>> occupiedSlots) {
+        if (occupiedSlots.isEmpty()) {
+            return Map.of();
+        }
+
+        final Map<Integer, Map<Integer, Integer>> copy = new LinkedHashMap<>(occupiedSlots.size());
+
+        for (final Map.Entry<Integer, Map<Integer, Integer>> entry : occupiedSlots.entrySet()) {
+            final Integer sizeOfSlot = Objects.requireNonNull(entry.getKey(), "occupiedSlots contains a null key");
+            final Map<Integer, Integer> segmentSlots = Objects.requireNonNull(entry.getValue(),
+                    "occupiedSlots contains a null nested map for slot size: " + sizeOfSlot);
+
+            copy.put(sizeOfSlot, Collections.unmodifiableMap(new LinkedHashMap<>(segmentSlots)));
+        }
+
+        return Collections.unmodifiableMap(copy);
     }
 
     /**

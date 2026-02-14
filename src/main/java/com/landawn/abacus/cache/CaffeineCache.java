@@ -18,7 +18,6 @@ import java.util.Set;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
-import com.landawn.abacus.util.Numbers;
 
 /**
  * A wrapper implementation that adapts Caffeine cache to the Abacus Cache interface.
@@ -291,13 +290,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * @return the estimated number of cache entries
      * @throws IllegalStateException if the cache has been closed
-     * @throws ArithmeticException if the estimated size exceeds Integer.MAX_VALUE
      */
     @Override
     public int size() {
         assertNotClosed();
 
-        return Numbers.toIntExact(cacheImpl.estimatedSize());
+        final long estimatedSize = cacheImpl.estimatedSize();
+        return (estimatedSize > Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int) estimatedSize;
     }
 
     /**

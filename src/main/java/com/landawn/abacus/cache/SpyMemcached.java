@@ -265,9 +265,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @SuppressWarnings("unchecked")
     @Override
     public final Map<String, T> getBulk(final String... keys) {
-        if (keys == null) {
-            throw new IllegalArgumentException("keys cannot be null");
-        }
+        validateBulkKeys(keys);
         return (Map<String, T>) mc.getBulk(keys);
     }
 
@@ -303,9 +301,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public final Future<Map<String, T>> asyncGetBulk(final String... keys) {
-        if (keys == null) {
-            throw new IllegalArgumentException("keys cannot be null");
-        }
+        validateBulkKeys(keys);
         return (Future) mc.asyncGetBulk(keys);
     }
 
@@ -345,9 +341,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @SuppressWarnings("unchecked")
     @Override
     public Map<String, T> getBulk(final Collection<String> keys) {
-        if (keys == null) {
-            throw new IllegalArgumentException("keys cannot be null");
-        }
+        validateBulkKeys(keys);
         return (Map<String, T>) mc.getBulk(keys);
     }
 
@@ -380,9 +374,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
     public Future<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
-        if (keys == null) {
-            throw new IllegalArgumentException("keys cannot be null");
-        }
+        validateBulkKeys(keys);
         return (Future) mc.asyncGetBulk(keys);
     }
 
@@ -1356,9 +1348,40 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws IllegalArgumentException if {@code timeout} is negative
      */
     public synchronized void disconnect(final long timeout) {
+        if (timeout < 0) {
+            throw new IllegalArgumentException("timeout cannot be negative: " + timeout);
+        }
+
         if (!isShutdown) {
             mc.shutdown(timeout, TimeUnit.MILLISECONDS);
             isShutdown = true;
+        }
+    }
+
+    private static void validateBulkKeys(final String... keys) {
+        if (keys == null) {
+            throw new IllegalArgumentException("keys cannot be null");
+        }
+
+        for (int i = 0, len = keys.length; i < len; i++) {
+            if (keys[i] == null) {
+                throw new IllegalArgumentException("keys cannot contain null element at index: " + i);
+            }
+        }
+    }
+
+    private static void validateBulkKeys(final Collection<String> keys) {
+        if (keys == null) {
+            throw new IllegalArgumentException("keys cannot be null");
+        }
+
+        int i = 0;
+        for (final String key : keys) {
+            if (key == null) {
+                throw new IllegalArgumentException("keys cannot contain null element at index: " + i);
+            }
+
+            i++;
         }
     }
 
