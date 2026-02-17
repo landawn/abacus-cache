@@ -274,6 +274,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
+        N.checkArgument(capacityInMB > 0, "The capacity in MB can't be: {}. It must be > 0", capacityInMB);
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "The Maximum Block size can't be: {}. It must be >= 1024 and <= {}", maxBlockSize,
                 SEGMENT_SIZE);
 
@@ -932,11 +933,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 .sorted(Comparators.<Tuple3<Integer, Integer, Integer>> comparingInt(it -> it._1).thenComparingInt(it -> it._2))
                 .groupTo(it -> it._1, Collectors.toMap(it -> it._2, it -> it._3, Suppliers.ofLinkedHashMap()), Suppliers.ofLinkedHashMap());
 
-        // TODO check if there is duplicated segment size and index. for debug purpose and will be removed later.
-        if (Stream.of(occupiedSlots.values()).flatmap(Map::keySet).hasDuplicates()) {
-            throw new IllegalStateException("Internal error: duplicate segment size and index detected");
-        }
-
         final long totalWriteToDiskCount = totalWriteToDiskTimeStats.getCount();
         final long totalReadFromDiskCount = totalReadFromDiskTimeStats.getCount();
 
@@ -1070,6 +1066,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         /**
          * Constructs a segment descriptor for the specified native-memory range.
          *
+         * <p><b>Usage Examples:</b></p>
+         * <pre>{@code
+         * final long segmentStartPtr = 0L;
+         * final Segment segment = new Segment(segmentStartPtr, 0);
+         * }</pre>
+         *
          * @param segmentStartPtr the starting address of this segment in off-heap memory
          * @param index the segment index in the cache segment array
          */
@@ -1081,6 +1083,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         /**
          * Returns this segment's index in the segment array.
          *
+         * <p><b>Usage Examples:</b></p>
+         * <pre>{@code
+         * int index = segment.index();
+         * }</pre>
+         *
          * @return the segment index
          */
         public int index() {
@@ -1091,6 +1098,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * Allocates one slot from this segment.
          * The first available slot index is selected, marked as occupied, and returned.
          * If no slot is available for the current slot size, {@code -1} is returned.
+         *
+         * <p><b>Usage Examples:</b></p>
+         * <pre>{@code
+         * int slotIndex = segment.allocateSlot();
+         * }</pre>
          *
          * @return the allocated slot index, or {@code -1} if the segment is full
          */
@@ -1110,6 +1122,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         /**
          * Releases an allocated slot so it can be reused.
+         *
+         * <p><b>Usage Examples:</b></p>
+         * <pre>{@code
+         * int slotIndex = 0;
+         * segment.releaseSlot(slotIndex);
+         * }</pre>
          *
          * @param slotIndex the slot index to release
          */

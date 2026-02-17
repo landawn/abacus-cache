@@ -111,9 +111,12 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * }</pre>
      *
      * @param maxSize the maximum size in bytes for cached objects. Must be positive.
-     * @throws IllegalArgumentException if maxSize is non-positive (validation happens during encode)
+     * @throws IllegalArgumentException if maxSize is non-positive
      */
     public KryoTranscoder(final int maxSize) {
+        if (maxSize <= 0) {
+            throw new IllegalArgumentException("maxSize must be positive: " + maxSize);
+        }
         this.maxSize = maxSize;
     }
 

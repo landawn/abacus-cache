@@ -15,53 +15,71 @@
 package com.landawn.abacus.cache;
 
 /**
- * A placeholder class for Chronicle Map integration.
- * Chronicle Map is a high-performance, off-heap, key-value store that provides
- * concurrent access with strong consistency guarantees. This class is intended
- * to provide integration with Chronicle Map in the Abacus caching framework,
- * similar to how CaffeineCache and Ehcache provide wrappers for their respective
- * caching libraries.
- *
+ * A compatibility adapter for the ChronicleMap API name.
  * <p>
- * Chronicle Map features that would be exposed through this wrapper:
- * <ul>
- * <li>Off-heap storage to reduce GC pressure</li>
- * <li>Memory-mapped files for persistence across restarts</li>
- * <li>Zero-copy operations for maximum performance</li>
- * <li>Lock-free reads under MVCC</li>
- * <li>Excellent performance for concurrent access</li>
- * <li>Support for multi-key queries</li>
- * </ul>
- *
+ * This class is now backed by {@link LocalCache} so existing code that references
+ * {@code ChronicleMap} remains functional even when the optional Chronicle-Map
+ * dependency is unavailable.
+ * </p>
  * <p>
- * <strong>Note:</strong> This is currently a placeholder implementation. The actual implementation
- * would wrap Chronicle Map's functionality to conform to the Abacus Cache interface.
+ * Note: this is not a true Chronicle-Map integration. The behavior matches
+ * {@code LocalCache} semantics and exists to keep the public API usable.
+ * </p>
  *
- * <p><b>Usage Examples:</b></p>
- * <pre>{@code
- * // Future implementation example
- * ChronicleMap<String, User> chronicleMap = ChronicleMapBuilder
- *     .of(String.class, User.class)
- *     .entries(10000)
- *     .averageKeySize(20)
- *     .averageValueSize(100)
- *     .create();
+ * @param <K> the key type
+ * @param <V> the value type
  *
- * ChronicleMap<String, User> cache = new ChronicleMap<>(chronicleMap);
- * cache.put("user:123", user);
- * }</pre>
- *
- * @see AbstractCache
- * @see <a href="https://github.com/OpenHFT/Chronicle-Map">Chronicle-Map on GitHub</a>
+ * @deprecated This is a compatibility wrapper. A dedicated Chronicle-Map adapter
+ *             is not implemented yet.
  */
-public class ChronicleMap {
+@Deprecated
+public class ChronicleMap<K, V> extends LocalCache<K, V> {
 
     /**
-     * Private constructor to prevent instantiation of this placeholder class.
-     * The actual implementation would provide factory methods or constructors
-     * to create Chronicle Map instances.
+     * Creates a ChronicleMap-compatible cache with default settings.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, String> map = new ChronicleMap<>();
+     * map.put("k", "v");
+     * String value = map.getOrNull("k");
+     * }</pre>
      */
-    private ChronicleMap() {
-        // TODO: Implement Chronicle Map integration
+    public ChronicleMap() {
+        this(1024, 60_000L);
+    }
+
+    /**
+     * Creates a ChronicleMap-compatible cache.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, Integer> map = new ChronicleMap<>(1_024, 60_000L);
+     * map.put("count", 42);
+     * }</pre>
+     *
+     * @param capacity cache capacity
+     * @param evictDelay eviction scan delay in milliseconds
+     */
+    public ChronicleMap(final int capacity, final long evictDelay) {
+        this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
+    }
+
+    /**
+     * Creates a ChronicleMap-compatible cache with custom default timings.
+     *
+     * <p><b>Usage Examples:</b></p>
+     * <pre>{@code
+     * Cache<String, String> map = new ChronicleMap<>(2_048, 30_000L, 3_600_000L, 300_000L);
+     * map.put("session", "abc", 10_000L, 5_000L);
+     * }</pre>
+     *
+     * @param capacity cache capacity
+     * @param evictDelay eviction scan delay in milliseconds
+     * @param defaultLiveTime default TTL in milliseconds
+     * @param defaultMaxIdleTime default max idle time in milliseconds
+     */
+    public ChronicleMap(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
+        super(capacity, evictDelay, defaultLiveTime, defaultMaxIdleTime);
     }
 }

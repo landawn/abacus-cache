@@ -117,8 +117,11 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * locks don't persist indefinitely if a holder crashes or fails to release them.
      *
      * <p>This is a non-blocking operation that returns immediately. If the lock is already
-     * held by another client, this method returns {@code false} without waiting. The implementation
-     * uses Memcached's atomic add operation to ensure only one client can acquire the lock.
+     * held by another client, this method returns {@code false} without waiting. The requested
+     * {@code liveTime} is converted to Memcached's second-granularity TTL before being forwarded
+     * to the server, so sub-second values are rounded up to the next second.
+     * The implementation uses Memcached's atomic add operation to ensure only one client can
+     * acquire the lock.
      *
      * <p>Important considerations:
      * <ul>
@@ -145,7 +148,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * }</pre>
      *
      * @param target the target resource on which to acquire the lock (must not be null)
-     * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive)
+     * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive;
+     *                 converted to whole seconds for Memcached, with fractional seconds rounded up)
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws IllegalArgumentException if target is null or liveTime is not positive
      * @throws RuntimeException if a communication error occurs with Memcached
@@ -167,7 +171,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * Attempts to acquire a lock on the specified target with an associated value.
      * This method allows storing additional information with the lock, such as the
      * identity of the lock holder or lock metadata. The lock will be automatically
-     * released after the specified live time expires. The implementation uses
+     * released after the specified live time expires. The requested live time is converted to
+     * whole seconds (rounded up if needed) before being sent to Memcached. The implementation uses
      * Memcached's atomic add operation (via mc.add) which only succeeds if the key
      * doesn't already exist, ensuring mutual exclusion.
      *
@@ -210,7 +215,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * @param target the target resource on which to acquire the lock (must not be null)
      * @param value the value to associate with the lock (can be {@code null})
-     * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive)
+     * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive;
+     *                 converted to whole seconds for Memcached, with fractional seconds rounded up)
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws IllegalArgumentException if target is null or liveTime is not positive
      * @throws RuntimeException if a communication error occurs with Memcached
