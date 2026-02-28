@@ -54,12 +54,12 @@ import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.Comparators;
 import com.landawn.abacus.util.ExceptionUtil;
-import com.landawn.abacus.util.Suppliers;
 import com.landawn.abacus.util.IOUtil;
 import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Numbers;
 import com.landawn.abacus.util.Objectory;
+import com.landawn.abacus.util.Suppliers;
 import com.landawn.abacus.util.Tuple;
 import com.landawn.abacus.util.Tuple.Tuple3;
 import com.landawn.abacus.util.function.TriFunction;
@@ -857,7 +857,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         _asyncExecutor.execute(() -> {
             try {
-                _pool.vacate();
+                _pool.evict();
 
                 evict();
 
