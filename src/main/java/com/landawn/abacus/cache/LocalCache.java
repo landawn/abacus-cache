@@ -20,7 +20,7 @@ import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
 import com.landawn.abacus.pool.PoolStats;
 import com.landawn.abacus.pool.Poolable;
-import com.landawn.abacus.pool.PoolableWrapper;
+import com.landawn.abacus.pool.PoolableAdapter;
 
 /**
  * A thread-safe, in-memory cache implementation with automatic eviction and expiration support.
@@ -63,7 +63,7 @@ import com.landawn.abacus.pool.PoolableWrapper;
  */
 public class LocalCache<K, V> extends AbstractCache<K, V> {
 
-    private final KeyedObjectPool<K, PoolableWrapper<V>> pool;
+    private final KeyedObjectPool<K, PoolableAdapter<V>> pool;
 
     /**
      * Creates a new LocalCache with specified capacity and eviction delay.
@@ -159,7 +159,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Create a custom pool with specific configuration
-     * KeyedObjectPool<String, PoolableWrapper<User>> customPool =
+     * KeyedObjectPool<String, PoolableAdapter<User>> customPool =
      *     PoolFactory.createKeyedObjectPool(1000, 60000);
      *
      * // Create cache with 1 hour default TTL and 30 minute idle time
@@ -175,7 +175,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param pool the pre-configured KeyedObjectPool to use for storage (must not be null)
      * @throws IllegalArgumentException if pool is null
      */
-    public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
+    public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableAdapter<V>> pool) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         if (pool == null) {
@@ -213,7 +213,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public V getOrNull(final K key) {
-        final PoolableWrapper<V> w = pool.get(key);
+        final PoolableAdapter<V> w = pool.get(key);
 
         return w == null ? null : w.value();
     }

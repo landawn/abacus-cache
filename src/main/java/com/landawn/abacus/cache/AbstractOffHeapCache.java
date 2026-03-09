@@ -131,7 +131,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         } else if (type.isByteBuffer()) {
             return ByteBufferType.valueOf(bytes);
         } else {
-            return parser.deserialize(new ByteArrayInputStream(bytes), type.clazz());
+            return parser.deserialize(new ByteArrayInputStream(bytes), type.javaType());
         }
     };
 

@@ -17,7 +17,7 @@ package com.landawn.abacus.cache;
 import static com.landawn.abacus.cache.DistributedCacheClient.DEFAULT_TIMEOUT;
 
 import com.landawn.abacus.pool.KeyedObjectPool;
-import com.landawn.abacus.pool.PoolableWrapper;
+import com.landawn.abacus.pool.PoolableAdapter;
 import com.landawn.abacus.util.ClassUtil;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Numbers;
@@ -145,14 +145,14 @@ public final class CacheFactory {
      * fine-grained control over cache entry management, pooling strategies, or integration
      * with existing pool infrastructure.
      *
-     * <p>The provided pool must be configured to handle PoolableWrapper objects and will
+     * <p>The provided pool must be configured to handle PoolableAdapter objects and will
      * be used directly by the cache for all entry storage and retrieval operations.
      * The pool's capacity and eviction settings will override any defaults.
      *
      * <p><b>Usage Examples:</b></p>
      * <pre>{@code
      * // Create custom pool with specific configuration
-     * KeyedObjectPool<String, PoolableWrapper<User>> customPool =
+     * KeyedObjectPool<String, PoolableAdapter<User>> customPool =
      *     PoolFactory.createKeyedObjectPool(1000, 60000);
      *
      * // Create cache using the custom pool
@@ -174,7 +174,7 @@ public final class CacheFactory {
      * @see #createLocalCache(int, long, long, long)
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final long defaultLiveTime, final long defaultMaxIdleTime,
-            final KeyedObjectPool<K, PoolableWrapper<V>> pool) {
+            final KeyedObjectPool<K, PoolableAdapter<V>> pool) {
         return new LocalCache<>(defaultLiveTime, defaultMaxIdleTime, pool);
     }
 
