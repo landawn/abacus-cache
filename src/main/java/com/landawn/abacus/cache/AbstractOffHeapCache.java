@@ -376,8 +376,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * to different memory regions are safe.
      *
      * @param bytes the source byte array containing the data to copy. Must not be null.
-     * @param srcOffset the starting offset in the source byte array. Together with the
-     *                  array base offset (arrayOffset), this determines the actual source address.
+     * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
+     *                  implementations, this already includes the array base offset (arrayOffset).
      * @param startPtr the destination memory address in off-heap memory. Must be a valid
      *                 address within the allocated memory region (between startPtr and startPtr + capacity).
      * @param len the number of bytes to copy. Must be positive and must not exceed the
@@ -399,8 +399,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                 address within the allocated memory region (between startPtr and startPtr + capacity).
      * @param bytes the destination byte array to copy data into. Must not be null and
      *              must have sufficient capacity to hold the copied data.
-     * @param destOffset the starting offset in the destination byte array. Together with the
-     *                   array base offset (arrayOffset), this determines the actual destination address.
+     * @param destOffset the byte offset within the destination array object in memory. For Unsafe-based
+     *                   implementations, this already includes the array base offset (arrayOffset).
      * @param len the number of bytes to copy. Must be positive and must not exceed the
      *            available space in the destination array starting from destOffset.
      */

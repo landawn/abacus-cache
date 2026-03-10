@@ -326,8 +326,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * called automatically during cache put operations and should not be called directly.
      * <br><br>
      * The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
-     * significantly faster than manual byte-by-byte copying. The srcOffset is combined with
-     * the array base offset (BYTE_ARRAY_BASE) to determine the actual source memory address.
+     * significantly faster than manual byte-by-byte copying. The srcOffset already includes
+     * the array base offset (BYTE_ARRAY_BASE), pointing directly to the data within the array object.
      *
      * <p><b>Memory Management:</b></p>
      * This method uses {@link sun.misc.Unsafe#copyMemory(Object, long, Object, long, long)} to perform
@@ -336,8 +336,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * No bounds checking is performed - invalid parameters will cause a JVM crash.
      *
      * @param srcBytes the source byte array from which to copy data. Must not be null.
-     * @param srcOffset the starting offset in the source array. Together with BYTE_ARRAY_BASE,
-     *                  this determines the actual source memory address. Must be non-negative.
+     * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
+     *                  operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
+     *                  to skip past the array header to the actual data. Must be non-negative.
      * @param startPtr the destination memory address in off-heap memory. Must be a valid address
      *                 within the allocated memory region (between _startPtr and _startPtr + capacity).
      * @param len the number of bytes to copy. Must be positive and must not exceed the available
@@ -358,8 +359,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * called automatically during cache get operations and should not be called directly.
      * <br><br>
      * The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
-     * significantly faster than manual byte-by-byte copying. The destOffset is combined with
-     * the array base offset (BYTE_ARRAY_BASE) to determine the actual destination memory address.
+     * significantly faster than manual byte-by-byte copying. The destOffset already includes
+     * the array base offset (BYTE_ARRAY_BASE), pointing directly to the data within the array object.
      *
      * <p><b>Memory Management:</b></p>
      * This method uses {@link sun.misc.Unsafe#copyMemory(Object, long, Object, long, long)} to perform
@@ -371,8 +372,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *                 valid address within the allocated memory region (between _startPtr and _startPtr + capacity).
      * @param bytes the destination byte array. Must not be null and must have sufficient capacity to
      *              hold the copied data (at least destOffset + len).
-     * @param destOffset the starting offset in the destination array. Together with BYTE_ARRAY_BASE,
-     *                   this determines the actual destination memory address. Must be non-negative.
+     * @param destOffset the byte offset within the destination array object in memory. For Unsafe-based
+     *                   operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
+     *                   to skip past the array header to the actual data. Must be non-negative.
      * @param len the number of bytes to copy. Must be positive and must not exceed the available
      *            space in the destination array starting from destOffset.
      * @see #allocate(long)

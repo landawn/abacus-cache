@@ -46,7 +46,7 @@ package com.landawn.abacus.cache;
  * <p><b>Thread Safety:</b> This class is immutable and thread-safe. Multiple threads can
  * safely read the statistics without synchronization.
  *
- * <p>Part of this code is copied from <a href="https://github.com/ben-manes/caffeine">caffeine</a> under Apache License 2.0.
+ * <p>Inspired by <a href="https://github.com/ben-manes/caffeine">Caffeine</a>'s cache statistics concept.
  *
  * <p><b>Usage Examples:</b></p>
  * <pre>{@code
