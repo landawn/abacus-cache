@@ -27,14 +27,13 @@ import com.landawn.abacus.util.Strings;
  *
  * <p>This abstract class serves as a foundation for distributed cache clients,
  * providing server URL management, default implementations for optional bulk
- * operations and flush functionality, and utility methods for time conversion.</p>
+ * operations and flush functionality, and utility methods for time conversion.
  *
  * <p><b>Thread Safety:</b> This class is thread-safe. The {@code serverUrl} field is
  * immutable after construction. Subclasses must ensure their implementations of abstract
- * methods are thread-safe to maintain the overall thread safety guarantee.</p>
+ * methods are thread-safe to maintain the overall thread safety guarantee.
  *
- * <br><br>
- * Key features:
+ * <p>Key features:
  * <ul>
  * <li>Stores and provides access to server URL(s)</li>
  * <li>Default implementations for optional operations (getBulk, flushAll)</li>
@@ -42,8 +41,7 @@ import com.landawn.abacus.util.Strings;
  * <li>Template method pattern for consistent behavior across implementations</li>
  * </ul>
  *
- * <br>
- * Subclasses must implement the following abstract methods:
+ * <p>Subclasses must implement the following abstract methods:
  * <ul>
  * <li>{@link #get(String)} - retrieves a single value from cache</li>
  * <li>{@link #set(String, Object, long)} - stores a value with TTL</li>
@@ -53,14 +51,13 @@ import com.landawn.abacus.util.Strings;
  * <li>{@link #disconnect()} - releases resources and closes connections</li>
  * </ul>
  *
- * <br>
- * Subclasses may optionally override:
+ * <p>Subclasses may optionally override:
  * <ul>
  * <li>{@link #getBulk(String...)} and {@link #getBulk(Collection)} - for bulk retrieval support</li>
  * <li>{@link #flushAll()} - for clearing all cache data</li>
  * </ul>
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * // Example custom implementation
  * public class MyDistributedCache<T> extends AbstractDistributedCacheClient<T> {
@@ -138,12 +135,12 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p>For multiple servers, implementations may use comma-separated values,
      * space-separated values, or other formats. Consult the specific implementation
-     * documentation for the exact format.</p>
+     * documentation for the exact format.
      *
      * <p><b>Thread Safety:</b> This constructor is safe to call from any thread.
-     * The {@code serverUrl} parameter is stored as an immutable field.</p>
+     * The {@code serverUrl} parameter is stored as an immutable field.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Single server
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
@@ -169,9 +166,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * For multiple servers, the format depends on the implementation
      * (e.g., comma-separated for some implementations).
      *
-     * <p>This method is thread-safe and can be called concurrently from multiple threads.</p>
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * String url = client.serverUrl();
@@ -194,7 +191,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Subclasses should override this method if the underlying cache system supports bulk retrieval
      * operations (such as Memcached's getMulti or Redis's MGET). If the underlying system does not
      * provide native bulk operations, subclasses may choose to implement this by performing multiple
-     * individual get operations, though this defeats the performance benefit.</p>
+     * individual get operations, though this defeats the performance benefit.
      *
      * <p><b>When to Override:</b>
      * <ul>
@@ -204,9 +201,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * </ul>
      *
      * <p><b>Thread Safety:</b> Implementations must be thread-safe and handle
-     * concurrent access safely across distributed cache clients.</p>
+     * concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // In a subclass that implements this method:
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
@@ -241,7 +238,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Subclasses should override this method if the underlying cache system supports bulk retrieval
      * operations (such as Memcached's getMulti or Redis's MGET). If the underlying system does not
      * provide native bulk operations, subclasses may choose to implement this by performing multiple
-     * individual get operations, though this defeats the performance benefit.</p>
+     * individual get operations, though this defeats the performance benefit.
      *
      * <p><b>When to Override:</b>
      * <ul>
@@ -253,12 +250,12 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Implementation Note:</b> If you override this method, you should typically also
      * override {@link #getBulk(String...)} and potentially implement it by delegating to this
-     * method using {@code Arrays.asList(keys)} for consistency.</p>
+     * method using {@code Arrays.asList(keys)} for consistency.
      *
      * <p><b>Thread Safety:</b> Implementations must be thread-safe and handle
-     * concurrent access safely across distributed cache clients.</p>
+     * concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // In a subclass that implements this method:
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
@@ -295,7 +292,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <p><b>Default Implementation:</b> This default implementation throws {@code UnsupportedOperationException}.
      * Subclasses should override this method if the underlying cache system supports flush/clear operations
      * (such as Memcached's flush_all or Redis's FLUSHALL/FLUSHDB). This operation is typically used for
-     * testing purposes or administrative maintenance.</p>
+     * testing purposes or administrative maintenance.
      *
      * <p><b>When to Override:</b>
      * <ul>
@@ -306,17 +303,17 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Implementation Note:</b> Implementations should ensure this operation affects all
      * connected servers when using a multi-server configuration. The operation should be idempotent
-     * (safe to call multiple times).</p>
+     * (safe to call multiple times).
      *
      * <p><b>Thread Safety:</b> Implementations must be thread-safe. However, note that
      * once executed, all cached data will be permanently lost and the effects are
-     * visible immediately to all clients connected to the same cache servers.</p>
+     * visible immediately to all clients connected to the same cache servers.
      *
      * <p><b>Warning:</b> This is a destructive operation that removes all data
      * from all connected cache servers. There is no way to undo this operation.
-     * Use with extreme caution in production environments.</p>
+     * Use with extreme caution in production environments.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // In a subclass that implements this method:
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
@@ -356,17 +353,16 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <li>This ensures cached items live at least as long as requested</li>
      * <li>Zero milliseconds returns zero seconds (no expiration)</li>
      * </ul>
-     * </p>
      *
      * <p><b>Implementation Details:</b> The conversion algorithm uses integer division
      * and modulo operations to efficiently round up fractional seconds. If the millisecond
      * value is evenly divisible by 1000, it performs exact division. Otherwise, it adds 1
-     * to round up. This ensures that a TTL of 1ms becomes 1s, not 0s.</p>
+     * to round up. This ensures that a TTL of 1ms becomes 1s, not 0s.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe as it has no side effects
-     * and operates only on method parameters.</p>
+     * and operates only on method parameters.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // In a subclass implementation
      * @Override

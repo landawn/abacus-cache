@@ -22,18 +22,16 @@ import java.util.Map;
  * This interface defines the contract for distributed caching systems like Memcached and Redis,
  * providing basic cache operations and atomic counter functionality. Implementations handle
  * network communication, serialization, and distributed data management.
- * 
- * <br><br>
- * Key features:
+ *
+ * <p>Key features:
  * <ul>
  * <li>Basic CRUD operations (get, set, delete)</li>
  * <li>Bulk operations for efficiency</li>
  * <li>Atomic increment/decrement operations</li>
  * <li>Time-based expiration support</li>
  * </ul>
- * 
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
  * User user = new User("John", "john@example.com");
@@ -69,9 +67,9 @@ public interface DistributedCacheClient<T> {
      * For multiple servers, the format is implementation-specific
      * (e.g., comma-separated for some implementations).
      *
-     * <p>This method is thread-safe and can be called concurrently from multiple threads.</p>
+     * <p>This method is thread-safe and can be called concurrently from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * String url = client.serverUrl();
@@ -86,9 +84,9 @@ public interface DistributedCacheClient<T> {
      * Retrieves a value from the cache by its key.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple get operation
      * User user = client.get("user:123");
@@ -119,9 +117,9 @@ public interface DistributedCacheClient<T> {
      * network round-trips. Keys not found in the cache will not be present in the returned map.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Basic bulk get
      * Map<String, User> users = client.getBulk("user:123", "user:456", "user:789");
@@ -152,9 +150,9 @@ public interface DistributedCacheClient<T> {
      * network round-trips. Keys not found in the cache will not be present in the returned map.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Using a List
      * List<String> userKeys = Arrays.asList("user:123", "user:456", "user:789");
@@ -186,9 +184,9 @@ public interface DistributedCacheClient<T> {
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
-     * When multiple clients set the same key concurrently, the last write wins.</p>
+     * When multiple clients set the same key concurrently, the last write wins.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Cache with 1 hour TTL
      * User user = new User("John", "john@example.com");
@@ -227,9 +225,9 @@ public interface DistributedCacheClient<T> {
      * if the delete command was successfully sent, regardless of key existence.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple delete
      * boolean success = client.delete("user:123");
@@ -262,7 +260,7 @@ public interface DistributedCacheClient<T> {
     /**
      * Atomically increments a numeric value by 1.
      *
-     * <p><b>Implementation-specific behavior when key doesn't exist:</b></p>
+     * <p><b>Implementation-specific behavior when key doesn't exist:</b>
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns -1 if key doesn't exist</li>
      * <li><b>Redis (JRedis):</b> Creates key with value 1 (initializes to 0, then increments)</li>
@@ -270,9 +268,9 @@ public interface DistributedCacheClient<T> {
      *
      * <p>This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
-     * ensuring no increments are lost.</p>
+     * ensuring no increments are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple counter
      * long pageViews = client.incr("page:views");
@@ -306,7 +304,7 @@ public interface DistributedCacheClient<T> {
     /**
      * Atomically increments a numeric value by a specified amount.
      *
-     * <p><b>Implementation-specific behavior when key doesn't exist:</b></p>
+     * <p><b>Implementation-specific behavior when key doesn't exist:</b>
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns -1 if key doesn't exist</li>
      * <li><b>Redis (JRedis):</b> Creates key with delta value (initializes to 0, then increments by delta)</li>
@@ -314,9 +312,9 @@ public interface DistributedCacheClient<T> {
      *
      * <p>This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
-     * ensuring no increments are lost.</p>
+     * ensuring no increments are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Game score increment
      * long score = client.incr("player:score", 10);
@@ -347,7 +345,7 @@ public interface DistributedCacheClient<T> {
     /**
      * Atomically decrements a numeric value by 1.
      *
-     * <p><b>Implementation-specific behavior when key doesn't exist:</b></p>
+     * <p><b>Implementation-specific behavior when key doesn't exist:</b>
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns -1 if key doesn't exist. Values cannot go below 0.</li>
      * <li><b>Redis (JRedis):</b> Creates key with value -1 (initializes to 0, then decrements)</li>
@@ -355,9 +353,9 @@ public interface DistributedCacheClient<T> {
      *
      * <p>This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
-     * ensuring no decrements are lost.</p>
+     * ensuring no decrements are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Token bucket rate limiting
      * long remainingTokens = client.decr("api:tokens:" + userId);
@@ -390,7 +388,7 @@ public interface DistributedCacheClient<T> {
     /**
      * Atomically decrements a numeric value by a specified amount.
      *
-     * <p><b>Implementation-specific behavior when key doesn't exist:</b></p>
+     * <p><b>Implementation-specific behavior when key doesn't exist:</b>
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns -1 if key doesn't exist. Values cannot go below 0.</li>
      * <li><b>Redis (JRedis):</b> Creates key with negative delta value (initializes to 0, then decrements by delta)</li>
@@ -398,9 +396,9 @@ public interface DistributedCacheClient<T> {
      *
      * <p>This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
-     * ensuring no decrements are lost.</p>
+     * ensuring no decrements are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Bulk inventory decrement
      * long inventory = client.decr("product:stock:456", 5);
@@ -443,9 +441,9 @@ public interface DistributedCacheClient<T> {
      *
      * <p>This method is thread-safe but its effects are visible immediately to all clients.
      * Once executed, all cached data will be permanently lost. There is no way to recover
-     * the data after this operation completes.</p>
+     * the data after this operation completes.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // WARNING: This removes ALL data from ALL cache servers!
      * client.flushAll();
@@ -488,12 +486,12 @@ public interface DistributedCacheClient<T> {
      *
      * <p>This method should be called when the client is no longer needed to ensure
      * proper cleanup of network connections, thread pools, and other resources. It is
-     * safe to call this method multiple times; subsequent calls will have no effect.</p>
+     * safe to call this method multiple times; subsequent calls will have no effect.
      *
      * <p>This method is thread-safe, but once called, no other operations should be
-     * attempted on this client instance.</p>
+     * attempted on this client instance.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Try-finally pattern
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");

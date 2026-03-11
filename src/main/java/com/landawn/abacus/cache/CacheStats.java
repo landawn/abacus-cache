@@ -48,7 +48,7 @@ package com.landawn.abacus.cache;
  *
  * <p>Inspired by <a href="https://github.com/ben-manes/caffeine">Caffeine</a>'s cache statistics concept.
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * // Create a cache and perform operations
  * LocalCache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);

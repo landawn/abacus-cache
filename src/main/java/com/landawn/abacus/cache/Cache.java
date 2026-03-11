@@ -25,9 +25,8 @@ import com.landawn.abacus.util.u.Optional;
  * The core interface for all cache implementations in the Abacus framework.
  * This interface defines the contract for caching systems, providing both synchronous
  * and asynchronous operations, configurable expiration policies, and property management.
- * 
- * <br><br>
- * Key features:
+ *
+ * <p>Key features:
  * <ul>
  * <li>Synchronous and asynchronous operations</li>
  * <li>Time-to-live (TTL) and idle timeout support</li>
@@ -35,9 +34,8 @@ import com.landawn.abacus.util.u.Optional;
  * <li>Property bag for custom configuration</li>
  * <li>Resource management via Closeable</li>
  * </ul>
- * 
- * <br>
- * Example usage:
+ *
+ * <p>Example usage:
  * <pre>{@code
  * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
  * 
@@ -76,7 +74,7 @@ public interface Cache<K, V> extends Closeable {
      * This method provides a null-safe way to handle cache misses and follows functional programming patterns.
      * The operation is thread-safe and does not block other cache operations.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns {@code Optional.empty()} if the key does not exist</li>
      * <li>Returns {@code Optional.empty()} if the entry has expired (TTL or idle timeout exceeded)</li>
@@ -84,7 +82,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Does not throw exceptions for missing keys - returns empty Optional instead</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -117,9 +115,9 @@ public interface Cache<K, V> extends Closeable {
      *
      * <p><b>Note:</b> This method is named {@code getOrNull} to distinguish it from {@link #get(Object)},
      * which returns {@code Optional<V>}. This naming convention clearly indicates the nullable return type
-     * while allowing both APIs to coexist.</p>
+     * while allowing both APIs to coexist.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns {@code null} if the key does not exist in the cache</li>
      * <li>Returns {@code null} if the entry has expired (TTL or idle timeout exceeded)</li>
@@ -127,7 +125,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Does not throw exceptions for missing keys - returns null instead</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -159,7 +157,7 @@ public interface Cache<K, V> extends Closeable {
      * are used unless overridden by the implementation. If the key already exists, its value will
      * be updated and its expiration time will be reset. The operation is thread-safe and atomic.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Overwrites existing entries with the same key</li>
      * <li>Resets TTL and idle timeout for existing entries</li>
@@ -167,7 +165,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Returns false if the operation fails (e.g., cache full and eviction not possible)</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -203,7 +201,7 @@ public interface Cache<K, V> extends Closeable {
      * The entry will be evicted when either the TTL expires (measured from the time of insertion)
      * or the idle time is exceeded (measured from the last access). The operation is thread-safe and atomic.
      *
-     * <p><b>Expiration Semantics:</b></p>
+     * <p><b>Expiration Semantics:</b>
      * <ul>
      * <li><b>liveTime (TTL):</b> Absolute expiration time from insertion. Entry is removed after this duration
      *     regardless of access patterns. Use 0 or negative to disable TTL expiration.</li>
@@ -213,7 +211,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>If both are set, the entry expires when either condition is met (whichever comes first).</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -248,7 +246,7 @@ public interface Cache<K, V> extends Closeable {
      * If the key exists, the entry is removed immediately; if not, the operation has no effect and
      * returns normally. The operation is atomic and does not block other cache operations.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Removes the entry if the key exists</li>
      * <li>Does nothing if the key does not exist (no error)</li>
@@ -256,7 +254,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Does not throw exceptions for non-existent keys</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -293,7 +291,7 @@ public interface Cache<K, V> extends Closeable {
      * and it does not reset idle timeout counters. However, expired entries may or may not be considered
      * present depending on the implementation - check implementation documentation for specifics.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns true if the key exists and is not expired</li>
      * <li>Returns false if the key does not exist or has expired</li>
@@ -302,7 +300,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>May be faster than {@link #get(Object)} for existence checks</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -341,7 +339,7 @@ public interface Cache<K, V> extends Closeable {
      * The returned ContinuableFuture provides functional composition capabilities for chaining
      * dependent operations.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns immediately with a ContinuableFuture that will complete with the result</li>
      * <li>The actual cache operation is executed asynchronously on a background thread</li>
@@ -349,7 +347,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe and non-blocking</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -388,7 +386,7 @@ public interface Cache<K, V> extends Closeable {
      * The returned ContinuableFuture provides functional composition capabilities for chaining
      * dependent operations.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns immediately with a ContinuableFuture that will complete with the result</li>
      * <li>The actual cache operation is executed asynchronously on a background thread</li>
@@ -396,7 +394,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe and non-blocking</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -438,7 +436,7 @@ public interface Cache<K, V> extends Closeable {
      * The returned ContinuableFuture provides functional composition capabilities for chaining
      * dependent operations.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns immediately with a ContinuableFuture that will complete with the result</li>
      * <li>The actual cache operation is executed asynchronously on a background thread</li>
@@ -447,7 +445,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe and non-blocking</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -490,7 +488,7 @@ public interface Cache<K, V> extends Closeable {
      * version of {@link #put(Object, Object, long, long)}. The returned ContinuableFuture provides
      * functional composition capabilities for chaining dependent operations.
      *
-     * <p><b>Expiration Semantics:</b></p>
+     * <p><b>Expiration Semantics:</b>
      * <ul>
      * <li><b>liveTime (TTL):</b> Absolute expiration time from insertion. Entry is removed after this duration
      *     regardless of access patterns. Use 0 or negative to disable TTL expiration.</li>
@@ -500,7 +498,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>If both are set, the entry expires when either condition is met (whichever comes first).</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -544,7 +542,7 @@ public interface Cache<K, V> extends Closeable {
      * allowing non-blocking cache removals. This is the asynchronous version of {@link #remove(Object)}.
      * The operation is idempotent - it succeeds whether the key exists or not.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns immediately with a ContinuableFuture that will complete when the operation finishes</li>
      * <li>The actual cache operation is executed asynchronously on a background thread</li>
@@ -553,7 +551,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe and non-blocking</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -590,7 +588,7 @@ public interface Cache<K, V> extends Closeable {
      * For most implementations, this method checks for the presence of the key but does not affect
      * the access time or reset idle timeout counters.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns immediately with a ContinuableFuture that will complete with the result</li>
      * <li>The actual cache operation is executed asynchronously on a background thread</li>
@@ -599,7 +597,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe and non-blocking</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -635,7 +633,7 @@ public interface Cache<K, V> extends Closeable {
      * depending on the implementation. The set may or may not include expired entries that have
      * not yet been evicted. Some cache implementations may throw UnsupportedOperationException.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>May return a snapshot (immutable) or live view (implementation-specific)</li>
      * <li>May or may not include expired but not yet evicted entries</li>
@@ -644,7 +642,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Some implementations (e.g., certain distributed caches) may not support this operation</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -681,7 +679,7 @@ public interface Cache<K, V> extends Closeable {
      * on the implementation. Some implementations may return an estimate rather than an exact count
      * for performance reasons, and some cache implementations may throw UnsupportedOperationException.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>May or may not include expired but not yet evicted entries</li>
      * <li>May return an estimate rather than exact count (particularly for distributed caches)</li>
@@ -690,7 +688,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Some implementations (e.g., certain distributed caches) may not support this operation</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -729,7 +727,7 @@ public interface Cache<K, V> extends Closeable {
      * This operation is thread-safe and atomic, though it may be expensive for distributed caches
      * or caches with very large numbers of entries. The operation may block briefly while clearing.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Removes all entries including expired and non-expired</li>
      * <li>After completion, {@link #size()} returns 0 and {@link #keySet()} returns an empty set</li>
@@ -738,7 +736,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Does not affect cache configuration or properties</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -773,7 +771,7 @@ public interface Cache<K, V> extends Closeable {
      * This method is idempotent and thread-safe - multiple calls have no additional effect and will not
      * throw exceptions.
      *
-     * <p><b>Resource Cleanup:</b></p>
+     * <p><b>Resource Cleanup:</b>
      * <ul>
      * <li>Releases all cached entries and associated memory</li>
      * <li>Stops background eviction threads (if any)</li>
@@ -783,9 +781,9 @@ public interface Cache<K, V> extends Closeable {
      * </ul>
      *
      * <p><b>Important:</b> It is recommended to always close the cache when it's no longer needed to prevent
-     * resource leaks. Use try-with-resources or try-finally blocks to ensure proper cleanup.</p>
+     * resource leaks. Use try-with-resources or try-finally blocks to ensure proper cleanup.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Try-with-resources (recommended approach)
      * try (Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000)) {
@@ -819,7 +817,7 @@ public interface Cache<K, V> extends Closeable {
      * Once a cache is closed via {@link #close()}, it cannot be reopened and should not be used.
      * This method is thread-safe and returns immediately without blocking.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns true if {@link #close()} has been called, false otherwise</li>
      * <li>Thread-safe and can be called from multiple threads</li>
@@ -827,7 +825,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Once true, will always remain true (caches cannot be reopened)</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -868,7 +866,7 @@ public interface Cache<K, V> extends Closeable {
      * in the cache. The properties are independent of cache entries and persist until explicitly removed
      * or the cache is closed.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns the same Properties instance for the lifetime of the cache</li>
      * <li>Properties are mutable and changes affect the cache</li>
@@ -876,7 +874,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe access depends on the Properties implementation</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -910,7 +908,7 @@ public interface Cache<K, V> extends Closeable {
      * Returns null if the property doesn't exist. The method performs an unchecked cast to the
      * expected type T, so the caller is responsible for ensuring the correct type is used.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns the property value if it exists</li>
      * <li>Returns null if the property doesn't exist</li>
@@ -918,7 +916,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe access depends on the Properties implementation</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.setProperty("description", "User cache");
@@ -956,7 +954,7 @@ public interface Cache<K, V> extends Closeable {
      * Properties can be used for custom configuration, metadata, or application-specific data.
      * The method returns the previous value if one existed, or null otherwise.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Sets the property value, overwriting any existing value</li>
      * <li>Returns the previous value if one existed, null otherwise</li>
@@ -965,7 +963,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe access depends on the Properties implementation</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -1006,7 +1004,7 @@ public interface Cache<K, V> extends Closeable {
      * This operation is idempotent - it succeeds whether the property exists or not, returning
      * the previous value if one existed, or null otherwise.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Removes the property if it exists</li>
      * <li>Returns the removed value if the property existed, null otherwise</li>
@@ -1015,7 +1013,7 @@ public interface Cache<K, V> extends Closeable {
      * <li>Thread-safe access depends on the Properties implementation</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.setProperty("description", "User cache");

@@ -42,7 +42,7 @@ package com.landawn.abacus.cache;
  * <li>Error handling - return null or false on failures rather than throwing exceptions</li>
  * </ul>
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * public class FileBasedOffHeapStore<K> implements OffHeapStore<K> {
  *     private final Path storageDir;
@@ -107,10 +107,10 @@ public interface OffHeapStore<K> {
      * Implementations should consider returning a defensive copy to prevent external
      * modifications, though this is implementation-specific.
      *
-     * <p><b>Thread Safety:</b></p>
+     * <p><b>Thread Safety:</b>
      * This method must be thread-safe and support concurrent access from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * OffHeapStore<String> store = new FileBasedOffHeapStore<>(Paths.get("/tmp/cache"));
      * byte[] data = store.get("user:123");
@@ -133,10 +133,10 @@ public interface OffHeapStore<K> {
      * Implementations should consider making a defensive copy of the byte array
      * if necessary to prevent external modifications, though this is implementation-specific.
      *
-     * <p><b>Thread Safety:</b></p>
+     * <p><b>Thread Safety:</b>
      * This method must be thread-safe and support concurrent access from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * OffHeapStore<String> store = new FileBasedOffHeapStore<>(Paths.get("/tmp/cache"));
      * User user = new User("John", 30);
@@ -160,10 +160,10 @@ public interface OffHeapStore<K> {
      * Returns {@code true} if a value was removed, {@code false} if the key was not found
      * or if an error occurred during removal. It is safe to call this method for a non-existent key.
      *
-     * <p><b>Thread Safety:</b></p>
+     * <p><b>Thread Safety:</b>
      * This method must be thread-safe and support concurrent access from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * OffHeapStore<String> store = new FileBasedOffHeapStore<>(Paths.get("/tmp/cache"));
      * if (store.remove("user:123")) {

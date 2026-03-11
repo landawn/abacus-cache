@@ -35,7 +35,7 @@ import redis.clients.jedis.JedisShardInfo;
  * for horizontal scaling and data distribution. Objects are serialized using Kryo for efficient
  * storage and retrieval.
  *
- * <p><b>Key Features:</b></p>
+ * <p><b>Key Features:</b>
  * <ul>
  *   <li>Automatic sharding across multiple Redis instances for horizontal scaling</li>
  *   <li>Efficient object serialization using Kryo parser</li>
@@ -44,7 +44,7 @@ import redis.clients.jedis.JedisShardInfo;
  *   <li>TTL (time-to-live) support for automatic expiration</li>
  * </ul>
  *
- * <p><b>Redis-Specific Behaviors:</b></p>
+ * <p><b>Redis-Specific Behaviors:</b>
  * <ul>
  *   <li>Keys are automatically distributed across shards using consistent hashing</li>
  *   <li>Increment/decrement operations auto-initialize non-existent keys to 0</li>
@@ -53,9 +53,9 @@ import redis.clients.jedis.JedisShardInfo;
  * </ul>
  *
  * <p><b>Thread Safety:</b> All public methods are thread-safe and can be called concurrently
- * from multiple threads. The underlying Jedis client handles connection pooling and thread safety.</p>
+ * from multiple threads. The underlying Jedis client handles connection pooling and thread safety.
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * // Create cache client with multiple Redis instances
  * JRedis<User> cache = new JRedis<>("localhost:6379,localhost:6380");
@@ -91,9 +91,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p>Each Redis instance becomes a shard in the distributed cache. When storing or retrieving
      * data, the appropriate shard is determined by hashing the key. This ensures even distribution
-     * of data across all servers.</p>
+     * of data across all servers.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Single Redis instance
      * JRedis<User> cache = new JRedis<>("localhost:6379");
@@ -125,9 +125,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p>The timeout value affects network operations with Redis servers. If a Redis operation
      * takes longer than the specified timeout, a timeout exception will be thrown. Choose an
-     * appropriate timeout based on your network latency and expected operation duration.</p>
+     * appropriate timeout based on your network latency and expected operation duration.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Cache with 5 second timeout
      * JRedis<Data> cache = new JRedis<>("redis1:6379,redis2:6379", 5000);
@@ -181,12 +181,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * The appropriate Redis shard is automatically determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis GET command. If the key
-     * does not exist or has expired, {@code null} is returned. The operation is O(1) time complexity.</p>
+     * does not exist or has expired, {@code null} is returned. The operation is O(1) time complexity.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple get operation
      * User user = cache.get("user:123");
@@ -235,14 +235,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Redis SETEX command which atomically sets both the value and expiration time. When
      * {@code liveTime} is 0 or negative, the Redis SET command is used without expiration, meaning
      * the key will persist until explicitly deleted. The operation is O(1) time complexity. If the
-     * key already exists, the previous value and TTL are completely replaced.</p>
+     * key already exists, the previous value and TTL are completely replaced.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
      * When multiple clients set the same key concurrently, the last write wins (Redis guarantees
-     * atomic execution of SETEX command).</p>
+     * atomic execution of SETEX command).
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Cache with 1 hour TTL
      * User user = new User("John", "john@example.com");
@@ -299,13 +299,13 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This method uses the Redis DEL command to remove the key.
      * The operation is O(1) time complexity. The command succeeds regardless of whether the key exists.
      * This method always returns {@code true} to indicate the DEL command was sent successfully,
-     * not to indicate whether the key actually existed.</p>
+     * not to indicate whether the key actually existed.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients. If multiple
-     * clients delete the same key concurrently, all will succeed (idempotent operation).</p>
+     * clients delete the same key concurrently, all will succeed (idempotent operation).
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple delete
      * boolean success = cache.delete("user:123");
@@ -357,17 +357,17 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis INCR command. If the key doesn't exist,
      * it will be automatically created with value 1 (Redis initializes to 0, then increments by 1).
      * This differs from Memcached which returns -1 for non-existent keys. The operation is O(1) time complexity.
-     * If the key contains a value that cannot be represented as an integer, an error will occur.</p>
+     * If the key contains a value that cannot be represented as an integer, an error will occur.
      *
      * <p><b>Important:</b> The key should contain a string representation of an integer. If the key
      * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
-     * will fail. Increment operations are meant for counters, not for general objects.</p>
+     * will fail. Increment operations are meant for counters, not for general objects.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly by Redis,
-     * ensuring no increments are lost. This makes it ideal for distributed counters and rate limiting.</p>
+     * ensuring no increments are lost. This makes it ideal for distributed counters and rate limiting.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple counter (auto-initializes to 1 if not exists)
      * long pageViews = cache.incr("page:views");
@@ -413,17 +413,17 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis INCRBY command. If the key doesn't exist,
      * it will be automatically created with the delta value (Redis initializes to 0, then increments by delta).
      * This differs from Memcached which returns -1 for non-existent keys. The operation is O(1) time complexity.
-     * If the key contains a value that cannot be represented as an integer, an error will occur.</p>
+     * If the key contains a value that cannot be represented as an integer, an error will occur.
      *
      * <p><b>Important:</b> The key should contain a string representation of an integer. If the key
      * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
-     * will fail. Increment operations are meant for counters, not for general objects.</p>
+     * will fail. Increment operations are meant for counters, not for general objects.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly by Redis,
-     * ensuring no increments are lost. This makes it ideal for distributed counters and batch operations.</p>
+     * ensuring no increments are lost. This makes it ideal for distributed counters and batch operations.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Game score increment
      * long score = cache.incr("player:score:123", 10);
@@ -471,18 +471,18 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis DECR command. If the key doesn't exist,
      * it will be automatically created with value -1 (Redis initializes to 0, then decrements by 1).
      * Unlike Memcached where values cannot go below 0, Redis allows negative values. The operation is
-     * O(1) time complexity. If the key contains a value that cannot be represented as an integer, an error will occur.</p>
+     * O(1) time complexity. If the key contains a value that cannot be represented as an integer, an error will occur.
      *
      * <p><b>Important:</b> The key should contain a string representation of an integer. If the key
      * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
      * will fail. Decrement operations are meant for counters, not for general objects. Unlike Memcached,
-     * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.</p>
+     * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly by Redis,
-     * ensuring no decrements are lost. This makes it ideal for resource quotas and inventory management.</p>
+     * ensuring no decrements are lost. This makes it ideal for resource quotas and inventory management.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Token bucket rate limiting
      * long remainingTokens = cache.decr("api:tokens:" + userId);
@@ -536,18 +536,18 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis DECRBY command. If the key doesn't exist,
      * it will be automatically created with the negative delta value (Redis initializes to 0, then decrements by delta).
      * Unlike Memcached where values cannot go below 0, Redis allows negative values. The operation is
-     * O(1) time complexity. If the key contains a value that cannot be represented as an integer, an error will occur.</p>
+     * O(1) time complexity. If the key contains a value that cannot be represented as an integer, an error will occur.
      *
      * <p><b>Important:</b> The key should contain a string representation of an integer. If the key
      * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
      * will fail. Decrement operations are meant for counters, not for general objects. Unlike Memcached,
-     * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.</p>
+     * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly by Redis,
-     * ensuring no decrements are lost. This makes it ideal for bulk resource management and quota systems.</p>
+     * ensuring no decrements are lost. This makes it ideal for bulk resource management and quota systems.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Bulk inventory decrement
      * int quantity = 5;
@@ -616,17 +616,17 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis FLUSHALL command on each shard.
      * It removes all keys from all databases (not just the currently selected database). The operation
      * is synchronous and blocks until all keys are removed from all shards. The time complexity is
-     * O(N) where N is the total number of keys across all databases on all shards.</p>
+     * O(N) where N is the total number of keys across all databases on all shards.
      *
      * <p><b>Warning:</b> This operation affects ALL databases on each Redis instance (DB 0 through DB 15
      * by default), not just the one being used by this client. If other applications share the same
-     * Redis instances, their data will also be deleted.</p>
+     * Redis instances, their data will also be deleted.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients.
      * Once executed, all cached data will be permanently lost. There is no way to recover
-     * the data after this operation completes.</p>
+     * the data after this operation completes.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // WARNING: This removes ALL data from ALL Redis instances!
      * cache.flushAll();
@@ -712,17 +712,17 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This method closes all connections to all Redis shards.
      * It releases network connections, socket resources, and any internal buffers. The underlying
      * Jedis client resources are cleaned up. This operation does not remove any data from Redis;
-     * it only closes the client-side connections.</p>
+     * it only closes the client-side connections.
      *
      * <p><b>Important:</b> This method should be called when the client is no longer needed to ensure
      * proper cleanup of network connections and other resources. It is safe to call this method
      * multiple times; subsequent calls will have no effect. After calling disconnect(), attempting
-     * to use the cache client will result in exceptions.</p>
+     * to use the cache client will result in exceptions.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe, but once called, no other operations should be
-     * attempted on this client instance from any thread.</p>
+     * attempted on this client instance from any thread.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Try-finally pattern (recommended)
      * JRedis<User> cache = new JRedis<>("localhost:6379");
@@ -791,10 +791,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Implementation Note:</b> Redis keys are binary-safe, meaning they can contain any
      * byte sequence. This method uses UTF-8 encoding which is the standard for most string-based
      * keys. UTF-8 ensures compatibility across different systems and handles international characters
-     * correctly.</p>
+     * correctly.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * String.getBytes() creates a new byte array on each call, so there are no shared mutable state issues.</p>
+     * String.getBytes() creates a new byte array on each call, so there are no shared mutable state issues.
      *
      * @param key the cache key to convert. Must not be {@code null}.
      * @return the UTF-8 encoded byte array representation of the key, never {@code null}
@@ -818,14 +818,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Serialization Details:</b> Kryo is a fast and efficient binary object graph serialization
      * framework for Java. It provides better performance and smaller serialized size compared to
      * standard Java serialization. Kryo handles object graphs, circular references, and complex
-     * data structures automatically.</p>
+     * data structures automatically.
      *
      * <p><b>Important:</b> The objects being serialized should be compatible with Kryo serialization.
      * Most Java objects work out of the box, but objects with special serialization requirements may
-     * need custom serializers. Classes should have proper constructors or be registered with Kryo.</p>
+     * need custom serializers. Classes should have proper constructors or be registered with Kryo.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.</p>
+     * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.
      *
      * @param value the value to encode. May be {@code null}.
      * @return the serialized byte array representation of the value, or empty array if value is {@code null}. Never {@code null}.
@@ -846,14 +846,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Deserialization Details:</b> Kryo is a fast and efficient binary object graph serialization
      * framework for Java. It provides better performance compared to standard Java serialization.
      * The deserialized object is reconstructed with the same state as when it was serialized,
-     * including all fields and nested objects.</p>
+     * including all fields and nested objects.
      *
      * <p><b>Important:</b> The class of the serialized object must be available on the classpath
      * at deserialization time. If the class structure has changed since serialization, deserialization
-     * may fail or produce unexpected results. Ensure class compatibility when upgrading applications.</p>
+     * may fail or produce unexpected results. Ensure class compatibility when upgrading applications.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.</p>
+     * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.
      *
      * @param bytes the byte array to decode. May be {@code null} or empty.
      * @return the deserialized object, or {@code null} if the byte array is {@code null} or empty

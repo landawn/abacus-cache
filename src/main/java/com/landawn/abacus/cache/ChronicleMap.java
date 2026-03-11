@@ -20,11 +20,9 @@ package com.landawn.abacus.cache;
  * This class is now backed by {@link LocalCache} so existing code that references
  * {@code ChronicleMap} remains functional even when the optional Chronicle-Map
  * dependency is unavailable.
- * </p>
  * <p>
  * Note: this is not a true Chronicle-Map integration. The behavior matches
  * {@code LocalCache} semantics and exists to keep the public API usable.
- * </p>
  *
  * @param <K> the key type
  * @param <V> the value type
@@ -38,7 +36,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
     /**
      * Creates a ChronicleMap-compatible cache with default settings.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, String> map = new ChronicleMap<>();
      * map.put("k", "v");
@@ -52,7 +50,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
     /**
      * Creates a ChronicleMap-compatible cache.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, Integer> map = new ChronicleMap<>(1_024, 60_000L);
      * map.put("count", 42);
@@ -68,7 +66,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
     /**
      * Creates a ChronicleMap-compatible cache with custom default timings.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, String> map = new ChronicleMap<>(2_048, 30_000L, 3_600_000L, 300_000L);
      * map.put("session", "abc", 10_000L, 5_000L);

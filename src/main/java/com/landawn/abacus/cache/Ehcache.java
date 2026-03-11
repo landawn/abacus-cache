@@ -35,7 +35,6 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * cache creation, not per-entry. Therefore, the {@code liveTime} and {@code maxIdleTime}
  * parameters in the {@link #put(Object, Object, long, long)} method are ignored.
  * Configure expiration settings when building the Ehcache instance instead.
- * </p>
  *
  * <p>
  * Ehcache features exposed through this wrapper:
@@ -47,7 +46,7 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  * <li>JSR-107 (JCache) compliance</li>
  * </ul>
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * // Create cache using Ehcache 3.x API
  * CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
@@ -80,7 +79,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * The underlying Ehcache instance should be pre-configured with desired
      * storage tiers, eviction policies, expiration settings, and loaders/writers.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
      *     .withCache("userCache",
@@ -107,9 +106,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * The operation may update access time depending on the eviction policy.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
-     * concurrent access to cache entries.</p>
+     * concurrent access to cache entries.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * User user = cache.getOrNull("userId123");
@@ -138,12 +137,11 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <b>Important Note:</b> Ehcache's expiration policy is configured at cache creation time.
      * The liveTime and maxIdleTime parameters are ignored by this implementation.
      * All entries use the cache-wide expiration settings.
-     * </p>
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
-     * concurrent updates to cache entries.</p>
+     * concurrent updates to cache entries.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * User user = new User("John", "john@example.com");
@@ -178,9 +176,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * This operation is idempotent - removing a non-existent key has no effect.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
-     * concurrent removal of cache entries.</p>
+     * concurrent removal of cache entries.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * cache.remove("userId123");
@@ -203,9 +201,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * This method tests for the presence of a key without retrieving its value.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. However, the result may become
-     * stale immediately in concurrent scenarios due to other threads modifying the cache.</p>
+     * stale immediately in concurrent scenarios due to other threads modifying the cache.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * if (cache.containsKey("userId123")) {
@@ -233,9 +231,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache-based locking or ensuring single initialization of cached values.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
-     * leveraging Ehcache's native atomic operations for optimal performance.</p>
+     * leveraging Ehcache's native atomic operations for optimal performance.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple conditional caching
      * User newUser = createUser();
@@ -282,12 +280,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * If a cache loader is configured, missing keys may be loaded automatically.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
-     * providing optimized batch retrieval capabilities.</p>
+     * providing optimized batch retrieval capabilities.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
-     * concurrent bulk operations.</p>
+     * concurrent bulk operations.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Batch retrieval
      * Set<String> keys = new HashSet<>(Arrays.asList("user:1", "user:2", "user:3"));
@@ -330,12 +328,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * writes are performed in a single batch. Existing entries are overwritten.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
-     * providing optimized batch storage capabilities.</p>
+     * providing optimized batch storage capabilities.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
-     * concurrent bulk operations.</p>
+     * concurrent bulk operations.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Batch insertion
      * Map<String, User> users = new HashMap<>();
@@ -374,12 +372,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * silently ignored. If a cache writer is configured, all deletions are performed in a single batch.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
-     * providing optimized batch removal capabilities.</p>
+     * providing optimized batch removal capabilities.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
-     * concurrent bulk operations.</p>
+     * concurrent bulk operations.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Batch removal
      * Set<String> keysToRemove = new HashSet<>(Arrays.asList("user:1", "user:2", "user:3"));
@@ -417,7 +415,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * expensive in terms of memory and performance. For distributed or disk-backed caches, this
      * operation would require scanning entire storage tiers.
      *
-     * <p><b>Why Not Supported:</b></p>
+     * <p><b>Why Not Supported:</b>
      * <ul>
      * <li>Ehcache 3.x API does not expose a keySet() or iterator() method</li>
      * <li>Multi-tier storage makes key enumeration prohibitively expensive</li>
@@ -427,9 +425,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * </ul>
      *
      * <p><b>Alternatives:</b> Track keys externally if enumeration is required, or use a different
-     * cache implementation that supports key iteration.</p>
+     * cache implementation that supports key iteration.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * try {
@@ -461,7 +459,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * require iterating through all keys across all storage tiers (on-heap, off-heap, disk), which
      * is not supported by Ehcache's API and would be prohibitively expensive for large caches.
      *
-     * <p><b>Why Not Supported:</b></p>
+     * <p><b>Why Not Supported:</b>
      * <ul>
      * <li>Ehcache 3.x API does not provide a size(), count(), or estimatedSize() method</li>
      * <li>Multi-tier storage (on-heap, off-heap, disk) makes accurate counting complex</li>
@@ -471,9 +469,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * </ul>
      *
      * <p><b>Alternatives:</b> Track cache entry count externally using atomic counters if needed,
-     * or use a different cache implementation that supports size reporting.</p>
+     * or use a different cache implementation that supports size reporting.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * try {
@@ -504,9 +502,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * (on-heap, off-heap, disk). This is a potentially expensive operation for large caches.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
-     * execution of the clear operation.</p>
+     * execution of the clear operation.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * cache.clear();
@@ -528,13 +526,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * This method clears all entries and marks the wrapper as closed.
      *
      * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
-     * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.</p>
+     * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.
      *
      * <p><b>Note:</b> This method only marks the wrapper as closed; it does not close or dispose
      * the underlying Ehcache instance. The underlying cache manager is responsible for managing
-     * the lifecycle of Ehcache instances.</p>
+     * the lifecycle of Ehcache instances.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * try {
@@ -566,9 +564,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * though most operations will throw {@link IllegalStateException} if the cache is closed.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
-     * The field is declared volatile to ensure visibility across threads.</p>
+     * The field is declared volatile to ensure visibility across threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * if (!cache.isClosed()) {

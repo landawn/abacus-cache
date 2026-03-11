@@ -26,27 +26,24 @@ import com.landawn.abacus.logging.LoggerFactory;
  * This class provides a simple distributed locking mechanism that can be used to coordinate
  * access to shared resources across multiple JVMs or servers. It leverages Memcached's atomic
  * add operation to ensure that only one client can hold a lock at a time.
- * 
- * <br><br>
- * Key features:
+ *
+ * <p>Key features:
  * <ul>
  * <li>Distributed mutual exclusion across multiple processes</li>
  * <li>Automatic lock expiration to prevent deadlocks</li>
  * <li>Optional value storage with the lock</li>
  * <li>Non-blocking lock acquisition</li>
  * </ul>
- * 
- * <br>
- * Implementation notes:
+ *
+ * <p>Implementation notes:
  * <ul>
  * <li>Uses Memcached's atomic add operation for lock acquisition</li>
  * <li>Lock expiration prevents permanent deadlocks if holder crashes</li>
  * <li>Not reentrant - same client cannot acquire lock twice</li>
  * <li>No queue or fairness guarantees - it's a simple mutex</li>
  * </ul>
- * 
- * <br>
- * Example usage:
+ *
+ * <p>Example usage:
  * <pre>{@code
  * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
  * 
@@ -71,9 +68,8 @@ import com.landawn.abacus.logging.LoggerFactory;
  *     System.out.println("Lock held by: " + currentHolder);
  * }
  * }</pre>
- * 
- * <br>
- * Thread Safety: This class is thread-safe. Multiple threads can safely call methods
+ *
+ * <p>Thread Safety: This class is thread-safe. Multiple threads can safely call methods
  * on the same instance. However, the lock itself is not reentrant.
  *
  * @param <K> the type of lock identifiers used as keys (typically String)
@@ -90,7 +86,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * Creates a new MemcachedLock instance connected to the specified Memcached server(s).
      * The server URL should be in the format "host1:port1,host2:port2" for multiple servers.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Single server
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
@@ -130,7 +126,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Always release locks in a finally block to prevent resource leaks</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
@@ -188,7 +184,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Adding contextual information for debugging distributed systems</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
@@ -260,7 +256,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Non-critical decision making where race conditions are acceptable</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
@@ -325,7 +321,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Returns {@code null} if the lock doesn't exist or if it stores an empty byte array</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
@@ -398,7 +394,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Be aware that locks can expire automatically, so unlock() may return false</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
@@ -466,7 +462,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Sanitize keys to comply with Memcached key restrictions</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Example 1: Custom implementation with namespace prefix
      * class NamespacedLock<V> extends MemcachedLock<String, V> {
@@ -529,7 +525,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Use conflicting TTL values that could cause unexpected behavior</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
@@ -575,7 +571,7 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p>It's strongly recommended to use this class with try-with-resources to ensure proper cleanup:
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Example 1: Recommended pattern with try-with-resources
      * try (MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211")) {

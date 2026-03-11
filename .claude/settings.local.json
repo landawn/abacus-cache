@@ -12,7 +12,14 @@
       "Bash(mvn compile:*)",
       "Bash(findstr:*)",
       "Bash(javac:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(find /Users/haiyangl/Landawn/abacus-cache/src/main/java -name \"*.java\" -print0 | xargs -0 perl -pi -e 's|</p>\\\\s*$||')",
+      "Bash(ls pom.xml build.gradle* gradlew* 2>/dev/null)",
+      "Bash(ls /Users/haiyangl/Landawn/abacus-cache/*.xml /Users/haiyangl/Landawn/abacus-cache/.classpath 2>/dev/null)",
+      "Bash(git checkout:*)",
+      "Bash(find /Users/haiyangl/Landawn/abacus-cache/src/main/java -name \"*.java\" -print0 | xargs -0 perl -pi -e 's|<\\\\/p>\\\\s*$||')",
+      "Bash(find /Users/haiyangl/Landawn/abacus-cache/src/main/java -name \"*.java\" -print0 | xargs -0 perl -pi -e 's/<p> /<p>/g')",
+      "Bash(find /Users/haiyangl/Landawn/abacus-cache/src/main/java -name \"*.java\" -print0 | xargs -0 perl -0777 -pi -e 's/\\(\\\\n\\\\s+\\\\*\\)\\\\s*\\\\n\\(\\\\s+\\\\*\\)\\\\s*\\\\n/$1\\\\n/g')"
     ],
     "deny": [],
     "ask": []

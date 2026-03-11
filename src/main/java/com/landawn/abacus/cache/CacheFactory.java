@@ -39,7 +39,7 @@ import com.landawn.abacus.util.TypeAttrParser;
  * <li>Custom implementations via class name</li>
  * </ul>
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * // Create local cache
  * LocalCache<String, User> localCache = CacheFactory.createLocalCache(
@@ -82,7 +82,7 @@ public final class CacheFactory {
      * expired entries. A value of 0 disables periodic eviction, but entries will still
      * be evicted on access if expired.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create cache with 1000 entries capacity, checking for expired entries every minute
      * LocalCache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
@@ -111,7 +111,7 @@ public final class CacheFactory {
      * it was added, regardless of access. The defaultMaxIdleTime determines how long an entry can
      * remain in the cache without being accessed before it expires.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create session cache: 500 capacity, check every 30s, expire after 30min or 15min idle
      * LocalCache<String, Session> cache = CacheFactory.createLocalCache(
@@ -149,7 +149,7 @@ public final class CacheFactory {
      * be used directly by the cache for all entry storage and retrieval operations.
      * The pool's capacity and eviction settings will override any defaults.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create custom pool with specific configuration
      * KeyedObjectPool<String, PoolableAdapter<User>> customPool =
@@ -190,7 +190,7 @@ public final class CacheFactory {
      * <li>Default circuit breaker configuration (max 100 consecutive failures, 1000ms retry delay)</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create Memcached client and wrap it
      * SpyMemcached<User> memcachedClient = new SpyMemcached<>("localhost:11211", 5000);
@@ -228,7 +228,7 @@ public final class CacheFactory {
      * <li>Logical separation of different cache regions within an application</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create Redis client
      * JRedis<Session> redisClient = new JRedis<>("localhost:6379", 3000);
@@ -272,7 +272,7 @@ public final class CacheFactory {
      * <li>Successful operations reset the failure counter and close the circuit</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create Redis client
      * JRedis<User> redisClient = new JRedis<>("localhost:6379", 3000);
@@ -331,7 +331,7 @@ public final class CacheFactory {
      * <li>{@code com.example.CustomCache(params...)} - Custom implementation with fully qualified class name</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Memcached with single server and default timeout
      * Cache<String, User> cache1 = CacheFactory.createCache("Memcached(localhost:11211)");

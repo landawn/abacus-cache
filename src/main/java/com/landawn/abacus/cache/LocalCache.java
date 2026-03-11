@@ -27,18 +27,16 @@ import com.landawn.abacus.pool.PoolableAdapter;
  * This cache stores objects in local memory and provides configurable time-to-live (TTL) and
  * idle timeout capabilities. It uses an underlying KeyedObjectPool for efficient memory management
  * and automatic eviction of expired entries.
- * 
- * <br><br>
- * Key features:
+ *
+ * <p>Key features:
  * <ul>
  * <li>Thread-safe operations</li>
  * <li>Automatic eviction based on capacity and time</li>
  * <li>Per-entry TTL and idle timeout support</li>
  * <li>Comprehensive statistics via {@link #stats()}</li>
  * </ul>
- * 
- * <br>
- * Example usage:
+ *
+ * <p>Example usage:
  * <pre>{@code
  * // Create cache with 1000 max entries, 60 second eviction delay
  * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
@@ -73,11 +71,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * the cache scans for expired entries to reclaim memory.
      *
      * <p>This constructor provides a simple way to create a cache with standard expiration
-     * settings, ideal for most use cases where entries should remain cached for a few hours.</p>
+     * settings, ideal for most use cases where entries should remain cached for a few hours.
      *
-     * <p><b>Thread Safety:</b> This cache is fully thread-safe for concurrent access.</p>
+     * <p><b>Thread Safety:</b> This cache is fully thread-safe for concurrent access.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create cache with 1000 max entries, check every 60 seconds for expired entries
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
@@ -108,11 +106,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>The defaultLiveTime and defaultMaxIdleTime parameters set the default expiration
      * behavior for entries added using {@link #put(Object, Object)}. Individual entries
-     * can override these defaults by using {@link #put(Object, Object, long, long)}.</p>
+     * can override these defaults by using {@link #put(Object, Object, long, long)}.
      *
-     * <p><b>Thread Safety:</b> This cache is fully thread-safe for concurrent access.</p>
+     * <p><b>Thread Safety:</b> This cache is fully thread-safe for concurrent access.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create cache with custom settings: 5000 capacity, 30s eviction check, 2h TTL, 30min idle
      * LocalCache<String, Data> cache = new LocalCache<>(5000, 30000, 7200000, 1800000);
@@ -152,11 +150,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>This constructor gives you full control over the underlying storage
      * mechanism while still benefiting from the cache abstraction and default
-     * expiration time management.</p>
+     * expiration time management.
      *
-     * <p><b>Thread Safety:</b> This cache is fully thread-safe if the provided pool is thread-safe.</p>
+     * <p><b>Thread Safety:</b> This cache is fully thread-safe if the provided pool is thread-safe.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create a custom pool with specific configuration
      * KeyedObjectPool<String, PoolableAdapter<User>> customPool =
@@ -192,9 +190,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * or idle timeout reached) or been evicted, {@code null} will be returned and the entry
      * will be removed from the cache during the next eviction cycle.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * cache.put("user:123", new User("John"));
@@ -228,11 +226,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <p>A liveTime of 0 or negative means the entry never expires based on age.
      * A maxIdleTime of 0 or negative means the entry never expires due to inactivity.
      * If both are 0 or negative, the entry will only be evicted when the cache
-     * reaches capacity and needs to make room for new entries.</p>
+     * reaches capacity and needs to make room for new entries.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * User user = new User("John");
@@ -276,9 +274,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * an exception. After this operation, {@link #containsKey(Object)} will return
      * {@code false} for the specified key.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * cache.put("user:123", user);
@@ -305,9 +303,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * the access time for idle timeout calculation, depending on the underlying
      * pool implementation, which could extend the entry's lifetime.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * cache.put("user:123", user);
@@ -340,11 +338,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <p>Use this method to enumerate all cached keys, inspect cache contents,
      * or perform bulk operations. Be aware that accessing values for returned keys
      * may still return {@code null} if entries have expired between obtaining the key set
-     * and accessing the values.</p>
+     * and accessing the values.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * cache.put("user:1", user1);
@@ -381,9 +379,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * (non-expired) entries may be lower. For the maximum capacity of the cache,
      * use {@link #stats()}.capacity().
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * cache.put("user:1", user1);
@@ -413,9 +411,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * or immediately after the clear). This is useful for cache invalidation scenarios
      * where all cached data needs to be refreshed.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * cache.put("user:1", user1);
@@ -448,9 +446,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <p>Use this method to monitor cache effectiveness and tune configuration
      * parameters for optimal performance. Key metrics like hit rate can help
      * determine if the cache capacity and TTL settings are appropriate for
-     * your workload.</p>
+     * your workload.
      *
-     * <p><b>Statistics provided:</b></p>
+     * <p><b>Statistics provided:</b>
      * <ul>
      * <li><b>capacity</b> - Maximum number of entries the cache can hold</li>
      * <li><b>size</b> - Current number of entries in the cache (may include expired entries)</li>
@@ -463,9 +461,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <li><b>dataSize</b> - Current data size (implementation-specific)</li>
      * </ul>
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      * // ... perform cache operations ...
@@ -516,12 +514,12 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * effect beyond the first invocation. The method is synchronized to ensure proper
      * shutdown coordination. It is strongly recommended to always close the cache when
      * it's no longer needed to prevent resource leaks, especially the background
-     * eviction thread.</p>
+     * eviction thread.
      *
      * <p><b>Thread Safety:</b> This method is synchronized and safe for concurrent calls.
-     * All concurrent operations will be allowed to complete before the cache is fully closed.</p>
+     * All concurrent operations will be allowed to complete before the cache is fully closed.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Try-with-resources (recommended approach)
      * try (LocalCache<String, User> cache = new LocalCache<>(1000, 60000)) {
@@ -561,9 +559,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * sharing cache instances across components. Once closed, the cache cannot
      * be reopened - a new instance must be created.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
      *

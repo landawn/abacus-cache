@@ -38,9 +38,8 @@ import net.spy.memcached.transcoders.Transcoder;
  * This class provides high-performance, asynchronous access to Memcached servers with
  * support for both synchronous and asynchronous operations. It uses Kryo serialization
  * when available for efficient object storage.
- * 
- * <br><br>
- * Key features:
+ *
+ * <p>Key features:
  * <ul>
  * <li>Asynchronous and synchronous operations</li>
  * <li>Bulk get operations for efficiency</li>
@@ -48,9 +47,8 @@ import net.spy.memcached.transcoders.Transcoder;
  * <li>Configurable timeouts and serialization</li>
  * <li>Future-based async API</li>
  * </ul>
- * 
- * <br>
- * Example usage:
+ *
+ * <p>Example usage:
  * <pre>{@code
  * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211");
  * 
@@ -82,7 +80,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * The server URL should contain comma-separated host:port pairs for multiple servers.
      * The default timeout value is defined in the parent class {@link AbstractDistributedCacheClient#DEFAULT_TIMEOUT}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * SpyMemcached<String> cache = new SpyMemcached<>("localhost:11211");
      * cache.set("key1", "value1", 3600000);
@@ -103,7 +101,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * object serialization via {@link KryoTranscoder}; otherwise, the default SpyMemcached
      * serialization mechanism is used.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create cache with 5-second operation timeout
      * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211", 5000);
@@ -158,9 +156,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * The operation timeout is configured during client construction.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple get operation
      * User user = cache.get("user:123");
@@ -199,9 +197,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * and retrieve the result when available. The operation timeout is configured during
      * client construction.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async get
      * Future<User> future = cache.asyncGet("user:123");
@@ -237,9 +235,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * complete or timeout.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Basic bulk get
      * Map<String, User> users = cache.getBulk("user:1", "user:2", "user:3");
@@ -276,9 +274,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * in the returned map. This operation is more efficient than multiple individual async get
      * operations as it uses a single network round-trip.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async bulk get
      * Future<Map<String, User>> future = cache.asyncGetBulk("user:1", "user:2");
@@ -313,9 +311,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * complete or timeout.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Using a List (requires: import java.util.List;)
      * List<String> userKeys = Arrays.asList("user:123", "user:456", "user:789");
@@ -352,9 +350,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * in the returned map. This operation is more efficient than multiple individual async get
      * operations as it uses a single network round-trip.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async bulk get with collection (requires: import java.util.Set;)
      * Set<String> keys = new HashSet<>(Arrays.asList("user:1", "user:2"));
@@ -386,9 +384,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
-     * When multiple clients set the same key concurrently, the last write wins.</p>
+     * When multiple clients set the same key concurrently, the last write wins.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Cache with 1 hour TTL
      * User user = new User("John", "john@example.com");
@@ -432,9 +430,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * returns immediately without blocking. The liveTime is converted from milliseconds to
      * seconds for Memcached (rounded up if not exact).
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async set
      * Future<Boolean> future = cache.asyncSet("user:123", user, 3600000);
@@ -475,9 +473,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * for Memcached (rounded up if not exact).
      *
      * <p><b>Thread Safety:</b> This operation is atomic, ensuring that in concurrent scenarios, only one client
-     * will successfully add the key while others will receive {@code false}.</p>
+     * will successfully add the key while others will receive {@code false}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple conditional add
      * if (cache.add("user:123", user, 3600000)) {
@@ -521,9 +519,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * is converted from milliseconds to seconds for Memcached (rounded up if not exact).
      *
      * <p><b>Thread Safety:</b> This operation is atomic, ensuring that in concurrent scenarios, only one client
-     * will successfully add the key while others will receive {@code false}.</p>
+     * will successfully add the key while others will receive {@code false}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async add
      * Future<Boolean> future = cache.asyncAdd("user:123", user, 3600000);
@@ -565,9 +563,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * for Memcached (rounded up if not exact).
      *
      * <p><b>Thread Safety:</b> This operation is atomic, ensuring that updates are applied atomically even in
-     * concurrent scenarios.</p>
+     * concurrent scenarios.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple replace operation
      * if (cache.replace("user:123", updatedUser, 3600000)) {
@@ -607,9 +605,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * is converted from milliseconds to seconds for Memcached (rounded up if not exact).
      *
      * <p><b>Thread Safety:</b> This operation is atomic, ensuring that updates are applied atomically even in
-     * concurrent scenarios.</p>
+     * concurrent scenarios.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async replace
      * Future<Boolean> future = cache.asyncReplace("user:123", updatedUser, 3600000);
@@ -649,9 +647,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * before deletion. This operation succeeds whether or not the key exists in the cache.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.</p>
+     * The implementation handles concurrent access safely across distributed cache clients.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple delete
      * boolean success = cache.delete("user:123");
@@ -693,9 +691,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * operation was acknowledged by the server, not necessarily whether the key existed before
      * deletion. This operation succeeds whether or not the key exists in the cache.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.</p>
+     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async delete
      * Future<Boolean> future = cache.asyncDelete("user:123");
@@ -731,13 +729,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> If the key doesn't exist, returns -1. Only works with string
      * representations of 64-bit unsigned integers stored in Memcached. The value must be stored as a
-     * decimal string representation.</p>
+     * decimal string representation.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
-     * ensuring no increments are lost.</p>
+     * ensuring no increments are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple counter
      * long pageViews = cache.incr("page:views");
@@ -779,13 +777,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> If the key doesn't exist, returns -1. Only works with string
      * representations of 64-bit unsigned integers stored in Memcached. The value must be stored as a
-     * decimal string representation.</p>
+     * decimal string representation.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
-     * ensuring no increments are lost.</p>
+     * ensuring no increments are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Game score increment
      * long score = cache.incr("player:score", 10);
@@ -834,13 +832,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)} which return -1
      * when the key doesn't exist, this method creates the key with the defaultValue if it doesn't exist,
-     * then increments it. The result is stored as a 64-bit unsigned integer in decimal string format.</p>
+     * then increments it. The result is stored as a 64-bit unsigned integer in decimal string format.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
-     * ensuring no increments are lost.</p>
+     * ensuring no increments are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Initialize counter to 0 if not exists, then increment by 1
      * long count = cache.incr("counter:views", 1, 0);
@@ -876,13 +874,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)} which return -1
      * when the key doesn't exist, this method creates the key with the defaultValue if it doesn't exist,
-     * then increments it. The result is stored as a 64-bit unsigned integer in decimal string format.</p>
+     * then increments it. The result is stored as a 64-bit unsigned integer in decimal string format.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
-     * ensuring no increments are lost.</p>
+     * ensuring no increments are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Hourly counter that expires after 1 hour
      * long count = cache.incr("counter:hourly", 1, 0, 3600000);
@@ -919,13 +917,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Memcached-Specific Behavior:</b> If the key doesn't exist, returns -1. Values cannot go below 0
      * (Memcached prevents underflow - attempting to decrement 0 results in 0, not a negative value).
      * Only works with string representations of 64-bit unsigned integers stored in Memcached. The value
-     * must be stored as a decimal string representation.</p>
+     * must be stored as a decimal string representation.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
-     * ensuring no decrements are lost.</p>
+     * ensuring no decrements are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Token bucket rate limiting
      * long remainingTokens = cache.decr("api:tokens:" + userId);
@@ -968,13 +966,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Memcached-Specific Behavior:</b> If the key doesn't exist, returns -1. Values cannot go below 0
      * (Memcached prevents underflow - if delta is larger than the current value, the result will be 0, not negative).
      * Only works with string representations of 64-bit unsigned integers stored in Memcached. The value
-     * must be stored as a decimal string representation.</p>
+     * must be stored as a decimal string representation.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
-     * ensuring no decrements are lost.</p>
+     * ensuring no decrements are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Bulk inventory decrement
      * long inventory = cache.decr("product:stock:456", 5);
@@ -1037,13 +1035,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * when the key doesn't exist, this method creates the key with the defaultValue if it doesn't exist,
      * then decrements it. Values cannot go below 0 (Memcached prevents underflow - if delta is larger than
      * defaultValue or the current value, the result will be 0). The result is stored as a 64-bit unsigned
-     * integer in decimal string format.</p>
+     * integer in decimal string format.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
-     * ensuring no decrements are lost.</p>
+     * ensuring no decrements are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Initialize inventory to 100 if not exists, then decrement by 1
      * long remaining = cache.decr("inventory:item123", 1, 100);
@@ -1083,13 +1081,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * when the key doesn't exist, this method creates the key with the defaultValue if it doesn't exist,
      * then decrements it. Values cannot go below 0 (Memcached prevents underflow - if delta is larger than
      * defaultValue or the current value, the result will be 0). The result is stored as a 64-bit unsigned
-     * integer in decimal string format.</p>
+     * integer in decimal string format.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
-     * ensuring no decrements are lost.</p>
+     * ensuring no decrements are lost.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Daily quota that expires after 24 hours
      * long remaining = cache.decr("quota:user:123", 1, 1000, 86400000);
@@ -1128,9 +1126,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients.
      * Once executed, all cached data will be permanently lost. There is no way to recover
-     * the data after this operation completes.</p>
+     * the data after this operation completes.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // WARNING: This removes ALL data from ALL cache servers!
      * cache.flushAll();
@@ -1169,9 +1167,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * keys from all servers and cannot be undone. Use with extreme caution in production.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients
-     * once the flush completes.</p>
+     * once the flush completes.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async flush
      * Future<Boolean> future = cache.asyncFlushAll();
@@ -1204,9 +1202,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * to seconds for Memcached (rounded up if not exact).
      *
      * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients
-     * after the delay period expires.</p>
+     * after the delay period expires.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Schedule a flush to happen in 5 seconds
      * boolean scheduled = cache.flushAll(5000);
@@ -1239,9 +1237,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * for Memcached (rounded up if not exact).
      *
      * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients
-     * after the delay period expires.</p>
+     * after the delay period expires.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Schedule a flush to happen in 10 seconds
      * Future<Boolean> future = cache.asyncFlushAll(10000);
@@ -1272,13 +1270,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * is idempotent - calling it multiple times has no additional effect.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe, and uses synchronization to ensure only one
-     * disconnect occurs. Once called, no other operations should be attempted on this client instance.</p>
+     * disconnect occurs. Once called, no other operations should be attempted on this client instance.
      *
      * <p>This method should be called when the client is no longer needed to ensure
      * proper cleanup of network connections, thread pools, and other resources. It is
-     * safe to call this method multiple times; subsequent calls will have no effect.</p>
+     * safe to call this method multiple times; subsequent calls will have no effect.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Try-finally pattern
      * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211");
@@ -1321,13 +1319,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * times has no additional effect.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe, and uses synchronization to ensure only one
-     * disconnect occurs. Once called, no other operations should be attempted on this client instance.</p>
+     * disconnect occurs. Once called, no other operations should be attempted on this client instance.
      *
      * <p>This method should be called when the client is no longer needed to ensure
      * proper cleanup of network connections, thread pools, and other resources. The timeout
-     * allows pending operations to complete gracefully.</p>
+     * allows pending operations to complete gracefully.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Graceful shutdown with timeout
      * try {
@@ -1393,9 +1391,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * before throwing the runtime exception.
      *
      * <p>This is a utility method used internally to convert asynchronous operations
-     * to synchronous ones by blocking on the Future result.</p>
+     * to synchronous ones by blocking on the Future result.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Internal usage pattern
      * Future<Boolean> future = mc.set("key", "value", 3600);
@@ -1431,7 +1429,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * This method handles the IOException that may occur during client creation
      * and converts it to an unchecked exception for easier handling.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * ConnectionFactory factory = new DefaultConnectionFactory();
      * MemcachedClient client = createSpyMemcachedClient("localhost:11211", factory);

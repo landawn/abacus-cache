@@ -30,7 +30,6 @@ import com.github.benmanes.caffeine.cache.stats.CacheStats;
  * cache creation, not per-entry. Therefore, the {@code liveTime} and {@code maxIdleTime}
  * parameters in the {@link #put(Object, Object, long, long)} method are ignored.
  * Configure expiration settings when building the Caffeine cache instance instead.
- * </p>
  *
  * <p>
  * Caffeine features exposed through this wrapper:
@@ -41,7 +40,7 @@ import com.github.benmanes.caffeine.cache.stats.CacheStats;
  * <li>Window TinyLFU eviction policy for near-optimal hit rate</li>
  * </ul>
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * import com.github.benmanes.caffeine.cache.Cache;
  * import com.github.benmanes.caffeine.cache.Caffeine;
@@ -78,7 +77,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * The underlying Caffeine cache should be pre-configured with desired
      * eviction policies, maximum size, and expiration settings.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * import com.github.benmanes.caffeine.cache.Cache;
      * import com.github.benmanes.caffeine.cache.Caffeine;
@@ -108,9 +107,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * when the Caffeine cache was created.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
-     * from multiple threads.</p>
+     * from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user, 0, 0);
@@ -140,12 +139,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Important:</b> Caffeine's expiration policy is configured at cache creation time
      * using the Caffeine builder, not per-entry. Therefore, the {@code liveTime} and
      * {@code maxIdleTime} parameters are ignored by this implementation. All entries use
-     * the cache-wide expiration settings configured when building the Caffeine instance.</p>
+     * the cache-wide expiration settings configured when building the Caffeine instance.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
-     * from multiple threads. The underlying Caffeine cache handles synchronization.</p>
+     * from multiple threads. The underlying Caffeine cache handles synchronization.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Configure expiration at cache creation time
      * Cache<String, User> caffeine = Caffeine.newBuilder()
@@ -188,9 +187,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * silently without throwing an exception.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
-     * from multiple threads.</p>
+     * from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user, 0, 0);
@@ -218,9 +217,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Returns false if the entry has expired or been evicted.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
-     * from multiple threads.</p>
+     * from multiple threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user, 0, 0);
@@ -249,7 +248,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * thread-safety over providing a key set view, which would require additional memory and
      * synchronization overhead.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * try {
@@ -277,9 +276,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * provide fast size estimates without blocking concurrent operations.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
-     * from multiple threads without blocking.</p>
+     * from multiple threads without blocking.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user1, 0, 0);
@@ -306,9 +305,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * will be logically invalidated when this method returns.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. However, concurrent put operations
-     * may add new entries while the clear is in progress.</p>
+     * may add new entries while the clear is in progress.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * cache.put("user:123", user1, 0, 0);
@@ -335,9 +334,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Closeable), but all entries are invalidated.
      *
      * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
-     * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.</p>
+     * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Try-with-resources pattern (recommended)
      * try (CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance)) {
@@ -383,9 +382,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Returns true if {@link #close()} has been called on this cache.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
-     * The field is declared volatile to ensure visibility across threads.</p>
+     * The field is declared volatile to ensure visibility across threads.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * if (!cache.isClosed()) {
@@ -414,12 +413,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Note:</b> This is a Caffeine-specific method not present in the base Cache interface.
      * If stats recording was not enabled during cache creation, this method returns a stats object
      * with all zero values. Statistics recording has a small performance overhead, so it should
-     * only be enabled when monitoring is required.</p>
+     * only be enabled when monitoring is required.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and returns a consistent snapshot
-     * of statistics at the time of invocation.</p>
+     * of statistics at the time of invocation.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create cache with stats enabled
      * Cache<String, User> caffeine = Caffeine.newBuilder()
@@ -460,7 +459,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * checks the volatile {@code isClosed} field to ensure visibility across threads.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe due to the volatile
-     * {@code isClosed} field.</p>
+     * {@code isClosed} field.
      *
      * @throws IllegalStateException if the cache has been closed via {@link #close()}
      */

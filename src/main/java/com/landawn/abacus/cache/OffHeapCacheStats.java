@@ -12,8 +12,7 @@ import java.util.Objects;
  * cache statistics with off-heap specific metrics like disk I/O performance and memory
  * segment utilization.
  *
- * <br><br>
- * Understanding the metrics:
+ * <p>Understanding the metrics:
  * <ul>
  * <li>Memory metrics: allocatedMemory is the total reserved, occupiedMemory is actually used</li>
  * <li>Data metrics: dataSize is the actual serialized data size, smaller than occupiedMemory due to slot allocation</li>
@@ -21,7 +20,7 @@ import java.util.Objects;
  * <li>Put metrics: putCount = size + sizeOnDisk + evictions (approximately)</li>
  * </ul>
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * OffHeapCache<String, byte[]> cache = OffHeapCache.builder()
  *     .capacityInMB(100)
@@ -118,11 +117,10 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * segment index as key and number of occupied slots in that segment as value.
      * This provides detailed information about memory fragmentation and utilization.
      *
-     * <br><br>
-     * Note: The map returned by this accessor is deeply unmodifiable. Both the outer map and
+     * <p>Note: The map returned by this accessor is deeply unmodifiable. Both the outer map and
      * nested maps are defensive copies captured during record construction.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Map<Integer, Map<Integer, Integer>> slots = stats.occupiedSlots();
      * // slots might contain: {1024 -> {0 -> 5, 1 -> 3}, 2048 -> {2 -> 2}}
@@ -160,7 +158,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * All values are in milliseconds. If no operations have been recorded,
      * all values will be 0.0.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MinMaxAvg writeStats = stats.writeToDiskTimeStats();
      * System.out.println("Write time - Min: " + writeStats.min() + "ms, " +
@@ -178,7 +176,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
          * The format is: {@code {min: <value>, max: <value>, avg: <value>}} where
          * each value is a double representing milliseconds.
          *
-         * <p><b>Usage Examples:</b></p>
+         * <p><b>Usage Examples:</b>
          * <pre>{@code
          * MinMaxAvg stats = new MinMaxAvg(5.2, 150.8, 45.3);
          * System.out.println(stats.toString());
@@ -199,7 +197,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * are occupied across different memory segments. This is useful for analyzing
      * memory fragmentation and understanding how memory is being utilized.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Map<Integer, Integer> segmentOccupation = new LinkedHashMap<>();
      * segmentOccupation.put(0, 5);   // Segment 0 has 5 occupied slots

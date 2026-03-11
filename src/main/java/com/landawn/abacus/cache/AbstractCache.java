@@ -28,18 +28,16 @@ import com.landawn.abacus.util.u.Optional;
  * This class implements the asynchronous operations, property management, and default
  * behaviors defined in the Cache interface. It serves as the foundation for all
  * concrete cache implementations in the framework.
- * 
- * <br><br>
- * Key features provided:
+ *
+ * <p>Key features provided:
  * <ul>
  * <li>Asynchronous operation implementations using a shared thread pool</li>
  * <li>Default TTL and idle time management</li>
  * <li>Property bag for custom configuration</li>
  * <li>Optional-based wrapper methods</li>
  * </ul>
- * 
- * <br>
- * Subclasses must implement:
+ *
+ * <p>Subclasses must implement:
  * <ul>
  * <li>{@link #getOrNull(Object)} - Direct value retrieval</li>
  * <li>{@link #put(Object, Object, long, long)} - Storage with expiration</li>
@@ -51,9 +49,8 @@ import com.landawn.abacus.util.u.Optional;
  * <li>{@link #close()} - Resource cleanup</li>
  * <li>{@link #isClosed()} - State check</li>
  * </ul>
- * 
- * <br>
- * Example of extending this class:
+ *
+ * <p>Example of extending this class:
  * <pre>{@code
  * public class MyCache<K, V> extends AbstractCache<K, V> {
  *     private final Map<K, V> storage = new ConcurrentHashMap<>();
@@ -124,7 +121,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Creates an AbstractCache with custom default expiration times.
      * These defaults are used when entries are added without explicit expiration.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create cache with 1 hour TTL and 15 minutes idle time
      * AbstractCache<String, User> cache = new MyCache<>(3600000L, 900000L);
@@ -143,7 +140,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * This method provides a null-safe way to handle cache misses and follows functional programming patterns.
      * The operation is thread-safe and does not block other cache operations.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns {@code Optional.empty()} if the key does not exist</li>
      * <li>Returns {@code Optional.empty()} if the entry has expired (TTL or idle timeout exceeded)</li>
@@ -151,7 +148,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * <li>Does not throw exceptions for missing keys - returns empty Optional instead</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -185,7 +182,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * are used unless overridden by the implementation. If the key already exists, its value will
      * be updated and its expiration time will be reset. The operation is thread-safe and atomic.
      *
-     * <p><b>Behavior:</b></p>
+     * <p><b>Behavior:</b>
      * <ul>
      * <li>Overwrites existing entries with the same key</li>
      * <li>Resets TTL and idle timeout for existing entries</li>
@@ -193,7 +190,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * <li>Returns false if the operation fails (e.g., cache full and eviction not possible)</li>
      * </ul>
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -231,7 +228,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * The operation is executed on a background thread from the shared async executor pool.
      * This is the asynchronous version of {@link #get(Object)}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.asyncGet("user:123")
@@ -254,7 +251,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * The operation is executed on a background thread from the shared async executor pool.
      * This is the asynchronous version of {@link #getOrNull(Object)}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.asyncGetOrNull("user:123")
@@ -281,7 +278,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * The operation is executed on a background thread from the shared async executor pool.
      * This is the asynchronous version of {@link #put(Object, Object)}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.asyncPut("user:123", user)
@@ -308,7 +305,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * The operation is executed on a background thread from the shared async executor pool.
      * This is the asynchronous version of {@link #put(Object, Object, long, long)}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.asyncPut("session:abc", session, 3600000, 1800000)
@@ -337,7 +334,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * The operation is executed on a background thread from the shared async executor pool.
      * This is the asynchronous version of {@link #remove(Object)}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.asyncRemove("user:123")
@@ -363,7 +360,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * The operation is executed on a background thread from the shared async executor pool.
      * This is the asynchronous version of {@link #containsKey(Object)}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.asyncContainsKey("user:123")
@@ -387,7 +384,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * associated with this cache. The returned Properties object is mutable and changes are reflected
      * in the cache.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * Properties<String, Object> props = cache.getProperties();
@@ -412,7 +409,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * This is a convenience method equivalent to calling {@code getProperties().get(propName)}.
      * Returns null if the property doesn't exist.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.setProperty("description", "User cache");
@@ -442,7 +439,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * This is a convenience method equivalent to calling {@code getProperties().put(propName, propValue)}.
      * Properties can be used for custom configuration, metadata, or application-specific data.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
@@ -474,7 +471,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * This is a convenience method equivalent to calling {@code getProperties().remove(propName)}.
      * This operation is idempotent - it succeeds whether the property exists or not.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.setProperty("description", "User cache");

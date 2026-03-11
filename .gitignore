@@ -1,3 +1,5 @@
 /target/
 /.factorypath
 /rocksdb-data/
+/.apt_generated/
+/.apt_generated_tests/

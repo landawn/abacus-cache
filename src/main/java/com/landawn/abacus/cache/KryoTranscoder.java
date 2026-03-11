@@ -38,7 +38,7 @@ import net.spy.memcached.transcoders.Transcoder;
  * handles thread-safety internally using ThreadLocal for Kryo instances,
  * ensuring safe concurrent access from multiple threads.
  *
- * <p><b>Usage Examples:</b></p>
+ * <p><b>Usage Examples:</b>
  * <pre>{@code
  * // Create a custom connection factory with Kryo transcoder
  * ConnectionFactory connFactory = new DefaultConnectionFactory() {
@@ -69,7 +69,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * <p>This constructor is suitable for most use cases where the default size limits
      * are appropriate. For custom size requirements, use {@link #KryoTranscoder(int)}.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create transcoder with default max size
      * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
@@ -96,7 +96,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * <p>Use this constructor when you need to enforce custom size limits based on your
      * application's memory constraints or cache infrastructure requirements.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create transcoder with 1MB max size
      * KryoTranscoder<User> transcoder = new KryoTranscoder<>(1024 * 1024);
@@ -129,7 +129,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * should be performed asynchronously. Since Kryo deserialization is already highly
      * efficient, performing it synchronously avoids unnecessary threading overhead.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
      * User user = new User("Bob", 30);
@@ -162,7 +162,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * graph to a compact binary representation using Kryo's optimized serialization protocol.
      * The resulting byte array is wrapped in a {@code CachedData} object along with metadata.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
      *
@@ -209,7 +209,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * available on the classpath. If the class structure has changed between encoding and decoding
      * (e.g., fields added/removed), deserialization may fail or produce unexpected results.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
      *
@@ -258,7 +258,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * way for callers to query the size limit and make decisions about whether to
      * cache particular objects.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * KryoTranscoder<User> transcoder = new KryoTranscoder<>(1024 * 1024);
      *

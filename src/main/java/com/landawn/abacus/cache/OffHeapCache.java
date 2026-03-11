@@ -40,9 +40,8 @@ import lombok.experimental.Accessors;
  * This cache stores objects outside the JVM heap to reduce garbage collection pressure and allow
  * for larger cache sizes. It includes support for automatic eviction, disk spillover, and
  * comprehensive statistics.
- * 
- * <br><br>
- * Key features:
+ *
+ * <p>Key features:
  * <ul>
  * <li>Direct memory allocation outside JVM heap</li>
  * <li>Automatic memory defragmentation</li>
@@ -51,18 +50,16 @@ import lombok.experimental.Accessors;
  * <li>Per-entry TTL and idle timeout</li>
  * <li>Comprehensive performance statistics</li>
  * </ul>
- * 
- * <br>
- * Important notes:
+ *
+ * <p>Important notes:
  * <ul>
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
  * <li>Requires JVM flags for Unsafe access (see class comment)</li>
  * <li>Memory is allocated at startup and held until shutdown</li>
  * </ul>
- * 
- * <br>
- * Example usage:
+ *
+ * <p>Example usage:
  * <pre>{@code
  * OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]>builder()
  *     .capacityInMB(100)
@@ -113,12 +110,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * (3 hours TTL and 30 minutes idle time). Memory is allocated at construction time and held until close().
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
-     * <p><b>Memory Management:</b></p>
+     * <p><b>Memory Management:</b>
      * The memory is allocated immediately from native (off-heap) memory using sun.misc.Unsafe.
      * This memory remains allocated until close() is called. The actual allocation size is
      * capacityInMB * 1048576 bytes (1MB = 1048576 bytes).
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create a 100MB off-heap cache
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
@@ -146,13 +143,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * The eviction delay controls how frequently the cache scans for expired entries and reclaims empty segments.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
-     * <p><b>Memory Management:</b></p>
+     * <p><b>Memory Management:</b>
      * Memory is allocated immediately from native (off-heap) memory. The eviction process runs
      * periodically at the specified interval to remove expired entries and reclaim memory from
      * empty segments. Setting evictDelay to 0 or negative disables automatic eviction, but
      * expired entries will still be removed lazily on access.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // 200MB cache with 60 second eviction interval
      * OffHeapCache<Long, Data> cache = new OffHeapCache<>(200, 60000);
@@ -180,11 +177,11 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * This constructor provides complete control over cache timing behavior.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
-     * <p><b>Memory Management:</b></p>
+     * <p><b>Memory Management:</b>
      * Native memory is allocated immediately. The default max block size (8192 bytes) is used,
      * and the default vacating factor (0.2) determines when LRU eviction triggers to free space.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // 500MB, 30s eviction, 1h TTL, 30min idle
      * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(500, 30000, 3600000, 1800000);
@@ -213,12 +210,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * This constructor is called internally by the Builder's build() method and should not be
      * invoked directly. It provides access to all advanced configuration options including
      * custom serialization, disk spillover, and memory management tuning.
-     * <br><br>
-     * This is the most flexible constructor, delegating to the parent AbstractOffHeapCache with all
+     * 
+     * <p>This is the most flexible constructor, delegating to the parent AbstractOffHeapCache with all
      * configuration parameters. For typical usage, prefer the public constructors or use the Builder
      * created via {@link #builder()}.
      *
-     * <p><b>Memory Management:</b></p>
+     * <p><b>Memory Management:</b>
      * Memory is allocated immediately using sun.misc.Unsafe.allocateMemory(). The maxBlockSize parameter
      * controls how values are stored - values larger than maxBlockSize are split across multiple blocks.
      * The vacatingFactor determines when defragmentation is triggered to reclaim fragmented memory.
@@ -268,12 +265,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * This memory is outside the JVM heap and must be explicitly freed via deallocate().
      * The allocated memory address is used for direct byte-level operations.
      * This is an internal method called automatically during cache construction and should not be called directly.
-     * <br><br>
-     * The memory is allocated from the native heap, not managed by the Java garbage collector.
+     * 
+     * <p>The memory is allocated from the native heap, not managed by the Java garbage collector.
      * This reduces GC pressure but requires manual deallocation via {@link #deallocate()} to prevent memory leaks.
      * The allocated memory is uninitialized and may contain arbitrary data.
      *
-     * <p><b>Memory Management:</b></p>
+     * <p><b>Memory Management:</b>
      * This method uses {@link sun.misc.Unsafe#allocateMemory(long)} which directly allocates native memory
      * from the operating system. The memory remains allocated until explicitly freed. Unlike heap memory,
      * this allocation does not trigger garbage collection or affect heap usage statistics.
@@ -298,12 +295,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Called during cache shutdown to release native memory and prevent memory leaks.
      * This method is automatically invoked by close(). This is an internal method
      * and should not be called directly.
-     * <br><br>
-     * Once called, the memory address (_startPtr) becomes invalid and must not be accessed.
+     * 
+     * <p>Once called, the memory address (_startPtr) becomes invalid and must not be accessed.
      * All cache operations should be stopped before calling this method. The method uses
      * sun.misc.Unsafe to free the native memory back to the operating system.
      *
-     * <p><b>Memory Management:</b></p>
+     * <p><b>Memory Management:</b>
      * This method uses {@link sun.misc.Unsafe#freeMemory(long)} to return the allocated native memory
      * to the operating system. After deallocation, any attempt to access the memory address will result
      * in undefined behavior (likely a JVM crash). The parent class ensures this method is only called
@@ -324,12 +321,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Uses unsafe operations for efficient memory transfer, bypassing standard
      * Java array access for maximum performance. This is an internal method
      * called automatically during cache put operations and should not be called directly.
-     * <br><br>
-     * The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
+     * 
+     * <p>The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
      * significantly faster than manual byte-by-byte copying. The srcOffset already includes
      * the array base offset (BYTE_ARRAY_BASE), pointing directly to the data within the array object.
      *
-     * <p><b>Memory Management:</b></p>
+     * <p><b>Memory Management:</b>
      * This method uses {@link sun.misc.Unsafe#copyMemory(Object, long, Object, long, long)} to perform
      * a fast, bulk memory copy. The first object parameter (srcBytes) indicates the source is a Java heap
      * object, while the second object parameter (null) indicates the destination is native memory.
@@ -357,12 +354,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Uses unsafe operations for efficient memory transfer, bypassing standard
      * Java array access for maximum performance. This is an internal method
      * called automatically during cache get operations and should not be called directly.
-     * <br><br>
-     * The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
+     * 
+     * <p>The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
      * significantly faster than manual byte-by-byte copying. The destOffset already includes
      * the array base offset (BYTE_ARRAY_BASE), pointing directly to the data within the array object.
      *
-     * <p><b>Memory Management:</b></p>
+     * <p><b>Memory Management:</b>
      * This method uses {@link sun.misc.Unsafe#copyMemory(Object, long, Object, long, long)} to perform
      * a fast, bulk memory copy. The first object parameter (null) indicates the source is native memory,
      * while the second object parameter (bytes) indicates the destination is a Java heap object.
@@ -391,7 +388,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * The returned builder exposes fluent configuration for capacity, expiration policies,
      * block sizing, serializers, and optional disk spillover.
      *
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Basic configuration
      * OffHeapCache<String, Data> cache = OffHeapCache.<String, Data>builder()
@@ -428,12 +425,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Provides a fluent API for setting all cache parameters including capacity,
      * eviction policies, serialization, and disk spillover options. All setters
      * return the builder instance for method chaining.
-     * <br><br>
-     * The builder uses Lombok's {@code @Data} and {@code @Accessors} annotations to generate fluent
+     * 
+     * <p>The builder uses Lombok's {@code @Data} and {@code @Accessors} annotations to generate fluent
      * setter methods automatically. All fields have sensible defaults and can be
      * overridden as needed before calling {@link #build()}.
      *
-     * <p><b>Default Values:</b></p>
+     * <p><b>Default Values:</b>
      * <ul>
      * <li>capacityInMB: required (must be set to a positive value)</li>
      * <li>maxBlockSizeInBytes: 8192 (8KB)</li>
@@ -449,8 +446,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * <li>storeSelector: {@code null} (default routing)</li>
      * </ul>
      *
-     * <br>
-     * <p><b>Usage Examples:</b></p>
+     * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple cache with basic settings
      * OffHeapCache<String, Data> cache = OffHeapCache.<String, Data>builder()
@@ -490,7 +486,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Creates a new builder instance with default configuration values.
          * Set {@code capacityInMB} to a positive value before calling {@link #build()}.
          *
-         * <p><b>Usage Examples:</b></p>
+         * <p><b>Usage Examples:</b>
          * <pre>{@code
          * Builder<String, Data> builder = new Builder<>();
          * builder.capacityInMB(100)
@@ -507,8 +503,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * The total off-heap memory capacity in megabytes.
          * This is a required field and must be set before calling build().
          * The actual capacity will be capacityInMB * 1048576 bytes.
-         * <br>
-         * Default: 0 (must be set to a positive value)
+         *
+         * <p>Default: 0 (must be set to a positive value)
          */
         private int capacityInMB;
 
@@ -517,8 +513,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Values larger than this will be split across multiple blocks.
          * Must be between 1024 and SEGMENT_SIZE (1048576).
          * Larger blocks reduce fragmentation but may waste space for small objects.
-         * <br>
-         * Default: 8192 bytes (8KB)
+         *
+         * <p>Default: 8192 bytes (8KB)
          */
         private int maxBlockSizeInBytes = DEFAULT_MAX_BLOCK_SIZE;
 
@@ -526,8 +522,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Delay between eviction runs in milliseconds.
          * Controls how frequently the cache scans for expired entries and reclaims empty segments.
          * Use 0 or negative to disable automatic eviction (expired entries still removed on access).
-         * <br>
-         * Default: 0 (automatic eviction disabled)
+         *
+         * <p>Default: 0 (automatic eviction disabled)
          */
         private long evictDelay;
 
@@ -536,8 +532,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Entries older than this will be considered expired and removed.
          * Use 0 or negative for no TTL expiration.
          * Can be overridden per entry in put() operations.
-         * <br>
-         * Default: 0 (no TTL expiration)
+         *
+         * <p>Default: 0 (no TTL expiration)
          */
         private long defaultLiveTime;
 
@@ -546,8 +542,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Entries not accessed within this time will be considered expired and removed.
          * Use 0 or negative for no idle timeout.
          * Can be overridden per entry in put() operations.
-         * <br>
-         * Default: 0 (no idle timeout)
+         *
+         * <p>Default: 0 (no idle timeout)
          */
         private long defaultMaxIdleTime;
 
@@ -556,8 +552,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * When the pool reaches this utilization threshold, LRU entries are evicted to free space.
          * Typical values range from 0.1 to 0.3. Higher values increase memory efficiency but may
          * cause more frequent evictions when approaching capacity.
-         * <br>
-         * Default: 0.2 (20%)
+         *
+         * <p>Default: 0.2 (20%)
          */
         private float vacatingFactor = DEFAULT_VACATING_FACTOR;
 
@@ -565,8 +561,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Custom serializer for converting values to byte streams.
          * The serializer receives the value and a ByteArrayOutputStream, and should write
          * the complete serialized form to the stream.
-         * <br>
-         * Default: {@code null} (uses Kryo if available, otherwise JSON)
+         *
+         * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
         private BiConsumer<? super V, ByteArrayOutputStream> serializer;
 
@@ -574,8 +570,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Custom deserializer for converting byte arrays back to values.
          * The function receives the byte array and type information, and should return
          * the deserialized value instance.
-         * <br>
-         * Default: {@code null} (uses Kryo if available, otherwise JSON)
+         *
+         * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
         private BiFunction<byte[], Type<V>, ? extends V> deserializer;
 
@@ -583,8 +579,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Optional disk store for spillover when memory is full.
          * When configured, values that don't fit in memory can be stored to disk instead of being rejected.
          * The disk store manages persistence and retrieval of overflow entries.
-         * <br>
-         * Default: {@code null} (memory-only mode)
+         *
+         * <p>Default: {@code null} (memory-only mode)
          */
         private OffHeapStore<K> offHeapStore;
 
@@ -593,8 +589,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * When {@code true}, tracks min/max/average read and write times to disk.
          * This has minimal performance overhead and is useful for monitoring disk performance.
          * Only applies when {@link #offHeapStore} is configured.
-         * <br>
-         * Default: {@code false}
+         *
+         * <p>Default: {@code false}
          */
         private boolean statsTimeOnDisk;
 
@@ -608,8 +604,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * </ul>
          * Return {@code true} to promote the value from disk to memory.
          * Only applies when {@link #offHeapStore} is configured.
-         * <br>
-         * Default: {@code null} (automatic promotion disabled)
+         *
+         * <p>Default: {@code null} (automatic promotion disabled)
          */
         private TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
 
@@ -622,8 +618,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * <li>2 - disk only (always store to disk via {@link #offHeapStore}, skip memory)</li>
          * </ul>
          * Only applies when {@link #offHeapStore} is configured.
-         * <br>
-         * Default: {@code null} (default routing behavior)
+         *
+         * <p>Default: {@code null} (default routing behavior)
          */
         private TriFunction<K, V, Integer, Integer> storeSelector;
 
@@ -633,11 +629,11 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * If {@code maxBlockSizeInBytes} is {@code 0}, the default block size (8192)
          * is applied.
          *
-         * <p><b>Memory Management:</b></p>
+         * <p><b>Memory Management:</b>
          * Calling this method allocates native memory immediately by using {@code sun.misc.Unsafe}.
          * The returned cache must be closed by calling {@link OffHeapCache#close()}.
          *
-         * <p><b>Usage Examples:</b></p>
+         * <p><b>Usage Examples:</b>
          * <pre>{@code
          * // Basic cache with required fields
          * OffHeapCache<String, Data> cache = OffHeapCache.<String, Data>builder()
