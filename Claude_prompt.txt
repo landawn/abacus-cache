@@ -14,9 +14,9 @@ Perform a thorough deep line by line review for javadocs in all the classes in p
 Perform a thorough deep line by line review for javadocs in Multiset.java to improve/correct existing javadocs
 
 
-Perform a thorough deep line by line review for all the classes under folder: ./src/main/java to find bugs and fix them, and unit tests for the fixes
+Perform a thorough deep line by line review for all the classes under folder: ./src/main/java to find bugs and fix them, and add unit tests for the fixes to existing test classes
 
-Perform a thorough deep line by line review for all the classes in package com.landawn.abacus.util under folder: ./src/main/java to find bugs and fix them, and unit tests for the fixes
+Perform a thorough deep line by line review for all the classes in package com.landawn.abacus.util under folder: ./src/main/java to find bugs and fix them, and add unit tests for the fixes to existing test classes
 
 Are you sure you have identified and fixed all the bugs? Perform a thorough deep review again.
 
