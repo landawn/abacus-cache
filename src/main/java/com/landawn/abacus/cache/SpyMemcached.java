@@ -87,8 +87,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param serverUrl the Memcached server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
-     * @throws IllegalArgumentException if serverUrl is invalid or cannot be parsed
-     * @throws RuntimeException if connection to Memcached servers fails
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null} or empty
+     * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the Memcached servers fails
      */
     public SpyMemcached(final String serverUrl) {
         this(serverUrl, DEFAULT_TIMEOUT);
@@ -110,8 +110,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param serverUrl the Memcached server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
      * @param timeout the operation timeout in milliseconds (must be positive). This timeout applies to all cache operations.
-     * @throws IllegalArgumentException if timeout is not positive or serverUrl is invalid
-     * @throws RuntimeException if connection to Memcached servers fails
+     * @throws IllegalArgumentException if {@code timeout} is not positive, or if {@code serverUrl} is {@code null} or empty
+     * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the Memcached servers fails
      */
     public SpyMemcached(final String serverUrl, final long timeout) {
         super(serverUrl);
@@ -1403,7 +1403,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param <R> the type of result returned by the Future
      * @param future the Future whose result is to be retrieved. Must not be {@code null}.
      * @return the result value from the Future
-     * @throws RuntimeException if the Future execution fails or is interrupted
+     * @throws IllegalArgumentException if {@code future} is {@code null}
+     * @throws RuntimeException if the Future execution fails or the calling thread is interrupted while waiting
      */
     protected <R> R resultOf(final Future<R> future) {
         if (future == null) {

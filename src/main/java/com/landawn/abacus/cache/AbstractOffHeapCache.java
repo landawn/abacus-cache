@@ -80,8 +80,8 @@ import com.landawn.abacus.util.stream.Stream;
  * <li>Each segment can be subdivided into slots of various sizes</li>
  * <li>Slot sizes are multiples of MIN_BLOCK_SIZE (64 bytes)</li>
  * <li>Large objects span multiple slots if needed</li>
- * <li>Automatic defragmentation when memory becomes fragmented</li>
- * <li>Optional disk spillover via OffHeapStore interface</li>
+ * <li>Automatic reclamation of empty segments so they can be reused with a different slot size</li>
+ * <li>Optional disk spillover via the {@link OffHeapStore} interface</li>
  * </ul>
  *
  * <p>Memory management strategy:
@@ -89,7 +89,7 @@ import com.landawn.abacus.util.stream.Stream;
  * <li>Best-fit allocation within size-based segment queues</li>
  * <li>Lazy segment allocation - segments allocated only when needed</li>
  * <li>Automatic eviction based on LRU when capacity reached</li>
- * <li>Vacating process triggers defragmentation</li>
+ * <li>Vacating process evicts LRU entries and reclaims now-empty segments</li>
  * <li>Statistics tracking for monitoring and optimization</li>
  * </ul>
  *
@@ -232,10 +232,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param defaultMaxIdleTime the default maximum idle time for entries in milliseconds. Entries not
      *                           accessed within this time will be considered expired. Use 0 or negative
      *                           for no idle timeout. This can be overridden per entry when calling put().
-     * @param vacatingFactor the utilization threshold (0.0 to 1.0) that triggers defragmentation when
-     *                       memory becomes fragmented. When the pool reaches this level of fragmentation,
-     *                       the least recently used entries are evicted to free up space. Use 0.0 to apply
-     *                       the DEFAULT_VACATING_FACTOR (0.2). Typical values range from 0.1 to 0.3.
+     * @param vacatingFactor the fraction (0.0 to 1.0) of entries to evict from the pool when capacity is
+     *                        reached. When eviction is triggered, the least recently used entries are
+     *                        removed until this fraction of the pool has been freed, allowing empty
+     *                        segments to be reclaimed. Use 0.0 to apply the DEFAULT_VACATING_FACTOR (0.2).
+     *                        Typical values range from 0.1 to 0.3.
      * @param arrayOffset the array base offset for memory operations, used to calculate the correct
      *                    memory address when copying data to/from byte arrays. This is implementation-specific
      *                    (e.g., Unsafe.ARRAY_BYTE_BASE_OFFSET for Unsafe-based implementations).
@@ -404,6 +405,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
 
+    /**
+     * Retrieves the value associated with the specified key, or {@code null} if no mapping exists.
+     * The lookup first consults the in-memory object pool. If the entry is stored on disk (via a
+     * {@code StoreWrapper}), the value is read back from the configured {@link OffHeapStore}, disk
+     * read statistics are updated, and the entry may be promoted back into memory when
+     * {@code testerForLoadingItemFromDiskToMemory} returns {@code true} for it.
+     *
+     * @param key the key whose associated value is to be returned
+     * @return the cached value, or {@code null} if the key is not present or its entry has expired
+     */
     @Override
     public V getOrNull(final K key) {
         final Wrapper<V> w = _pool.get(key);
@@ -528,6 +539,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Stores a key-value pair in the cache with the specified expiration settings.
+     * The value is serialized and copied into off-heap memory. Values that fit within
+     * {@code maxBlockSize} are stored in a single slot; larger values are split across
+     * multiple slots. When memory is unavailable (or directed by the {@code storeSelector}),
+     * the value may be written to the configured {@link OffHeapStore} instead. If neither
+     * memory nor disk storage succeeds, an asynchronous vacating task is triggered and the
+     * method returns {@code false}.
+     *
+     * @param key the key with which the specified value is to be associated; must not be {@code null}
+     * @param value the value to be cached; must not be {@code null}
+     * @param liveTime the time-to-live for this entry in milliseconds
+     * @param maxIdleTime the maximum idle time for this entry in milliseconds
+     * @return {@code true} if the value was successfully cached (in memory or on disk);
+     *         {@code false} otherwise
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
+     */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         if (key == null) {
@@ -833,8 +861,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <li>If already running, returns immediately to avoid redundant work</li>
      * <li>Otherwise, schedules an asynchronous task that:
      *     <ul>
-     *     <li>Calls _pool.vacate() to evict LRU entries based on the vacatingFactor threshold</li>
-     *     <li>Calls evict() to release now-empty segments back to the pool</li>
+     *     <li>Calls {@code _pool.evict()} to evict LRU entries based on the vacatingFactor threshold</li>
+     *     <li>Calls {@link #evict()} to release now-empty segments back to the pool</li>
      *     <li>Sleeps for 3 seconds to allow memory to stabilize before allowing another vacation</li>
      *     </ul>
      * </li>
@@ -867,6 +895,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         });
     }
 
+    /**
+     * Removes the cache entry associated with the specified key, if present.
+     * The underlying wrapper is destroyed, releasing any off-heap memory slots or
+     * disk storage held by the entry.
+     *
+     * @param key the key whose mapping is to be removed from the cache
+     */
     @Override
     public void remove(final K key) {
         final Wrapper<V> w = _pool.remove(key);
@@ -876,21 +911,41 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Returns whether the cache contains a mapping for the specified key.
+     *
+     * @param key the key whose presence in the cache is to be tested
+     * @return {@code true} if the cache contains a mapping for the specified key; {@code false} otherwise
+     */
     @Override
     public boolean containsKey(final K key) {
         return _pool.containsKey(key);
     }
 
+    /**
+     * Returns a set view of all keys currently held in the cache.
+     *
+     * @return the set of cache keys; never {@code null}
+     */
     @Override
     public Set<K> keySet() {
         return _pool.keySet();
     }
 
+    /**
+     * Returns the number of entries currently held in the cache (including disk-stored entries).
+     *
+     * @return the current cache size
+     */
     @Override
     public int size() {
         return _pool.size();
     }
 
+    /**
+     * Removes all entries from the cache, destroying their wrappers and releasing
+     * any associated off-heap memory and disk storage.
+     */
     @Override
     public void clear() {
         _pool.clear();
@@ -948,6 +1003,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
     }
 
+    /**
+     * Closes the cache and releases all resources.
+     * Cancels the scheduled eviction task, removes the JVM shutdown hook, closes the
+     * underlying object pool, and deallocates all off-heap memory. This method is
+     * idempotent: invoking it on an already-closed cache returns immediately. It is
+     * also invoked automatically by the registered shutdown hook during JVM shutdown.
+     */
     @Override
     public synchronized void close() {
         if (_pool.isClosed()) {
@@ -978,6 +1040,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Returns whether this cache has been closed.
+     *
+     * @return {@code true} if {@link #close()} has been called; {@code false} if the cache is still operational
+     */
     @Override
     public boolean isClosed() {
         return _pool.isClosed();
@@ -1323,7 +1390,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * @param liveTime the time-to-live in milliseconds
          * @param maxIdleTime the maximum idle time in milliseconds
          * @param size the actual serialized size of the value in bytes
-         * @param segments the list of allocated slots in order (note: parameter name is misleading, should be 'slots')
+         * @param segments the list of allocated slots holding the value chunks, in order
          */
         MultiSlotsWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slot> segments) {
             super(type, liveTime, maxIdleTime, size);

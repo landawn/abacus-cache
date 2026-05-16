@@ -347,7 +347,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *     .build();
      *
      * // Advanced configuration with disk spillover
-     * OffHeapStore<String> diskStore = new OffHeapStore<>(Paths.get("/tmp/cache"));
+     * OffHeapStore<String> diskStore = myOffHeapStoreImplementation;
      * OffHeapCache25<String, byte[]> advancedCache = OffHeapCache25.<String, byte[]>builder()
      *     .capacityInMB(200)
      *     .maxBlockSizeInBytes(16384)
@@ -404,7 +404,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *     .build();
      *
      * // Advanced cache with disk spillover
-     * OffHeapStore<String> diskStore = new OffHeapStore<>(Paths.get("/tmp/cache"));
+     * OffHeapStore<String> diskStore = myOffHeapStoreImplementation;
      * OffHeapCache25<String, Data> advancedCache = OffHeapCache25.<String, Data>builder()
      *     .capacityInMB(100)
      *     .maxBlockSizeInBytes(16384)
@@ -597,7 +597,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
          * }
          *
          * // Advanced cache with disk spillover
-         * OffHeapStore<String> store = new OffHeapStore<>(Paths.get("/tmp/cache"));
+         * OffHeapStore<String> store = myOffHeapStoreImplementation;
          * OffHeapCache25<String, Data> advancedCache = OffHeapCache25.<String, Data>builder()
          *     .capacityInMB(100)
          *     .maxBlockSizeInBytes(16384)

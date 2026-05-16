@@ -95,8 +95,8 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock2 = new MemcachedLock<>("server1:11211,server2:11211");
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) to connect to (must not be null)
-     * @throws IllegalArgumentException if serverUrl is null or invalid
+     * @param serverUrl the Memcached server URL(s) to connect to (must not be null or empty)
+     * @throws IllegalArgumentException if serverUrl is null or empty
      * @throws RuntimeException if connection to the Memcached server(s) fails
      */
     public MemcachedLock(final String serverUrl) {

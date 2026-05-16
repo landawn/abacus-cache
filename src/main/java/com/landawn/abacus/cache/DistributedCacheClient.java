@@ -335,7 +335,7 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @param delta the increment amount (positive value), must be non-negative
+     * @param delta the increment amount, must be non-negative
      * @return the value after increment, or -1 if key doesn't exist (Memcached)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs
@@ -427,7 +427,7 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @param delta the decrement amount (positive value), must be non-negative
+     * @param delta the decrement amount, must be non-negative
      * @return the value after decrement (cannot be negative in Memcached), or -1 if key doesn't exist (Memcached)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs

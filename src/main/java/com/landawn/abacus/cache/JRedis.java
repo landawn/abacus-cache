@@ -145,8 +145,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
-     * @param timeout the connection and socket timeout in milliseconds, must be positive
-     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, contains no valid server addresses, or {@code timeout} is not positive
+     * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE}.
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or contains no valid server addresses,
+     *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
      * @see #JRedis(String)
      */
     public JRedis(final String serverUrl, final long timeout) {

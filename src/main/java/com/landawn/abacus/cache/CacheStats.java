@@ -86,8 +86,6 @@ package com.landawn.abacus.cache;
  * // Verify cache invariants
  * assert stats.getCount() == stats.hitCount() + stats.missCount() :
  *     "Get count should equal sum of hits and misses";
- * assert stats.size() <= stats.capacity() :
- *     "Current size should not exceed capacity";
  * if (stats.maxMemory() > 0) {
  *     assert stats.dataSize() <= stats.maxMemory() :
  *         "Data size should not exceed max memory";
@@ -96,8 +94,8 @@ package com.landawn.abacus.cache;
  *
  * @param capacity the maximum number of entries the cache can hold. This value is set during cache creation
  *                 and represents the upper limit of entries before eviction occurs. Must be non-negative.
- * @param size the current number of entries actually stored in the cache at the time of this snapshot.
- *             Must be between 0 and {@code capacity}, inclusive.
+ * @param size the current number of entries stored in the cache at the time of this snapshot. This count
+ *             may transiently include expired entries that have not yet been evicted. Must be non-negative.
  * @param putCount the total cumulative number of put operations performed since cache creation,
  *                 including both insertions of new entries and updates of existing entries. Must be non-negative.
  * @param getCount the total cumulative number of get operations attempted since cache creation,

@@ -105,6 +105,14 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
         long missCount, long evictionCount, long evictionCountFromDisk, long allocatedMemory, long occupiedMemory, long dataSize, long dataSizeOnDisk,
         MinMaxAvg writeToDiskTimeStats, MinMaxAvg readFromDiskTimeStats, int segmentSize, Map<Integer, Map<Integer, Integer>> occupiedSlots) {
 
+    /**
+     * Canonical constructor that validates the time-statistics arguments and stores a deeply
+     * unmodifiable defensive copy of {@code occupiedSlots}.
+     *
+     * @throws NullPointerException if {@code writeToDiskTimeStats}, {@code readFromDiskTimeStats},
+     *         or {@code occupiedSlots} is {@code null}, or if {@code occupiedSlots} contains a
+     *         {@code null} key or a {@code null} nested map
+     */
     public OffHeapCacheStats {
         Objects.requireNonNull(writeToDiskTimeStats, "writeToDiskTimeStats cannot be null");
         Objects.requireNonNull(readFromDiskTimeStats, "readFromDiskTimeStats cannot be null");
