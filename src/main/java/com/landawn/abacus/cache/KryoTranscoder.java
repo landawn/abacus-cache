@@ -142,7 +142,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * User decoded = transcoder.decode(data);
      * }</pre>
      *
-     * @param d the cached data whose asynchronous decode capability is to be tested (must not be null)
+     * @param d the cached data whose asynchronous decode capability is to be tested (ignored; may be null)
      * @return {@code false}, always indicating synchronous decoding only
      */
     @Override
@@ -231,8 +231,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * }
      * }</pre>
      *
-     * @param d the cached data to decode and deserialize (must not be null)
-     * @return the deserialized object of type T (can be null if null was encoded)
+     * @param d the cached data to decode and deserialize; if {@code null}, {@code null} is returned
+     * @return the deserialized object of type T, or {@code null} if {@code d} is null, its data is
+     *         null or empty, or null was encoded
      * @throws RuntimeException if the deserialization fails (e.g., corrupt data, class not found, incompatible class version)
      * @see #encode(Object)
      * @see CachedData#getData()

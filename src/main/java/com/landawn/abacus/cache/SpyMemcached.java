@@ -78,7 +78,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Creates a new SpyMemcached instance with the default timeout.
      * The server URL should contain comma-separated host:port pairs for multiple servers.
-     * The default timeout value is defined in the parent class {@link AbstractDistributedCacheClient#DEFAULT_TIMEOUT}.
+     * The default timeout value is defined by {@link DistributedCacheClient#DEFAULT_TIMEOUT}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

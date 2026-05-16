@@ -360,11 +360,12 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param provider the cache provider specification string in format "ClassName(param1,param2,...)" (must not be null or empty)
      * @return a new Cache instance configured according to the specification
-     * @throws IllegalArgumentException if provider string is invalid: missing parameters (no parameters provided),
-     *         unsupported number of parameters (more than 3 for Memcached/Redis), or contains invalid timeout
-     *         value (non-numeric when timeout parameter is expected)
-     * @throws RuntimeException if custom class cannot be instantiated (class not found, no suitable constructor,
-     *         instantiation fails, security restrictions, etc.)
+     * @throws IllegalArgumentException if the provider string is null or empty, cannot be parsed, has no
+     *         parameters, has an empty server URL, has an empty class name, specifies an unsupported number
+     *         of parameters (more than 3 for Memcached/Redis), specifies a non-numeric or non-positive timeout,
+     *         names a class that cannot be found, or names a custom class with no matching constructor
+     * @throws RuntimeException if a custom class is found but cannot be instantiated (constructor invocation
+     *         fails, security restrictions, etc.)
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createLocalCache(int, long)

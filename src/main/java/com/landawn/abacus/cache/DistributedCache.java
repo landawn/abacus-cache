@@ -213,7 +213,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li><b>Closed (Normal):</b> Operations proceed normally. Tracks failure count.</li>
      * <li><b>Open (Failing Fast):</b> When {@code failedCounter >= maxFailedNumForRetry} AND within {@code retryDelay}
      *     milliseconds of last failure, returns {@code null} immediately without attempting cache access.</li>
-     * <li><b>Half-Open (Testing):</b> After {@code retryDelay} expires, attempts one operation to test if cache recovered.</li>
+     * <li><b>Half-Open (Testing):</b> Once {@code retryDelay} milliseconds have elapsed since the last failure
+     *     (or while {@code failedCounter < maxFailedNumForRetry}), operations are attempted again to test if the
+     *     cache recovered. Note this is not a single-probe gate: concurrent threads may all proceed.</li>
      * </ul>
      *
      * <p><b>State Transitions:</b>
@@ -328,7 +330,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Overwrites existing entries with the same key</li>
      * <li>Resets TTL for existing entries</li>
      * <li>Only {@code liveTime} affects expiration ({@code maxIdleTime} is ignored)</li>
-     * <li>Returns {@code false} on network errors or timeouts</li>
+     * <li>Returns the underlying client's success result; network errors or timeouts typically
+     *     propagate as a {@link RuntimeException} rather than returning {@code false}</li>
      * <li>Does not implement circuit breaker logic (unlike {@link #getOrNull(Object)})</li>
      * <li>Does not affect or reset the circuit breaker failure counter</li>
      * </ul>
@@ -371,9 +374,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param value the value to cache (null handling depends on underlying cache client implementation)
      * @param liveTime the time-to-live in milliseconds (0 or negative for no expiration)
      * @param maxIdleTime the maximum idle time in milliseconds (<b>IGNORED - not supported by distributed caches</b>)
-     * @return {@code true} if the operation was successful, {@code false} on network errors or timeouts
+     * @return {@code true} if the operation was successful, {@code false} otherwise (as reported
+     *         by the underlying cache client)
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null (thrown by {@link #generateKey(Object)})
+     * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #generateKey(Object)
      * @see DistributedCacheClient#set(String, Object, long)
      */
@@ -395,7 +400,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Silently succeeds if the key does not exist (no error)</li>
      * <li>Returns void (does not indicate success/failure or key existence)</li>
      * <li>Safe to call multiple times with the same key (idempotent)</li>
-     * <li>Network errors are silently ignored (no exception thrown)</li>
+     * <li>Network errors or timeouts typically propagate as a {@link RuntimeException} from the underlying client</li>
      * <li>Does not implement circuit breaker logic</li>
      * </ul>
      *
@@ -436,6 +441,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key, must not be null
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null (thrown by {@link #generateKey(Object)})
+     * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #clear()
      * @see #generateKey(Object)
      * @see DistributedCacheClient#delete(String)
@@ -612,6 +618,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
+     * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see DistributedCacheClient#flushAll()
      * @see #remove(Object)
      */
@@ -819,7 +826,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the original key, must not be null
      * @return the prefixed and Base64-encoded cache key suitable for distributed cache systems
-     * @throws IllegalArgumentException if key is null
+     * @throws IllegalArgumentException if key is null, or if its string representation
+     *         (via {@link N#stringOf(Object)}) is null
      * @see Strings#base64Encode(byte[])
      * @see N#stringOf(Object)
      */

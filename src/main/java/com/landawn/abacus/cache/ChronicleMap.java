@@ -58,6 +58,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * @param capacity cache capacity
      * @param evictDelay eviction scan delay in milliseconds
+     * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      */
     public ChronicleMap(final int capacity, final long evictDelay) {
         this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -76,6 +77,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * @param evictDelay eviction scan delay in milliseconds
      * @param defaultLiveTime default TTL in milliseconds
      * @param defaultMaxIdleTime default max idle time in milliseconds
+     * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      */
     public ChronicleMap(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         super(capacity, evictDelay, defaultLiveTime, defaultMaxIdleTime);

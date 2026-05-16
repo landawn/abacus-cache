@@ -160,7 +160,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
-     * @param value the cache value to be associated with the specified key (can be null if the underlying Caffeine cache allows it)
+     * @param value the cache value to be associated with the specified key (must not be null; the underlying Caffeine cache rejects null values)
      * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration via Caffeine builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration via Caffeine builder)
      * @return {@code true} always (operation always succeeds unless an exception is thrown)

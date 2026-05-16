@@ -263,7 +263,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                      Use null for default behavior (always try memory first).
      * @param logger the logger instance for this cache, used to log warnings and errors during cache
      *               operations. Should not be null.
-     * @throws IllegalArgumentException if maxBlockSize is less than 1024 or greater than SEGMENT_SIZE (1048576)
+     * @throws IllegalArgumentException if capacityInMB is not positive, or if maxBlockSize is less than
+     *                                  1024 or greater than SEGMENT_SIZE (1048576)
      */
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
