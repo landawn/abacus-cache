@@ -219,5 +219,16 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * @param occupiedSlots map of segment index to number of occupied slots in that segment
      */
     public record OccupiedSlot(int sizeOfSlot, Map<Integer, Integer> occupiedSlots) {
+        /**
+         * Canonical constructor that stores an unmodifiable defensive copy of
+         * {@code occupiedSlots}, mirroring the immutability guarantees of the enclosing
+         * {@link OffHeapCacheStats} record.
+         *
+         * @throws NullPointerException if {@code occupiedSlots} is {@code null}
+         */
+        public OccupiedSlot {
+            Objects.requireNonNull(occupiedSlots, "occupiedSlots cannot be null");
+            occupiedSlots = occupiedSlots.isEmpty() ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(occupiedSlots));
+        }
     }
 }

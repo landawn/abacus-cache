@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.cache.OffHeapCache;
+import com.landawn.abacus.cache.OffHeapStore;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.type.TypeFactory;
@@ -103,6 +104,72 @@ public class OffHeapCacheTest {
 
     private Account createAccount(final Class<Account> cls) {
         return Beans.newRandom(cls);
+    }
+
+    /**
+     * Regression test for the totalDataSize double-counting bug in AbstractOffHeapCache.put().
+     *
+     * <p>StoreWrapper's constructor already accounts for totalDataSize, but put() also added it
+     * unconditionally for every wrapper type, while StoreWrapper.destroy() only subtracts it once.
+     * As a result, for every disk-stored entry the reported dataSize was double the real value and
+     * never reconciled (it leaked permanently).
+     *
+     * <p>Before the fix: after a single disk-only put, stats().dataSize() == 2 * dataSizeOnDisk(),
+     * and after removing the entry dataSize() stays non-zero. After the fix dataSize() ==
+     * dataSizeOnDisk() and returns to 0 once the entry is removed.
+     */
+    @Test
+    public void test_totalDataSize_doubleCount_for_disk_entries() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                memStore.remove(key);
+                return true;
+            }
+        };
+
+        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2) // disk only
+                .build();
+
+        try {
+            final Account account = createAccount(Account.class);
+            account.setFirstName(Strings.repeat("x", 5000));
+            final String key = account.getEmailAddress();
+
+            assertTrue(diskCache.put(key, account));
+
+            final var statsAfterPut = diskCache.stats();
+            // The single on-disk entry must be counted exactly once in dataSize.
+            assertEquals(statsAfterPut.dataSizeOnDisk(), statsAfterPut.dataSize());
+            assertEquals(account, diskCache.get(key).orElse(null));
+
+            diskCache.remove(key);
+
+            final var statsAfterRemove = diskCache.stats();
+            assertEquals(0L, statsAfterRemove.dataSizeOnDisk());
+            assertEquals(0L, statsAfterRemove.dataSize());
+        } finally {
+            diskCache.close();
+        }
     }
 
     @Test

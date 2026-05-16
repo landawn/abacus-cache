@@ -553,7 +553,6 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        cacheImpl.clear();
         isClosed = true;
     }
 

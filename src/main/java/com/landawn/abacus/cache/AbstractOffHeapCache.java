@@ -677,9 +677,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             if (SlotWrapper.class.equals(wcls) || MultiSlotsWrapper.class.equals(wcls)) {
                 totalOccupiedMemorySize.addAndGet(occupiedMemory);
-            }
 
-            totalDataSize.addAndGet(size);
+                // StoreWrapper already accounts for totalDataSize in its constructor; only memory
+                // wrappers need it added here (and their destroy() subtracts the matching amount).
+                totalDataSize.addAndGet(size);
+            }
 
             result = _pool.put(key, w);
         } finally {
