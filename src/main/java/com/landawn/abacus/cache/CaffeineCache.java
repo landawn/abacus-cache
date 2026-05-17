@@ -212,8 +212,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Checks if the cache contains a mapping for the specified key.
-     * This method performs a cache lookup via {@link #getOrNull(Object)} and may affect
-     * access-based eviction policies if configured in the underlying Caffeine cache.
+     * This method inspects the underlying {@code asMap()} view, which does <i>not</i>
+     * record a read access or update Caffeine's frequency sketch, so it does not
+     * influence access-based eviction or pollute hit/miss statistics.
      * Returns false if the entry has expired or been evicted.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
@@ -238,7 +239,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     public boolean containsKey(final K key) {
         assertNotClosed();
 
-        return getOrNull(key) != null;
+        return cacheImpl.asMap().containsKey(key);
     }
 
     /**

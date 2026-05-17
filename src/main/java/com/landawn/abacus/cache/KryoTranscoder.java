@@ -34,9 +34,11 @@ import net.spy.memcached.transcoders.Transcoder;
  * <li>No requirement for Serializable interface</li>
  * </ul>
  *
- * <p><b>Thread Safety:</b> This class is thread-safe. The underlying KryoParser
- * handles thread-safety internally using ThreadLocal for Kryo instances,
- * ensuring safe concurrent access from multiple threads.
+ * <p><b>Thread Safety:</b> This class is thread-safe. Concurrency safety is
+ * delegated to the underlying shared {@link KryoParser}, which internally pools
+ * Kryo/Output/Input instances. Note that this pooling is guarded by internal
+ * locks rather than thread-locals, so highly concurrent encode/decode workloads
+ * may contend on the shared pool; correctness is unaffected.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code

@@ -33,7 +33,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
@@ -158,14 +158,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
 
-    // Statistics tracking
-    final AtomicLong totalOccupiedMemorySize = new AtomicLong();
-    final AtomicLong totalDataSize = new AtomicLong();
-    final AtomicLong dataSizeOnDisk = new AtomicLong();
-    final AtomicLong sizeOnDisk = new AtomicLong();
-    final AtomicLong writeCountToDisk = new AtomicLong();
-    final AtomicLong readCountFromDisk = new AtomicLong();
-    final AtomicLong evictionCountFromDisk = new AtomicLong();
+    // Statistics tracking. LongAdder (rather than AtomicLong) is used because these
+    // counters are write-heavy on the hot get/put/evict paths and only read in stats();
+    // LongAdder spreads contention across cells, avoiding the single contended CAS.
+    final LongAdder totalOccupiedMemorySize = new LongAdder();
+    final LongAdder totalDataSize = new LongAdder();
+    final LongAdder dataSizeOnDisk = new LongAdder();
+    final LongAdder sizeOnDisk = new LongAdder();
+    final LongAdder writeCountToDisk = new LongAdder();
+    final LongAdder readCountFromDisk = new LongAdder();
+    final LongAdder evictionCountFromDisk = new LongAdder();
 
     final Logger logger;
 
@@ -177,11 +179,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     private final Segment[] _segments;
     private final BitSet _segmentBitSet = new BitSet();
+    // Lower bound for the next free segment scan. Only ever read/written while holding
+    // the _segmentBitSet monitor, so a plain int suffices. Lets new-segment allocation
+    // start nextClearBit() near the first free index instead of rescanning from 0.
+    private int _nextSegmentIndexHint = 0;
     private final Map<Integer, Deque<Segment>> _segmentQueueMap = new ConcurrentHashMap<>();
     private final Deque<Segment>[] _segmentQueues;
 
     private final AsyncExecutor _asyncExecutor = new AsyncExecutor();
     private final AtomicInteger _activeVacationTaskCount = new AtomicInteger();
+    // Wall-clock time the most recent vacate task finished. Used to debounce
+    // repeated vacate requests without pinning a pool thread in a sleep.
+    private volatile long _lastVacateFinishedTime = 0;
+    private static final long VACATE_DEBOUNCE_MILLIS = 3000;
     private final KeyedObjectPool<K, Wrapper<V>> _pool;
 
     private ScheduledFuture<?> scheduleFuture;
@@ -422,117 +432,131 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final Wrapper<V> w = _pool.get(key);
 
         // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
-        if (w != null && StoreWrapper.class.equals(w.getClass())) {
+        if (w != null && w.kind == Wrapper.KIND_STORE) {
             final StoreWrapper storeWrapper = (StoreWrapper) w;
 
-            readCountFromDisk.incrementAndGet();
+            readCountFromDisk.increment();
 
             if (statsTimeOnDisk || testerForLoadingItemFromDiskToMemory != null) {
                 final long startTime = System.currentTimeMillis();
 
+                // Read the serialized bytes from disk exactly once. The same bytes are
+                // reused both to produce the return value and (when promotion is enabled)
+                // to copy the value back into off-heap memory, avoiding a second disk read.
+                final byte[] diskBytes;
+                long elapsedTime = 0;
+
                 try {
-                    return w.read();
+                    diskBytes = storeWrapper.readBytes();
                 } finally {
-                    final long elapsedTime = System.currentTimeMillis() - startTime;
+                    elapsedTime = System.currentTimeMillis() - startTime;
 
                     if (statsTimeOnDisk) {
                         synchronized (totalReadFromDiskTimeStats) {
                             totalReadFromDiskTimeStats.accept(elapsedTime);
                         }
                     }
+                }
 
-                    if (testerForLoadingItemFromDiskToMemory != null
-                            && testerForLoadingItemFromDiskToMemory.test(storeWrapper.activityPrint(), storeWrapper.size, elapsedTime)) {
+                if (diskBytes == null) {
+                    return null;
+                }
 
-                        final ActivityPrint activityPrint = storeWrapper.activityPrint();
-                        final long maxIdleTime = activityPrint.getMaxIdleTime();
-                        final long liveTime = activityPrint.getLiveTime() - (System.currentTimeMillis() - activityPrint.getCreatedTime());
+                final V value = storeWrapper.deserialize(diskBytes);
 
-                        final int size = storeWrapper.size;
-                        final byte[] bytes = liveTime > 0 ? offHeapStore.get(key) : null;
+                if (testerForLoadingItemFromDiskToMemory != null
+                        && testerForLoadingItemFromDiskToMemory.test(storeWrapper.activityPrint(), storeWrapper.size, elapsedTime)) {
 
-                        if (bytes != null && bytes.length == size) {
-                            Slot slot = null;
-                            List<Slot> slots = null;
-                            int occupiedMemory = 0;
-                            Wrapper<V> slotWrapper = null;
+                    final ActivityPrint activityPrint = storeWrapper.activityPrint();
+                    final long maxIdleTime = activityPrint.getMaxIdleTime();
+                    final long liveTime = activityPrint.getLiveTime() - (System.currentTimeMillis() - activityPrint.getCreatedTime());
 
-                            try {
-                                if (size <= _maxBlockSize) {
-                                    slot = getAvailableSlot(size);
+                    final int size = storeWrapper.size;
+                    final byte[] bytes = liveTime > 0 ? diskBytes : null;
 
-                                    if (slot != null) {
-                                        final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
+                    if (bytes != null && bytes.length == size) {
+                        Slot slot = null;
+                        List<Slot> slots = null;
+                        int occupiedMemory = 0;
+                        Wrapper<V> slotWrapper = null;
 
-                                        copyToMemory(bytes, _arrayOffset, slotStartPtr, size);
+                        try {
+                            if (size <= _maxBlockSize) {
+                                slot = getAvailableSlot(size);
 
-                                        occupiedMemory = slot.segment.sizeOfSlot;
+                                if (slot != null) {
+                                    final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
 
-                                        slotWrapper = new SlotWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slot, slotStartPtr);
-                                    }
-                                } else {
-                                    slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
-                                    int copiedSize = 0;
-                                    int srcOffset = _arrayOffset;
+                                    copyToMemory(bytes, _arrayOffset, slotStartPtr, size);
 
-                                    while (copiedSize < size) {
-                                        final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
-                                        slot = getAvailableSlot(sizeToCopy);
+                                    occupiedMemory = slot.segment.sizeOfSlot;
 
-                                        if (slot == null) {
-                                            break;
-                                        }
-
-                                        final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-
-                                        copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
-
-                                        srcOffset += sizeToCopy;
-                                        copiedSize += sizeToCopy;
-
-                                        occupiedMemory += slot.segment.sizeOfSlot;
-                                        slots.add(slot);
-                                    }
-
-                                    if (copiedSize == size) {
-                                        slotWrapper = new MultiSlotsWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slots);
-                                    }
+                                    slotWrapper = new SlotWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slot, slotStartPtr);
                                 }
-                            } finally {
-                                if (slotWrapper == null) {
-                                    if (slot != null) {
-                                        slot.release();
+                            } else {
+                                slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
+                                int copiedSize = 0;
+                                int srcOffset = _arrayOffset;
+
+                                while (copiedSize < size) {
+                                    final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
+                                    slot = getAvailableSlot(sizeToCopy);
+
+                                    if (slot == null) {
+                                        break;
                                     }
 
-                                    if (slots != null) {
-                                        for (final Slot e : slots) {
-                                            e.release();
-                                        }
+                                    final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
+
+                                    copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
+
+                                    srcOffset += sizeToCopy;
+                                    copiedSize += sizeToCopy;
+
+                                    occupiedMemory += slot.segment.sizeOfSlot;
+                                    slots.add(slot);
+                                }
+
+                                if (copiedSize == size) {
+                                    slotWrapper = new MultiSlotsWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slots);
+                                }
+                            }
+                        } finally {
+                            if (slotWrapper == null) {
+                                if (slot != null) {
+                                    slot.release();
+                                }
+
+                                if (slots != null) {
+                                    for (final Slot e : slots) {
+                                        e.release();
                                     }
                                 }
                             }
+                        }
 
-                            if (slotWrapper != null) {
-                                boolean result = false;
+                        if (slotWrapper != null) {
+                            boolean result = false;
 
-                                try {
-                                    remove(key);
+                            try {
+                                remove(key);
 
-                                    totalOccupiedMemorySize.addAndGet(occupiedMemory);
+                                totalOccupiedMemorySize.add(occupiedMemory);
 
-                                    totalDataSize.addAndGet(size);
+                                totalDataSize.add(size);
 
-                                    result = _pool.put(key, slotWrapper);
-                                } finally {
-                                    if (!result) {
-                                        slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
-                                    }
-
+                                result = _pool.put(key, slotWrapper);
+                            } finally {
+                                if (!result) {
+                                    slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
                                 }
+
                             }
                         }
                     }
                 }
+
+                return value;
             } else {
                 return w.read();
             }
@@ -657,7 +681,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             Objectory.recycle(os);
 
             // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
-            if (w == null || StoreWrapper.class.equals(w.getClass())) {
+            if (w == null || w.kind == Wrapper.KIND_STORE) {
                 if (slot != null) {
                     slot.release();
                 }
@@ -678,17 +702,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         boolean result = false;
-        final Class<?> wcls = w.getClass();
+        final int wkind = w.kind;
 
         try {
-            // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
-
-            if (SlotWrapper.class.equals(wcls) || MultiSlotsWrapper.class.equals(wcls)) {
-                totalOccupiedMemorySize.addAndGet(occupiedMemory);
+            if (wkind == Wrapper.KIND_SLOT || wkind == Wrapper.KIND_MULTI_SLOTS) {
+                totalOccupiedMemorySize.add(occupiedMemory);
 
                 // StoreWrapper already accounts for totalDataSize in its constructor; only memory
                 // wrappers need it added here (and their destroy() subtracts the matching amount).
-                totalDataSize.addAndGet(size);
+                totalDataSize.add(size);
             }
 
             result = _pool.put(key, w);
@@ -697,9 +719,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 w.destroy(Caller.PUT_ADD_FAILURE);
             }
 
-            // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
-            if (StoreWrapper.class.equals(wcls)) {
-                writeCountToDisk.incrementAndGet();
+            if (wkind == Wrapper.KIND_STORE) {
+                writeCountToDisk.increment();
 
                 if (statsTimeOnDisk) {
                     synchronized (totalWriteToDiskTimeStats) {
@@ -837,13 +858,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         if (indexOfAvailableSlot < 0) {
             synchronized (_segmentBitSet) {
-                final int nextSegmentIndex = _segmentBitSet.nextClearBit(0);
+                // Start the scan from the hint rather than rescanning the whole bitset
+                // from index 0 on every new-segment allocation.
+                final int nextSegmentIndex = _segmentBitSet.nextClearBit(_nextSegmentIndexHint);
 
                 if (nextSegmentIndex >= _segments.length) {
                     return null; // No space available;
                 }
 
                 _segmentBitSet.set(nextSegmentIndex);
+                _nextSegmentIndexHint = nextSegmentIndex + 1;
                 _segmentQueueMap.put(nextSegmentIndex, queue);
 
                 segment = _segments[nextSegmentIndex];
@@ -874,7 +898,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *     <ul>
      *     <li>Calls {@code _pool.evict()} to evict LRU entries based on the vacatingFactor threshold</li>
      *     <li>Calls {@link #evict()} to release now-empty segments back to the pool</li>
-     *     <li>Sleeps for 3 seconds to allow memory to stabilize before allowing another vacation</li>
+     *     <li>Records its completion time so a debounce window suppresses immediately
+     *         re-triggered vacations (without pinning a pool thread in a sleep)</li>
      *     </ul>
      * </li>
      * </ol>
@@ -887,6 +912,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * one vacating task runs at a time, even when called concurrently from multiple threads.
      */
     private void vacate() {
+        // Debounce: skip if a vacate finished very recently, so a burst of failing
+        // puts doesn't schedule redundant vacations while memory is still settling.
+        if (System.currentTimeMillis() - _lastVacateFinishedTime < VACATE_DEBOUNCE_MILLIS) {
+            return;
+        }
+
         if (_activeVacationTaskCount.incrementAndGet() > 1) {
             _activeVacationTaskCount.decrementAndGet();
             return;
@@ -897,10 +928,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 _pool.evict();
 
                 evict();
-
-                // wait for a couple of seconds to avoid the second vacation which just arrives before the vacation is done.
-                N.sleep(3000);
             } finally {
+                // Record completion and release the gate immediately. The debounce
+                // window above (not a thread-pinning sleep) prevents an immediate
+                // re-vacation, so a fresh vacate can start as soon as it is needed.
+                _lastVacateFinishedTime = System.currentTimeMillis();
                 _activeVacationTaskCount.decrementAndGet();
             }
         });
@@ -1008,9 +1040,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 totalReadFromDiskCount > 0 ? totalReadFromDiskTimeStats.getMax() : 0.0D,
                 totalReadFromDiskCount > 0 ? Numbers.round(totalReadFromDiskTimeStats.getAverage(), 2) : 0.0D);
 
-        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), sizeOnDisk.get(), poolStats.putCount(), writeCountToDisk.get(),
-                poolStats.getCount(), poolStats.hitCount(), readCountFromDisk.get(), poolStats.missCount(), poolStats.evictionCount(),
-                evictionCountFromDisk.get(), _capacityInBytes, totalOccupiedMemorySize.get(), totalDataSize.get(), dataSizeOnDisk.get(), writeToDiskTimeStats,
+        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), sizeOnDisk.sum(), poolStats.putCount(), writeCountToDisk.sum(),
+                poolStats.getCount(), poolStats.hitCount(), readCountFromDisk.sum(), poolStats.missCount(), poolStats.evictionCount(),
+                evictionCountFromDisk.sum(), _capacityInBytes, totalOccupiedMemorySize.sum(), totalDataSize.sum(), dataSizeOnDisk.sum(), writeToDiskTimeStats,
                 readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
     }
 
@@ -1112,6 +1144,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                                 _segmentQueueMap.remove(i);
                                 _segmentBitSet.clear(i);
+
+                                // A lower index just became free; make sure the
+                                // next-free-segment scan can find it again.
+                                if (i < _nextSegmentIndexHint) {
+                                    _nextSegmentIndexHint = i;
+                                }
                             }
                         }
                     }
@@ -1277,6 +1315,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param <T> the value type
      */
     abstract static class Wrapper<T> extends AbstractPoolable {
+        /** Discriminator: value stored in a single off-heap slot. */
+        static final int KIND_SLOT = 1;
+        /** Discriminator: value stored across multiple off-heap slots. */
+        static final int KIND_MULTI_SLOTS = 2;
+        /** Discriminator: value stored on disk via {@link OffHeapStore}. */
+        static final int KIND_STORE = 3;
+
+        // Final discriminator set once at construction. Used instead of
+        // getClass()/Class.equals(...) dispatch on the hot get/put paths (a
+        // generic inner-class instanceof here triggers unchecked-cast warnings,
+        // which is why an int tag is used rather than instanceof).
+        final int kind;
         final Type<T> type;
         final int size;
 
@@ -1287,12 +1337,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * @param liveTime the time-to-live in milliseconds (0 or negative for default)
          * @param maxIdleTime the maximum idle time in milliseconds (0 or negative for default)
          * @param size the serialized size of the value in bytes
+         * @param kind the storage-strategy discriminator ({@link #KIND_SLOT}, {@link #KIND_MULTI_SLOTS} or {@link #KIND_STORE})
          */
-        Wrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size) {
+        Wrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final int kind) {
             super(liveTime, maxIdleTime);
 
             this.type = type;
             this.size = size;
+            this.kind = kind;
         }
 
         /**
@@ -1342,7 +1394,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * @param slotStartPtr the starting memory address where the value is stored
          */
         SlotWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final Slot slot, final long slotStartPtr) {
-            super(type, liveTime, maxIdleTime, size);
+            super(type, liveTime, maxIdleTime, size, KIND_SLOT);
 
             this.slot = slot;
             this.slotStartPtr = slotStartPtr;
@@ -1373,8 +1425,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         public void destroy(final Caller caller) {
             synchronized (this) {
                 if (slot != null) {
-                    totalOccupiedMemorySize.addAndGet(-slot.segment.sizeOfSlot);
-                    totalDataSize.addAndGet(-size);
+                    totalOccupiedMemorySize.add(-slot.segment.sizeOfSlot);
+                    totalDataSize.add(-size);
                     slot.release();
                     slot = null;
                 }
@@ -1412,7 +1464,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * @param segments the list of allocated slots holding the value chunks, in order
          */
         MultiSlotsWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slot> segments) {
-            super(type, liveTime, maxIdleTime, size);
+            super(type, liveTime, maxIdleTime, size, KIND_MULTI_SLOTS);
 
             slots = segments;
         }
@@ -1462,11 +1514,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             synchronized (this) {
                 if (N.notEmpty(slots)) {
                     for (final Slot slot : slots) {
-                        totalOccupiedMemorySize.addAndGet(-slot.segment.sizeOfSlot);
+                        totalOccupiedMemorySize.add(-slot.segment.sizeOfSlot);
                         slot.release();
                     }
 
-                    totalDataSize.addAndGet(-size);
+                    totalDataSize.add(-size);
 
                     slots = null;
                 }
@@ -1503,17 +1555,27 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * @param permanentKey the key used to store and retrieve the value from offHeapStore
          */
         StoreWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final K permanentKey) {
-            super(type, liveTime, maxIdleTime, size);
+            super(type, liveTime, maxIdleTime, size, KIND_STORE);
 
             this.permanentKey = permanentKey;
 
-            sizeOnDisk.incrementAndGet();
-            dataSizeOnDisk.addAndGet(size);
-            totalDataSize.addAndGet(size);
+            sizeOnDisk.increment();
+            dataSizeOnDisk.add(size);
+            totalDataSize.add(size);
         }
 
-        @Override
-        V read() {
+        /**
+         * Reads the raw serialized bytes from disk exactly once. The destroyed-check
+         * and the disk fetch are performed under the wrapper lock; the (potentially
+         * expensive) deserialization is deliberately left to {@link #deserialize(byte[])}
+         * so it can run outside the lock and so callers can reuse the bytes (e.g. to
+         * promote the value back into memory without a second disk read).
+         *
+         * @return the serialized bytes, or {@code null} if the entry was already
+         *         destroyed by concurrent eviction or is missing from the store
+         * @throws IllegalStateException if the fetched size does not match the recorded size
+         */
+        byte[] readBytes() {
             synchronized (this) {
                 if (permanentKey == null) {
                     return null; // Already destroyed by concurrent eviction
@@ -1531,14 +1593,33 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                             "Failed to retrieve value: fetched size (" + bytes.length + " bytes) does not match expected size (" + size + " bytes)");
                 }
 
-                if (type.isPrimitiveByteArray()) {
-                    return (V) bytes;
-                } else if (type.isByteBuffer()) {
-                    return (V) ByteBufferType.valueOf(bytes);
-                } else {
-                    return deserializer.apply(bytes, type);
-                }
+                return bytes;
             }
+        }
+
+        /**
+         * Deserializes bytes previously obtained from {@link #readBytes()} into the value.
+         * Operates only on the supplied local array (and the effectively-immutable type /
+         * deserializer), so it is safe to invoke outside the wrapper lock.
+         *
+         * @param bytes the serialized bytes; must not be {@code null}
+         * @return the deserialized value
+         */
+        V deserialize(final byte[] bytes) {
+            if (type.isPrimitiveByteArray()) {
+                return (V) bytes;
+            } else if (type.isByteBuffer()) {
+                return (V) ByteBufferType.valueOf(bytes);
+            } else {
+                return deserializer.apply(bytes, type);
+            }
+        }
+
+        @Override
+        V read() {
+            final byte[] bytes = readBytes();
+
+            return bytes == null ? null : deserialize(bytes);
         }
 
         @Override
@@ -1546,13 +1627,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             synchronized (this) {
                 if (permanentKey != null) {
                     if (caller == Caller.EVICT || caller == Caller.VACATE) {
-                        evictionCountFromDisk.incrementAndGet();
+                        evictionCountFromDisk.increment();
                     }
 
-                    sizeOnDisk.decrementAndGet();
-                    dataSizeOnDisk.addAndGet(-size);
+                    sizeOnDisk.decrement();
+                    dataSizeOnDisk.add(-size);
 
-                    totalDataSize.addAndGet(-size);
+                    totalDataSize.add(-size);
 
                     offHeapStore.remove(permanentKey);
                     permanentKey = null;

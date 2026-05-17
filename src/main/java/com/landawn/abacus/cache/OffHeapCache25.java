@@ -90,8 +90,13 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     private static final Logger logger = LoggerFactory.getLogger(OffHeapCache25.class);
 
-    private volatile Arena arena;
-    private volatile MemorySegment buffer;
+    // Assigned exactly once in allocate() during construction and never reassigned
+    // afterwards (close() merely closes the Arena without nulling these). Safe
+    // publication of the cache instance establishes the necessary happens-before,
+    // so these are intentionally non-volatile to avoid a memory barrier on every
+    // off-heap copy in the hot get/put paths.
+    private Arena arena;
+    private MemorySegment buffer;
 
     /**
      * Creates an OffHeapCache25 with the specified capacity in megabytes.

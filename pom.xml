@@ -81,7 +81,7 @@
 		<dependency>
 			<groupId>org.ehcache</groupId>
 			<artifactId>ehcache</artifactId>
-    		<version>3.9.11</version>
+			<version>3.9.11</version>
 			<scope>provided</scope>
 		</dependency>
 
@@ -89,7 +89,8 @@
 			<groupId>org.rocksdb</groupId>
 			<artifactId>rocksdbjni</artifactId>
 			<version>10.4.2</version>
-			<scope>provided</scope>
+			<classifier>win64</classifier>
+			<scope>test</scope>
 		</dependency>
 
 		<dependency>

@@ -92,6 +92,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     private final String keyPrefix;
 
+    // Precomputed once: keyPrefix is normalized to Strings.EMPTY in the constructor,
+    // so the empty-vs-prefixed branch in generateKey() is fixed for the instance's
+    // lifetime and need not be re-evaluated on every cache operation.
+    private final boolean hasKeyPrefix;
+
     private final int maxFailedNumForRetry;
 
     private final long retryDelay;
@@ -200,6 +205,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         }
 
         this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
+        this.hasKeyPrefix = Strings.isNotEmpty(this.keyPrefix);
         this.dcc = dcc;
         this.maxFailedNumForRetry = maxFailedNumForRetry;
         this.retryDelay = retryDelay;
@@ -306,10 +312,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             }
         } finally {
             if (isOK) {
-                // Reset in the correct order: counter first, then time
-                // This prevents race conditions where another thread might see counter=0 but old timestamp
-                failedCounter.set(0);
-                lastFailedTime.set(0);
+                // Steady-state fast path: when there have been no recent failures the counter
+                // is already 0, so skip the two contended atomic writes and only pay a volatile
+                // read. Reset order (counter first, then time) is preserved for the rare
+                // recovery case to avoid the counter=0 / stale-timestamp race.
+                if (failedCounter.get() != 0) {
+                    failedCounter.set(0);
+                    lastFailedTime.set(0);
+                }
             } else {
                 // Update timestamp BEFORE incrementing counter to prevent race conditions
                 // This ensures that when another thread sees the incremented counter,
@@ -847,14 +857,16 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             throw new IllegalArgumentException("Key cannot be null");
         }
 
-        final String keyStr = N.stringOf(key);
+        // Fast path for String keys: skip N.stringOf (which may do reflection/formatting
+        // for arbitrary types) when the key is already a String.
+        final String keyStr = (key instanceof final String s) ? s : N.stringOf(key);
         if (keyStr == null) {
             throw new IllegalArgumentException("Key string representation cannot be null");
         }
 
         final String encodedKey = Strings.base64Encode(keyStr.getBytes(Charsets.UTF_8));
 
-        return Strings.isEmpty(keyPrefix) ? encodedKey : (keyPrefix + encodedKey);
+        return hasKeyPrefix ? (keyPrefix + encodedKey) : encodedKey;
     }
 
     /**

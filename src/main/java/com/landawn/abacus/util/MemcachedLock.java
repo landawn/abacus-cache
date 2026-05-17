@@ -112,8 +112,10 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * The lock will be automatically released after the specified live time expires, ensuring that
      * locks don't persist indefinitely if a holder crashes or fails to release them.
      *
-     * <p>This is a non-blocking operation that returns immediately. If the lock is already
-     * held by another client, this method returns {@code false} without waiting. The requested
+     * <p>This is a non-spinning operation: it makes a single atomic attempt and never retries
+     * or busy-waits. It does, however, block the calling thread for the duration of the one
+     * Memcached round-trip (up to the configured spymemcached operation timeout). If the lock
+     * is already held by another client, this method returns {@code false} without retrying. The requested
      * {@code liveTime} is converted to Memcached's second-granularity TTL before being forwarded
      * to the server, so sub-second values are rounded up to the next second.
      * The implementation uses Memcached's atomic add operation to ensure only one client can

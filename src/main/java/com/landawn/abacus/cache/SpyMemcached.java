@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import com.landawn.abacus.exception.UncheckedIOException;
 import com.landawn.abacus.logging.Logger;
@@ -73,6 +74,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     static final Logger logger = LoggerFactory.getLogger(SpyMemcached.class);
 
     private final MemcachedClient mc;
+    private final long operationTimeout;
     private volatile boolean isShutdown = false;
 
     /**
@@ -120,6 +122,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (timeout <= 0) {
             throw new IllegalArgumentException("Timeout must be positive: " + timeout);
         }
+
+        this.operationTimeout = timeout;
 
         MemcachedClient tempMc = null;
         try {
@@ -1409,19 +1413,35 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param future the Future whose result is to be retrieved. Must not be {@code null}.
      * @return the result value from the Future
      * @throws IllegalArgumentException if {@code future} is {@code null}
-     * @throws RuntimeException if the Future execution fails or the calling thread is interrupted while waiting
+     * @throws RuntimeException if the Future execution fails, the calling thread is interrupted,
+     *         or the bounded wait (a generous multiple of the configured operation timeout) elapses
      */
     protected <R> R resultOf(final Future<R> future) {
         if (future == null) {
             throw new IllegalArgumentException("future cannot be null");
         }
         try {
-            return future.get();
+            // Defense-in-depth bounded wait so a hung/stalled connection cannot pin the
+            // calling thread indefinitely. spymemcached enforces its own per-operation
+            // timeout internally; this outer bound is intentionally generous (a multiple
+            // of the configured operation timeout) so legitimately slower bulk operations
+            // are not failed prematurely.
+            return future.get(Math.max(operationTimeout * 4, operationTimeout + 5_000L), TimeUnit.MILLISECONDS);
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt(); // Restore interrupt status
 
+            future.cancel(true);
+
             if (logger.isWarnEnabled()) {
                 logger.warn("Thread was interrupted while waiting for a Memcached operation to complete", e);
+            }
+
+            throw ExceptionUtil.toRuntimeException(e, true);
+        } catch (final TimeoutException e) {
+            future.cancel(true);
+
+            if (logger.isWarnEnabled()) {
+                logger.warn("Timed out waiting for a Memcached operation to complete", e);
             }
 
             throw ExceptionUtil.toRuntimeException(e, true);

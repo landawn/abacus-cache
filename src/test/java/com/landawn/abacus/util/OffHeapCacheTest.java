@@ -103,7 +103,9 @@ public class OffHeapCacheTest {
     }
 
     private Account createAccount(final Class<Account> cls) {
-        return Beans.newRandom(cls);
+        Account account = Beans.newRandom(cls);
+        account.setEmailAddress(Strings.uuid());
+        return account;
     }
 
     /**
