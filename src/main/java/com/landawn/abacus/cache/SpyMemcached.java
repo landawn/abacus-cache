@@ -144,6 +144,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             tempMc = createSpyMemcachedClient(serverUrl, connFactory);
             this.mc = tempMc;
         } catch (final Exception e) {
+            if (logger.isWarnEnabled()) {
+                logger.warn("Failed to create SpyMemcached client for server(s): " + serverUrl + " (timeout=" + timeout + "ms)", e);
+            }
+
             if (tempMc != null) {
                 tempMc.shutdown();
             }
@@ -1415,6 +1419,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             return future.get();
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt(); // Restore interrupt status
+
+            if (logger.isWarnEnabled()) {
+                logger.warn("Thread was interrupted while waiting for a Memcached operation to complete", e);
+            }
+
             throw ExceptionUtil.toRuntimeException(e, true);
         } catch (final ExecutionException e) {
             final Throwable cause = e.getCause();

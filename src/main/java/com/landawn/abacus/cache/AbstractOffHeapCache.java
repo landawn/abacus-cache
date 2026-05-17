@@ -1031,7 +1031,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         Runtime.getRuntime().removeShutdownHook(shutdownHook);
                         shutdownHook = null;
                     } catch (final IllegalStateException e) {
-                        // Already shutting down, ignore
+                        // Expected when close() is invoked from the shutdown hook itself (JVM already
+                        // shutting down); the hook will run anyway, so this is safe to ignore.
+                        if (logger.isDebugEnabled()) {
+                            logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
+                        }
                     }
                 }
             } finally {

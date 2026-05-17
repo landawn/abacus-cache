@@ -238,6 +238,10 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
 
             return acquired;
         } catch (final Exception e) {
+            if (logger.isWarnEnabled()) {
+                logger.warn("Failed to acquire lock for key: " + key + " (liveTime=" + liveTime + "ms) due to a Memcached communication error", e);
+            }
+
             throw new RuntimeException("Failed to acquire lock for key: " + key, e);
         }
     }
@@ -455,6 +459,10 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
 
             return released;
         } catch (final Exception e) {
+            if (logger.isWarnEnabled()) {
+                logger.warn("Failed to release lock for key: " + key + " due to a Memcached communication error; the lock may remain held until it expires", e);
+            }
+
             throw new RuntimeException("Failed to release lock for key: " + key, e);
         }
     }
