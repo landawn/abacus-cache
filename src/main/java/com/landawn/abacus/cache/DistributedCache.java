@@ -18,6 +18,8 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.landawn.abacus.logging.Logger;
+import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.util.Charsets;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Strings;
@@ -69,6 +71,8 @@ import com.landawn.abacus.util.Strings;
  * @see CacheFactory
  */
 public class DistributedCache<K, V> extends AbstractCache<K, V> {
+
+    private static final Logger logger = LoggerFactory.getLogger(DistributedCache.class);
 
     /**
      * Default maximum number of consecutive failures before opening the circuit breaker.
@@ -294,8 +298,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             result = dcc.get(cacheKey);
             isOK = true;
         } catch (final Exception e) {
-            // Log the exception if needed, but don't rethrow
-            // isOK = false;
+            // Swallowed by design: the circuit breaker (updated in the finally block) handles
+            // recovery, so callers see a cache miss rather than an exception. Logged at debug
+            // to aid diagnosis without flooding logs while the circuit is open.
+            if (logger.isDebugEnabled()) {
+                logger.debug("Distributed cache read failed (treated as cache miss); failure count is now " + (failedCounter.get() + 1), e);
+            }
         } finally {
             if (isOK) {
                 // Reset in the correct order: counter first, then time
@@ -705,8 +713,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         try {
             dcc.disconnect();
         } catch (final Exception e) {
-            // Even if disconnect fails, the cache should remain closed
-            // Log the exception if needed, but don't rethrow to maintain idempotent behavior
+            // Even if disconnect fails, the cache remains closed; not rethrown to keep close() idempotent.
+            // Logged at warn because a failed disconnect may leak client-side connections/resources.
+            if (logger.isWarnEnabled()) {
+                logger.warn("Error while disconnecting the distributed cache client during close()", e);
+            }
         }
     }
 

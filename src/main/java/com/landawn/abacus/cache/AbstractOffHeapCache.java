@@ -53,7 +53,6 @@ import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.Comparators;
-import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.IOUtil;
 import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
@@ -311,10 +310,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 try {
                     evict();
                 } catch (final Exception e) {
-                    // ignore
-
+                    // Swallowed so the scheduled task keeps running; eviction retries on the next cycle.
+                    // Pass the exception (not just its message) so the stack trace is preserved.
                     if (logger.isWarnEnabled()) {
-                        logger.warn("Error during cache eviction: " + ExceptionUtil.getErrorMessage(e));
+                        logger.warn("Error during background cache eviction; will retry on next scheduled run", e);
                     }
                 }
             };

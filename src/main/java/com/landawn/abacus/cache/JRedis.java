@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
+import com.landawn.abacus.logging.Logger;
+import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
@@ -78,6 +80,8 @@ import redis.clients.jedis.JedisShardInfo;
  */
 @SuppressWarnings("deprecation")
 public class JRedis<T> extends AbstractDistributedCacheClient<T> {
+
+    private static final Logger logger = LoggerFactory.getLogger(JRedis.class);
 
     private static final KryoParser kryoParser = ParserFactory.createKryoParser();
 
@@ -692,6 +696,13 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
                     try {
                         j.flushAll();
                     } catch (final RuntimeException e) {
+                        // Continue flushing the remaining shards; the first failure is rethrown
+                        // after the loop. Log every shard failure so errors on later shards
+                        // (which are otherwise swallowed) remain visible.
+                        if (logger.isWarnEnabled()) {
+                            logger.warn("Failed to flush a Redis shard during flushAll(); continuing with remaining shards", e);
+                        }
+
                         if (firstException == null) {
                             firstException = e;
                         }

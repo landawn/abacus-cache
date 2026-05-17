@@ -230,7 +230,13 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
         final String key = toKey(target);
 
         try {
-            return mc.add(key, value, liveTime);
+            final boolean acquired = mc.add(key, value, liveTime);
+
+            if (logger.isDebugEnabled()) {
+                logger.debug(acquired ? "Acquired lock for key: " + key + " (liveTime=" + liveTime + "ms)" : "Lock already held for key: " + key);
+            }
+
+            return acquired;
         } catch (final Exception e) {
             throw new RuntimeException("Failed to acquire lock for key: " + key, e);
         }
@@ -441,7 +447,13 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
         final String key = toKey(target);
 
         try {
-            return mc.delete(key);
+            final boolean released = mc.delete(key);
+
+            if (logger.isDebugEnabled()) {
+                logger.debug(released ? "Released lock for key: " + key : "No lock to release for key: " + key);
+            }
+
+            return released;
         } catch (final Exception e) {
             throw new RuntimeException("Failed to release lock for key: " + key, e);
         }
