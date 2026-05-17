@@ -212,8 +212,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * custom serialization, disk spillover, and memory management tuning.
      * 
      * <p>This is the most flexible constructor, delegating to the parent AbstractOffHeapCache with all
-     * configuration parameters. For typical usage, prefer the public constructors or use the Builder
-     * created via {@link #builder()}.
+     * configuration parameters. All constructors of this class are package-private; for typical usage,
+     * obtain an instance through the Builder created via {@link #builder()} or via {@link CacheFactory}.
      *
      * <p><b>Memory Management:</b>
      * Memory is allocated immediately using sun.misc.Unsafe.allocateMemory(). The maxBlockSize parameter

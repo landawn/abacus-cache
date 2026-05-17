@@ -280,6 +280,7 @@ public interface Cache<K, V> extends Closeable {
      * @param key the cache key to remove (must not be null for most implementations)
      * @throws IllegalStateException if the cache has been closed
      * @see #clear()
+     * @see #containsKey(Object)
      * @see #asyncRemove(Object)
      */
     void remove(final K key);

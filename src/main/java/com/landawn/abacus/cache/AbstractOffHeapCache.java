@@ -414,6 +414,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the key whose associated value is to be returned
      * @return the cached value, or {@code null} if the key is not present or its entry has expired
+     * @throws IllegalStateException if a stored value cannot be reconstructed because its size no
+     *                               longer matches the recorded size (data corruption detected)
      */
     @Override
     public V getOrNull(final K key) {
@@ -1119,8 +1121,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * The sizeOfSlot field can be reconfigured to different multiples of MIN_BLOCK_SIZE (64, 128,
      * 256, 512, 1024, 2048, 4096, 8192, etc.) when the segment becomes empty and is reused.
      * 
-     * <p>Thread safety: All public methods are synchronized on the slotBitSet to ensure thread-safe
-     * slot allocation and deallocation.
+     * <p>Thread safety: The slot allocation and deallocation methods ({@link #allocateSlot()} and
+     * {@link #releaseSlot(int)}) are synchronized on the internal slot BitSet to ensure thread-safe
+     * slot management. {@link #index()} simply returns an immutable field and requires no synchronization.
      */
     static final class Segment {
 
@@ -1288,7 +1291,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * 
          * <p>Thread safety: Implementations must be thread-safe.
          *
-         * @return the deserialized value, or null if the value cannot be retrieved
+         * @return the deserialized value, or {@code null} if the value cannot be retrieved
+         *         (for example, the entry was already destroyed by concurrent eviction)
+         * @throws IllegalStateException if the retrieved data size does not match the recorded
+         *                               size (data corruption detected)
          */
         abstract T read();
     }

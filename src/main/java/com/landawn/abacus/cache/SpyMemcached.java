@@ -89,6 +89,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param serverUrl the Memcached server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null} or empty
      * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the Memcached servers fails
+     * @see #SpyMemcached(String, long)
      */
     public SpyMemcached(final String serverUrl) {
         this(serverUrl, DEFAULT_TIMEOUT);

@@ -160,7 +160,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Implementation Note:</b> The encoding process involves converting the object
      * graph to a compact binary representation using Kryo's optimized serialization protocol.
-     * The resulting byte array is wrapped in a {@code CachedData} object along with metadata.
+     * The resulting byte array is wrapped in a {@code CachedData} object with a flag value of
+     * {@code 0} and the configured maximum size as its declared maximum.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

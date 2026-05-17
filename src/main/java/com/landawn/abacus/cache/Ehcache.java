@@ -70,8 +70,10 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  */
 public class Ehcache<K, V> extends AbstractCache<K, V> {
 
+    /** The underlying Ehcache 3.x instance that this wrapper delegates all operations to. */
     private final Cache<K, V> cacheImpl;
 
+    /** Flag indicating whether this cache wrapper has been closed via {@link #close()}. */
     private volatile boolean isClosed = false;
 
     /**
@@ -442,9 +444,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @return never returns normally
-     * @throws UnsupportedOperationException always thrown
-     * @deprecated Unsupported operation. Ehcache does not provide efficient key iteration.
+     * @return this method never returns normally; it always throws
+     * @throws UnsupportedOperationException always thrown, because the underlying Ehcache 3.x API does not provide key iteration
+     * @deprecated unsupported operation. Ehcache does not provide efficient key iteration.
+     *             Track keys externally or use a cache implementation that supports key enumeration instead.
      */
     @Deprecated
     @Override
@@ -486,9 +489,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @return never returns normally
-     * @throws UnsupportedOperationException always thrown
-     * @deprecated Unsupported operation. Ehcache does not provide a size-reporting API.
+     * @return this method never returns normally; it always throws
+     * @throws UnsupportedOperationException always thrown, because the underlying Ehcache 3.x API does not provide size reporting
+     * @deprecated unsupported operation. Ehcache does not provide a size-reporting API.
+     *             Track the entry count externally or use a cache implementation that supports size reporting instead.
      */
     @Deprecated
     @Override

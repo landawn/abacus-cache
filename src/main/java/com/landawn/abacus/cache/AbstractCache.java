@@ -43,8 +43,8 @@ import com.landawn.abacus.util.u.Optional;
  * <li>{@link #put(Object, Object, long, long)} - Storage with expiration</li>
  * <li>{@link #remove(Object)} - Entry removal</li>
  * <li>{@link #containsKey(Object)} - Key existence check</li>
- * <li>{@link #keySet()} - Key enumeration (optional)</li>
- * <li>{@link #size()} - Entry count (optional)</li>
+ * <li>{@link #keySet()} - Key enumeration (may throw {@link UnsupportedOperationException} if unsupported)</li>
+ * <li>{@link #size()} - Entry count (may be approximate or unsupported depending on the implementation)</li>
  * <li>{@link #clear()} - Bulk removal</li>
  * <li>{@link #close()} - Resource cleanup</li>
  * <li>{@link #isClosed()} - State check</li>
@@ -110,8 +110,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Creates an AbstractCache with default expiration times.
-     * Uses DEFAULT_LIVE_TIME (3 hours) and DEFAULT_MAX_IDLE_TIME (30 minutes) as the
-     * default TTL and idle time for entries added without explicit expiration settings.
+     * Uses {@link #DEFAULT_LIVE_TIME} (3 hours) and {@link #DEFAULT_MAX_IDLE_TIME} (30 minutes)
+     * as the default TTL and idle time for entries added without explicit expiration settings.
      */
     protected AbstractCache() {
         this(DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -342,7 +342,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * }</pre>
      *
      * @param key the cache key to remove
-     * @return a ContinuableFuture that completes when the operation finishes
+     * @return a ContinuableFuture of {@link Void} that completes (with a {@code null} result)
+     *         when the removal has finished
      * @see #remove(Object)
      * @see #asyncContainsKey(Object)
      */
