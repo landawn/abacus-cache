@@ -264,7 +264,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
             throw new IllegalArgumentException("Key cannot be null");
         }
 
-        return pool.put(key, Poolable.wrap(value, liveTime, maxIdleTime));
+        // A liveTime/maxIdleTime of 0 or negative means "no expiration" per the Cache contract.
+        // The underlying ActivityPrint requires strictly positive values, so translate
+        // non-positive values to Long.MAX_VALUE (effectively infinite), matching the semantics
+        // used by Poolable.wrap(value).
+        final long effectiveLiveTime = liveTime <= 0 ? Long.MAX_VALUE : liveTime;
+        final long effectiveMaxIdleTime = maxIdleTime <= 0 ? Long.MAX_VALUE : maxIdleTime;
+
+        return pool.put(key, Poolable.wrap(value, effectiveLiveTime, effectiveMaxIdleTime));
     }
 
     /**

@@ -20,7 +20,12 @@
       "Bash(find /Users/haiyangl/Landawn/abacus-cache/src/main/java -name \"*.java\" -print0 | xargs -0 perl -pi -e 's|<\\\\/p>\\\\s*$||')",
       "Bash(find /Users/haiyangl/Landawn/abacus-cache/src/main/java -name \"*.java\" -print0 | xargs -0 perl -pi -e 's/<p> /<p>/g')",
       "Bash(find /Users/haiyangl/Landawn/abacus-cache/src/main/java -name \"*.java\" -print0 | xargs -0 perl -0777 -pi -e 's/\\(\\\\n\\\\s+\\\\*\\)\\\\s*\\\\n\\(\\\\s+\\\\*\\)\\\\s*\\\\n/$1\\\\n/g')",
-      "PowerShell(mvn *)"
+      "PowerShell(mvn *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(cd \"$env:TEMP\\\\acmn\"; & \"$env:JAVA_HOME\\\\bin\\\\jar.exe\" xf \"C:\\\\Users\\\\haiyangl\\\\.m2\\\\repository\\\\com\\\\landawn\\\\abacus-common\\\\2.3.1\\\\abacus-common-2.3.1.jar\" com/landawn/abacus/util/Strings.class; & \"$env:JAVA_HOME\\\\bin\\\\javap.exe\" -p com.landawn.abacus.util.Strings | Select-String -Pattern \"join\\\\\\(\")",
+      "PowerShell(cd \"$env:TEMP\\\\acmn\"; & \"$env:JAVA_HOME\\\\bin\\\\javap.exe\" -cp \"C:\\\\Users\\\\haiyangl\\\\.m2\\\\repository\\\\com\\\\landawn\\\\abacus-common\\\\2.3.1\\\\abacus-common-2.3.1.jar\" -p com.landawn.abacus.util.Strings | Select-String -Pattern \" join\\\\\\(\")",
+      "PowerShell(& \"$env:JAVA_HOME\\\\bin\\\\jar.exe\" tf \"C:\\\\Users\\\\haiyangl\\\\.m2\\\\repository\\\\com\\\\landawn\\\\abacus-common\\\\2.3.1\\\\abacus-common-2.3.1.jar\" | Select-String -Pattern \"util/Strings\" | Select-Object -First 5)"
     ],
     "deny": [],
     "ask": []

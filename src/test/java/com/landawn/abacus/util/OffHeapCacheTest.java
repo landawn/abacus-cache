@@ -172,6 +172,45 @@ public class OffHeapCacheTest {
         }
     }
 
+    /**
+     * Regression test for the "no expiration" contract bug in AbstractOffHeapCache.put().
+     *
+     * <p>The OffHeapCache Builder javadoc documents {@code defaultLiveTime}/{@code defaultMaxIdleTime}
+     * of {@code 0} (the Builder default) as "no TTL expiration" / "no idle timeout". But
+     * {@code put(key, value)} forwards those defaults to {@code put(key, value, 0, 0)}, which built a
+     * Wrapper whose underlying {@code ActivityPrint} throws {@code IllegalArgumentException} for any
+     * value {@code <= 0}.
+     *
+     * <p>Before the fix: a default-built cache threw {@code IllegalArgumentException} on the simple
+     * {@code put(key, value)} call. After the fix: non-positive live/idle times are treated as
+     * "no expiration" and the entry is stored and retrievable.
+     */
+    @Test
+    public void test_put_withDefaultZeroExpiration_doesNotThrow() {
+        final OffHeapCache<String, Account> noExpiryCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                // defaultLiveTime / defaultMaxIdleTime intentionally left at the Builder default (0)
+                .build();
+
+        try {
+            final Account account = createAccount(Account.class);
+            final String key = account.getEmailAddress();
+
+            // Documented "no expiration" usage - must NOT throw and must store the value.
+            assertTrue(noExpiryCache.put(key, account));
+            assertEquals(account, noExpiryCache.get(key).orElse(null));
+
+            // Explicit non-positive values must behave the same way.
+            assertTrue(noExpiryCache.put("k2", account, 0, 0));
+            assertTrue(noExpiryCache.put("k3", account, -1, -1));
+            assertEquals(account, noExpiryCache.get("k2").orElse(null));
+            assertEquals(account, noExpiryCache.get("k3").orElse(null));
+        } finally {
+            noExpiryCache.close();
+        }
+    }
+
     @Test
     public void test_put_get_2() {
         final MultiLoopsStatistics result = Profiler.run(32, 3, 1, this::test_put_get);

@@ -568,6 +568,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             throw new IllegalArgumentException("Value cannot be null");
         }
 
+        // A non-positive liveTime/maxIdleTime means "no expiration" per the documented contract
+        // (see Cache#put and the OffHeapCache/OffHeapCache25 Builder javadoc). The underlying
+        // ActivityPrint rejects values <= 0 with IllegalArgumentException, so translate them to
+        // Long.MAX_VALUE here, which is the same value the library uses internally for "no expiration".
+        final long effectiveLiveTime = liveTime > 0 ? liveTime : Long.MAX_VALUE;
+        final long effectiveMaxIdleTime = maxIdleTime > 0 ? maxIdleTime : Long.MAX_VALUE;
+
         final Type<V> type = N.typeOf(value.getClass());
         Wrapper<V> w = null;
 
@@ -609,9 +616,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                     occupiedMemory = slot.segment.sizeOfSlot;
 
-                    w = new SlotWrapper(type, liveTime, maxIdleTime, size, slot, slotStartPtr);
+                    w = new SlotWrapper(type, effectiveLiveTime, effectiveMaxIdleTime, size, slot, slotStartPtr);
                 } else if (canBeStoredToDisk && offHeapStore != null) {
-                    w = putToDisk(key, liveTime, maxIdleTime, type, bytes, size);
+                    w = putToDisk(key, effectiveLiveTime, effectiveMaxIdleTime, type, bytes, size);
                 }
             } else {
                 int copiedSize = 0;
@@ -641,9 +648,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
 
                 if (copiedSize == size) {
-                    w = new MultiSlotsWrapper(type, liveTime, maxIdleTime, size, slots);
+                    w = new MultiSlotsWrapper(type, effectiveLiveTime, effectiveMaxIdleTime, size, slots);
                 } else if (canBeStoredToDisk && offHeapStore != null) {
-                    w = putToDisk(key, liveTime, maxIdleTime, type, bytes, size);
+                    w = putToDisk(key, effectiveLiveTime, effectiveMaxIdleTime, type, bytes, size);
                 }
             }
         } finally {
