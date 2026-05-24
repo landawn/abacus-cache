@@ -1,6 +1,6 @@
 # abacus-cache
 
-[![Maven Central](https://img.shields.io/maven-central/v/com.landawn.abacus/abacus-cache.svg)](https://maven-badges.herokuapp.com/maven-central/com.landawn.abacus/abacus-cache/)
+[![Maven Central](https://img.shields.io/maven-central/v/com.landawn.abacus/abacus-cache.svg)](https://central.sonatype.com/artifact/com.landawn.abacus/abacus-cache/2.7.2)
 [![Javadocs](https://img.shields.io/badge/javadoc-2.7.2-brightgreen.svg)](https://www.javadoc.io/doc/com.landawn.abacus/abacus-cache/2.7.2/index.html)
 
 
