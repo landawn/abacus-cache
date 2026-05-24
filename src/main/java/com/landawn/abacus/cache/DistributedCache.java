@@ -218,14 +218,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Base64 encoded for compatibility with distributed cache systems that have key format restrictions.
      *
      * <p><b>Circuit Breaker Behavior:</b>
-     * The circuit breaker has three states:
+     * The circuit breaker has two effective states (there is no canonical "half-open" single-probe gate):
      * <ul>
-     * <li><b>Closed (Normal):</b> Operations proceed normally. Tracks failure count.</li>
-     * <li><b>Open (Failing Fast):</b> When {@code failedCounter >= maxFailedNumForRetry} AND within {@code retryDelay}
-     *     milliseconds of last failure, returns {@code null} immediately without attempting cache access.</li>
-     * <li><b>Half-Open (Testing):</b> Once {@code retryDelay} milliseconds have elapsed since the last failure
-     *     (or while {@code failedCounter < maxFailedNumForRetry}), operations are attempted again to test if the
-     *     cache recovered. Note this is not a single-probe gate: concurrent threads may all proceed.</li>
+     * <li><b>Closed (Normal):</b> Operations proceed normally. Each failure increments the counter
+     *     and updates the last-failure timestamp; each success resets both.</li>
+     * <li><b>Open (Failing Fast):</b> When {@code failedCounter >= maxFailedNumForRetry} AND the time
+     *     since the last failure is less than {@code retryDelay} milliseconds, this method returns
+     *     {@code null} immediately without attempting cache access. Once the retry window elapses, ALL
+     *     subsequent reads attempt the cache again — there is no single-probe restriction, so a still-
+     *     unavailable cache may briefly cause a burst of failures before re-opening the circuit.</li>
      * </ul>
      *
      * <p><b>State Transitions:</b>

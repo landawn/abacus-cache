@@ -345,7 +345,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @return a ContinuableFuture of {@link Void} that completes (with a {@code null} result)
      *         when the removal has finished
      * @see #remove(Object)
-     * @see #asyncContainsKey(Object)
+     * @see #asyncPut(Object, Object)
      */
     @Override
     public ContinuableFuture<Void> asyncRemove(final K key) {
@@ -393,7 +393,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * props.put("region", "us-west-2");
      *
      * // Later retrieve the properties
-     * String description = cache.getProperties().get("description");
+     * String description = (String) cache.getProperties().get("description");
      * }</pre>
      *
      * @return the properties container for this cache, never null

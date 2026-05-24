@@ -215,7 +215,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested
-     * @return {@code true} if the cache contains a mapping for the specified key and it has not expired; {@code false} otherwise
+     * @return {@code true} if the cache currently has a mapping for the specified key; {@code false}
+     *         otherwise. Note that Ehcache's {@code containsKey} does NOT actively evaluate expiration:
+     *         an expired entry that has not yet been removed by Ehcache's housekeeping may still report
+     *         {@code true} here while {@link #getOrNull(Object)} returns {@code null} for the same key.
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -277,9 +280,20 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Retrieves multiple values from the cache in a single bulk operation.
      * This is significantly more efficient than multiple individual get operations, particularly
-     * when fetching many entries or when using remote storage tiers. The returned map only includes
-     * keys that were found in the cache; missing or expired keys are not included in the result.
-     * If a cache loader is configured, missing keys may be loaded automatically.
+     * when fetching many entries or when using remote storage tiers.
+     *
+     * <p>The shape of the returned map depends on whether a cache loader is configured on the
+     * underlying Ehcache instance:
+     * <ul>
+     *   <li>With NO cache loader (the common case), Ehcache 3 returns a map that contains an
+     *       entry for every requested key, with a {@code null} value for any key not currently
+     *       in the cache.</li>
+     *   <li>With a cache loader, missing keys may be loaded; the returned map contains the
+     *       values produced (which may still be {@code null} for keys the loader could not
+     *       resolve).</li>
+     * </ul>
+     * In other words, do not rely on {@code result.containsKey(k)} == false meaning "absent" —
+     * check {@code result.get(k) == null} instead.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
      * providing optimized batch retrieval capabilities.
@@ -307,7 +321,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param keys the set of cache keys to retrieve
-     * @return a map of key-value pairs found in the cache (does not include missing keys)
+     * @return a map keyed by the requested keys, with each value being the cached value or
+     *         {@code null} if the key is not present in the cache (subject to the cache-loader
+     *         semantics described above)
      * @throws IllegalArgumentException if keys is null
      * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheLoadingException if the bulk cache loader fails

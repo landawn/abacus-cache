@@ -16,8 +16,12 @@ import java.util.Objects;
  * <ul>
  * <li>Memory metrics: allocatedMemory is the total reserved, occupiedMemory is actually used</li>
  * <li>Data metrics: dataSize is the actual serialized data size, smaller than occupiedMemory due to slot allocation</li>
- * <li>Hit metrics: hitCount + hitCountByDisk + missCount = getCount</li>
- * <li>Put metrics: putCount = size + sizeOnDisk + evictions (approximately)</li>
+ * <li>Hit metrics: {@code hitCount + missCount = getCount}. {@code hitCountByDisk} is the subset of
+ *     {@code hitCount} that was served from disk (so {@code hitCountByDisk} &le; {@code hitCount}).</li>
+ * <li>Put metrics: {@code putCount} counts successful inserts into the pool (memory and disk).
+ *     Failed put attempts (e.g., wrapper allocation failed before reaching the pool) are not included.
+ *     The approximate identity is
+ *     {@code putCount} &asymp; {@code size + sizeOnDisk + evictionCount + evictionCountFromDisk + removed/replaced entries}.</li>
  * </ul>
  *
  * <p><b>Usage Examples:</b>
@@ -55,23 +59,32 @@ import java.util.Objects;
  *             persisted to disk
  * @param sizeOnDisk the current number of entries stored on disk. These are entries that have been
  *                   evicted from memory but are still accessible through disk I/O operations
- * @param putCount the total number of put operations performed since cache creation. This is a cumulative
- *                 counter that includes all successful and failed put attempts
+ * @param putCount the total number of <em>successful</em> put operations performed since cache creation,
+ *                 counting both memory-backed and disk-spilled stores. A put that fails before the wrapper
+ *                 is installed in the pool (e.g., neither memory nor disk could accept the value) is NOT
+ *                 counted here
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
  *                       when off-heap memory is full and the value is stored to disk via the configured
  *                       {@link OffHeapStore}, or when the storeSelector explicitly routes the value to disk
- * @param getCount the total number of get operations performed since cache creation. This equals the sum
- *                 of hitCount, hitCountByDisk, and missCount
- * @param hitCount the number of successful get operations where the entry was found in memory (off-heap).
- *                 These are the fastest cache accesses as they don't require disk I/O
- * @param hitCountByDisk the number of successful get operations where the entry was retrieved from disk.
- *                       These operations are slower due to disk I/O but still count as cache hits
+ * @param getCount the total number of get operations performed since cache creation. The identity is
+ *                 {@code getCount = hitCount + missCount}. {@code hitCountByDisk} is NOT additive here
+ *                 because it is already part of {@code hitCount}.
+ * @param hitCount the number of successful get operations, including those that ultimately served the value
+ *                 from disk. To compute the number of hits served purely from off-heap memory, subtract
+ *                 {@code hitCountByDisk} from {@code hitCount}.
+ * @param hitCountByDisk the number of successful get operations where the entry was read from disk via the
+ *                       configured {@link OffHeapStore}. Always {@code &le; hitCount}; the disk read happens
+ *                       after the pool lookup hit, which is the reason the pool's {@code hitCount} already
+ *                       includes this case.
  * @param missCount the number of failed get operations where the entry was not found in either memory or
  *                  disk. This can occur when the key never existed, was explicitly removed, or has expired
- * @param evictionCount the total number of entries that have been evicted from memory. Evictions occur
- *                      when the cache reaches capacity or when entries are explicitly removed or expired
- * @param evictionCountFromDisk the number of entries that have been permanently removed from disk storage.
- *                              This typically happens when entries expire or are explicitly deleted
+ * @param evictionCount the total number of entries removed by the eviction / vacate paths (i.e., entries
+ *                      reclaimed because the cache reached capacity, or because the periodic eviction sweep
+ *                      noticed they had expired). Explicit {@code remove()} / {@code clear()} calls and
+ *                      {@code put()} replacements use a different code path and are NOT counted here.
+ * @param evictionCountFromDisk the number of disk-stored entries removed by eviction or vacate (expired
+ *                              or reclaimed to free capacity). Explicit {@code remove()} / {@code clear()}
+ *                              and {@code put()} replacements of a disk-stored key are NOT counted here.
  * @param allocatedMemory the total allocated off-heap memory in bytes. This represents the maximum memory
  *                        that has been reserved for the cache, typically organized into fixed-size segments
  * @param occupiedMemory the currently occupied off-heap memory in bytes, including both data and internal

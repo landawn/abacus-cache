@@ -227,7 +227,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param capacityInMB the total off-heap memory capacity in megabytes. This determines the total
      *                     number of segments (capacityInMB MB / 1MB per segment). Must be positive.
-     *                     The actual capacity will be exactly capacityInMB * 1048576 bytes.
+     *                     The actual capacity will be exactly capacityInMB * 1048576 bytes. For very
+     *                     large caches (capacityInMB &ge; ~131072, i.e. 128 GB) the derived pool
+     *                     entry-capacity is clamped to {@code Integer.MAX_VALUE} so the int cast does
+     *                     not overflow; the off-heap memory itself is still allocated at full size.
      * @param maxBlockSize the maximum size of a single memory block in bytes. Values that fit within
      *                     this size will be stored in a single slot; larger values will be split across
      *                     multiple slots. Must be between 1024 and SEGMENT_SIZE (1048576). The value
@@ -745,12 +748,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * the storeSelector determines the value should be stored on disk. The method delegates
      * to the offHeapStore for actual disk persistence and creates a StoreWrapper to track
      * the disk-stored value within the cache.
-     * 
-     * <p>The StoreWrapper maintains metadata about the disk-stored value including its type,
-     * size, expiration settings, and the key needed to retrieve it from the offHeapStore.
-     * Statistics are automatically updated when creating the wrapper (sizeOnDisk, dataSizeOnDisk,
-     * totalDataSize).
-     * 
+     *
+     * <p>Before writing the new bytes, any existing wrapper at this key is removed from the
+     * pool and destroyed. This is required so that a prior {@code StoreWrapper}'s destroy()
+     * calls {@code offHeapStore.remove(k)} on the OLD bytes rather than wiping the NEW bytes
+     * that are about to be written. For memory-backed prior wrappers (Slot / MultiSlots), this
+     * just releases their slots a moment earlier than the pool's own replace would. The prior
+     * wrapper's bookkeeping (sizeOnDisk / dataSizeOnDisk / totalDataSize) is decremented as part
+     * of the destroy.
+     *
+     * <p>The new {@code StoreWrapper} maintains metadata about the disk-stored value including
+     * its type, size, expiration settings, and the key needed to retrieve it from the
+     * offHeapStore. Statistics are automatically updated when creating the wrapper (sizeOnDisk,
+     * dataSizeOnDisk, totalDataSize).
+     *
      * <p>Thread safety: This method may be called concurrently from multiple threads during put
      * operations. The offHeapStore implementation must handle concurrent put operations safely.
      *
@@ -803,9 +814,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *     (if capacity allows) and adds it to the queue</li>
      * </ol>
      *
-     * <p>Thread safety: This method is thread-safe and uses fine-grained locking on individual
-     * segment queues (not global locking). Multiple threads can allocate slots from different
-     * size queues concurrently.
+     * <p>Thread safety: This method is thread-safe. The fast path uses per-queue locks scoped to a
+     * single slot size, so threads allocating slots of different sizes do not contend. When a new
+     * segment must be allocated from the global pool, a global lock on {@code _segmentBitSet} is
+     * briefly held to assign a fresh segment index.
      *
      * @param size the required slot size in bytes. Must be positive. Will be rounded up to the
      *             nearest multiple of MIN_BLOCK_SIZE (64 bytes) or capped at maxBlockSize.
@@ -908,8 +920,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * 
      * <p>Vacating process:
      * <ol>
-     * <li>Checks if a vacating task is already running using an atomic counter</li>
-     * <li>If already running, returns immediately to avoid redundant work</li>
+     * <li>Debounce gate: if a vacate completed within the last {@code VACATE_DEBOUNCE_MILLIS}
+     *     (3000 ms), returns immediately without scheduling another one.</li>
+     * <li>Otherwise, checks if a vacating task is already in flight using an atomic counter;
+     *     if so, returns immediately to avoid redundant work.</li>
      * <li>Otherwise, schedules an asynchronous task that:
      *     <ul>
      *     <li>Calls {@code _pool.evict()} to evict LRU entries based on the vacatingFactor threshold</li>
@@ -919,6 +933,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *     </ul>
      * </li>
      * </ol>
+     * If the asynchronous executor rejects the scheduling, the in-flight counter is released so
+     * subsequent vacate() calls are not permanently silenced.
      *
      * <p>The method returns immediately after scheduling the vacating task, allowing the calling
      * thread to continue. This non-blocking behavior ensures that put operations don't hang
@@ -1027,7 +1043,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * disk I/O timing aggregates, and segment-slot occupancy details.
      * 
      * <p>This method collects statistics from the underlying pool and segment queues, then assembles
-     * an immutable {@link OffHeapCacheStats} view. Segment queues are synchronized while being read,
+     * an immutable {@link OffHeapCacheStats} view. Segment queues and the disk I/O timing aggregates
+     * are synchronized while being read (under the same monitors used by put() and getOrNull()),
      * so the returned values are internally consistent for the capture moment.
      *
      * <p><b>Usage Examples:</b>

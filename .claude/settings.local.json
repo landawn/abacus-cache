@@ -25,7 +25,8 @@
       "PowerShell(Remove-Item *)",
       "PowerShell(cd \"$env:TEMP\\\\acmn\"; & \"$env:JAVA_HOME\\\\bin\\\\jar.exe\" xf \"C:\\\\Users\\\\haiyangl\\\\.m2\\\\repository\\\\com\\\\landawn\\\\abacus-common\\\\2.3.1\\\\abacus-common-2.3.1.jar\" com/landawn/abacus/util/Strings.class; & \"$env:JAVA_HOME\\\\bin\\\\javap.exe\" -p com.landawn.abacus.util.Strings | Select-String -Pattern \"join\\\\\\(\")",
       "PowerShell(cd \"$env:TEMP\\\\acmn\"; & \"$env:JAVA_HOME\\\\bin\\\\javap.exe\" -cp \"C:\\\\Users\\\\haiyangl\\\\.m2\\\\repository\\\\com\\\\landawn\\\\abacus-common\\\\2.3.1\\\\abacus-common-2.3.1.jar\" -p com.landawn.abacus.util.Strings | Select-String -Pattern \" join\\\\\\(\")",
-      "PowerShell(& \"$env:JAVA_HOME\\\\bin\\\\jar.exe\" tf \"C:\\\\Users\\\\haiyangl\\\\.m2\\\\repository\\\\com\\\\landawn\\\\abacus-common\\\\2.3.1\\\\abacus-common-2.3.1.jar\" | Select-String -Pattern \"util/Strings\" | Select-Object -First 5)"
+      "PowerShell(& \"$env:JAVA_HOME\\\\bin\\\\jar.exe\" tf \"C:\\\\Users\\\\haiyangl\\\\.m2\\\\repository\\\\com\\\\landawn\\\\abacus-common\\\\2.3.1\\\\abacus-common-2.3.1.jar\" | Select-String -Pattern \"util/Strings\" | Select-Object -First 5)",
+      "PowerShell(Test-Path *)"
     ],
     "deny": [],
     "ask": []

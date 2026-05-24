@@ -1275,8 +1275,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Disconnects from all Memcached servers and releases resources.
      * After calling this method, the cache client cannot be used anymore and any subsequent
-     * operations will fail. Uses the default shutdown timeout from SpyMemcached. This method
-     * is idempotent - calling it multiple times has no additional effect.
+     * operations will fail. This method delegates to {@code MemcachedClient.shutdown()} (the no-arg
+     * overload), which initiates an <b>immediate</b> shutdown — in-flight operations are not awaited.
+     * Use {@link #disconnect(long)} if you need a bounded graceful shutdown that lets pending
+     * operations complete. This method is idempotent - calling it multiple times has no additional effect.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe, and uses synchronization to ensure only one
      * disconnect occurs. Once called, no other operations should be attempted on this client instance.

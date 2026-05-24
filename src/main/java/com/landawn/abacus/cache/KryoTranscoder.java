@@ -157,8 +157,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * The object is serialized to a byte array with no flags set (flags = 0). If the serialized
      * data exceeds the configured maximum size, an {@code IllegalArgumentException} is thrown.
      *
-     * <p>This method is thread-safe. Multiple threads can safely encode objects concurrently
-     * as the underlying {@code KryoParser} uses ThreadLocal instances to ensure thread safety.
+     * <p>This method is thread-safe. The underlying {@code KryoParser} maintains internal pools
+     * of Kryo/Output/Input instances guarded by synchronized locks rather than ThreadLocal; it is
+     * safe for concurrent use but highly concurrent workloads may contend on the shared pool.
      *
      * <p><b>Implementation Note:</b> The encoding process involves converting the object
      * graph to a compact binary representation using Kryo's optimized serialization protocol.
@@ -205,8 +206,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * It supports deserializing any object type that Kryo can handle, including complex object
      * graphs with nested structures and circular references.
      *
-     * <p>This method is thread-safe. Multiple threads can safely decode data concurrently
-     * as the underlying {@code KryoParser} uses ThreadLocal instances to ensure thread safety.
+     * <p>This method is thread-safe. The underlying {@code KryoParser} maintains internal pools
+     * of Kryo/Output/Input instances guarded by synchronized locks rather than ThreadLocal; it is
+     * safe for concurrent use but highly concurrent workloads may contend on the shared pool.
      *
      * <p><b>Important:</b> The class definitions of the objects being deserialized must be
      * available on the classpath. If the class structure has changed between encoding and decoding

@@ -126,6 +126,11 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <li>The lock is not reentrant - the same client cannot acquire the same lock twice</li>
      * <li>Choose an appropriate liveTime to balance between deadlock prevention and operational needs</li>
      * <li>Always release locks in a finally block to prevent resource leaks</li>
+     * <li><b>Memcached TTL upper bound:</b> Memcached treats any TTL greater than 30 days
+     *     (2,592,000 seconds &asymp; 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
+     *     A {@code liveTime} larger than that will be interpreted as a tiny epoch time (i.e., the
+     *     lock will appear to have expired in the past), which can cause the lock to evaporate
+     *     immediately or silently allow two holders. Keep {@code liveTime} comfortably below 30 days.</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -393,10 +398,18 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * making the target available for other clients to acquire. It's important to always unlock
      * in a finally block to ensure locks are released even if exceptions occur.
      *
-     * <p>Important: This implementation does not verify lock ownership. Any client can
-     * unlock any lock, even if they don't hold it. For applications requiring ownership
-     * verification, implement additional logic using the value stored with the lock (e.g.,
-     * check if {@link #get(Object)} returns your identifier before unlocking).
+     * <p><b>Important — no ownership verification:</b> This implementation deletes the key
+     * unconditionally. Any client can release any lock, including one held by a different client.
+     * If your TTL is short relative to how long the critical section may take (due to GC pauses,
+     * scheduling, network jitter), the original holder's lock can expire and be reacquired by a
+     * second client before the first client's unlock call runs — at which point the first client
+     * deletes the second client's lock and a third client may immediately acquire it. A safe
+     * "delete-if-mine" requires an atomic compare-and-delete primitive (e.g., Redis Lua scripts),
+     * which the Memcached protocol does not provide.
+     *
+     * <p>Implementing ownership verification by reading {@link #get(Object)} and comparing before
+     * calling {@code unlock} is <b>also racy</b> (the lock can expire between the read and the
+     * delete) and only narrows the window — it does not eliminate it.
      *
      * <p>Best practices:
      * <ul>
@@ -439,7 +452,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * }</pre>
      *
      * @param target the target resource whose lock is to be released (must not be null)
-     * @return {@code true} if the lock was successfully removed, {@code false} if it didn't exist
+     * @return {@code true} if an entry was deleted from Memcached for this target (regardless of
+     *         which client originally acquired the lock), {@code false} if no entry existed
+     *         (e.g., the lock had already expired or was never acquired)
      * @throws IllegalArgumentException if target is null
      * @throws RuntimeException if a communication error occurs with Memcached
      * @see #lock(Object, long)
@@ -505,13 +520,13 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * NamespacedLock<String> lock = new NamespacedLock<>("localhost:11211", "myapp");
      * lock.lock("resource1", 30000);   // Key in Memcached: "lock:myapp:resource1"
      *
-     * // Example 2: Custom implementation with MD5 hashing for long keys
+     * // Example 2: Custom implementation that hashes long keys to stay under the Memcached limit.
      * class HashedLock<K, V> extends MemcachedLock<K, V> {
      *     @Override
      *     protected String toKey(K target) {
-     *         String key = N.stringOf(target);
+     *         String key = super.toKey(target); // null-check inherited from the base class
      *         if (key.length() > 200) { // Memcached key limit is 250 bytes
-     *             return "lock:hash:" + N.md5(key);
+     *             return "lock:hash:" + Integer.toHexString(key.hashCode());
      *         }
      *         return "lock:" + key;
      *     }
@@ -519,7 +534,10 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * }</pre>
      *
      * @param target the target object to be converted to a key string (must not be null)
-     * @return the string key to use in Memcached (should not exceed 250 bytes)
+     * @return the string key to use in Memcached. The default implementation returns
+     *         {@code N.stringOf(target)} without truncation; callers and overriders are responsible
+     *         for ensuring the result stays within Memcached's 250-byte key-length limit.
+     * @throws IllegalArgumentException if {@code target} is {@code null}
      */
     protected String toKey(final K target) {
         // Match the Javadoc contract: a null target is a programming error and must be rejected.

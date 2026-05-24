@@ -41,7 +41,6 @@ import redis.clients.jedis.JedisShardInfo;
  * <ul>
  *   <li>Automatic sharding across multiple Redis instances for horizontal scaling</li>
  *   <li>Efficient object serialization using Kryo parser</li>
- *   <li>Thread-safe operations for concurrent access</li>
  *   <li>Atomic operations for counters (incr/decr)</li>
  *   <li>TTL (time-to-live) support for automatic expiration</li>
  * </ul>
@@ -54,8 +53,18 @@ import redis.clients.jedis.JedisShardInfo;
  *   <li>All string keys are encoded using UTF-8</li>
  * </ul>
  *
- * <p><b>Thread Safety:</b> All public methods are thread-safe and can be called concurrently
- * from multiple threads. The underlying Jedis client handles connection pooling and thread safety.
+ * <p><b>Thread Safety (IMPORTANT):</b> This class wraps a single {@link BinaryShardedJedis} instance,
+ * and each underlying {@link Jedis} shard is itself <b>not</b> thread-safe. Concurrent calls into the
+ * same {@code JRedis} instance can interleave on the wire and corrupt protocol framing, returning
+ * wrong values or causing "unexpected reply" / "ERR Protocol error" disconnects. There is no
+ * connection pooling here. Callers must either:
+ * <ul>
+ *   <li>serialize all access externally (e.g., a single dedicated thread),</li>
+ *   <li>or wrap each method call in their own synchronization, or</li>
+ *   <li>or replace this implementation with one backed by a {@code ShardedJedisPool}.</li>
+ * </ul>
+ * The atomicity advertised for counter operations is the <em>server-side</em> atomicity of Redis
+ * commands, not concurrency safety of this client wrapper.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
@@ -405,7 +414,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @return the value after increment (will be 1 if the key did not exist before)
+     * @return the value after increment (will be 1 if the key did not exist before). Returns {@code 0}
+     *         if the Redis shard returns a {@code nil} reply (e.g., on transient errors), rather than
+     *         throwing a {@link NullPointerException}.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #incr(String, int)
@@ -466,8 +477,15 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the increment amount, can be positive or negative (negative delta effectively decrements)
-     * @return the value after increment (will be equal to delta if the key did not exist before)
+     * @param delta the increment amount. The base {@link DistributedCacheClient#incr(String, int)}
+     *              contract documents this parameter as non-negative; however, the Redis INCRBY
+     *              command itself supports negative deltas (effectively decrementing), and this
+     *              implementation forwards the value as-is without validation. For portability
+     *              across cache backends (e.g. SpyMemcached, which rejects negative deltas),
+     *              prefer non-negative values.
+     * @return the value after increment (will be equal to delta if the key did not exist before).
+     *         Returns {@code 0} if the Redis shard returns a {@code nil} reply, rather than throwing
+     *         a {@link NullPointerException}.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #incr(String)
@@ -533,7 +551,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
+     * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist
+     *         before). Returns {@code 0} if the Redis shard returns a {@code nil} reply, rather than
+     *         throwing a {@link NullPointerException}.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #decr(String, int)
@@ -612,8 +632,15 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the decrement amount, can be positive or negative (negative delta effectively increments)
-     * @return the value after decrement (can be negative in Redis, will be equal to -delta if the key did not exist before)
+     * @param delta the decrement amount. The base {@link DistributedCacheClient#decr(String, int)}
+     *              contract documents this parameter as non-negative; however, the Redis DECRBY
+     *              command itself supports negative deltas (effectively incrementing), and this
+     *              implementation forwards the value as-is without validation. For portability
+     *              across cache backends (e.g. SpyMemcached, which rejects negative deltas),
+     *              prefer non-negative values.
+     * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
+     *         if the key did not exist before). Returns {@code 0} if the Redis shard returns a
+     *         {@code nil} reply, rather than throwing a {@link NullPointerException}.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #decr(String)

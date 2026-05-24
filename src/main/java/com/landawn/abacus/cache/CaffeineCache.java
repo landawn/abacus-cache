@@ -165,6 +165,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration via Caffeine builder)
      * @return {@code true} always (operation always succeeds unless an exception is thrown)
      * @throws IllegalArgumentException if key is null
+     * @throws NullPointerException if value is null (thrown by the underlying Caffeine cache,
+     *         which does not allow null values)
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -272,9 +274,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns the estimated number of entries in the cache.
-     * This is an approximation and may not be exact due to concurrent modifications
-     * and asynchronous cleanup operations. Caffeine uses probabilistic counting to
-     * provide fast size estimates without blocking concurrent operations.
+     * This is an approximation and may not be exact: Caffeine maintains an internal write buffer,
+     * and entries that have been added/removed but not yet drained from the buffer are not reflected
+     * in this count, so the returned value can lag slightly behind the true size.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads without blocking.

@@ -228,8 +228,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
      * @param defaultLiveTime default time-to-live for entries in milliseconds. Use 0 or negative for no TTL expiration.
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
-     * @param vacatingFactor factor (0.0-1.0) determining when to trigger memory defragmentation.
-     *                       When the pool reaches this utilization threshold, LRU entries are evicted to free space.
+     * @param vacatingFactor factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when
+     *                       the underlying pool reaches capacity; this fraction of the pool's current size is
+     *                       then evicted (LRU first) to free space. It does NOT control when vacating starts.
      *                       Use 0.0 to apply the DEFAULT_VACATING_FACTOR (0.2). Typical values range from 0.1 to 0.3.
      * @param serializer custom serializer for converting values to byte streams, or null for default serialization
      *                   (Kryo if available, otherwise JSON). The serializer should write the complete serialized
@@ -399,7 +400,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *     .build();
      *
      * // Advanced configuration with disk spillover
-     * OffHeapStore<String> diskStore = new OffHeapStore<>(Paths.get("/tmp/cache"));
+     * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
+     * OffHeapStore<String> diskStore = myFileBackedOffHeapStore(Paths.get("/tmp/cache"));
      * OffHeapCache<String, byte[]> advancedCache = OffHeapCache.<String, byte[]>builder()
      *     .capacityInMB(200)
      *     .maxBlockSizeInBytes(16384)
@@ -456,7 +458,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *     .build();
      *
      * // Advanced cache with disk spillover
-     * OffHeapStore<String> diskStore = new OffHeapStore<>(Paths.get("/tmp/cache"));
+     * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
+     * OffHeapStore<String> diskStore = myFileBackedOffHeapStore(Paths.get("/tmp/cache"));
      * OffHeapCache<String, Data> advancedCache = OffHeapCache.<String, Data>builder()
      *     .capacityInMB(100)
      *     .maxBlockSizeInBytes(16384)
@@ -548,10 +551,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         private long defaultMaxIdleTime;
 
         /**
-         * Factor (0.0-1.0) determining when to trigger memory defragmentation.
-         * When the pool reaches this utilization threshold, LRU entries are evicted to free space.
-         * Typical values range from 0.1 to 0.3. Higher values increase memory efficiency but may
-         * cause more frequent evictions when approaching capacity.
+         * Factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when the underlying
+         * pool reaches capacity; this fraction of the pool's current size is then evicted (LRU first) to
+         * free space. It does NOT control when vacating starts. Typical values 0.1-0.3. Higher values free
+         * more space per vacate but cause larger pauses in put throughput while the eviction runs.
          *
          * <p>Default: 0.2 (20%)
          */
@@ -649,7 +652,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * }
          *
          * // Advanced cache with disk spillover
-         * OffHeapStore<String> store = new OffHeapStore<>(Paths.get("/tmp/cache"));
+         * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
+         * OffHeapStore<String> store = myFileBackedOffHeapStore(Paths.get("/tmp/cache"));
          * OffHeapCache<String, Data> advancedCache = OffHeapCache.<String, Data>builder()
          *     .capacityInMB(100)
          *     .maxBlockSizeInBytes(16384)
