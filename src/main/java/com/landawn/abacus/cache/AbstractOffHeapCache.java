@@ -304,7 +304,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE, i);
         }
 
-        _pool = PoolFactory.createKeyedObjectPool((int) (_capacityInBytes / MIN_BLOCK_SIZE), evictDelay, EvictionPolicy.LAST_ACCESS_TIME, true,
+        // Pool capacity is the maximum number of MIN_BLOCK_SIZE slots that fit in the cache. For
+        // very large caches (capacityInMB >= ~131_072 i.e. 128 GB) the slot count can exceed
+        // Integer.MAX_VALUE; cap at Integer.MAX_VALUE so the int cast does not wrap to a
+        // negative or near-zero value and make every put fail with "pool full".
+        final long maxSlots = _capacityInBytes / MIN_BLOCK_SIZE;
+        final int poolCapacity = maxSlots > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) maxSlots;
+        _pool = PoolFactory.createKeyedObjectPool(poolCapacity, evictDelay, EvictionPolicy.LAST_ACCESS_TIME, true,
                 vacatingFactor == 0f ? DEFAULT_VACATING_FACTOR : vacatingFactor);
 
         this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
@@ -761,6 +767,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *         or null if the offHeapStore.put() operation failed
      */
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
+        // Pre-destroy any prior wrapper at this key BEFORE writing new bytes. If the prior wrapper
+        // is also a StoreWrapper, its destroy() calls offHeapStore.remove(k); doing it now means
+        // it operates on the OLD bytes rather than wiping the NEW bytes we are about to write.
+        // For non-Store prior wrappers this just releases their memory slots a moment early, which
+        // is harmless because they would have been released by _pool.put()'s replace anyway.
+        final Wrapper<V> prior = _pool.remove(k);
+        if (prior != null) {
+            prior.destroy(Caller.REMOVE_REPLACE_CLEAR);
+        }
+
         if (offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size))) {
             return new StoreWrapper(type, liveTime, maxIdleTime, size, k);
         }
@@ -923,19 +939,30 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        _asyncExecutor.execute(() -> {
-            try {
-                _pool.evict();
+        boolean scheduled = false;
+        try {
+            _asyncExecutor.execute(() -> {
+                try {
+                    _pool.evict();
 
-                evict();
-            } finally {
-                // Record completion and release the gate immediately. The debounce
-                // window above (not a thread-pinning sleep) prevents an immediate
-                // re-vacation, so a fresh vacate can start as soon as it is needed.
-                _lastVacateFinishedTime = System.currentTimeMillis();
+                    evict();
+                } finally {
+                    // Record completion and release the gate immediately. The debounce
+                    // window above (not a thread-pinning sleep) prevents an immediate
+                    // re-vacation, so a fresh vacate can start as soon as it is needed.
+                    _lastVacateFinishedTime = System.currentTimeMillis();
+                    _activeVacationTaskCount.decrementAndGet();
+                }
+            });
+            scheduled = true;
+        } finally {
+            // If the executor rejects the task (e.g., it is shutting down), we must
+            // release the gate here. Otherwise the counter stays > 0 forever and every
+            // subsequent vacate() call sees > 1 and returns without doing any work.
+            if (!scheduled) {
                 _activeVacationTaskCount.decrementAndGet();
             }
-        });
+        }
     }
 
     /**
@@ -1029,16 +1056,34 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 .sorted(Comparators.<Tuple3<Integer, Integer, Integer>> comparingInt(it -> it._1).thenComparingInt(it -> it._2))
                 .groupTo(it -> it._1, Collectors.toMap(it -> it._2, it -> it._3, Suppliers.ofLinkedHashMap()), Suppliers.ofLinkedHashMap());
 
-        final long totalWriteToDiskCount = totalWriteToDiskTimeStats.getCount();
-        final long totalReadFromDiskCount = totalReadFromDiskTimeStats.getCount();
+        // Snapshot stats under the same monitors writers use (see put() and getOrNull()).
+        // LongSummaryStatistics is not thread-safe; reading count/min/max/average from a
+        // concurrently mutated instance can yield a torn state where, e.g., count > 0 but
+        // min is still Long.MAX_VALUE, or where average's internal sum and count were sampled
+        // at different moments and so represent no real point-in-time average.
+        final double writeMin;
+        final double writeMax;
+        final double writeAvg;
+        synchronized (totalWriteToDiskTimeStats) {
+            final long count = totalWriteToDiskTimeStats.getCount();
+            writeMin = count > 0 ? totalWriteToDiskTimeStats.getMin() : 0.0D;
+            writeMax = count > 0 ? totalWriteToDiskTimeStats.getMax() : 0.0D;
+            writeAvg = count > 0 ? Numbers.round(totalWriteToDiskTimeStats.getAverage(), 2) : 0.0D;
+        }
 
-        final MinMaxAvg writeToDiskTimeStats = new MinMaxAvg(totalWriteToDiskCount > 0 ? totalWriteToDiskTimeStats.getMin() : 0.0D,
-                totalWriteToDiskCount > 0 ? totalWriteToDiskTimeStats.getMax() : 0.0D,
-                totalWriteToDiskCount > 0 ? Numbers.round(totalWriteToDiskTimeStats.getAverage(), 2) : 0.0D);
+        final MinMaxAvg writeToDiskTimeStats = new MinMaxAvg(writeMin, writeMax, writeAvg);
 
-        final MinMaxAvg readFromDiskTimeStats = new MinMaxAvg(totalReadFromDiskCount > 0 ? totalReadFromDiskTimeStats.getMin() : 0.0D,
-                totalReadFromDiskCount > 0 ? totalReadFromDiskTimeStats.getMax() : 0.0D,
-                totalReadFromDiskCount > 0 ? Numbers.round(totalReadFromDiskTimeStats.getAverage(), 2) : 0.0D);
+        final double readMin;
+        final double readMax;
+        final double readAvg;
+        synchronized (totalReadFromDiskTimeStats) {
+            final long count = totalReadFromDiskTimeStats.getCount();
+            readMin = count > 0 ? totalReadFromDiskTimeStats.getMin() : 0.0D;
+            readMax = count > 0 ? totalReadFromDiskTimeStats.getMax() : 0.0D;
+            readAvg = count > 0 ? Numbers.round(totalReadFromDiskTimeStats.getAverage(), 2) : 0.0D;
+        }
+
+        final MinMaxAvg readFromDiskTimeStats = new MinMaxAvg(readMin, readMax, readAvg);
 
         return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), sizeOnDisk.sum(), poolStats.putCount(), writeCountToDisk.sum(),
                 poolStats.getCount(), poolStats.hitCount(), readCountFromDisk.sum(), poolStats.missCount(), poolStats.evictionCount(),

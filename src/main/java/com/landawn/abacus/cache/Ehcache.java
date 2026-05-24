@@ -525,16 +525,14 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes the cache and releases resources.
-     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
-     * This method clears all entries and marks the wrapper as closed.
+     * Closes this wrapper. The underlying Ehcache instance is NOT cleared or disposed
+     * because its lifecycle is owned by the {@code CacheManager} that created it —
+     * multiple wrappers may share the same Ehcache instance, and the manager is free to
+     * keep using it directly after this wrapper is closed. After closing, this wrapper
+     * rejects further operations with {@link IllegalStateException}.
      *
      * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
      * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.
-     *
-     * <p><b>Note:</b> This method only marks the wrapper as closed; it does not close or dispose
-     * the underlying Ehcache instance. The underlying cache manager is responsible for managing
-     * the lifecycle of Ehcache instances.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

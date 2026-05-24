@@ -87,6 +87,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     private final BinaryShardedJedis jedis;
 
+    private volatile boolean isShutdown = false;
+
     /**
      * Creates a new JRedis instance with the default timeout.
      * The server URL should contain comma-separated host:port pairs for multiple Redis instances.
@@ -174,7 +176,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
         final List<JedisShardInfo> jedisClusterNodes = new ArrayList<>();
 
         for (final InetSocketAddress addr : addressList) {
-            jedisClusterNodes.add(new JedisShardInfo(addr.getHostName(), addr.getPort(), (int) timeout));
+            // Use getHostString() (returns the literal host or IP) instead of getHostName(), which
+            // performs a reverse DNS lookup. Reverse DNS can block startup, fail if no PTR record
+            // exists, and produce shard hash keys that differ between processes whose resolvers
+            // disagree — silently breaking sharding consistency.
+            jedisClusterNodes.add(new JedisShardInfo(addr.getHostString(), addr.getPort(), (int) timeout));
         }
 
         jedis = new BinaryShardedJedis(jedisClusterNodes);
@@ -408,7 +414,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long incr(final String key) {
-        return jedis.incr(getKeyBytes(key));
+        // BinaryShardedJedis.incr returns a boxed Long; auto-unboxing a null reply (which can
+        // occur on a transient shard error returning nil) would NPE rather than surfacing a
+        // meaningful exception. Treat null as "no value" / 0.
+        final Long v = jedis.incr(getKeyBytes(key));
+        return v == null ? 0L : v.longValue();
     }
 
     /**
@@ -466,7 +476,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long incr(final String key, final int delta) {
-        return jedis.incrBy(getKeyBytes(key), delta);
+        final Long v = jedis.incrBy(getKeyBytes(key), delta);
+        return v == null ? 0L : v.longValue();
     }
 
     /**
@@ -531,7 +542,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long decr(final String key) {
-        return jedis.decr(getKeyBytes(key));
+        final Long v = jedis.decr(getKeyBytes(key));
+        return v == null ? 0L : v.longValue();
     }
 
     /**
@@ -610,7 +622,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long decr(final String key, final int delta) {
-        return jedis.decrBy(getKeyBytes(key), delta);
+        final Long v = jedis.decrBy(getKeyBytes(key), delta);
+        return v == null ? 0L : v.longValue();
     }
 
     /**
@@ -790,8 +803,20 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @see #flushAll()
      */
     @Override
-    public void disconnect() {
-        jedis.disconnect();
+    public synchronized void disconnect() {
+        // Guard with isShutdown so repeated calls are safe (the Javadoc above promises
+        // "It is safe to call this method multiple times"). Without the guard, calling
+        // jedis.disconnect() after the underlying sockets have already been closed can
+        // throw obscure low-level exceptions on some shards.
+        if (isShutdown) {
+            return;
+        }
+
+        try {
+            jedis.disconnect();
+        } finally {
+            isShutdown = true;
+        }
     }
 
     /**

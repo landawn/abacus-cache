@@ -76,9 +76,9 @@ import com.landawn.abacus.logging.LoggerFactory;
  * @param <V> the type of optional metadata values associated with locks
  * @see SpyMemcached
  */
-public final class MemcachedLock<K, V> implements AutoCloseable {
+public class MemcachedLock<K, V> implements AutoCloseable {
 
-    static final Logger logger = LoggerFactory.getLogger(MemcachedLock.class);
+    private static final Logger logger = LoggerFactory.getLogger(MemcachedLock.class);
 
     private final SpyMemcached<V> mc;
 
@@ -522,6 +522,12 @@ public final class MemcachedLock<K, V> implements AutoCloseable {
      * @return the string key to use in Memcached (should not exceed 250 bytes)
      */
     protected String toKey(final K target) {
+        // Match the Javadoc contract: a null target is a programming error and must be rejected.
+        // Without this check, N.stringOf(null) returns the string "null", which would silently
+        // collide on a single global "null" lock key across the whole application.
+        if (target == null) {
+            throw new IllegalArgumentException("target cannot be null");
+        }
         return N.stringOf(target);
     }
 
