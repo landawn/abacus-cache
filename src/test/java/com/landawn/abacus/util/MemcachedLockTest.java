@@ -173,6 +173,104 @@ public class MemcachedLockTest {
     }
 
     /**
+     * lock() with value parameter overload should also forward the same TTL conversion.
+     */
+    @Test
+    public void testLock_WithValue() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            OperationFuture<Boolean> addOk = immediateBooleanFuture(true);
+            when(mockMc.add(any(String.class), anyInt(), any())).thenReturn(addOk);
+
+            assertTrue(lock.lock("k", Long.valueOf(42), 5_000L));
+            verify(mockMc).add(eq("k"), eq(5), any());
+        }
+    }
+
+    @Test
+    public void testLock_EdgeCase_NullTarget() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            assertThrows(IllegalArgumentException.class, () -> lock.lock(null, 1000L));
+            assertThrows(IllegalArgumentException.class, () -> lock.lock(null, Long.valueOf(1), 1000L));
+        }
+    }
+
+    @Test
+    public void testLock_EdgeCase_NonPositiveLiveTime() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            assertThrows(IllegalArgumentException.class, () -> lock.lock("k", 0L));
+            assertThrows(IllegalArgumentException.class, () -> lock.lock("k", -1L));
+            assertThrows(IllegalArgumentException.class, () -> lock.lock("k", Long.valueOf(1), 0L));
+        }
+    }
+
+    @Test
+    public void testIsLocked_EdgeCase_NullTarget() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            assertThrows(IllegalArgumentException.class, () -> lock.isLocked(null));
+        }
+    }
+
+    @Test
+    public void testGet_EdgeCase_NullTarget() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            assertThrows(IllegalArgumentException.class, () -> lock.get(null));
+        }
+    }
+
+    @Test
+    public void testUnlock_EdgeCase_NullTarget() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            assertThrows(IllegalArgumentException.class, () -> lock.unlock(null));
+        }
+    }
+
+    @Test
+    public void testGet_ReturnsStoredValue() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, String> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+            when(mockMc.get("k")).thenReturn("holder-1");
+            assertEquals("holder-1", lock.get("k"));
+        }
+    }
+
+    @Test
+    public void testClient_ReturnsUnderlyingSpyMemcached() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            org.junit.jupiter.api.Assertions.assertNotNull(lock.client());
+        }
+    }
+
+    @Test
+    public void testClose_DisconnectsUnderlyingClient() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+            lock.close();
+            verify(mockMc).shutdown();
+        }
+    }
+
+    @Test
+    public void testConstructor_EdgeCase_EmptyServerUrl() {
+        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, Long>(""));
+    }
+
+    @Test
+    public void testConstructor_EdgeCase_NullServerUrl() {
+        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, Long>(null));
+    }
+
+    /**
      * Returns an immediately-complete future yielding the supplied value. Used so that
      * spymemcached's resultOf() returns the canned value without blocking on the wire.
      */

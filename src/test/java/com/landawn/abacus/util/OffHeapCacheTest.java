@@ -5,6 +5,8 @@
 package com.landawn.abacus.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -403,6 +405,78 @@ public class OffHeapCacheTest {
                 assertNull(cache.get(key).orElse(null));
             }
         }).printResult();
+    }
+
+    /** Exercises the keySet / size / clear / containsKey / isClosed lifecycle on AbstractOffHeapCache. */
+    @Test
+    public void test_OffHeapCache_keySet_size_clear_lifecycle() {
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]>builder().capacityInMB(1).build();
+        try {
+            c.put("a", new byte[256]);
+            c.put("b", new byte[256]);
+            assertTrue(c.containsKey("a"));
+            assertTrue(c.size() >= 1);
+            assertTrue(c.keySet().contains("a"));
+
+            // remove + verify
+            c.remove("a");
+            assertNull(c.get("a").orElse(null));
+
+            // clear empties the cache
+            c.clear();
+            assertEquals(0, c.size());
+
+            // isClosed is false before close, true after
+            assertFalse(c.isClosed());
+        } finally {
+            c.close();
+        }
+
+        // Second close is idempotent and isClosed reflects state.
+        final OffHeapCache<String, byte[]> c2 = OffHeapCache.<String, byte[]>builder().capacityInMB(1).build();
+        c2.close();
+        c2.close();
+        assertTrue(c2.isClosed());
+    }
+
+    /** Verifies stats() returns a non-null snapshot after some traffic. */
+    @Test
+    public void test_OffHeapCache_stats_returns_snapshot() {
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]>builder().capacityInMB(1).build();
+        try {
+            c.put("k", new byte[256]);
+            c.get("k");
+            assertNotNull(c.stats());
+        } finally {
+            c.close();
+        }
+    }
+
+    @Test
+    public void test_OffHeapCache_simpleConstructor_capacityOnly() {
+        // Exercises the (capacityInMB) and (capacityInMB, evictDelay) constructors via the Builder
+        // path. The Builder is the public API; the underlying simple constructors are package-private.
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]>builder().capacityInMB(1).build();
+        try {
+            assertTrue(c.put("k", new byte[256]));
+            assertNotNull(c.get("k"));
+        } finally {
+            c.close();
+        }
+    }
+
+    @Test
+    public void test_OffHeapCache_builder_defaults() {
+        // Builder with default values for everything other than capacity.
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]>builder()
+                .capacityInMB(1)
+                .maxBlockSizeInBytes(0) // 0 should fall back to default
+                .build();
+        try {
+            assertTrue(c.put("k", new byte[256]));
+        } finally {
+            c.close();
+        }
     }
 
     @Test

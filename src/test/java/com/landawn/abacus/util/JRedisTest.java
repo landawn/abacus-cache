@@ -291,4 +291,35 @@ public class JRedisTest {
         a.setBirthDate(Dates.currentTimestamp());
         return a;
     }
+
+    @Test
+    public void test_serverUrl_returns_constructor_value() {
+        assertEquals("localhost:6379", cache.serverUrl());
+    }
+
+    @Test
+    public void test_constructor_with_default_timeout_does_not_throw() {
+        // Default-timeout constructor (single-arg) is exercised here, reusing the BeforeEach mockConstruction.
+        final JRedis<Object> c = new JRedis<>("localhost:6379");
+        assertNotNull(c);
+    }
+
+    @Test
+    public void test_constructor_rejects_invalid_server_url() {
+        // No host:port in the URL → AddrUtil returns empty → IAE.
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>(""));
+    }
+
+    @Test
+    public void test_getKeyBytes_EdgeCase_NullKey() throws Exception {
+        // Reach the protected getKeyBytes via reflection so we can verify the contract.
+        final java.lang.reflect.Method m = JRedis.class.getDeclaredMethod("getKeyBytes", String.class);
+        m.setAccessible(true);
+        try {
+            m.invoke(cache, (Object) null);
+            org.junit.jupiter.api.Assertions.fail("expected IllegalArgumentException");
+        } catch (final java.lang.reflect.InvocationTargetException ite) {
+            org.junit.jupiter.api.Assertions.assertTrue(ite.getCause() instanceof IllegalArgumentException);
+        }
+    }
 }

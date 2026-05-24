@@ -82,4 +82,94 @@ public class LocalCacheTest {
             assertEquals(0, cache.size());
         }
     }
+
+    @org.junit.jupiter.api.Test
+    public void testConstructor_EdgeCase_InvalidCapacity() {
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> new LocalCache<String, String>(0, 0));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> new LocalCache<String, String>(-1, 0));
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testConstructor_EdgeCase_NegativeEvictDelay() {
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> new LocalCache<String, String>(100, -1));
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testConstructor_EdgeCase_NullPool() {
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> new LocalCache<String, String>(0L, 0L, null));
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testPut_EdgeCase_NullKey() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> cache.put(null, "v", 1000, 1000));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testContainsKey() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            cache.put("a", "1");
+            org.junit.jupiter.api.Assertions.assertTrue(cache.containsKey("a"));
+            org.junit.jupiter.api.Assertions.assertFalse(cache.containsKey("missing"));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testKeySet_AndSize() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            cache.put("a", "1");
+            cache.put("b", "2");
+            org.junit.jupiter.api.Assertions.assertEquals(2, cache.size());
+            final java.util.Set<String> keys = cache.keySet();
+            org.junit.jupiter.api.Assertions.assertEquals(2, keys.size());
+            org.junit.jupiter.api.Assertions.assertTrue(keys.contains("a"));
+            org.junit.jupiter.api.Assertions.assertTrue(keys.contains("b"));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testClear() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            cache.put("a", "1");
+            cache.put("b", "2");
+            cache.clear();
+            org.junit.jupiter.api.Assertions.assertEquals(0, cache.size());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testIsClosed() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        org.junit.jupiter.api.Assertions.assertFalse(cache.isClosed());
+        cache.close();
+        org.junit.jupiter.api.Assertions.assertTrue(cache.isClosed());
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testStats() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            cache.put("a", "1");
+            cache.getOrNull("a");
+            cache.getOrNull("missing");
+            final com.landawn.abacus.cache.CacheStats stats = cache.stats();
+            org.junit.jupiter.api.Assertions.assertNotNull(stats);
+            org.junit.jupiter.api.Assertions.assertEquals(100, stats.capacity());
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testConstructor_WithCustomPool() {
+        final com.landawn.abacus.pool.KeyedObjectPool<String, com.landawn.abacus.pool.PoolableAdapter<String>> pool = com.landawn.abacus.pool.PoolFactory
+                .createKeyedObjectPool(50, 0);
+        try (LocalCache<String, String> cache = new LocalCache<>(60_000L, 30_000L, pool)) {
+            assertTrue(cache.put("k", "v"));
+            assertEquals("v", cache.getOrNull("k"));
+        }
+    }
 }

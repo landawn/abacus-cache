@@ -390,6 +390,19 @@ public class OffHeapCache25Test {
 
     }
 
+    @Test
+    public void test_OffHeapCache25_builder_basic() {
+        final OffHeapCache25<String, byte[]> c = OffHeapCache25.<String, byte[]>builder()
+                .capacityInMB(1)
+                .maxBlockSizeInBytes(0) // 0 should fall back to default
+                .build();
+        try {
+            assertEquals(true, c.put("k", new byte[256]));
+        } finally {
+            c.close();
+        }
+    }
+
     public static class KryoSerializer implements org.ehcache.spi.serialization.Serializer<Account> {
 
         public KryoSerializer(final ClassLoader classLoader) {

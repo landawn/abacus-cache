@@ -288,6 +288,185 @@ public class SpyMemcachedTest {
         assertThrows(IllegalArgumentException.class, () -> cache.set("k", "v", 60_000));
     }
 
+    @Test
+    public void test_serverUrl_returns_constructor_value() {
+        assertEquals("localhost:11211", cache.serverUrl());
+    }
+
+    @Test
+    public void test_asyncSet_forwards() {
+        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(ok);
+        assertNotNull(cache.asyncSet("k", "v", 60_000));
+        verify(mockMc).set("k", 60, "v");
+    }
+
+    @Test
+    public void test_asyncSet_EdgeCase_NullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncSet(null, "v", 60_000));
+    }
+
+    @Test
+    public void test_add_EdgeCase_NullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.add(null, "v", 60_000));
+    }
+
+    @Test
+    public void test_asyncAdd_forwards() {
+        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        when(mockMc.add(eq("k"), anyInt(), any())).thenReturn(ok);
+        assertNotNull(cache.asyncAdd("k", "v", 60_000));
+        verify(mockMc).add("k", 60, "v");
+    }
+
+    @Test
+    public void test_asyncAdd_EdgeCase_NullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncAdd(null, "v", 60_000));
+    }
+
+    @Test
+    public void test_replace_EdgeCase_NullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.replace(null, "v", 60_000));
+    }
+
+    @Test
+    public void test_asyncReplace_forwards() {
+        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        when(mockMc.replace(eq("k"), anyInt(), any())).thenReturn(ok);
+        assertNotNull(cache.asyncReplace("k", "v", 60_000));
+        verify(mockMc).replace("k", 60, "v");
+    }
+
+    @Test
+    public void test_asyncReplace_EdgeCase_NullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncReplace(null, "v", 60_000));
+    }
+
+    @Test
+    public void test_asyncDelete_forwards() {
+        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        when(mockMc.delete("k")).thenReturn(ok);
+        assertNotNull(cache.asyncDelete("k"));
+        verify(mockMc).delete("k");
+    }
+
+    @Test
+    public void test_asyncDelete_EdgeCase_NullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncDelete(null));
+    }
+
+    @Test
+    public void test_incr_EdgeCase_NullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
+    }
+
+    @Test
+    public void test_incr_with_default_value_and_liveTime() {
+        when(mockMc.incr("counter", 1, 0L, 60)).thenReturn(1L);
+        assertEquals(1L, cache.incr("counter", 1, 0L, 60_000L));
+        verify(mockMc).incr("counter", 1, 0L, 60);
+    }
+
+    @Test
+    public void test_incr_with_default_value_EdgeCase_NullKeyAndNegativeDelta() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L, 1000L));
+    }
+
+    @Test
+    public void test_decr_EdgeCase_NullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
+    }
+
+    @Test
+    public void test_decr_with_default_value() {
+        when(mockMc.decr("counter", 1, 100L, -1)).thenReturn(99L);
+        assertEquals(99L, cache.decr("counter", 1, 100L));
+        verify(mockMc).decr("counter", 1, 100L, -1);
+    }
+
+    @Test
+    public void test_decr_with_default_value_and_liveTime() {
+        when(mockMc.decr("counter", 1, 100L, 60)).thenReturn(99L);
+        assertEquals(99L, cache.decr("counter", 1, 100L, 60_000L));
+        verify(mockMc).decr("counter", 1, 100L, 60);
+    }
+
+    @Test
+    public void test_decr_with_default_value_EdgeCase_NullKeyAndNegativeDelta() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L, 1000L));
+    }
+
+    @Test
+    public void test_getBulk_collection_EdgeCase_NullKeys() {
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((java.util.Collection<String>) null));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk(Arrays.asList("a", null)));
+    }
+
+    @Test
+    public void test_asyncGetBulk_varargs_forwards() {
+        when(mockMc.asyncGetBulk(any(String[].class))).thenReturn((net.spy.memcached.internal.BulkFuture) null);
+        try {
+            cache.asyncGetBulk("a", "b");
+        } catch (NullPointerException ignore) {
+            // The mock returns null; we only care the dispatch happens.
+        }
+        verify(mockMc).asyncGetBulk(any(String[].class));
+    }
+
+    @Test
+    public void test_asyncGetBulk_collection_forwards() {
+        when(mockMc.asyncGetBulk(any(java.util.Collection.class))).thenReturn((net.spy.memcached.internal.BulkFuture) null);
+        try {
+            cache.asyncGetBulk(Arrays.asList("a"));
+        } catch (NullPointerException ignore) {
+            // ok
+        }
+        verify(mockMc).asyncGetBulk(any(java.util.Collection.class));
+    }
+
+    @Test
+    public void test_flushAll_with_delay() {
+        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        when(mockMc.flush(anyInt())).thenReturn(ok);
+        assertTrue(cache.flushAll(5_000));
+        verify(mockMc).flush(5);
+    }
+
+    @Test
+    public void test_asyncFlushAll_forwards() {
+        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        when(mockMc.flush()).thenReturn(ok);
+        assertNotNull(cache.asyncFlushAll());
+        verify(mockMc).flush();
+    }
+
+    @Test
+    public void test_asyncFlushAll_with_delay_forwards() {
+        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        when(mockMc.flush(anyInt())).thenReturn(ok);
+        assertNotNull(cache.asyncFlushAll(10_000));
+        verify(mockMc).flush(10);
+    }
+
+    @Test
+    public void test_disconnect_with_timeout() {
+        cache.disconnect(5000);
+        verify(mockMc).shutdown(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    @Test
+    public void test_disconnect_with_timeout_EdgeCase_Negative() {
+        assertThrows(IllegalArgumentException.class, () -> cache.disconnect(-1));
+    }
+
     private static Object readField(Object target, String fieldName) throws Exception {
         Field f = target.getClass().getDeclaredField(fieldName);
         f.setAccessible(true);
