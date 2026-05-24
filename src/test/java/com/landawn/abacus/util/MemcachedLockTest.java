@@ -5,41 +5,121 @@
 package com.landawn.abacus.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import java.net.InetSocketAddress;
-import java.net.Socket;
-
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedConstruction;
+import org.mockito.Mockito;
+
+import net.spy.memcached.MemcachedClient;
+import net.spy.memcached.internal.OperationFuture;
 
 @Tag("2025")
 public class MemcachedLockTest {
     final String url = "localhost:11211";
-    final MemcachedLock<String, Long> memcachedLock = new MemcachedLock<>(url);
 
-    private static boolean isServerReachable(String host, int port) {
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(host, port), 500);
-            return true;
-        } catch (Exception e) {
-            return false;
+    /**
+     * Mock-based replacement for the original {@code test_lock}, which was skipped whenever
+     * a real memcached server was not running on localhost:11211. We intercept construction
+     * of {@link MemcachedClient} so the {@link MemcachedLock} (and the {@code SpyMemcached}
+     * it wraps internally) operate against a Mockito mock instead of opening a real socket.
+     */
+    @Test
+    public void test_lock() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            final String key = "mysql";
+
+            // add() succeeds on first attempt (i.e. lock acquired).
+            OperationFuture<Boolean> addOk = immediateBooleanFuture(true);
+            when(mockMc.add(eq(key), anyInt(), any())).thenReturn(addOk);
+
+            assertTrue(lock.lock(key, 10_000), "first lock() should acquire");
+            verify(mockMc).add(eq(key), eq(10), any()); // 10_000 ms -> 10 s
+
+            // isLocked() uses mc.get(...); return non-null to indicate "held".
+            when(mockMc.get(key)).thenReturn(Long.valueOf(123));
+            assertTrue(lock.isLocked(key));
+
+            // get(target) returns the stored value.
+            assertEquals(Long.valueOf(123), lock.get(key));
         }
     }
 
+    /**
+     * Second-acquire-fails scenario: the server returns false from add() when the key already exists.
+     */
     @Test
-    public void test_lock() {
-        Assumptions.assumeTrue(isServerReachable("localhost", 11211), "memcached server localhost:11211 is not reachable; skipping test_lock");
-        String key = "mysql";
-        memcachedLock.lock(key, 10000);
+    public void test_lock_returns_false_when_already_held() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
 
-        assertTrue(memcachedLock.isLocked(key));
+            OperationFuture<Boolean> alreadyHeld = immediateBooleanFuture(false);
+            when(mockMc.add(any(String.class), anyInt(), any())).thenReturn(alreadyHeld);
 
-        Object value = memcachedLock.get(key);
+            assertFalse(lock.lock("k", 5_000));
+        }
+    }
 
-        N.println(value);
+    /**
+     * unlock() should issue a delete and propagate the boolean result.
+     */
+    @Test
+    public void test_unlock_deletes_key() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            OperationFuture<Boolean> deleted = immediateBooleanFuture(true);
+            when(mockMc.delete("k")).thenReturn(deleted);
+
+            assertTrue(lock.unlock("k"));
+            verify(mockMc).delete("k");
+        }
+    }
+
+    /**
+     * isLocked() should return false when mc.get() returns null (i.e., no lock present).
+     */
+    @Test
+    public void test_isLocked_false_when_not_held() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            when(mockMc.get("k")).thenReturn(null);
+
+            assertFalse(lock.isLocked("k"));
+        }
+    }
+
+    /**
+     * get() should return null when the stored value is an empty byte array — this is the
+     * documented sentinel used by the no-value form of lock(target, ttl).
+     */
+    @Test
+    public void test_get_returns_null_for_empty_byte_array_sentinel() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            when(mockMc.get("k")).thenReturn(new byte[0]);
+
+            assertNull(lock.get("k"));
+        }
     }
 
     /**
@@ -92,8 +172,20 @@ public class MemcachedLockTest {
         }
     }
 
-    private static void assertFalse(final boolean condition) {
-        org.junit.jupiter.api.Assertions.assertFalse(condition);
+    /**
+     * Returns an immediately-complete future yielding the supplied value. Used so that
+     * spymemcached's resultOf() returns the canned value without blocking on the wire.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> OperationFuture<T> immediateBooleanFuture(T value) {
+        OperationFuture<T> f = mock(OperationFuture.class);
+        try {
+            when(f.get(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any())).thenReturn(value);
+            when(f.get()).thenReturn(value);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return f;
     }
 
     /**
