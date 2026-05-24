@@ -4,13 +4,17 @@
 
 package com.landawn.abacus.util;
 
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.sql.Time;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 
 import com.landawn.abacus.cache.JRedis;
 
@@ -19,7 +23,27 @@ public class JRedisTest {
     protected static final String FIRST_NAME = "firstName";
     protected static final String MIDDLE_NAME = "MN";
     protected static final String LAST_NAME = "lastName";
-    private static JRedis<Object> client = new JRedis<>("hqd-billing-01:6379");
+
+    private static final String REDIS_HOST = "hqd-billing-01";
+    private static final int REDIS_PORT = 6379;
+
+    private static JRedis<Object> client;
+
+    @BeforeAll
+    public static void setUpClass() {
+        Assumptions.assumeTrue(isServerReachable(REDIS_HOST, REDIS_PORT),
+                "Redis server " + REDIS_HOST + ":" + REDIS_PORT + " is not reachable; skipping JRedisTest");
+        client = new JRedis<>(REDIS_HOST + ":" + REDIS_PORT);
+    }
+
+    private static boolean isServerReachable(String host, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 500);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     /**
      *

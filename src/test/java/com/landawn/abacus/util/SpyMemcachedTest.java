@@ -4,11 +4,15 @@
 
 package com.landawn.abacus.util;
 
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.sql.Time;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +23,27 @@ public class SpyMemcachedTest {
     protected static final String FIRST_NAME = "firstName";
     protected static final String MIDDLE_NAME = "MN";
     protected static final String LAST_NAME = "lastName";
-    private static final SpyMemcached<Object> client = new SpyMemcached<>("localhost:11211");
+
+    private static final String MEMCACHED_HOST = "localhost";
+    private static final int MEMCACHED_PORT = 11211;
+
+    private static SpyMemcached<Object> client;
+
+    @BeforeAll
+    public static void setUpClass() {
+        Assumptions.assumeTrue(isServerReachable(MEMCACHED_HOST, MEMCACHED_PORT),
+                "memcached server " + MEMCACHED_HOST + ":" + MEMCACHED_PORT + " is not reachable; skipping SpyMemcachedTest");
+        client = new SpyMemcached<>(MEMCACHED_HOST + ":" + MEMCACHED_PORT);
+    }
+
+    private static boolean isServerReachable(String host, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 500);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     @Test
     public void testSetGetOneObject() {

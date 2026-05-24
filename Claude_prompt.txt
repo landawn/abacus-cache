@@ -11,6 +11,8 @@ Perform a thorough deep line by line review for javadocs in all the classes unde
 
 Perform a thorough deep line by line review for javadocs in all the classes in package com.landawn.abacus.type under folder: ./src/main/java to improve/correct existing javadocs
 
+Perform a thorough, line-by-line review of the Javadocs in all classes under the ./src/main/java directory. Improve and correct the existing documentation where necessary, ensuring clarity, accuracy, and completeness. Align the style, structure, and conventions with the standard JDK Javadoc guidelines wherever possible.
+
 Perform a thorough deep line by line review for javadocs in Multiset.java to improve/correct existing javadocs
 
 
@@ -208,8 +210,6 @@ Requirements:
 			public Iterator<List<E>> iterator()
 
 	4) Run mvn javadoc:javadoc to verify all changes are valid
-
-
 
 
 -- ==========================================================
@@ -456,7 +456,7 @@ CONSTRAINTS
 
 
 
-Read the Eclipse-generated HTML coverage reports located in ./report/coverage/260315/ batch by batch.
+Read the Eclipse-generated HTML coverage reports located in ./report/coverage/260321/ batch by batch.
 Each batch contains 20 HTML files, ordered by highest "Missed Instructions" first (start with the classes that have the most uncovered instructions). 
 For each class report in the batch:
 

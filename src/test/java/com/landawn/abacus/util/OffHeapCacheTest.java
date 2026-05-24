@@ -363,8 +363,8 @@ public class OffHeapCacheTest {
                     // public stats record, but writeCount() gives us the analog.
                     if (s.putCountToDisk() > 0) {
                         if (w.min() < 0 || w.max() < 0 || w.min() > w.max() + 1) {
-                            failure.compareAndSet(null, new AssertionError(
-                                    "Torn stats: writeCount=" + s.putCountToDisk() + " min=" + w.min() + " max=" + w.max()));
+                            failure.compareAndSet(null,
+                                    new AssertionError("Torn stats: writeCount=" + s.putCountToDisk() + " min=" + w.min() + " max=" + w.max()));
                             return;
                         }
                     }

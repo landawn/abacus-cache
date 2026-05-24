@@ -8,6 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.InetSocketAddress;
+import java.net.Socket;
+
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -16,8 +20,18 @@ public class MemcachedLockTest {
     final String url = "localhost:11211";
     final MemcachedLock<String, Long> memcachedLock = new MemcachedLock<>(url);
 
+    private static boolean isServerReachable(String host, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 500);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     @Test
     public void test_lock() {
+        Assumptions.assumeTrue(isServerReachable("localhost", 11211), "memcached server localhost:11211 is not reachable; skipping test_lock");
         String key = "mysql";
         memcachedLock.lock(key, 10000);
 
@@ -45,8 +59,7 @@ public class MemcachedLockTest {
         assertFalse_isFinal(MemcachedLock.class);
 
         // The toKey override is reachable via a subclass at compile-time.
-        final NamespacedDummyLock<String> subclass = NamespacedDummyLock.class.cast(
-                NamespacedDummyLock.class.getDeclaredField("STUB").get(null));
+        final NamespacedDummyLock<String> subclass = NamespacedDummyLock.class.cast(NamespacedDummyLock.class.getDeclaredField("STUB").get(null));
         assertEquals("ns:my-resource", subclass.testToKey("my-resource"));
     }
 

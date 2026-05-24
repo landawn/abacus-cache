@@ -15,7 +15,8 @@ public class RocksDBExample {
 
     @Test
     public void test_01() {
-        try (final Options options = new Options().setCreateIfMissing(true); final RocksDB db = RocksDB.open(options, "rocksdb-data")) {
+        try (final Options options = new Options().setCreateIfMissing(true);
+             final RocksDB db = RocksDB.open(options, "rocksdb-data")) {
 
             // Put a key-value pair
             db.put("hello".getBytes(), "world".getBytes());
