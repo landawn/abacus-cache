@@ -168,7 +168,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * <p><b>Memory Management:</b>
      * Native memory is allocated immediately. The default max block size (8192 bytes) is used,
-     * and the default vacating factor (0.2) determines when LRU eviction triggers to free space.
+     * and the default vacating factor (0.2) controls how much of the pool is evicted (LRU first)
+     * when capacity is reached.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -205,7 +206,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * <p><b>Memory Management:</b>
      * Memory is allocated immediately using the Foreign Memory API (Arena). The maxBlockSize parameter
      * controls how values are stored -- values larger than maxBlockSize are split across multiple blocks.
-     * The vacatingFactor determines when defragmentation is triggered to reclaim fragmented memory.
+     * The vacatingFactor controls how much of the pool is evicted (LRU first) once the pool reaches
+     * capacity.
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
      *                     The actual capacity will be capacityInMB * 1048576 bytes.
@@ -306,8 +308,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *                 valid address within the allocated memory region (between _startPtr and _startPtr + capacity).
      * @param bytes the destination byte array. Must not be null and must have sufficient capacity to
      *              hold the copied data.
-     * @param destOffset the starting offset in the destination array. Together with the array structure,
-     *                   this determines the actual destination memory address.
+     * @param destOffset the index of the first byte in {@code bytes} to write to (zero-based, no array
+     *                   header offset is applied by this implementation).
      * @param len the number of bytes to copy. Must be positive and must not exceed the available
      *            space in the destination array starting from destOffset.
      */
@@ -326,8 +328,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * by subtracting _startPtr from startPtr to determine the correct position in the memory segment.
      *
      * @param srcBytes the source byte array from which to copy data. Must not be null.
-     * @param srcOffset the starting offset in the source array. Together with the array structure,
-     *                  this determines the actual source memory address.
+     * @param srcOffset the index of the first byte in {@code srcBytes} to read (zero-based, no array
+     *                  header offset is applied by this implementation).
      * @param startPtr the destination memory address in off-heap memory. Must be a valid address
      *                 within the allocated memory region (between _startPtr and _startPtr + capacity).
      * @param len the number of bytes to copy. Must be positive and must not exceed the available
@@ -619,8 +621,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
          * }</pre>
          *
          * @return a new {@link OffHeapCache25} instance configured with the builder settings
-         * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if {@code maxBlockSizeInBytes}
-         *                                  is outside [1024, 1048576], or if other validation fails
+         * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if
+         *                                  {@code maxBlockSizeInBytes} is non-zero and outside
+         *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192)
          * @throws OutOfMemoryError if native memory allocation fails
          */
         public OffHeapCache25<K, V> build() {

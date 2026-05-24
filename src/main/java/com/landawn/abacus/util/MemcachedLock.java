@@ -32,7 +32,7 @@ import com.landawn.abacus.logging.LoggerFactory;
  * <li>Distributed mutual exclusion across multiple processes</li>
  * <li>Automatic lock expiration to prevent deadlocks</li>
  * <li>Optional value storage with the lock</li>
- * <li>Non-blocking lock acquisition</li>
+ * <li>Non-retrying lock acquisition (single atomic attempt, returns immediately on contention)</li>
  * </ul>
  *
  * <p>Implementation notes:

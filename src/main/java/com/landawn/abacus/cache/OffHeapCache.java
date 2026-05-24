@@ -44,9 +44,9 @@ import lombok.experimental.Accessors;
  * <p>Key features:
  * <ul>
  * <li>Direct memory allocation outside JVM heap</li>
- * <li>Automatic memory defragmentation</li>
+ * <li>Automatic reclamation of emptied segments so they can be reused for a different slot size</li>
  * <li>Optional disk spillover when memory is full</li>
- * <li>Configurable serialization (defaults to Kryo)</li>
+ * <li>Configurable serialization (defaults to Kryo if available, otherwise JSON)</li>
  * <li>Per-entry TTL and idle timeout</li>
  * <li>Comprehensive performance statistics</li>
  * </ul>
@@ -179,7 +179,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * <p><b>Memory Management:</b>
      * Native memory is allocated immediately. The default max block size (8192 bytes) is used,
-     * and the default vacating factor (0.2) determines when LRU eviction triggers to free space.
+     * and the default vacating factor (0.2) controls how much of the pool is evicted (LRU first)
+     * when capacity is reached.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -667,8 +668,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * }</pre>
          *
          * @return a new {@link OffHeapCache} instance configured with the builder settings
-         * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if {@code maxBlockSizeInBytes}
-         *                                  is outside [1024, 1048576], or if other validation fails
+         * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if
+         *                                  {@code maxBlockSizeInBytes} is non-zero and outside
+         *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192)
          * @throws OutOfMemoryError if native memory allocation fails
          */
         public OffHeapCache<K, V> build() {

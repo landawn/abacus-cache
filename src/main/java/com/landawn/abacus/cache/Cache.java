@@ -71,15 +71,14 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Retrieves a value from the cache wrapped in an Optional.
-     * This method provides a null-safe way to handle cache misses and follows functional programming patterns.
-     * The operation is thread-safe and does not block other cache operations.
+     * This is the null-safe counterpart of {@link #getOrNull(Object)}.
      *
      * <p><b>Behavior:</b>
      * <ul>
      * <li>Returns {@code Optional.empty()} if the key does not exist</li>
      * <li>Returns {@code Optional.empty()} if the entry has expired (TTL or idle timeout exceeded)</li>
-     * <li>May update the last access time for idle timeout tracking (implementation-specific)</li>
-     * <li>Does not throw exceptions for missing keys - returns empty Optional instead</li>
+     * <li>May update the last-access time for idle-timeout tracking (implementation-specific)</li>
+     * <li>Does not throw for missing keys - returns an empty Optional instead</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -99,30 +98,24 @@ public interface Cache<K, V> extends Closeable {
      *     .orElse("Unknown");
      * }</pre>
      *
-     * @param key the cache key to look up (must not be null for most implementations)
+     * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
      * @return an Optional containing the cached value if present and not expired, or an empty Optional otherwise
-     * @throws IllegalStateException if the cache has been closed
      * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
     Optional<V> get(final K key);
 
     /**
-     * Retrieves a value from the cache directly without wrapping in Optional.
-     * This method returns null for cache misses rather than using Optional, providing a more
-     * traditional API for scenarios where Optional overhead is not desired or when working
-     * with legacy code. The operation is thread-safe and does not block other cache operations.
-     *
-     * <p><b>Note:</b> This method is named {@code getOrNull} to distinguish it from {@link #get(Object)},
-     * which returns {@code Optional<V>}. This naming convention clearly indicates the nullable return type
-     * while allowing both APIs to coexist.
+     * Retrieves a value from the cache directly, returning {@code null} on a miss.
+     * This method is named {@code getOrNull} to coexist with {@link #get(Object)},
+     * which returns {@code Optional<V>}.
      *
      * <p><b>Behavior:</b>
      * <ul>
-     * <li>Returns {@code null} if the key does not exist in the cache</li>
+     * <li>Returns {@code null} if the key does not exist</li>
      * <li>Returns {@code null} if the entry has expired (TTL or idle timeout exceeded)</li>
-     * <li>May update the last access time for idle timeout tracking (implementation-specific)</li>
-     * <li>Does not throw exceptions for missing keys - returns null instead</li>
+     * <li>May update the last-access time for idle-timeout tracking (implementation-specific)</li>
+     * <li>Does not throw for missing keys - returns {@code null} instead</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -135,7 +128,7 @@ public interface Cache<K, V> extends Closeable {
      *     System.out.println(user.getName());
      * }
      *
-     * // With default value fallback
+     * // Cache-aside with database fallback
      * User result = cache.getOrNull("user:123");
      * if (result == null) {
      *     result = loadFromDatabase("user:123");
@@ -143,26 +136,23 @@ public interface Cache<K, V> extends Closeable {
      * }
      * }</pre>
      *
-     * @param key the cache key to look up (must not be null for most implementations)
-     * @return the cached value if present and not expired, or null if the key is not found or has expired
-     * @throws IllegalStateException if the cache has been closed
+     * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
+     * @return the cached value if present and not expired, or {@code null} if the key is not found or has expired
      * @see #get(Object)
      * @see #asyncGetOrNull(Object)
      */
     V getOrNull(final K key);
 
     /**
-     * Stores a key-value pair in the cache using default expiration settings.
-     * The default TTL ({@link #DEFAULT_LIVE_TIME}) and idle time ({@link #DEFAULT_MAX_IDLE_TIME})
-     * are used unless overridden by the implementation. If the key already exists, its value will
-     * be updated and its expiration time will be reset. The operation is thread-safe and atomic.
+     * Stores a key-value pair in the cache using the implementation's default expiration settings.
+     * If the key already exists, its value is replaced and its expiration is reset.
      *
      * <p><b>Behavior:</b>
      * <ul>
-     * <li>Overwrites existing entries with the same key</li>
-     * <li>Resets TTL and idle timeout for existing entries</li>
-     * <li>May trigger eviction of old entries if cache capacity is reached</li>
-     * <li>Returns false if the operation fails (e.g., cache full and eviction not possible)</li>
+     * <li>Overwrites any existing entry with the same key</li>
+     * <li>Resets TTL and idle-timeout counters for the entry</li>
+     * <li>May trigger eviction of other entries if cache capacity is reached</li>
+     * <li>Returns {@code false} if the operation fails (e.g., cache full and eviction not possible)</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -186,10 +176,9 @@ public interface Cache<K, V> extends Closeable {
      * }
      * }</pre>
      *
-     * @param key the cache key to store the value under (must not be null for most implementations)
-     * @param value the value to cache (may be null depending on implementation, check implementation docs)
-     * @return true if the operation was successful, false otherwise (e.g., cache full, closed, or write failure)
-     * @throws IllegalStateException if the cache has been closed
+     * @param key the cache key to store the value under; null-handling is implementation-defined
+     * @param value the value to cache; null-handling is implementation-defined
+     * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full, closed, or write failure)
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
@@ -197,17 +186,18 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Stores a key-value pair in the cache with custom expiration settings.
-     * If the key already exists, its value and expiration settings will be replaced.
-     * The entry will be evicted when either the TTL expires (measured from the time of insertion)
-     * or the idle time is exceeded (measured from the last access). The operation is thread-safe and atomic.
+     * If the key already exists, its value and expiration settings are replaced.
+     * The entry is evicted when either the TTL elapses (measured from insertion)
+     * or the idle time is exceeded (measured from last access), whichever happens first.
      *
      * <p><b>Expiration Semantics:</b>
      * <ul>
      * <li><b>liveTime (TTL):</b> Absolute expiration time from insertion. Entry is removed after this duration
-     *     regardless of access patterns. Use 0 or negative to disable TTL expiration.</li>
-     * <li><b>maxIdleTime:</b> Relative expiration based on last access. Entry is removed if not accessed within
-     *     this duration. Use 0 or negative to disable idle timeout. <b>Note:</b> Not supported by all
-     *     implementations, particularly distributed caches - check implementation documentation.</li>
+     *     regardless of access patterns. The exact handling of 0 / negative values is implementation-defined
+     *     (some implementations treat them as "no TTL", others reject them).</li>
+     * <li><b>maxIdleTime:</b> Expiration based on last access. Entry is removed if not accessed within this duration.
+     *     <b>Not supported by all implementations</b> — distributed caches (e.g. Memcached, Redis) typically ignore
+     *     this parameter. Check the implementing class's documentation.</li>
      * <li>If both are set, the entry expires when either condition is met (whichever comes first).</li>
      * </ul>
      *
@@ -223,18 +213,14 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Short-lived data that expires quickly if unused
      * cache.put("otp:token", token, 300000, 60000);   // 5min TTL, 1min idle
-     *
-     * // No expiration (use with caution to avoid memory leaks)
-     * cache.put("permanent:config", config, 0, 0);
      * }</pre>
      *
-     * @param key the cache key to store the value under (must not be null for most implementations)
-     * @param value the value to cache (may be null depending on implementation, check implementation docs)
-     * @param liveTime the time-to-live in milliseconds from insertion (0 or negative for no TTL expiration)
-     * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout).
-     *                    <b>Note:</b> Not supported by all implementations - check implementation documentation.
-     * @return true if the operation was successful, false otherwise (e.g., cache full, closed, or write failure)
-     * @throws IllegalStateException if the cache has been closed
+     * @param key the cache key to store the value under; null-handling is implementation-defined
+     * @param value the value to cache; null-handling is implementation-defined
+     * @param liveTime the time-to-live in milliseconds from insertion; handling of {@code <= 0} is implementation-defined
+     * @param maxIdleTime the maximum idle time in milliseconds since last access; handling of {@code <= 0} is
+     *                    implementation-defined and the parameter may be ignored entirely by distributed caches
+     * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full, closed, or write failure)
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
@@ -242,16 +228,13 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Removes an entry from the cache.
-     * This operation is idempotent and thread-safe - it succeeds whether the key exists or not.
-     * If the key exists, the entry is removed immediately; if not, the operation has no effect and
-     * returns normally. The operation is atomic and does not block other cache operations.
+     * Idempotent: removing a key that is not present has no effect and does not throw.
      *
      * <p><b>Behavior:</b>
      * <ul>
      * <li>Removes the entry if the key exists</li>
      * <li>Does nothing if the key does not exist (no error)</li>
      * <li>Safe to call multiple times with the same key</li>
-     * <li>Does not throw exceptions for non-existent keys</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -261,24 +244,14 @@ public interface Cache<K, V> extends Closeable {
      * // Basic removal
      * cache.remove("user:123");   // Removes if exists, no error if not
      *
-     * // Safe to call multiple times
-     * cache.remove("user:123");
-     * cache.remove("user:123");   // No exception thrown
-     *
-     * // Remove on update failure
+     * // Invalidate on update failure
      * boolean updated = updateUser(userId);
      * if (!updated) {
-     *     cache.remove("user:" + userId);   // Invalidate stale cache entry
-     * }
-     *
-     * // Batch removal
-     * for (String key : keysToRemove) {
-     *     cache.remove(key);
+     *     cache.remove("user:" + userId);
      * }
      * }</pre>
      *
-     * @param key the cache key to remove (must not be null for most implementations)
-     * @throws IllegalStateException if the cache has been closed
+     * @param key the cache key to remove; null-handling is implementation-defined
      * @see #clear()
      * @see #containsKey(Object)
      * @see #asyncRemove(Object)
@@ -286,48 +259,31 @@ public interface Cache<K, V> extends Closeable {
     void remove(final K key);
 
     /**
-     * Checks if the cache contains a specific key.
-     * This operation is thread-safe and does not block other cache operations. For most implementations,
-     * this method checks for the presence of the key but does not affect the access time or LRU ordering,
-     * and it does not reset idle timeout counters. However, expired entries may or may not be considered
-     * present depending on the implementation - check implementation documentation for specifics.
+     * Returns whether the cache contains an entry for the specified key.
      *
      * <p><b>Behavior:</b>
      * <ul>
-     * <li>Returns true if the key exists and is not expired</li>
-     * <li>Returns false if the key does not exist or has expired</li>
-     * <li>Does not update access time or reset idle timeout (implementation-specific)</li>
-     * <li>Does not affect LRU eviction ordering (for LRU-based caches)</li>
-     * <li>May be faster than {@link #get(Object)} for existence checks</li>
+     * <li>Returns {@code true} if the key has a live (non-expired) entry</li>
+     * <li>Returns {@code false} if the key does not exist or has expired</li>
+     * <li>Whether the call updates access time / LRU ordering / idle counters is implementation-defined</li>
+     * <li>Whether expired-but-not-yet-evicted entries are visible here is implementation-defined</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Basic existence check
      * if (cache.containsKey("user:123")) {
      *     System.out.println("User is cached");
-     * } else {
-     *     System.out.println("User not found in cache");
      * }
      *
-     * // Avoid unnecessary retrieval
      * if (!cache.containsKey("config:settings")) {
-     *     Config config = loadConfigFromFile();
-     *     cache.put("config:settings", config);
-     * }
-     *
-     * // Check before removal
-     * if (cache.containsKey(key)) {
-     *     cache.remove(key);
-     *     log("Removed cached entry for: " + key);
+     *     cache.put("config:settings", loadConfigFromFile());
      * }
      * }</pre>
      *
-     * @param key the cache key to check for (must not be null for most implementations)
-     * @return true if the key exists in the cache and is not expired, false otherwise
-     * @throws IllegalStateException if the cache has been closed
+     * @param key the cache key to check for; null-handling is implementation-defined
+     * @return {@code true} if an entry for the key exists and is not expired, {@code false} otherwise
      * @see #get(Object)
      * @see #asyncContainsKey(Object)
      */
@@ -335,148 +291,74 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously retrieves a value from the cache wrapped in an Optional.
-     * The operation is executed on a background thread from the shared async executor pool,
-     * allowing non-blocking cache access. This is the asynchronous version of {@link #get(Object)}.
-     * The returned ContinuableFuture provides functional composition capabilities for chaining
-     * dependent operations.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Returns immediately with a ContinuableFuture that will complete with the result</li>
-     * <li>The actual cache operation is executed asynchronously on a background thread</li>
-     * <li>Completes with {@code Optional.empty()} if the key does not exist or has expired</li>
-     * <li>Thread-safe and non-blocking</li>
-     * </ul>
+     * Asynchronous counterpart of {@link #get(Object)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Basic async retrieval
      * cache.asyncGet("user:123")
      *      .thenAccept(opt -> opt.ifPresent(u -> System.out.println("Found: " + u.getName())));
      *
-     * // Chain multiple operations
      * cache.asyncGet("user:123")
      *      .thenApply(opt -> opt.map(User::getName).orElse("Unknown"))
      *      .thenAccept(name -> log("User name: " + name));
-     *
-     * // Exception handling
-     * cache.asyncGet("user:123")
-     *      .thenAccept(opt -> process(opt))
-     *      .exceptionally(e -> {
-     *          log("Error retrieving from cache", e);
-     *          return null;
-     *      });
      * }</pre>
      *
-     * @param key the cache key to look up (must not be null for most implementations)
-     * @return a ContinuableFuture that will complete with an Optional containing the cached value if present,
-     *         or an empty Optional if the key is not found or has expired. The future may complete exceptionally
-     *         if an error occurs during the operation (e.g., IllegalArgumentException for null keys,
-     *         IllegalStateException if the cache is closed).
+     * @param key the cache key to look up; null-handling is implementation-defined
+     * @return a ContinuableFuture that completes with an Optional containing the cached value,
+     *         or with {@code Optional.empty()} if the key is absent or has expired. The future
+     *         completes exceptionally if the underlying {@code get} call throws.
      * @see #get(Object)
      * @see #asyncGetOrNull(Object)
      */
     ContinuableFuture<Optional<V>> asyncGet(final K key);
 
     /**
-     * Asynchronously retrieves a value from the cache directly without wrapping in Optional.
-     * The operation is executed on a background thread from the shared async executor pool,
-     * allowing non-blocking cache access. This is the asynchronous version of {@link #getOrNull(Object)}.
-     * The returned ContinuableFuture provides functional composition capabilities for chaining
-     * dependent operations.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Returns immediately with a ContinuableFuture that will complete with the result</li>
-     * <li>The actual cache operation is executed asynchronously on a background thread</li>
-     * <li>Completes with null if the key does not exist or has expired</li>
-     * <li>Thread-safe and non-blocking</li>
-     * </ul>
+     * Asynchronously retrieves a value from the cache, returning {@code null} on a miss.
+     * Asynchronous counterpart of {@link #getOrNull(Object)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Basic async retrieval with null check
      * cache.asyncGetOrNull("user:123")
      *      .thenAccept(user -> {
      *          if (user != null) {
      *              process(user);
      *          }
      *      });
-     *
-     * // Chain multiple async operations
-     * cache.asyncGetOrNull("user:123")
-     *      .thenCompose(user -> user != null ? updateUser(user) : loadFromDatabase("user:123"))
-     *      .thenAccept(user -> cache.put("user:123", user));
-     *
-     * // Exception handling
-     * cache.asyncGetOrNull("user:123")
-     *      .exceptionally(e -> {
-     *          log("Error retrieving from cache", e);
-     *          return null;
-     *      });
      * }</pre>
      *
-     * @param key the cache key to look up (must not be null for most implementations)
-     * @return a ContinuableFuture that will complete with the cached value if present,
-     *         or null if the key is not found or has expired. The future may complete exceptionally
-     *         if an error occurs during the operation (e.g., NullPointerException for null keys,
-     *         IllegalStateException if the cache is closed).
+     * @param key the cache key to look up; null-handling is implementation-defined
+     * @return a ContinuableFuture that completes with the cached value, or with {@code null}
+     *         if the key is absent or has expired. The future completes exceptionally if the
+     *         underlying {@code getOrNull} call throws.
      * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
     ContinuableFuture<V> asyncGetOrNull(final K key);
 
     /**
-     * Asynchronously stores a key-value pair using default expiration settings.
-     * The operation is executed on a background thread from the shared async executor pool,
-     * allowing non-blocking cache writes. This is the asynchronous version of {@link #put(Object, Object)}.
-     * The returned ContinuableFuture provides functional composition capabilities for chaining
-     * dependent operations.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Returns immediately with a ContinuableFuture that will complete with the result</li>
-     * <li>The actual cache operation is executed asynchronously on a background thread</li>
-     * <li>Overwrites existing entries with the same key</li>
-     * <li>Resets TTL and idle timeout for existing entries</li>
-     * <li>Thread-safe and non-blocking</li>
-     * </ul>
+     * Asynchronously stores a key-value pair using the implementation's default expiration settings.
+     * Asynchronous counterpart of {@link #put(Object, Object)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Basic async put
      * cache.asyncPut("user:123", user)
      *      .thenAccept(success -> {
      *          if (success) {
      *              log("User cached successfully");
      *          }
      *      });
-     *
-     * // Chain multiple operations
-     * cache.asyncPut("user:123", user)
-     *      .thenCompose(success -> success ? notifySubscribers(user) : handleFailure())
-     *      .thenRunAsync(() -> log("Operation complete"));
-     *
-     * // Exception handling
-     * cache.asyncPut("user:123", user)
-     *      .exceptionally(e -> {
-     *          log("Error caching user", e);
-     *          return false;
-     *      });
      * }</pre>
      *
-     * @param key the cache key to store the value under (must not be null for most implementations)
-     * @param value the value to cache (may be null depending on implementation, check implementation docs)
-     * @return a ContinuableFuture that will complete with true if the operation was successful, false otherwise
-     *         (e.g., cache full, closed, or write failure). The future may complete exceptionally if an error
-     *         occurs during the operation (e.g., IllegalArgumentException for null keys, IllegalStateException
-     *         if the cache is closed).
+     * @param key the cache key to store the value under; null-handling is implementation-defined
+     * @param value the value to cache; null-handling is implementation-defined
+     * @return a ContinuableFuture that completes with {@code true} on success, {@code false} otherwise.
+     *         The future completes exceptionally if the underlying {@code put} call throws.
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
@@ -484,20 +366,8 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously stores a key-value pair with custom expiration settings.
-     * The operation is executed on a background thread from the shared async executor pool,
-     * allowing non-blocking cache writes with custom TTL and idle timeout. This is the asynchronous
-     * version of {@link #put(Object, Object, long, long)}. The returned ContinuableFuture provides
-     * functional composition capabilities for chaining dependent operations.
-     *
-     * <p><b>Expiration Semantics:</b>
-     * <ul>
-     * <li><b>liveTime (TTL):</b> Absolute expiration time from insertion. Entry is removed after this duration
-     *     regardless of access patterns. Use 0 or negative to disable TTL expiration.</li>
-     * <li><b>maxIdleTime:</b> Relative expiration based on last access. Entry is removed if not accessed within
-     *     this duration. Use 0 or negative to disable idle timeout. <b>Note:</b> Not supported by all
-     *     implementations, particularly distributed caches - check implementation documentation.</li>
-     * <li>If both are set, the entry expires when either condition is met (whichever comes first).</li>
-     * </ul>
+     * Asynchronous counterpart of {@link #put(Object, Object, long, long)}; see that method for
+     * the semantics of {@code liveTime} and {@code maxIdleTime}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -505,33 +375,19 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Session with 1 hour TTL, 30 minute idle timeout
      * cache.asyncPut("session:abc", session, 3600000, 1800000)
-     *      .thenAccept(success -> {
-     *          if (success) {
-     *              log("Session cached with 1h TTL, 30min idle");
-     *          }
-     *      });
+     *      .thenAccept(success -> log("Session cached: " + success));
      *
      * // Short-lived temporary data
      * cache.asyncPut("temp:data", data, 5000, 0)
      *      .thenRunAsync(() -> log("Temporary data cached for 5 seconds"));
-     *
-     * // Exception handling
-     * cache.asyncPut("otp:token", token, 300000, 60000)
-     *      .exceptionally(e -> {
-     *          log("Error caching token", e);
-     *          return false;
-     *      });
      * }</pre>
      *
-     * @param key the cache key to store the value under (must not be null for most implementations)
-     * @param value the value to cache (may be null depending on implementation, check implementation docs)
-     * @param liveTime the time-to-live in milliseconds from insertion (0 or negative for no TTL expiration)
-     * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout).
-     *                    <b>Note:</b> Not supported by all implementations - check implementation documentation.
-     * @return a ContinuableFuture that will complete with true if the operation was successful, false otherwise
-     *         (e.g., cache full, closed, or write failure). The future may complete exceptionally if an error
-     *         occurs during the operation (e.g., IllegalArgumentException for null keys, IllegalStateException
-     *         if the cache is closed).
+     * @param key the cache key to store the value under; null-handling is implementation-defined
+     * @param value the value to cache; null-handling is implementation-defined
+     * @param liveTime the time-to-live in milliseconds from insertion; handling of {@code <= 0} is implementation-defined
+     * @param maxIdleTime the maximum idle time in milliseconds since last access; may be ignored by distributed caches
+     * @return a ContinuableFuture that completes with {@code true} on success, {@code false} otherwise.
+     *         The future completes exceptionally if the underlying {@code put} call throws.
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
@@ -539,44 +395,20 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously removes an entry from the cache.
-     * The operation is executed on a background thread from the shared async executor pool,
-     * allowing non-blocking cache removals. This is the asynchronous version of {@link #remove(Object)}.
-     * The operation is idempotent - it succeeds whether the key exists or not.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Returns immediately with a ContinuableFuture that will complete when the operation finishes</li>
-     * <li>The actual cache operation is executed asynchronously on a background thread</li>
-     * <li>Removes the entry if the key exists</li>
-     * <li>Does nothing if the key does not exist (no error)</li>
-     * <li>Thread-safe and non-blocking</li>
-     * </ul>
+     * Asynchronous counterpart of {@link #remove(Object)}; idempotent.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Basic async removal
      * cache.asyncRemove("user:123")
      *      .thenRunAsync(() -> log("User removed from cache"));
-     *
-     * // Chain with other operations
-     * cache.asyncRemove("user:123")
-     *      .thenCompose(v -> notifySubscribers("user:123"))
-     *      .thenRunAsync(() -> log("Cache invalidation complete"));
-     *
-     * // Exception handling
-     * cache.asyncRemove("user:123")
-     *      .exceptionally(e -> {
-     *          log("Error removing from cache", e);
-     *          return null;
-     *      });
      * }</pre>
      *
-     * @param key the cache key to remove (must not be null for most implementations)
-     * @return a ContinuableFuture that completes when the operation finishes. The future may complete
-     *         exceptionally if an error occurs during the operation (e.g., NullPointerException for null keys,
-     *         IllegalStateException if the cache is closed).
+     * @param key the cache key to remove; null-handling is implementation-defined
+     * @return a ContinuableFuture that completes (with a {@code null} result) when the removal
+     *         has finished. The future completes exceptionally if the underlying {@code remove}
+     *         call throws.
      * @see #remove(Object)
      * @see #asyncPut(Object, Object)
      */
@@ -584,93 +416,48 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Asynchronously checks if the cache contains a specific key.
-     * The operation is executed on a background thread from the shared async executor pool,
-     * allowing non-blocking existence checks. This is the asynchronous version of {@link #containsKey(Object)}.
-     * For most implementations, this method checks for the presence of the key but does not affect
-     * the access time or reset idle timeout counters.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Returns immediately with a ContinuableFuture that will complete with the result</li>
-     * <li>The actual cache operation is executed asynchronously on a background thread</li>
-     * <li>Completes with true if the key exists and is not expired</li>
-     * <li>Completes with false if the key does not exist or has expired</li>
-     * <li>Thread-safe and non-blocking</li>
-     * </ul>
+     * Asynchronous counterpart of {@link #containsKey(Object)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Basic async existence check
      * cache.asyncContainsKey("user:123")
      *      .thenAccept(exists -> log("User exists in cache: " + exists));
-     *
-     * // Conditional operations based on existence
-     * cache.asyncContainsKey("config:settings")
-     *      .thenCompose(exists -> exists ? cache.asyncGetOrNull("config:settings") : loadConfigAsync())
-     *      .thenAccept(config -> processConfig(config));
-     *
-     * // Exception handling
-     * cache.asyncContainsKey("user:123")
-     *      .exceptionally(e -> {
-     *          log("Error checking cache", e);
-     *          return false;
-     *      });
      * }</pre>
      *
-     * @param key the cache key to check for (must not be null for most implementations)
-     * @return a ContinuableFuture that will complete with true if the key exists in the cache and is not expired,
-     *         false otherwise. The future may complete exceptionally if an error occurs during the operation
-     *         (e.g., IllegalArgumentException for null keys, IllegalStateException if the cache is closed).
+     * @param key the cache key to check for; null-handling is implementation-defined
+     * @return a ContinuableFuture that completes with {@code true} if a live entry for the key
+     *         exists, {@code false} otherwise. The future completes exceptionally if the
+     *         underlying {@code containsKey} call throws.
      * @see #containsKey(Object)
      * @see #asyncGet(Object)
      */
     ContinuableFuture<Boolean> asyncContainsKey(final K key);
 
     /**
-     * Returns a set of all keys currently in the cache.
-     * The returned set may be a snapshot (immutable) or a live view (reflecting cache changes)
-     * depending on the implementation. The set may or may not include expired entries that have
-     * not yet been evicted. Some cache implementations may throw UnsupportedOperationException.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>May return a snapshot (immutable) or live view (implementation-specific)</li>
-     * <li>May or may not include expired but not yet evicted entries</li>
-     * <li>The operation may be expensive for large caches</li>
-     * <li>Thread-safety of the returned set depends on implementation</li>
-     * <li>Some implementations (e.g., certain distributed caches) may not support this operation</li>
-     * </ul>
+     * Returns a set of the keys currently in the cache.
+     * Whether the returned set is a live view or a snapshot, whether it includes
+     * expired-but-not-yet-evicted entries, and the cost of producing it are all
+     * implementation-defined.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Iterate over all keys
      * Set<String> keys = cache.keySet();
      * keys.forEach(key -> System.out.println("Cached key: " + key));
      *
-     * // Check if any keys exist
-     * if (!cache.keySet().isEmpty()) {
-     *     System.out.println("Cache has entries");
-     * }
-     *
-     * // Filter and act on entries (note: most implementations return a snapshot, so
-     * // mutating the returned Set does NOT mutate the cache itself — call remove() instead)
+     * // Most implementations return a snapshot, so mutating the returned Set does NOT
+     * // mutate the cache itself - call remove() to actually evict.
      * cache.keySet().stream()
      *     .filter(key -> key.startsWith("temp:"))
      *     .forEach(cache::remove);
-     *
-     * // Pattern matching
-     * cache.keySet().stream()
-     *     .filter(key -> key.startsWith("user:"))
-     *     .forEach(key -> processUser(cache.getOrNull(key)));
      * }</pre>
      *
-     * @return a set of all cache keys (may or may not include expired entries depending on implementation)
-     * @throws UnsupportedOperationException if the operation is not supported by this cache implementation
-     * @throws IllegalStateException if the cache has been closed (implementation-specific)
+     * @return a set of cache keys; whether expired entries are included is implementation-defined
+     * @throws UnsupportedOperationException if the operation is not supported by this implementation
+     *         (e.g., some distributed cache backends)
      * @see #size()
      * @see #containsKey(Object)
      */
@@ -678,135 +465,79 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Returns the number of entries currently in the cache.
-     * The count may or may not include expired entries that have not yet been evicted, depending
-     * on the implementation. Some implementations may return an estimate rather than an exact count
-     * for performance reasons, and some cache implementations may throw UnsupportedOperationException.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>May or may not include expired but not yet evicted entries</li>
-     * <li>May return an estimate rather than exact count (particularly for distributed caches)</li>
-     * <li>The operation is typically fast but may be expensive for certain implementations</li>
-     * <li>Thread-safe but the count may change immediately after being retrieved</li>
-     * <li>Some implementations (e.g., certain distributed caches) may not support this operation</li>
-     * </ul>
+     * Whether the count includes expired-but-not-yet-evicted entries and whether it is
+     * exact or approximate are implementation-defined.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Basic size check
      * int count = cache.size();
      * System.out.println("Cache contains " + count + " entries");
      *
-     * // Check if cache is empty
-     * if (cache.size() == 0) {
-     *     System.out.println("Cache is empty");
-     * }
-     *
-     * // Monitor cache usage
-     * int size = cache.size();
-     * if (size > 900) {
-     *     log("Cache nearing capacity: " + size + "/1000");
-     * }
-     *
-     * // Conditional clearing
      * if (cache.size() > threshold) {
      *     cache.clear();
      * }
      * }</pre>
      *
      * @return the number of cache entries (may be an estimate depending on implementation)
-     * @throws UnsupportedOperationException if the operation is not supported by this cache implementation
-     * @throws IllegalStateException if the cache has been closed (implementation-specific)
+     * @throws UnsupportedOperationException if the operation is not supported by this implementation
+     *         (e.g., some distributed cache backends)
      * @see #keySet()
      * @see #clear()
      */
     int size();
 
     /**
-     * Removes all entries from the cache.
-     * After this operation, the cache will be empty ({@link #size()} returns 0).
-     * This operation is thread-safe and atomic, though it may be expensive for distributed caches
-     * or caches with very large numbers of entries. The operation may block briefly while clearing.
+     * Removes all entries from the cache. After this call, {@link #size()} returns 0
+     * (subject to concurrent insertions). Cache configuration and {@link #getProperties() properties}
+     * are not affected.
      *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Removes all entries including expired and non-expired</li>
-     * <li>After completion, {@link #size()} returns 0 and {@link #keySet()} returns an empty set</li>
-     * <li>Thread-safe and atomic operation</li>
-     * <li>May be expensive for large caches, particularly distributed caches</li>
-     * <li>Does not affect cache configuration or properties</li>
-     * </ul>
+     * <p>May be expensive for very large caches and for distributed cache backends.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Basic clear operation
-     * cache.clear();   // Removes all cached entries
-     *
-     * // Clear and verify
      * cache.clear();
-     * System.out.println("Cache size after clear: " + cache.size());   // Should be 0
+     * System.out.println("Cache size after clear: " + cache.size());   // typically 0
      *
-     * // Periodic cache refresh
-     * cache.clear();
-     * reloadAllDataIntoCache();
-     *
-     * // Clear on configuration change
      * if (configChanged()) {
      *     cache.clear();
      *     log("Cache cleared due to configuration change");
      * }
      * }</pre>
      *
-     * @throws IllegalStateException if the cache has been closed (implementation-specific)
      * @see #remove(Object)
      * @see #size()
      */
     void clear();
 
     /**
-     * Closes the cache and releases all associated resources.
-     * After closing, the cache cannot be used - subsequent operations may throw exceptions
-     * (typically {@link IllegalStateException}) or have undefined behavior depending on the implementation.
-     * This method is idempotent and thread-safe - multiple calls have no additional effect and will not
-     * throw exceptions.
+     * Closes the cache and releases its resources. After closing, the cache cannot be reopened;
+     * the behavior of subsequent operations is implementation-defined (typically they throw or
+     * return as if empty). This method is expected to be idempotent — calling it more than once
+     * has no additional effect.
      *
-     * <p><b>Resource Cleanup:</b>
+     * <p><b>Typical resource cleanup:</b>
      * <ul>
-     * <li>Releases all cached entries and associated memory</li>
+     * <li>Releases cached entries and associated memory</li>
      * <li>Stops background eviction threads (if any)</li>
      * <li>Closes connections to remote cache servers (for distributed caches)</li>
      * <li>Releases file handles or other system resources</li>
-     * <li>Does not throw exceptions even if already closed</li>
      * </ul>
      *
-     * <p><b>Important:</b> It is recommended to always close the cache when it's no longer needed to prevent
-     * resource leaks. Use try-with-resources or try-finally blocks to ensure proper cleanup.
+     * <p><b>Override:</b> Although {@link Closeable#close()} declares {@code throws IOException},
+     * this override drops the checked exception so a cache can be used in try-with-resources
+     * without forcing callers to handle IOException.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Try-with-resources (recommended approach)
+     * // Try-with-resources (recommended)
      * try (Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000)) {
      *     cache.put("key", value);
      *     User user = cache.getOrNull("key");
-     *     // Cache is automatically closed when exiting the try block
      * }
-     *
-     * // Try-finally (when try-with-resources is not suitable)
-     * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
-     * try {
-     *     cache.put("key", value);
-     *     processData(cache);
-     * } finally {
-     *     cache.close();   // Always close to release resources
-     * }
-     *
-     * // Safe to call multiple times
-     * cache.close();
-     * cache.close();   // No exception thrown
      * }</pre>
      *
      * @see Closeable#close()
@@ -816,241 +547,120 @@ public interface Cache<K, V> extends Closeable {
     void close();
 
     /**
-     * Checks if the cache has been closed.
-     * Once a cache is closed via {@link #close()}, it cannot be reopened and should not be used.
-     * This method is thread-safe and returns immediately without blocking.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Returns true if {@link #close()} has been called, false otherwise</li>
-     * <li>Thread-safe and can be called from multiple threads</li>
-     * <li>Does not throw exceptions even if the cache is in an error state</li>
-     * <li>Once true, will always remain true (caches cannot be reopened)</li>
-     * </ul>
+     * Returns whether the cache has been closed. Once {@link #close()} has been called,
+     * this method returns {@code true} and the cache cannot be reopened.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Check before operations
      * if (!cache.isClosed()) {
      *     cache.put("key", value);
      * }
      *
-     * // Verify state after closing
      * cache.close();
      * System.out.println("Is closed: " + cache.isClosed());   // true
-     *
-     * // Safe operations with closed check
-     * public void cacheUser(User user) {
-     *     if (cache.isClosed()) {
-     *         log("Cache is closed, skipping caching");
-     *         return;
-     *     }
-     *     cache.put("user:" + user.getId(), user);
-     * }
-     *
-     * // Guard against closed cache in long-running process
-     * while (!cache.isClosed() && hasMoreData()) {
-     *     Data data = fetchNextData();
-     *     cache.put(data.getKey(), data);
-     * }
      * }</pre>
      *
-     * @return true if {@link #close()} has been called, false otherwise
+     * @return {@code true} if {@link #close()} has been called, {@code false} otherwise
      * @see #close()
      */
     boolean isClosed();
 
     /**
-     * Returns the properties bag for this cache instance.
-     * Properties can be used to store custom configuration, metadata, or application-specific data
-     * associated with this cache. The returned Properties object is mutable and changes are reflected
-     * in the cache. The properties are independent of cache entries and persist until explicitly removed
-     * or the cache is closed.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Returns the same Properties instance for the lifetime of the cache</li>
-     * <li>Properties are mutable and changes affect the cache</li>
-     * <li>Properties are not persisted; they exist only in memory and are discarded along with the cache instance</li>
-     * <li>Thread-safe access depends on the Properties implementation</li>
-     * </ul>
+     * Returns the mutable property bag for this cache instance. Properties are independent of
+     * cache entries: they live only in memory and are useful for custom configuration or
+     * metadata attached to the cache. The same instance is returned for the lifetime of the cache.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Set properties directly
      * Properties<String, Object> props = cache.getProperties();
      * props.put("description", "User cache for active sessions");
      * props.put("region", "us-west-2");
-     * props.put("maxRetries", 3);
      *
-     * // Later retrieve the properties
      * String description = (String) cache.getProperties().get("description");
-     * System.out.println("Cache: " + description);
-     *
-     * // Check if property exists
-     * if (cache.getProperties().containsKey("region")) {
-     *     String region = (String) cache.getProperties().get("region");
-     *     log("Operating in region: " + region);
-     * }
      * }</pre>
      *
-     * @return the properties container for this cache, never null
-     * @throws IllegalStateException if the cache has been closed (implementation-specific)
+     * @return the properties container for this cache; never {@code null}
      * @see #getProperty(String)
      * @see #setProperty(String, Object)
      */
     Properties<String, Object> getProperties();
 
     /**
-     * Retrieves a property value by name.
-     * This is a convenience method equivalent to calling {@code getProperties().get(propName)}.
-     * Returns null if the property doesn't exist. The method performs an unchecked cast to the
-     * expected type T, so the caller is responsible for ensuring the correct type is used.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Returns the property value if it exists</li>
-     * <li>Returns null if the property doesn't exist</li>
-     * <li>Performs unchecked cast to type T (caller must ensure correct type)</li>
-     * <li>Thread-safe access depends on the Properties implementation</li>
-     * </ul>
+     * Retrieves a property value by name. Equivalent to {@code getProperties().get(propName)}.
+     * The return type is an unchecked cast to {@code T}; because the cast is erased at runtime,
+     * any {@link ClassCastException} surfaces at the call site, not inside this method.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.setProperty("description", "User cache");
      * cache.setProperty("maxRetries", 3);
-     * cache.setProperty("enableMetrics", true);
      *
-     * // Basic retrieval with correct types
      * String description = cache.getProperty("description");
      * Integer retries = cache.getProperty("maxRetries");
-     * Boolean metrics = cache.getProperty("enableMetrics");
      *
-     * // Returns null for non-existent properties
      * String unknown = cache.getProperty("nonExistent");   // null
-     *
-     * // Use with null check
-     * Integer maxRetries = cache.getProperty("maxRetries");
-     * if (maxRetries != null && maxRetries > 0) {
-     *     setRetryCount(maxRetries);
-     * }
      * }</pre>
      *
-     * @param <T> the type of the property value to be returned (caller should ensure correct type)
-     * @param propName the property name to look up (must not be null)
-     * @return the property value cast to type T, or null if not found. Because the cast is
-     *         erased at runtime, a {@link ClassCastException} (if the stored value is not
-     *         assignable to T) will surface at the call site where the result is used, not
-     *         inside this method.
-     * @throws IllegalStateException if the cache has been closed (implementation-specific)
+     * @param <T> the expected type of the property value (caller responsibility)
+     * @param propName the property name to look up
+     * @return the property value cast to {@code T}, or {@code null} if no such property is set
      * @see #getProperties()
      * @see #setProperty(String, Object)
      */
     <T> T getProperty(String propName);
 
     /**
-     * Sets a property value.
-     * This is a convenience method equivalent to calling {@code getProperties().put(propName, propValue)}.
-     * Properties can be used for custom configuration, metadata, or application-specific data.
-     * The method returns the previous value if one existed, or null otherwise.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Sets the property value, overwriting any existing value</li>
-     * <li>Returns the previous value if one existed, null otherwise</li>
-     * <li>Accepts any object type as the property value</li>
-     * <li>Performs unchecked cast on the previous value (caller must ensure correct type)</li>
-     * <li>Thread-safe access depends on the Properties implementation</li>
-     * </ul>
+     * Sets a property value. Equivalent to {@code getProperties().put(propName, propValue)}.
+     * The previous value (if any) is returned as an unchecked cast to {@code T}; any
+     * {@link ClassCastException} surfaces at the call site, not inside this method.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * // Set various property types
      * cache.setProperty("description", "User cache for session data");
      * cache.setProperty("maxRetries", 3);
-     * cache.setProperty("enableMetrics", true);
-     * cache.setProperty("lastRefresh", System.currentTimeMillis());
      *
-     * // Update an existing property and get the old value
+     * // Update returns the old value
      * String oldDescription = cache.setProperty("description", "Updated description");
-     * System.out.println("Old: " + oldDescription);   // "User cache for session data"
+     * // oldDescription == "User cache for session data"
      *
      * // First set returns null
      * String prev = cache.setProperty("newProperty", "value");   // prev is null
-     *
-     * // Use returned value to check if update was needed
-     * Integer oldRetries = cache.setProperty("maxRetries", 5);
-     * if (oldRetries == null || !oldRetries.equals(5)) {
-     *     log("Retry count updated from " + oldRetries + " to 5");
-     * }
      * }</pre>
      *
-     * @param <T> the type of the previous property value to be returned (caller should ensure correct type)
-     * @param propName the property name to set (must not be null)
-     * @param propValue the property value to set (can be any object type, including null)
-     * @return the previous value associated with the property, or null if there was no previous
-     *         value. Because the cast is erased at runtime, a {@link ClassCastException} (if the
-     *         prior value is not assignable to T) will surface at the call site where the result
-     *         is used, not inside this method.
-     * @throws IllegalStateException if the cache has been closed (implementation-specific)
+     * @param <T> the expected type of the previous property value (caller responsibility)
+     * @param propName the property name to set
+     * @param propValue the property value to set (may be {@code null})
+     * @return the previous value associated with this property name, or {@code null} if there was none
      * @see #getProperty(String)
      * @see #removeProperty(String)
      */
     <T> T setProperty(String propName, Object propValue);
 
     /**
-     * Removes a property from the cache.
-     * This is a convenience method equivalent to calling {@code getProperties().remove(propName)}.
-     * This operation is idempotent - it succeeds whether the property exists or not, returning
-     * the previous value if one existed, or null otherwise.
-     *
-     * <p><b>Behavior:</b>
-     * <ul>
-     * <li>Removes the property if it exists</li>
-     * <li>Returns the removed value if the property existed, null otherwise</li>
-     * <li>Does nothing if the property doesn't exist (no error)</li>
-     * <li>Performs unchecked cast on the removed value (caller must ensure correct type)</li>
-     * <li>Thread-safe access depends on the Properties implementation</li>
-     * </ul>
+     * Removes a property by name. Equivalent to {@code getProperties().remove(propName)}.
+     * Idempotent: removing an absent property returns {@code null} and has no other effect.
+     * The removed value is returned as an unchecked cast to {@code T}; any
+     * {@link ClassCastException} surfaces at the call site, not inside this method.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      * cache.setProperty("description", "User cache");
-     * cache.setProperty("tempFlag", true);
      *
-     * // Remove and get the old value
-     * String oldValue = cache.removeProperty("description");
-     * System.out.println("Removed: " + oldValue);   // "User cache"
-     *
-     * // Removing non-existent property returns null
+     * String oldValue = cache.removeProperty("description");   // "User cache"
      * String notFound = cache.removeProperty("nonExistent");   // null
-     *
-     * // Safe to call multiple times
-     * cache.removeProperty("tempFlag");
-     * cache.removeProperty("tempFlag");   // No error, returns null
-     *
-     * // Use returned value to check if removal was necessary
-     * Boolean wasSet = cache.removeProperty("enableMetrics");
-     * if (wasSet != null) {
-     *     log("Metrics were " + (wasSet ? "enabled" : "disabled") + ", now removed");
-     * }
      * }</pre>
      *
-     * @param <T> the type of the property value to be returned (caller should ensure correct type)
-     * @param propName the property name to remove (must not be null)
-     * @return the removed value, or null if the property didn't exist. Because the cast is
-     *         erased at runtime, a {@link ClassCastException} (if the stored value is not
-     *         assignable to T) will surface at the call site where the result is used, not
-     *         inside this method.
-     * @throws IllegalStateException if the cache has been closed (implementation-specific)
+     * @param <T> the expected type of the removed property value (caller responsibility)
+     * @param propName the property name to remove
+     * @return the previous value associated with this property name, or {@code null} if there was none
      * @see #getProperty(String)
      * @see #setProperty(String, Object)
      */

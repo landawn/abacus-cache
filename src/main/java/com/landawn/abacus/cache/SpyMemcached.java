@@ -35,32 +35,32 @@ import net.spy.memcached.MemcachedClient;
 import net.spy.memcached.transcoders.Transcoder;
 
 /**
- * A Memcached distributed cache client implementation using the SpyMemcached library.
- * This class provides high-performance, asynchronous access to Memcached servers with
- * support for both synchronous and asynchronous operations. It uses Kryo serialization
- * when available for efficient object storage.
+ * A Memcached distributed cache client implementation backed by the SpyMemcached library.
+ * Provides synchronous and asynchronous access to one or more Memcached servers. When the
+ * Kryo parser is available on the classpath ({@link ParserFactory#isKryoParserAvailable()}),
+ * a {@link KryoTranscoder} is installed for serialization; otherwise the default SpyMemcached
+ * transcoder is used.
  *
  * <p>Key features:
  * <ul>
- * <li>Asynchronous and synchronous operations</li>
- * <li>Bulk get operations for efficiency</li>
+ * <li>Synchronous and {@link Future}-based asynchronous operations</li>
+ * <li>Bulk get operations to reduce network round-trips</li>
  * <li>Atomic increment/decrement operations</li>
- * <li>Configurable timeouts and serialization</li>
- * <li>Future-based async API</li>
+ * <li>Configurable operation timeout</li>
  * </ul>
  *
  * <p>Example usage:
  * <pre>{@code
  * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211");
- * 
+ *
  * // Synchronous operations
  * cache.set("user:123", user, 3600000);   // Cache for 1 hour
  * User cached = cache.get("user:123");
- * 
+ *
  * // Asynchronous operations
  * Future<Boolean> future = cache.asyncSet("user:456", anotherUser, 3600000);
  * boolean success = future.get();   // Wait for completion
- * 
+ *
  * // Bulk operations
  * Map<String, User> users = cache.getBulk("user:123", "user:456", "user:789");
  * }</pre>
@@ -78,9 +78,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     private volatile boolean isShutdown = false;
 
     /**
-     * Creates a new SpyMemcached instance with the default timeout.
-     * The server URL should contain comma-separated host:port pairs for multiple servers.
-     * The default timeout value is defined by {@link DistributedCacheClient#DEFAULT_TIMEOUT}.
+     * Creates a new SpyMemcached instance using {@link DistributedCacheClient#DEFAULT_TIMEOUT}
+     * as the operation timeout.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -88,7 +87,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * cache.set("key1", "value1", 3600000);
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
+     * @param serverUrl the Memcached server URL(s) in the format {@code "host1:port1,host2:port2,..."}.
+     *                  Must not be {@code null} or empty.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null} or empty
      * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the Memcached servers fails
      * @see #SpyMemcached(String, long)

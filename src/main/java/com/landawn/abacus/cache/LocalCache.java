@@ -523,8 +523,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * it's no longer needed to prevent resource leaks, especially the background
      * eviction thread.
      *
-     * <p><b>Thread Safety:</b> This method is synchronized and safe for concurrent calls.
-     * All concurrent operations will be allowed to complete before the cache is fully closed.
+     * <p><b>Thread Safety:</b> This method is synchronized on the cache instance, so concurrent
+     * invocations of {@code close()} are serialized. Other cache methods are not synchronized on
+     * the same monitor; thread safety for in-flight {@code get}/{@code put}/{@code remove}/etc.
+     * operations during close is the responsibility of the underlying pool.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

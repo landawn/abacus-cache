@@ -75,9 +75,9 @@ import com.landawn.abacus.util.stream.Stream;
  *
  * <p>Architecture overview:
  * <ul>
- * <li>Memory is divided into fixed-size segments (default 1MB each)</li>
+ * <li>Memory is divided into fixed-size segments ({@value #SEGMENT_SIZE} bytes each)</li>
  * <li>Each segment can be subdivided into slots of various sizes</li>
- * <li>Slot sizes are multiples of MIN_BLOCK_SIZE (64 bytes)</li>
+ * <li>Slot sizes are multiples of {@link #MIN_BLOCK_SIZE} (64 bytes)</li>
  * <li>Large objects span multiple slots if needed</li>
  * <li>Automatic reclamation of empty segments so they can be reused with a different slot size</li>
  * <li>Optional disk spillover via the {@link OffHeapStore} interface</li>
@@ -85,10 +85,10 @@ import com.landawn.abacus.util.stream.Stream;
  *
  * <p>Memory management strategy:
  * <ul>
- * <li>Best-fit allocation within size-based segment queues</li>
+ * <li>Size-segregated segment queues with bidirectional best-fit slot search</li>
  * <li>Lazy segment allocation - segments allocated only when needed</li>
- * <li>Automatic eviction based on LRU when capacity reached</li>
- * <li>Vacating process evicts LRU entries and reclaims now-empty segments</li>
+ * <li>Automatic eviction based on last-access time when capacity is reached</li>
+ * <li>Vacating process evicts entries and reclaims now-empty segments</li>
  * <li>Statistics tracking for monitoring and optimization</li>
  * </ul>
  *
@@ -102,24 +102,27 @@ import com.landawn.abacus.util.stream.Stream;
 abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
-     * Default vacating factor (0.2) used by the object pool to trigger eviction.
-     * When the pool reaches this utilization threshold, eviction of least recently
-     * used entries is triggered to free up space.
+     * Default vacating factor (0.2) passed to the underlying object pool. Controls the
+     * fraction of entries the pool removes when a vacating cycle is triggered.
      */
     static final float DEFAULT_VACATING_FACTOR = 0.2f;
 
     /**
-     * Default parser for serialization - uses Kryo if available, otherwise JSON.
+     * Default parser used for serialization when no custom serializer is configured.
+     * Uses Kryo if it is on the classpath, otherwise falls back to JSON.
      */
     static final Parser<?, ?> parser = ParserFactory.isKryoParserAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJsonParser();
 
     /**
-     * Default serializer using the configured parser.
+     * Default serializer used when no custom serializer is configured.
+     * Delegates to {@link #parser}.
      */
     static final BiConsumer<Object, ByteArrayOutputStream> SERIALIZER = parser::serialize;
 
     /**
-     * Default deserializer with special handling for byte arrays and ByteBuffers.
+     * Default deserializer used when no custom deserializer is configured.
+     * Returns the raw bytes for {@code byte[]} types, wraps them in a {@link ByteBuffer}
+     * for {@code ByteBuffer} types, and otherwise delegates to {@link #parser}.
      */
     static final BiFunction<byte[], Type<?>, Object> DESERIALIZER = (bytes, type) -> {
         // it's destroyed after read from memory. dirty data may be read.
@@ -133,22 +136,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     };
 
     /**
-     * Size of each memory segment in bytes (1MB).
+     * Size of each memory segment in bytes (1 MB).
      */
     static final int SEGMENT_SIZE = 1024 * 1024; // (int) N.ONE_MB;
 
     /**
-     * Minimum slot size in bytes. All slot sizes are multiples of this value.
+     * Minimum slot size in bytes. All slot sizes are rounded up to a multiple of this value.
      */
     static final int MIN_BLOCK_SIZE = 64;
 
     /**
-     * Default maximum size for a single memory block (8KB).
+     * Default maximum size for a single memory block (8 KB).
      */
     static final int DEFAULT_MAX_BLOCK_SIZE = 8192; // 8K
 
     /**
-     * Shared scheduled executor for eviction tasks across all off-heap cache instances.
+     * Shared scheduled executor used for the background eviction task of all
+     * off-heap cache instances created from this class.
      */
     static final ScheduledExecutorService scheduledExecutor;
 
@@ -231,10 +235,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                     large caches (capacityInMB &ge; ~131072, i.e. 128 GB) the derived pool
      *                     entry-capacity is clamped to {@code Integer.MAX_VALUE} so the int cast does
      *                     not overflow; the off-heap memory itself is still allocated at full size.
-     * @param maxBlockSize the maximum size of a single memory block in bytes. Values that fit within
+     * @param maxBlockSize the maximum size of a single memory slot in bytes. Values that fit within
      *                     this size will be stored in a single slot; larger values will be split across
-     *                     multiple slots. Must be between 1024 and SEGMENT_SIZE (1048576). The value
-     *                     will be rounded up to the nearest multiple of MIN_BLOCK_SIZE (64 bytes).
+     *                     multiple slots. Must be between 1024 and {@link #SEGMENT_SIZE} (1048576). The
+     *                     value is rounded up to the nearest multiple of {@link #MIN_BLOCK_SIZE} (64 bytes).
      * @param evictDelay the delay between eviction runs in milliseconds. If positive, schedules a
      *                   background task to periodically evict expired entries and release empty segments.
      *                   Use 0 or negative to disable automatic eviction (manual eviction via vacate() still works).
@@ -244,11 +248,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param defaultMaxIdleTime the default maximum idle time for entries in milliseconds. Entries not
      *                           accessed within this time will be considered expired. Use 0 or negative
      *                           for no idle timeout. This can be overridden per entry when calling put().
-     * @param vacatingFactor the fraction (0.0 to 1.0) of entries to evict from the pool when capacity is
-     *                        reached. When eviction is triggered, the least recently used entries are
-     *                        removed until this fraction of the pool has been freed, allowing empty
-     *                        segments to be reclaimed. Use 0.0 to apply the DEFAULT_VACATING_FACTOR (0.2).
-     *                        Typical values range from 0.1 to 0.3.
+     * @param vacatingFactor the fraction (0.0 to 1.0) of entries the underlying object pool removes
+     *                        during a vacate cycle. A value of {@code 0f} selects the
+     *                        {@link #DEFAULT_VACATING_FACTOR} (0.2). Typical values range from 0.1 to 0.3.
      * @param arrayOffset the array base offset for memory operations, used to calculate the correct
      *                    memory address when copying data to/from byte arrays. This is implementation-specific
      *                    (e.g., Unsafe.ARRAY_BYTE_BASE_OFFSET for Unsafe-based implementations).
@@ -270,9 +272,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                                             Return true to promote the value to memory. Use null to
      *                                             disable automatic promotion.
      * @param storeSelector the function to determine storage location for each put operation. Receives the
-     *                      key, value, and size, and should return: 0 for default (try memory, fallback to disk),
-     *                      1 for memory only (never store to disk), or 2 for disk only (always store to disk).
-     *                      Use null for default behavior (always try memory first).
+     *                      key, value, and serialized size and should return: {@code 0} for default
+     *                      (memory with disk fallback when configured), {@code 1} for memory only (never
+     *                      spill to disk), or {@code 2} for disk only (skip memory). Use {@code null} for
+     *                      default behavior on every put.
      * @param logger the logger instance for this cache, used to log warnings and errors during cache
      *               operations. Should not be null.
      * @throws IllegalArgumentException if capacityInMB is not positive, or if maxBlockSize is less than
@@ -427,12 +430,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Retrieves the value associated with the specified key, or {@code null} if no mapping exists.
      * The lookup first consults the in-memory object pool. If the entry is stored on disk (via a
-     * {@code StoreWrapper}), the value is read back from the configured {@link OffHeapStore}, disk
-     * read statistics are updated, and the entry may be promoted back into memory when
-     * {@code testerForLoadingItemFromDiskToMemory} returns {@code true} for it.
+     * {@code StoreWrapper}), the value is read back from the configured {@link OffHeapStore}, the
+     * disk-read counter (and read-time statistics, if enabled) are updated, and the entry may be
+     * promoted back into memory when {@code testerForLoadingItemFromDiskToMemory} is configured
+     * and returns {@code true} for it.
      *
      * @param key the key whose associated value is to be returned
-     * @return the cached value, or {@code null} if the key is not present or its entry has expired
+     * @return the cached value, or {@code null} if the key is not present, the entry has expired,
+     *         or the disk-backed entry has been removed from the store
      * @throws IllegalStateException if a stored value cannot be reconstructed because its size no
      *                               longer matches the recorded size (data corruption detected)
      */
@@ -578,15 +583,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Stores a key-value pair in the cache with the specified expiration settings.
      * The value is serialized and copied into off-heap memory. Values that fit within
      * {@code maxBlockSize} are stored in a single slot; larger values are split across
-     * multiple slots. When memory is unavailable (or directed by the {@code storeSelector}),
-     * the value may be written to the configured {@link OffHeapStore} instead. If neither
-     * memory nor disk storage succeeds, an asynchronous vacating task is triggered and the
-     * method returns {@code false}.
+     * multiple slots. When memory cannot be allocated (or when directed by the configured
+     * {@code storeSelector}), the value may be written to the configured {@link OffHeapStore}
+     * instead. If neither memory nor disk storage succeeds, an asynchronous vacating task is
+     * scheduled and the method returns {@code false}.
+     *
+     * <p>Non-positive {@code liveTime} or {@code maxIdleTime} values are interpreted as
+     * "no expiration" and internally translated to {@code Long.MAX_VALUE}.
      *
      * @param key the key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to be cached; must not be {@code null}
-     * @param liveTime the time-to-live for this entry in milliseconds
-     * @param maxIdleTime the maximum idle time for this entry in milliseconds
+     * @param liveTime the time-to-live for this entry in milliseconds; values {@code <= 0} mean no expiration
+     * @param maxIdleTime the maximum idle time for this entry in milliseconds; values {@code <= 0} mean no idle timeout
      * @return {@code true} if the value was successfully cached (in memory or on disk);
      *         {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
@@ -1396,8 +1404,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * Constructs a new Wrapper with the specified metadata.
          *
          * @param type the value type information for deserialization
-         * @param liveTime the time-to-live in milliseconds (0 or negative for default)
-         * @param maxIdleTime the maximum idle time in milliseconds (0 or negative for default)
+         * @param liveTime the time-to-live in milliseconds; must be positive (callers translate
+         *                 non-positive values to {@code Long.MAX_VALUE})
+         * @param maxIdleTime the maximum idle time in milliseconds; must be positive (callers translate
+         *                    non-positive values to {@code Long.MAX_VALUE})
          * @param size the serialized size of the value in bytes
          * @param kind the storage-strategy discriminator ({@link #KIND_SLOT}, {@link #KIND_MULTI_SLOTS} or {@link #KIND_STORE})
          */
@@ -1523,7 +1533,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * @param liveTime the time-to-live in milliseconds
          * @param maxIdleTime the maximum idle time in milliseconds
          * @param size the actual serialized size of the value in bytes
-         * @param segments the list of allocated slots holding the value chunks, in order
+         * @param segments the list of allocated slots holding the value chunks, in order (despite the
+         *                 parameter name, the elements are {@link Slot} instances, not {@link Segment}s)
          */
         MultiSlotsWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slot> segments) {
             super(type, liveTime, maxIdleTime, size, KIND_MULTI_SLOTS);

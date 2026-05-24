@@ -217,7 +217,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * This method inspects the underlying {@code asMap()} view, which does <i>not</i>
      * record a read access or update Caffeine's frequency sketch, so it does not
      * influence access-based eviction or pollute hit/miss statistics.
-     * Returns false if the entry has expired or been evicted.
+     *
+     * <p>Note that {@code asMap().containsKey()} does not actively run Caffeine's
+     * housekeeping. An entry that has logically expired but has not yet been removed by
+     * the maintenance task can still report {@code true} here, while
+     * {@link #getOrNull(Object)} returns {@code null} for the same key. Treat the result
+     * as a hint, not a strict freshness guarantee.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads.
@@ -234,7 +239,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested
-     * @return {@code true} if the cache contains a mapping for the specified key and it has not expired; {@code false} otherwise
+     * @return {@code true} if the underlying {@code asMap()} view still holds a mapping for the key
+     *         (which may include entries that have expired but not yet been removed by housekeeping);
+     *         {@code false} otherwise
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -274,9 +281,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns the estimated number of entries in the cache.
-     * This is an approximation and may not be exact: Caffeine maintains an internal write buffer,
-     * and entries that have been added/removed but not yet drained from the buffer are not reflected
-     * in this count, so the returned value can lag slightly behind the true size.
+     * This is an approximation and may not be exact: Caffeine maintains internal read/write buffers,
+     * and entries that have been added/removed but not yet drained from those buffers are not
+     * reflected in this count, so the returned value can lag slightly behind the true size. It may
+     * also include entries that have expired but have not yet been removed by Caffeine's housekeeping.
+     * If the underlying long count exceeds {@link Integer#MAX_VALUE}, it is clamped.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads without blocking.

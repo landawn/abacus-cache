@@ -14,14 +14,19 @@ import java.util.Objects;
  *
  * <p>Understanding the metrics:
  * <ul>
- * <li>Memory metrics: allocatedMemory is the total reserved, occupiedMemory is actually used</li>
- * <li>Data metrics: dataSize is the actual serialized data size, smaller than occupiedMemory due to slot allocation</li>
+ * <li>Memory metrics: {@code allocatedMemory} is the total reserved off-heap memory;
+ *     {@code occupiedMemory} is the slot space currently in use by memory-resident entries.</li>
+ * <li>Data metrics: {@code dataSize} is the total serialized payload bytes tracked by the cache and
+ *     covers BOTH the off-heap memory pool and the disk store. {@code dataSizeOnDisk} is the disk
+ *     subset; the in-memory portion is {@code dataSize - dataSizeOnDisk}. The in-memory portion is
+ *     typically smaller than {@code occupiedMemory} because the slot allocator rounds each entry up
+ *     to the next multiple of the minimum block size (64 bytes).</li>
  * <li>Hit metrics: {@code hitCount + missCount = getCount}. {@code hitCountByDisk} is the subset of
  *     {@code hitCount} that was served from disk (so {@code hitCountByDisk} &le; {@code hitCount}).</li>
- * <li>Put metrics: {@code putCount} counts successful inserts into the pool (memory and disk).
- *     Failed put attempts (e.g., wrapper allocation failed before reaching the pool) are not included.
- *     The approximate identity is
- *     {@code putCount} &asymp; {@code size + sizeOnDisk + evictionCount + evictionCountFromDisk + removed/replaced entries}.</li>
+ * <li>Put metrics: {@code putCount} counts successful inserts into the pool (both memory- and
+ *     disk-resident wrappers go through the same pool). Failed put attempts (e.g., wrapper allocation
+ *     failed before reaching the pool) are not included. As an approximate identity,
+ *     {@code putCount} &asymp; {@code size + evictionCount + evictionCountFromDisk + removed/replaced entries}.</li>
  * </ul>
  *
  * <p><b>Usage Examples:</b>
@@ -45,20 +50,25 @@ import java.util.Objects;
  * System.out.println("Disk write avg time: " + stats.writeToDiskTimeStats().avg() + "ms");
  * System.out.println("Disk read avg time: " + stats.readFromDiskTimeStats().avg() + "ms");
  *
- * // Fragmentation analysis
- * double overhead = (double) stats.occupiedMemory() / stats.dataSize();
+ * // Fragmentation analysis (compare in-memory occupancy against the in-memory data size)
+ * long inMemoryDataSize = stats.dataSize() - stats.dataSizeOnDisk();
+ * double overhead = inMemoryDataSize == 0 ? 0.0
+ *         : (double) stats.occupiedMemory() / inMemoryDataSize;
  * System.out.println("Memory overhead: " + (overhead * 100) + "%");
  * }</pre>
  *
- * @param capacity the maximum number of entries the cache can hold. This is the configured capacity limit
- *                 that determines when evictions start occurring. Once the total number of entries
- *                 (size + sizeOnDisk) reaches this limit, older entries will be evicted to make room
- *                 for new ones
- * @param size the current number of entries stored in memory (off-heap). This count includes only
- *             entries that are currently in the off-heap memory cache, not those that have been
- *             persisted to disk
- * @param sizeOnDisk the current number of entries stored on disk. These are entries that have been
- *                   evicted from memory but are still accessible through disk I/O operations
+ * @param capacity the configured upper bound on the number of in-memory entries the underlying keyed object
+ *                 pool will hold before eviction kicks in. It is derived from the off-heap memory budget as
+ *                 {@code allocatedMemory / MIN_BLOCK_SIZE} (currently {@code allocatedMemory / 64}), capped at
+ *                 {@link Integer#MAX_VALUE}. Because each entry consumes a slot whose size is rounded up to
+ *                 the per-entry block size, the cache will typically exhaust off-heap memory and start evicting
+ *                 long before {@code size} approaches this value.
+ * @param size the current number of entries tracked by the underlying keyed object pool. Both
+ *             memory-resident wrappers and disk-spilled (store) wrappers live in the same pool, so this
+ *             count includes both. To compute the memory-only entry count, use {@code size - sizeOnDisk}.
+ * @param sizeOnDisk the current number of entries whose value bytes are stored on disk via the configured
+ *                   {@link OffHeapStore}. These entries are still represented as wrappers in the pool (and
+ *                   therefore counted in {@code size}); only their payloads live on disk.
  * @param putCount the total number of <em>successful</em> put operations performed since cache creation,
  *                 counting both memory-backed and disk-spilled stores. A put that fails before the wrapper
  *                 is installed in the pool (e.g., neither memory nor disk could accept the value) is NOT
@@ -90,11 +100,13 @@ import java.util.Objects;
  * @param occupiedMemory the currently occupied off-heap memory in bytes, including both data and internal
  *                       overhead. This value includes the actual data size plus any metadata and alignment
  *                       padding required by the slot-based allocation system
- * @param dataSize the total size of actual serialized data stored in memory in bytes, excluding any internal
- *                 overhead or padding. This represents the raw size of the cached values without the
- *                 slot allocation overhead
- * @param dataSizeOnDisk the total size of data stored on disk in bytes. This includes all entries that
- *                       have been persisted to disk storage
+ * @param dataSize the total size of actual serialized data tracked by the cache in bytes, across both
+ *                 the off-heap memory pool and the disk store, excluding any slot-allocation padding or
+ *                 internal overhead. To isolate the in-memory portion, subtract {@code dataSizeOnDisk}
+ *                 from {@code dataSize}.
+ * @param dataSizeOnDisk the total size of serialized data currently stored on disk in bytes. This is a
+ *                       subset of {@code dataSize} and counts only entries that have been persisted to
+ *                       disk storage.
  * @param writeToDiskTimeStats statistics for disk write operations, tracking the minimum, maximum, and
  *                             average time in milliseconds for writing entries to disk. This helps monitor
  *                             disk write performance and identify potential I/O bottlenecks
@@ -175,9 +187,9 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
 
     /**
      * Statistics for minimum, maximum, and average values of a metric.
-     * Used to track performance characteristics of disk I/O operations.
-     * All values are in milliseconds. If no operations have been recorded,
-     * all values will be 0.0.
+     * Within {@link OffHeapCacheStats} this is used to track disk I/O timings
+     * (values are in milliseconds). When no observations have been recorded yet,
+     * all three values are reported as {@code 0.0}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -187,9 +199,9 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      *                    "Avg: " + writeStats.avg() + "ms");
      * }</pre>
      *
-     * @param min the minimum observed value in milliseconds
-     * @param max the maximum observed value in milliseconds
-     * @param avg the average of all observed values in milliseconds
+     * @param min the minimum observed value (0.0 if no observations have been recorded)
+     * @param max the maximum observed value (0.0 if no observations have been recorded)
+     * @param avg the average of all observed values (0.0 if no observations have been recorded)
      */
     public record MinMaxAvg(double min, double max, double avg) {
         /**

@@ -74,13 +74,13 @@ public final class CacheFactory {
     }
 
     /**
-     * Creates a new LocalCache with specified capacity and eviction delay.
-     * Uses default time-to-live of 3 hours and default idle time of 30 minutes
-     * as defined in Cache.DEFAULT_LIVE_TIME and Cache.DEFAULT_MAX_IDLE_TIME.
+     * Creates a new LocalCache with the specified capacity and eviction delay.
+     * Uses default TTL ({@link Cache#DEFAULT_LIVE_TIME}, 3 hours) and default idle time
+     * ({@link Cache#DEFAULT_MAX_IDLE_TIME}, 30 minutes).
      *
-     * <p>The eviction delay determines how frequently the cache checks for and removes
-     * expired entries. A value of 0 disables periodic eviction, but entries will still
-     * be evicted on access if expired.
+     * <p>The eviction delay controls how frequently the cache scans for and removes
+     * expired entries. A value of 0 disables the periodic eviction scan; entries can
+     * still be lazily evicted when accessed.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

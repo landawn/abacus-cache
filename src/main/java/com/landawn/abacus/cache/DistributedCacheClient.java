@@ -179,8 +179,10 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Stores a key-value pair in the cache with a specified time-to-live.
-     * If the key already exists, its value will be replaced. The {@code liveTime} parameter
-     * is converted from milliseconds to seconds (rounded up if not exact) for storage.
+     * If the key already exists, its value will be replaced. Distributed cache backends
+     * (Memcached, Redis) typically express TTL in seconds, so implementations are expected to
+     * convert {@code liveTime} from milliseconds — see {@link AbstractDistributedCacheClient#toSeconds(long)}
+     * for the conversion used by the bundled implementations.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -251,7 +253,9 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @return {@code true} if the delete operation was successfully sent to the server, {@code false} otherwise
+     * @return {@code true} if the delete operation was acknowledged by the server. Most
+     *         implementations return {@code true} regardless of whether the key actually
+     *         existed; consult the specific implementation for any other return semantics.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */
@@ -295,7 +299,9 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @return the value after increment, or -1 if key doesn't exist (Memcached)
+     * @return the value after increment. For non-existent keys: Memcached returns -1
+     *         (no auto-initialization); Redis creates the key (effective value after
+     *         increment is 1).
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */
@@ -336,7 +342,9 @@ public interface DistributedCacheClient<T> {
      *
      * @param key the cache key, must not be {@code null}
      * @param delta the increment amount, must be non-negative
-     * @return the value after increment, or -1 if key doesn't exist (Memcached)
+     * @return the value after increment. For non-existent keys: Memcached returns -1
+     *         (no auto-initialization); Redis creates the key (effective value after
+     *         increment is {@code delta}).
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs
      */
@@ -379,7 +387,9 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @return the value after decrement (cannot be negative in Memcached), or -1 if key doesn't exist (Memcached)
+     * @return the value after decrement. Memcached clamps at 0 (values cannot go negative)
+     *         and returns -1 if the key doesn't exist; Redis allows negative values and
+     *         creates non-existent keys (effective value after decrement is -1).
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */
@@ -428,7 +438,9 @@ public interface DistributedCacheClient<T> {
      *
      * @param key the cache key, must not be {@code null}
      * @param delta the decrement amount, must be non-negative
-     * @return the value after decrement (cannot be negative in Memcached), or -1 if key doesn't exist (Memcached)
+     * @return the value after decrement. Memcached clamps at 0 (values cannot go negative)
+     *         and returns -1 if the key doesn't exist; Redis allows negative values and
+     *         creates non-existent keys (effective value after decrement is {@code -delta}).
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs
      */
@@ -503,10 +515,10 @@ public interface DistributedCacheClient<T> {
      *     System.out.println("Cache client disconnected");
      * }
      *
-     * // Try-with-resources pattern (if implementing AutoCloseable)
-     * try (AutoCloseable closeable = () -> client.disconnect()) {
+     * // Try-with-resources pattern via an AutoCloseable adapter
+     * try (AutoCloseable closeable = client::disconnect) {
      *     client.set("key", value, 3600000);
-     *     // Client will be disconnected automatically
+     *     // Client will be disconnected automatically when the block exits
      * }
      *
      * // Application shutdown hook
