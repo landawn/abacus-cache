@@ -191,6 +191,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Adding contextual information for debugging distributed systems</li>
      * </ul>
      *
+     * <p><b>Memcached TTL upper bound:</b> Memcached treats any TTL greater than 30 days
+     * (2,592,000 seconds &asymp; 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
+     * A {@code liveTime} larger than that will be interpreted as a tiny epoch time (i.e., the
+     * lock will appear to have expired in the past), which can cause the lock to evaporate
+     * immediately or silently allow two holders. Keep {@code liveTime} comfortably below 30 days.
+     *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
@@ -208,12 +214,14 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *     System.out.println("Lock is held by: " + lock.get("resource1"));
      * }
      *
-     * // Example 2: Store structured metadata
+     * // Example 2: Store structured metadata (V must be a compatible type,
+     * // e.g., MemcachedLock<String, Map<String, Object>>)
+     * MemcachedLock<String, Map<String, Object>> metaLock = new MemcachedLock<>("localhost:11211");
      * Map<String, Object> metadata = new HashMap<>();
      * metadata.put("host", "server1");
      * metadata.put("thread", Thread.currentThread().getName());
      * metadata.put("timestamp", System.currentTimeMillis());
-     * lock.lock("resource2", (V) metadata, 30000);
+     * metaLock.lock("resource2", metadata, 30000);
      * }</pre>
      *
      * @param target the target resource on which to acquire the lock (must not be null)

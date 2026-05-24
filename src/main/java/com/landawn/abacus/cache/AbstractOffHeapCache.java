@@ -280,6 +280,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *               operations. Should not be null.
      * @throws IllegalArgumentException if capacityInMB is not positive, or if maxBlockSize is less than
      *                                  1024 or greater than SEGMENT_SIZE (1048576)
+     * @throws OutOfMemoryError if the underlying call to {@link #allocate(long)} fails because the host
+     *                          cannot reserve {@code capacityInMB} MB of native memory
      */
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
@@ -368,6 +370,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                        Typically this will be a multiple of SEGMENT_SIZE (1048576 bytes).
      * @return the base memory address (pointer) of the allocated off-heap memory region.
      *         This address will be used for all subsequent memory access operations.
+     * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
      */
     protected abstract long allocate(long capacityInBytes);
 

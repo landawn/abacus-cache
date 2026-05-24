@@ -44,11 +44,14 @@ import com.landawn.abacus.util.Strings;
  * is managed using atomic variables, and the close operation is synchronized. Multiple threads
  * can safely perform concurrent cache operations.
  *
+ * <p><b>Construction:</b> Constructors are {@code protected}; obtain instances through
+ * {@link CacheFactory#createDistributedCache(DistributedCacheClient, String, int, long)} and its overloads.
+ *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
- * // Create cache with full configuration
+ * // Create cache with full configuration via the factory
  * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
- * DistributedCache<String, User> cache = new DistributedCache<>(
+ * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(
  *     client,
  *     "myapp:",           // key prefix for namespace isolation
  *     100,                // max consecutive failures before circuit opens
@@ -110,20 +113,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Creates a DistributedCache with default retry configuration.
-     * Uses an empty key prefix and default circuit breaker parameters (max 100 consecutive failures, 1000ms retry delay).
+     * Uses an empty key prefix and default circuit breaker parameters
+     * ({@link #DEFAULT_MAX_FAILED_NUMBER} consecutive failures, {@link #DEFAULT_RETRY_DELAY} ms retry delay).
+     *
+     * <p>This constructor is {@code protected}; external callers should obtain instances
+     * via {@link CacheFactory#createDistributedCache(DistributedCacheClient)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client);
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client);
      *
      * // Cache operations will use circuit breaker protection
      * cache.put("key", new User("John"), 3600000, 0);
      * User user = cache.getOrNull("key");
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap (must not be null)
-     * @throws IllegalArgumentException if dcc is null
+     * @param dcc the distributed cache client to wrap (must not be {@code null})
+     * @throws IllegalArgumentException if {@code dcc} is {@code null}
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc) {
         this(dcc, Strings.EMPTY, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
@@ -132,21 +139,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     /**
      * Creates a DistributedCache with a key prefix and default circuit breaker configuration.
      * All keys will be prefixed for namespace isolation. Uses default circuit breaker parameters
-     * (max 100 consecutive failures, 1000ms retry delay).
+     * ({@link #DEFAULT_MAX_FAILED_NUMBER} consecutive failures, {@link #DEFAULT_RETRY_DELAY} ms retry delay).
+     *
+     * <p>This constructor is {@code protected}; external callers should obtain instances
+     * via {@link CacheFactory#createDistributedCache(DistributedCacheClient, String)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // All keys will be prefixed with "myapp:" and Base64 encoded
      * cache.put("user:123", new User("John"), 3600000, 0);
      * // Actual cache key: "myapp:" + Base64("user:123")
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap (must not be null)
-     * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
-     * @throws IllegalArgumentException if dcc is null
+     * @param dcc the distributed cache client to wrap (must not be {@code null})
+     * @param keyPrefix the key prefix to prepend to all keys (may be empty string or {@code null} for no prefix)
+     * @throws IllegalArgumentException if {@code dcc} is {@code null}
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
         this(dcc, keyPrefix, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
@@ -164,12 +174,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>{@code retryDelay}: Milliseconds to wait before attempting retry after circuit opens</li>
      * </ul>
      *
+     * <p>This constructor is {@code protected}; external callers should obtain instances
+     * via {@link CacheFactory#createDistributedCache(DistributedCacheClient, String, int, long)}.
+     *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      *
      * // More aggressive circuit breaker (opens faster, retries sooner)
-     * DistributedCache<String, User> aggressiveCache = new DistributedCache<>(
+     * DistributedCache<String, User> aggressiveCache = CacheFactory.createDistributedCache(
      *     client,
      *     "myapp:",  // key prefix for namespace isolation
      *     10,        // open circuit after just 10 consecutive failures
@@ -177,7 +190,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * );
      *
      * // More tolerant circuit breaker (slower to open, longer retry delay)
-     * DistributedCache<String, User> tolerantCache = new DistributedCache<>(
+     * DistributedCache<String, User> tolerantCache = CacheFactory.createDistributedCache(
      *     client,
      *     "myapp:",
      *     200,       // allow up to 200 consecutive failures
@@ -185,11 +198,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * );
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap (must not be null)
-     * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
+     * @param dcc the distributed cache client to wrap (must not be {@code null})
+     * @param keyPrefix the key prefix to prepend to all keys (may be empty string or {@code null} for no prefix)
      * @param maxFailedNumForRetry maximum consecutive failures before opening circuit breaker (must be non-negative)
      * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative)
-     * @throws IllegalArgumentException if dcc is null, maxFailedNumForRetry is negative, or retryDelay is negative
+     * @throws IllegalArgumentException if {@code dcc} is {@code null}, {@code maxFailedNumForRetry} is negative,
+     *         or {@code retryDelay} is negative
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
         if (dcc == null) {
@@ -248,7 +262,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:", 100, 1000);
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:", 100, 1000);
      *
      * // Basic retrieval with null check
      * User user = cache.getOrNull("user:123");
@@ -362,7 +376,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // Cache with 1 hour TTL (maxIdleTime ignored)
      * User user = new User("John");
@@ -431,7 +445,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // Basic removal
      * cache.remove("user:123");   // Removes if exists, no-op if doesn't exist
@@ -500,7 +514,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // Basic existence check
      * if (cache.containsKey("user:123")) {
@@ -611,7 +625,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // WARNING: This will flush ALL data from all cache servers!
      * // Not just "myapp:" prefixed keys, but EVERYTHING!
@@ -675,7 +689,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Try-with-resources (recommended - implements AutoCloseable)
-     * try (DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:")) {
+     * try (DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:")) {
      *     cache.put("user:123", user, 3600000, 0);
      *     User cached = cache.getOrNull("user:123");
      *     // Cache automatically closed when exiting try block
@@ -683,7 +697,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // Try-finally pattern
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      * try {
      *     cache.put("key", value, 3600000, 0);
      *     // ... use cache
@@ -754,7 +768,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // Check before operations
      * if (!cache.isClosed()) {
@@ -824,12 +838,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // With prefix "myapp:"
-     * DistributedCache<String, User> cache = new DistributedCache<>(client, "myapp:");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      * String cacheKey = cache.generateKey("user:123");
      * // Result: "myapp:dXNlcjoxMjM=" (prefix + Base64 of "user:123")
      *
      * // Without prefix
-     * DistributedCache<String, User> cache2 = new DistributedCache<>(client, "");
+     * DistributedCache<String, User> cache2 = CacheFactory.createDistributedCache(client, "");
      * String cacheKey2 = cache2.generateKey("user:123");
      * // Result: "dXNlcjoxMjM=" (just Base64 of "user:123")
      *

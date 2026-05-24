@@ -49,6 +49,11 @@ import net.spy.memcached.transcoders.Transcoder;
  * <li>Configurable operation timeout</li>
  * </ul>
  *
+ * <p><b>Thread Safety:</b> Instances of this class are safe for concurrent use by multiple threads.
+ * The wrapper delegates to a single shared {@link MemcachedClient}, which performs network I/O on a
+ * dedicated selector thread and serializes commands through its internal operation queue; concurrent
+ * calls from application threads enqueue operations safely.
+ *
  * <p>Example usage:
  * <pre>{@code
  * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211");
@@ -835,13 +840,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Atomically increments a numeric value with a default value if key doesn't exist.
-     * If the key doesn't exist, it is created with the defaultValue, then incremented by delta.
-     * The value will not expire (passing -1 as expiration to SpyMemcached means no expiration).
+     * Atomically increments a numeric value, initializing it to {@code defaultValue} when the key
+     * doesn't exist. The newly-created entry will not expire (this implementation passes {@code -1}
+     * as the expiration to SpyMemcached, which means "no expiration").
      *
-     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)} which return -1
-     * when the key doesn't exist, this method creates the key with the defaultValue if it doesn't exist,
-     * then increments it. The result is stored as a 64-bit unsigned integer in decimal string format.
+     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)},
+     * which return {@code -1} when the key is absent, this overload first-writes the key with
+     * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
+     * <b>the increment is NOT applied on the initial insert</b>: when the key is absent the stored
+     * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
+     * {@code defaultValue + delta}). The {@code delta} only takes effect on subsequent calls when the
+     * key already exists. Values are stored as 64-bit unsigned integers in decimal string format.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
@@ -849,9 +858,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Initialize counter to 0 if not exists, then increment by 1
+     * // First call when key is absent: stores 0, returns 0 (delta is NOT applied on init).
      * long count = cache.incr("counter:views", 1, 0);
-     * System.out.println("View count: " + count);
+     * // Subsequent call: existing value 0 is incremented by 1, returns 1.
+     * count = cache.incr("counter:views", 1, 0);
      *
      * // Auto-initializing counter
      * long requestCount = cache.incr("api:requests:" + endpoint, 1, 0);
@@ -859,9 +869,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the amount by which to increment the value (must be non-negative)
-     * @param defaultValue the initial value to set if the key doesn't exist, which will then be incremented by delta
-     * @return the value after increment (defaultValue + delta if key didn't exist, otherwise existing value + delta)
+     * @param delta the amount by which to increment the value when the key already exists (must be non-negative)
+     * @param defaultValue the initial value to set if the key doesn't exist; on first-write this value
+     *                     is stored verbatim — {@code delta} is NOT added on insert
+     * @return the value after the operation: {@code defaultValue} if the key did not exist (no delta
+     *         applied on insert), otherwise {@code existing value + delta}
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -876,14 +888,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Atomically increments a numeric value with default value and expiration.
-     * If the key doesn't exist, it's created with the defaultValue, then incremented by delta,
-     * and the expiration time is set to the specified liveTime. The liveTime is converted from
-     * milliseconds to seconds for Memcached (rounded up if not exact).
+     * Atomically increments a numeric value, initializing it to {@code defaultValue} with the given
+     * expiration when the key doesn't exist. The {@code liveTime} is converted from milliseconds to
+     * seconds for Memcached (rounded up if not exact).
      *
-     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)} which return -1
-     * when the key doesn't exist, this method creates the key with the defaultValue if it doesn't exist,
-     * then increments it. The result is stored as a 64-bit unsigned integer in decimal string format.
+     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)},
+     * which return {@code -1} when the key is absent, this overload first-writes the key with
+     * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
+     * <b>the increment is NOT applied on the initial insert</b>: when the key is absent the stored
+     * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
+     * {@code defaultValue + delta}). The {@code delta} only takes effect on subsequent calls when the
+     * key already exists. Values are stored as 64-bit unsigned integers in decimal string format.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
@@ -891,7 +906,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Hourly counter that expires after 1 hour
+     * // Hourly counter that expires after 1 hour. First call when key is absent stores 0 and
+     * // returns 0; subsequent calls increment by 1.
      * long count = cache.incr("counter:hourly", 1, 0, 3600000);
      * System.out.println("Hourly count: " + count);
      *
@@ -903,10 +919,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the amount by which to increment the value (must be non-negative)
-     * @param defaultValue the initial value to set if the key doesn't exist, which will then be incremented by delta
-     * @param liveTime the time-to-live in milliseconds for the key (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
-     * @return the value after increment (defaultValue + delta if key didn't exist, otherwise existing value + delta)
+     * @param delta the amount by which to increment the value when the key already exists (must be non-negative)
+     * @param defaultValue the initial value to set if the key doesn't exist; on first-write this value
+     *                     is stored verbatim — {@code delta} is NOT added on insert
+     * @param liveTime the time-to-live in milliseconds for the key (0 means no expiration, converted to
+     *                 seconds, rounded up if not exact). Must not be negative.
+     * @return the value after the operation: {@code defaultValue} if the key did not exist (no delta
+     *         applied on insert), otherwise {@code existing value + delta}
      * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative, or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -1036,15 +1055,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Atomically decrements a numeric value with a default value if key doesn't exist.
-     * If the key doesn't exist, it is created with the defaultValue, then decremented by delta.
-     * The value will not expire (passing -1 as expiration to SpyMemcached means no expiration).
+     * Atomically decrements a numeric value, initializing it to {@code defaultValue} when the key
+     * doesn't exist. The newly-created entry will not expire (this implementation passes {@code -1}
+     * as the expiration to SpyMemcached, which means "no expiration").
      *
-     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, int)} which return -1
-     * when the key doesn't exist, this method creates the key with the defaultValue if it doesn't exist,
-     * then decrements it. Values cannot go below 0 (Memcached prevents underflow - if delta is larger than
-     * defaultValue or the current value, the result will be 0). The result is stored as a 64-bit unsigned
-     * integer in decimal string format.
+     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, int)},
+     * which return {@code -1} when the key is absent, this overload first-writes the key with
+     * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
+     * <b>the decrement is NOT applied on the initial insert</b>: when the key is absent the stored
+     * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
+     * {@code defaultValue - delta}). The {@code delta} only takes effect on subsequent calls when the
+     * key already exists. Values cannot go below {@code 0} (Memcached clamps underflow). Values are
+     * stored as 64-bit unsigned integers in decimal string format.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
@@ -1052,9 +1074,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Initialize inventory to 100 if not exists, then decrement by 1
+     * // First call when key is absent: stores 100, returns 100 (delta NOT applied on init).
      * long remaining = cache.decr("inventory:item123", 1, 100);
-     * System.out.println("Items remaining: " + remaining);
+     * // Subsequent call: existing value 100 is decremented by 1, returns 99.
+     * remaining = cache.decr("inventory:item123", 1, 100);
      *
      * // Auto-initializing quota
      * long quotaRemaining = cache.decr("quota:user:" + userId, 1, 1000);
@@ -1064,9 +1087,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the amount by which to decrement the value (must be non-negative)
-     * @param defaultValue the initial value to set if the key doesn't exist, which will then be decremented by delta
-     * @return the value after decrement (defaultValue - delta if key didn't exist, otherwise existing value - delta). Cannot be negative due to Memcached underflow prevention.
+     * @param delta the amount by which to decrement the value when the key already exists (must be non-negative)
+     * @param defaultValue the initial value to set if the key doesn't exist; on first-write this value
+     *                     is stored verbatim — {@code delta} is NOT subtracted on insert
+     * @return the value after the operation: {@code defaultValue} if the key did not exist (no delta
+     *         applied on insert), otherwise {@code existing value - delta} clamped at {@code 0}
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -1081,16 +1106,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Atomically decrements a numeric value with default value and expiration.
-     * If the key doesn't exist, it's created with the defaultValue, then decremented by delta,
-     * and the expiration time is set to the specified liveTime. The liveTime is converted from
-     * milliseconds to seconds for Memcached (rounded up if not exact).
+     * Atomically decrements a numeric value, initializing it to {@code defaultValue} with the given
+     * expiration when the key doesn't exist. The {@code liveTime} is converted from milliseconds to
+     * seconds for Memcached (rounded up if not exact).
      *
-     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, int)} which return -1
-     * when the key doesn't exist, this method creates the key with the defaultValue if it doesn't exist,
-     * then decrements it. Values cannot go below 0 (Memcached prevents underflow - if delta is larger than
-     * defaultValue or the current value, the result will be 0). The result is stored as a 64-bit unsigned
-     * integer in decimal string format.
+     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, int)},
+     * which return {@code -1} when the key is absent, this overload first-writes the key with
+     * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
+     * <b>the decrement is NOT applied on the initial insert</b>: when the key is absent the stored
+     * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
+     * {@code defaultValue - delta}). The {@code delta} only takes effect on subsequent calls when the
+     * key already exists. Values cannot go below {@code 0} (Memcached clamps underflow). Values are
+     * stored as 64-bit unsigned integers in decimal string format.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
@@ -1098,7 +1125,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Daily quota that expires after 24 hours
+     * // Daily quota that expires after 24 hours. First call when key is absent stores 1000 and
+     * // returns 1000; subsequent calls decrement by 1.
      * long remaining = cache.decr("quota:user:123", 1, 1000, 86400000);
      * System.out.println("Remaining quota: " + remaining);
      *
@@ -1110,10 +1138,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the amount by which to decrement the value (must be non-negative)
-     * @param defaultValue the initial value to set if the key doesn't exist, which will then be decremented by delta
-     * @param liveTime the time-to-live in milliseconds for the key (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
-     * @return the value after decrement (defaultValue - delta if key didn't exist, otherwise existing value - delta). Cannot be negative due to Memcached underflow prevention.
+     * @param delta the amount by which to decrement the value when the key already exists (must be non-negative)
+     * @param defaultValue the initial value to set if the key doesn't exist; on first-write this value
+     *                     is stored verbatim — {@code delta} is NOT subtracted on insert
+     * @param liveTime the time-to-live in milliseconds for the key (0 means no expiration, converted to
+     *                 seconds, rounded up if not exact). Must not be negative.
+     * @return the value after the operation: {@code defaultValue} if the key did not exist (no delta
+     *         applied on insert), otherwise {@code existing value - delta} clamped at {@code 0}
      * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative, or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */

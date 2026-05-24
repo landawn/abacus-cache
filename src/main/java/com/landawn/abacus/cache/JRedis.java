@@ -203,8 +203,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis GET command. If the key
      * does not exist or has expired, {@code null} is returned. The operation is O(1) time complexity.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.
+     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
+     * note. Concurrent invocations against the same {@code JRedis} instance can corrupt protocol
+     * framing on the underlying {@link Jedis} shards. Serialize access externally if needed.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -257,10 +258,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * the key will persist until explicitly deleted. The operation is O(1) time complexity. If the
      * key already exists, the previous value and TTL are completely replaced.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients.
-     * When multiple clients set the same key concurrently, the last write wins (Redis guarantees
-     * atomic execution of SETEX command).
+     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
+     * note. The Redis SET/SETEX commands themselves are atomic on the server side, and when multiple
+     * <em>separate</em> clients set the same key concurrently the last write wins. However, calls into
+     * the same {@code JRedis} instance from multiple threads can corrupt protocol framing on the
+     * underlying {@link Jedis} shards; serialize access externally if needed.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -321,9 +323,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * This method always returns {@code true} to indicate the DEL command was sent successfully,
      * not to indicate whether the key actually existed.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The implementation handles concurrent access safely across distributed cache clients. If multiple
-     * clients delete the same key concurrently, all will succeed (idempotent operation).
+     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
+     * note. The Redis DEL command itself is idempotent and atomic on the server side, so when multiple
+     * <em>separate</em> clients delete the same key concurrently all will succeed. Concurrent calls into
+     * the same {@code JRedis} instance from multiple threads, however, can corrupt protocol framing on
+     * the underlying {@link Jedis} shards; serialize access externally if needed.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -383,9 +387,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
      * will fail. Increment operations are meant for counters, not for general objects.
      *
-     * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
-     * Multiple concurrent increment operations are guaranteed to be serialized correctly by Redis,
-     * ensuring no increments are lost. This makes it ideal for distributed counters and rate limiting.
+     * <p><b>Thread Safety:</b> The Redis INCR command is atomic on the server side, so concurrent
+     * increments issued by <em>separate</em> client instances are guaranteed to be serialized correctly
+     * by Redis and no increments are lost — making it suitable for distributed counters and rate
+     * limiting. <b>However, this wrapper itself is not thread-safe</b> — see the class-level Thread
+     * Safety note. Concurrent calls into the same {@code JRedis} instance can corrupt protocol framing
+     * on the underlying {@link Jedis} shards.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -445,9 +452,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
      * will fail. Increment operations are meant for counters, not for general objects.
      *
-     * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
-     * Multiple concurrent increment operations are guaranteed to be serialized correctly by Redis,
-     * ensuring no increments are lost. This makes it ideal for distributed counters and batch operations.
+     * <p><b>Thread Safety:</b> The Redis INCRBY command is atomic on the server side, so concurrent
+     * increments issued by <em>separate</em> client instances are guaranteed to be serialized correctly
+     * by Redis and no increments are lost — making it suitable for distributed counters and batch
+     * operations. <b>However, this wrapper itself is not thread-safe</b> — see the class-level Thread
+     * Safety note. Concurrent calls into the same {@code JRedis} instance can corrupt protocol framing
+     * on the underlying {@link Jedis} shards.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -512,9 +522,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * will fail. Decrement operations are meant for counters, not for general objects. Unlike Memcached,
      * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.
      *
-     * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
-     * Multiple concurrent decrement operations are guaranteed to be serialized correctly by Redis,
-     * ensuring no decrements are lost. This makes it ideal for resource quotas and inventory management.
+     * <p><b>Thread Safety:</b> The Redis DECR command is atomic on the server side, so concurrent
+     * decrements issued by <em>separate</em> client instances are guaranteed to be serialized correctly
+     * by Redis and no decrements are lost — making it suitable for resource quotas and inventory
+     * management. <b>However, this wrapper itself is not thread-safe</b> — see the class-level Thread
+     * Safety note. Concurrent calls into the same {@code JRedis} instance can corrupt protocol framing
+     * on the underlying {@link Jedis} shards.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -580,9 +593,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * will fail. Decrement operations are meant for counters, not for general objects. Unlike Memcached,
      * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.
      *
-     * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
-     * Multiple concurrent decrement operations are guaranteed to be serialized correctly by Redis,
-     * ensuring no decrements are lost. This makes it ideal for bulk resource management and quota systems.
+     * <p><b>Thread Safety:</b> The Redis DECRBY command is atomic on the server side, so concurrent
+     * decrements issued by <em>separate</em> client instances are guaranteed to be serialized correctly
+     * by Redis and no decrements are lost — making it suitable for bulk resource management and quota
+     * systems. <b>However, this wrapper itself is not thread-safe</b> — see the class-level Thread
+     * Safety note. Concurrent calls into the same {@code JRedis} instance can corrupt protocol framing
+     * on the underlying {@link Jedis} shards.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -667,9 +683,11 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * by default), not just the one being used by this client. If other applications share the same
      * Redis instances, their data will also be deleted.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients.
-     * Once executed, all cached data will be permanently lost. There is no way to recover
-     * the data after this operation completes.
+     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
+     * note. The Redis FLUSHALL command itself is atomic on each server, but concurrent invocations
+     * against the same {@code JRedis} instance can corrupt protocol framing on the underlying
+     * {@link Jedis} shards. Once executed, all cached data on the affected servers is permanently
+     * lost and visible immediately to all other clients connected to those servers.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

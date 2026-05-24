@@ -34,7 +34,9 @@ package com.landawn.abacus.cache;
 public class ChronicleMap<K, V> extends LocalCache<K, V> {
 
     /**
-     * Creates a ChronicleMap-compatible cache with default settings.
+     * Creates a ChronicleMap-compatible cache with default settings: capacity of 1024 entries,
+     * an eviction scan delay of 60,000 ms (1 minute), and the default TTL/idle times defined by
+     * {@link Cache#DEFAULT_LIVE_TIME} (3 hours) and {@link Cache#DEFAULT_MAX_IDLE_TIME} (30 minutes).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -48,7 +50,9 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
     }
 
     /**
-     * Creates a ChronicleMap-compatible cache.
+     * Creates a ChronicleMap-compatible cache with the specified capacity and eviction delay,
+     * using the default TTL/idle times defined by {@link Cache#DEFAULT_LIVE_TIME} (3 hours)
+     * and {@link Cache#DEFAULT_MAX_IDLE_TIME} (30 minutes).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -56,8 +60,9 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * map.put("count", 42);
      * }</pre>
      *
-     * @param capacity cache capacity
-     * @param evictDelay eviction scan delay in milliseconds
+     * @param capacity the maximum number of entries the cache can hold (must be positive)
+     * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative;
+     *                   0 disables automatic eviction)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      */
     public ChronicleMap(final int capacity, final long evictDelay) {
@@ -65,7 +70,10 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
     }
 
     /**
-     * Creates a ChronicleMap-compatible cache with custom default timings.
+     * Creates a ChronicleMap-compatible cache with custom capacity, eviction delay, and default timings.
+     * These defaults are used when entries are added via {@link #put(Object, Object)} without
+     * explicit expiration; individual entries can override them by calling
+     * {@link #put(Object, Object, long, long)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -73,10 +81,13 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * map.put("session", "abc", 10_000L, 5_000L);
      * }</pre>
      *
-     * @param capacity cache capacity
-     * @param evictDelay eviction scan delay in milliseconds
-     * @param defaultLiveTime default TTL in milliseconds
-     * @param defaultMaxIdleTime default max idle time in milliseconds
+     * @param capacity the maximum number of entries the cache can hold (must be positive)
+     * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative;
+     *                   0 disables automatic eviction)
+     * @param defaultLiveTime default TTL in milliseconds for entries added without explicit
+     *                        expiration (0 or negative for no TTL expiration)
+     * @param defaultMaxIdleTime default max idle time in milliseconds for entries added without
+     *                           explicit expiration (0 or negative for no idle timeout)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      */
     public ChronicleMap(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {

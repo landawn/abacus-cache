@@ -68,8 +68,10 @@ import com.github.benmanes.caffeine.cache.stats.CacheStats;
  */
 public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
+    /** The underlying Caffeine cache instance that this wrapper delegates all operations to. */
     private final Cache<K, V> cacheImpl;
 
+    /** Flag indicating whether this cache wrapper has been closed via {@link #close()}. */
     private volatile boolean isClosed = false;
 
     /**
@@ -465,10 +467,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Ensures the cache is not closed before performing operations.
-     * This is a utility method called by all cache operations to verify that
-     * the cache is still in an operational state. It provides a consistent
-     * way to enforce the "closed" state across all cache methods. This method
-     * checks the volatile {@code isClosed} field to ensure visibility across threads.
+     * This is a utility method called by cache operations that need to verify the cache
+     * is still in an operational state. It provides a consistent way to enforce the
+     * "closed" state across cache methods. This method checks the volatile {@code isClosed}
+     * field to ensure visibility across threads.
+     *
+     * <p>Note: {@link #keySet()} does not call this method because it always throws
+     * {@link UnsupportedOperationException} regardless of whether the cache is open.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe due to the volatile
      * {@code isClosed} field.

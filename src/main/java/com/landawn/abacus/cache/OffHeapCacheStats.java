@@ -8,9 +8,9 @@ import java.util.Objects;
 /**
  * An immutable snapshot of off-heap cache statistics at a specific point in time.
  * This record provides comprehensive metrics about off-heap cache performance, including
- * memory usage, disk operations, and segment allocation details. It extends the basic
- * cache statistics with off-heap specific metrics like disk I/O performance and memory
- * segment utilization.
+ * memory usage, disk operations, and segment allocation details. In addition to the basic
+ * cache counters (size, put/get/hit/miss/eviction counts) it exposes off-heap specific
+ * metrics like disk I/O performance and memory segment utilization.
  *
  * <p>Understanding the metrics:
  * <ul>

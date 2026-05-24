@@ -224,7 +224,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
      *                     The actual capacity will be capacityInMB * 1048576 bytes.
      * @param maxBlockSize maximum size of a single memory block in bytes for memory allocation efficiency.
-     *                     Must be between 1024 and SEGMENT_SIZE (1048576). Values larger than maxBlockSize
+     *                     Must be between 1024 and SEGMENT_SIZE (1048576). The value is rounded up to the
+     *                     nearest multiple of MIN_BLOCK_SIZE (64 bytes). Values larger than maxBlockSize
      *                     will be split across multiple blocks. Default is 8192 bytes.
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
      * @param defaultLiveTime default time-to-live for entries in milliseconds. Use 0 or negative for no TTL expiration.
@@ -515,7 +516,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * Maximum size of a single memory block in bytes.
          * Values larger than this will be split across multiple blocks.
-         * Must be between 1024 and SEGMENT_SIZE (1048576).
+         * Must be between 1024 and SEGMENT_SIZE (1048576), and is rounded up to the
+         * nearest multiple of MIN_BLOCK_SIZE (64 bytes).
          * Larger blocks reduce fragmentation but may waste space for small objects.
          *
          * <p>Default: 8192 bytes (8KB)

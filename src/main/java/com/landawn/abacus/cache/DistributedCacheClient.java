@@ -222,9 +222,13 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Removes a key-value pair from the cache.
-     * The return value indicates whether the operation was acknowledged by the server,
-     * not whether the key existed. In most implementations, this returns {@code true}
-     * if the delete command was successfully sent, regardless of key existence.
+     * The exact meaning of the return value is implementation-specific:
+     * <ul>
+     * <li><b>Memcached (SpyMemcached):</b> Returns the server's acknowledgement of the delete
+     *     operation. Typically returns {@code false} when the key did not exist.</li>
+     * <li><b>Redis (JRedis):</b> Always returns {@code true} on success (the underlying client
+     *     fires the DEL command and does not distinguish missing keys via this return value).</li>
+     * </ul>
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -253,9 +257,8 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @return {@code true} if the delete operation was acknowledged by the server. Most
-     *         implementations return {@code true} regardless of whether the key actually
-     *         existed; consult the specific implementation for any other return semantics.
+     * @return implementation-specific success indicator (see method description for per-implementation
+     *         semantics). In general, {@code true} indicates the delete operation completed normally.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */

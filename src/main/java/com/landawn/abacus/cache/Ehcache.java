@@ -310,11 +310,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *     System.out.println("Found: " + entry.getKey() + " -> " + entry.getValue());
      * }
      *
-     * // Handle missing keys
+     * // Handle missing keys (use result.get(key) == null, NOT !containsKey,
+     * // because Ehcache without a loader returns an entry for every requested key
+     * // with a null value for absent keys)
      * Set<String> requestedKeys = Set.of("key1", "key2", "key3");
      * Map<String, Value> cached = cache.getAll(requestedKeys);
      * for (String key : requestedKeys) {
-     *     if (!cached.containsKey(key)) {
+     *     if (cached.get(key) == null) {
      *         System.out.println("Missing key: " + key);
      *     }
      * }
@@ -606,9 +608,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Ensures the cache is not closed before performing operations.
-     * This is a utility method called by all cache operations to verify that
+     * This is a utility method called by cache operations to verify that
      * the cache is still in an operational state. It provides a consistent
-     * way to enforce the "closed" state across all cache methods.
+     * way to enforce the "closed" state across cache methods.
+     *
+     * <p>Note: {@link #keySet()} and {@link #size()} do not call this method because
+     * they always throw {@link UnsupportedOperationException} regardless of whether
+     * the cache is open.
+     *
+     * <p><b>Thread Safety:</b> This method is thread-safe due to the volatile
+     * {@code isClosed} field.
      *
      * @throws IllegalStateException if the cache has been closed
      */
