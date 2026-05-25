@@ -21,24 +21,23 @@ import net.spy.memcached.CachedData;
 import net.spy.memcached.transcoders.Transcoder;
 
 /**
- * A Memcached transcoder implementation that uses Kryo for serialization.
- * Kryo is a fast and efficient serialization framework that provides better
- * performance and smaller serialized sizes compared to Java's default serialization.
- * This transcoder integrates Kryo with SpyMemcached for optimal caching performance.
+ * A Memcached {@link Transcoder} implementation that uses Kryo for serialization.
+ * Kryo is a fast and efficient serialization framework that typically delivers better
+ * performance and smaller serialized payloads than Java's default serialization. This
+ * transcoder integrates Kryo with SpyMemcached for caching performance.
  *
  * <p>Benefits of using Kryo:
  * <ul>
- * <li>Faster serialization/deserialization</li>
- * <li>Smaller serialized data size</li>
- * <li>Support for circular references</li>
- * <li>No requirement for Serializable interface</li>
+ * <li>Faster serialization/deserialization.</li>
+ * <li>Smaller serialized data size.</li>
+ * <li>Support for circular references.</li>
+ * <li>No requirement for the {@link java.io.Serializable} interface.</li>
  * </ul>
  *
- * <p><b>Thread Safety:</b> This class is thread-safe. Concurrency safety is
- * delegated to the underlying shared {@link KryoParser}, which internally pools
- * Kryo/Output/Input instances. Note that this pooling is guarded by internal
- * locks rather than thread-locals, so highly concurrent encode/decode workloads
- * may contend on the shared pool; correctness is unaffected.
+ * <p><b>Thread Safety:</b> This class is thread-safe. Concurrency safety is delegated to the
+ * underlying shared {@link KryoParser}, which internally pools Kryo/Output/Input instances.
+ * The pool is guarded by internal locks rather than thread-locals, so highly concurrent
+ * encode/decode workloads may contend on the shared pool; correctness is unaffected.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
@@ -64,12 +63,13 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     private final int maxSize;
 
     /**
-     * Creates a new KryoTranscoder with the default maximum size.
-     * The default size is taken from {@code CachedData.MAX_SIZE}. Objects larger than
-     * this size will fail to cache with an {@code IllegalArgumentException}.
+     * Creates a new {@code KryoTranscoder} configured with the default maximum size.
+     * The default value is {@link CachedData#MAX_SIZE}. Objects whose serialized form
+     * exceeds this size will fail to cache and {@link #encode(Object)} will throw
+     * {@link IllegalArgumentException}.
      *
-     * <p>This constructor is suitable for most use cases where the default size limits
-     * are appropriate. For custom size requirements, use {@link #KryoTranscoder(int)}.
+     * <p>This constructor is suitable for most use cases where the default size limit
+     * is appropriate. For custom size requirements, use {@link #KryoTranscoder(int)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -90,10 +90,11 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     }
 
     /**
-     * Creates a new KryoTranscoder with a specified maximum size.
-     * Objects larger than this size cannot be cached and will throw an {@code IllegalArgumentException}
-     * during the encode operation. This prevents oversized objects from being stored in the cache
-     * and helps maintain predictable memory usage.
+     * Creates a new {@code KryoTranscoder} with the specified maximum size.
+     * Objects whose serialized form exceeds {@code maxSize} cannot be cached, and
+     * {@link #encode(Object)} will throw {@link IllegalArgumentException} when this limit is
+     * exceeded. Enforcing a maximum size prevents oversized objects from being stored in the
+     * cache and helps maintain predictable memory usage.
      *
      * <p>Use this constructor when you need to enforce custom size limits based on your
      * application's memory constraints or cache infrastructure requirements.
@@ -112,8 +113,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * };
      * }</pre>
      *
-     * @param maxSize the maximum size in bytes for cached objects. Must be positive.
-     * @throws IllegalArgumentException if maxSize is non-positive
+     * @param maxSize the maximum size in bytes for cached objects; must be positive
+     * @throws IllegalArgumentException if {@code maxSize} is not positive
      */
     public KryoTranscoder(final int maxSize) {
         if (maxSize <= 0) {
@@ -124,12 +125,12 @@ public class KryoTranscoder<T> implements Transcoder<T> {
 
     /**
      * Indicates whether this transcoder supports asynchronous decoding.
-     * Kryo transcoding is fast enough that async decoding provides no benefit,
-     * so this implementation always returns {@code false}.
+     * Kryo decoding is fast enough that asynchronous decoding offers no benefit, so this
+     * implementation always returns {@code false}.
      *
-     * <p>This method is called by SpyMemcached to determine if the decode operation
-     * should be performed asynchronously. Since Kryo deserialization is already highly
-     * efficient, performing it synchronously avoids unnecessary threading overhead.
+     * <p>This method is called by SpyMemcached to determine whether the decode operation should
+     * be deferred to a worker thread. Returning {@code false} keeps decoding on the calling
+     * thread, avoiding unnecessary threading overhead.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -144,8 +145,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * User decoded = transcoder.decode(data);
      * }</pre>
      *
-     * @param d the cached data whose asynchronous decode capability is to be tested (ignored; may be null)
-     * @return {@code false}, always indicating synchronous decoding only
+     * @param d the cached data whose asynchronous-decode capability is being queried (ignored;
+     *          may be {@code null})
+     * @return {@code false} always, indicating synchronous decoding only
      */
     @Override
     public boolean asyncDecode(final CachedData d) {
@@ -155,16 +157,16 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     /**
      * Encodes an object to cached data using Kryo serialization.
      * The object is serialized to a byte array with no flags set (flags = 0). If the serialized
-     * data exceeds the configured maximum size, an {@code IllegalArgumentException} is thrown.
+     * payload exceeds the configured maximum size, an {@link IllegalArgumentException} is thrown.
      *
-     * <p>This method is thread-safe. The underlying {@code KryoParser} maintains internal pools
-     * of Kryo/Output/Input instances guarded by synchronized locks rather than ThreadLocal; it is
-     * safe for concurrent use but highly concurrent workloads may contend on the shared pool.
+     * <p>This method is thread-safe. The underlying {@link KryoParser} maintains internal pools of
+     * Kryo/Output/Input instances guarded by internal locks rather than {@code ThreadLocal}; it is
+     * safe for concurrent use, though highly concurrent workloads may contend on the shared pool.
      *
-     * <p><b>Implementation Note:</b> The encoding process involves converting the object
-     * graph to a compact binary representation using Kryo's optimized serialization protocol.
-     * The resulting byte array is wrapped in a {@code CachedData} object with a flag value of
-     * {@code 0} and the configured maximum size as its declared maximum.
+     * <p><b>Implementation Note:</b> The encoding step converts the object graph into a compact
+     * binary representation using Kryo's optimized serialization protocol. The resulting byte
+     * array is wrapped in a {@link CachedData} with flag value {@code 0} and the configured
+     * maximum size as its declared maximum.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -184,9 +186,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * CachedData orderData = transcoder.encode(order);
      * }</pre>
      *
-     * @param o the object to encode and serialize (can be null)
-     * @return the {@code CachedData} containing the serialized bytes and metadata, never null
-     * @throws IllegalArgumentException if the serialized size exceeds maxSize
+     * @param o the object to encode and serialize (may be {@code null})
+     * @return a {@link CachedData} containing the serialized bytes and metadata; never {@code null}
+     * @throws IllegalArgumentException if the serialized size exceeds the configured {@code maxSize}
      * @throws RuntimeException if serialization fails due to Kryo-related errors
      * @see #decode(CachedData)
      * @see CachedData
@@ -201,18 +203,18 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     }
 
     /**
-     * Decodes cached data back to an object using Kryo deserialization.
-     * This method reconstructs the original object from its serialized byte array representation.
-     * It supports deserializing any object type that Kryo can handle, including complex object
-     * graphs with nested structures and circular references.
+     * Decodes cached data back into an object using Kryo deserialization.
+     * Reconstructs the original object from its serialized byte-array representation. Supports
+     * any object type that Kryo can handle, including complex object graphs with nested structures
+     * and circular references.
      *
-     * <p>This method is thread-safe. The underlying {@code KryoParser} maintains internal pools
-     * of Kryo/Output/Input instances guarded by synchronized locks rather than ThreadLocal; it is
-     * safe for concurrent use but highly concurrent workloads may contend on the shared pool.
+     * <p>This method is thread-safe. The underlying {@link KryoParser} maintains internal pools of
+     * Kryo/Output/Input instances guarded by internal locks rather than {@code ThreadLocal}; it is
+     * safe for concurrent use, though highly concurrent workloads may contend on the shared pool.
      *
      * <p><b>Important:</b> The class definitions of the objects being deserialized must be
      * available on the classpath. If the class structure has changed between encoding and decoding
-     * (e.g., fields added/removed), deserialization may fail or produce unexpected results.
+     * (e.g., fields added or removed), deserialization may fail or produce unexpected results.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -237,9 +239,10 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * }</pre>
      *
      * @param d the cached data to decode and deserialize; if {@code null}, {@code null} is returned
-     * @return the deserialized object of type T, or {@code null} if {@code d} is null, its data is
-     *         null or empty, or null was encoded
-     * @throws RuntimeException if the deserialization fails (e.g., corrupt data, class not found, incompatible class version)
+     * @return the deserialized object of type {@code T}, or {@code null} if {@code d} is
+     *         {@code null}, its data is {@code null} or empty, or {@code null} was originally encoded
+     * @throws RuntimeException if deserialization fails (e.g., corrupt data, class not found,
+     *         or incompatible class version)
      * @see #encode(Object)
      * @see CachedData#getData()
      */
@@ -256,13 +259,12 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     }
 
     /**
-     * Returns the maximum size for cached objects in bytes.
-     * Objects that serialize to a size larger than this value will fail to cache
-     * with an {@code IllegalArgumentException} during the {@link #encode(Object)} operation.
+     * Returns the maximum allowed size, in bytes, for cached objects.
+     * Objects whose serialized size exceeds this value will fail to cache with an
+     * {@link IllegalArgumentException} during {@link #encode(Object)}.
      *
-     * <p>This value is set during construction and cannot be changed. It provides a
-     * way for callers to query the size limit and make decisions about whether to
-     * cache particular objects.
+     * <p>The returned value is fixed at construction time. It lets callers query the size limit
+     * and decide whether to attempt caching particular objects.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -286,7 +288,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *     (largeTranscoder.getMaxSize() - smallTranscoder.getMaxSize()) + " bytes");
      * }</pre>
      *
-     * @return the maximum size in bytes for objects that can be cached
+     * @return the maximum size, in bytes, for objects that can be cached
      * @see #encode(Object)
      * @see CachedData#MAX_SIZE
      */

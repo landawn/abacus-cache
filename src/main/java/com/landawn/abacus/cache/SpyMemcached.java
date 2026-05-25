@@ -43,16 +43,16 @@ import net.spy.memcached.transcoders.Transcoder;
  *
  * <p>Key features:
  * <ul>
- * <li>Synchronous and {@link Future}-based asynchronous operations</li>
- * <li>Bulk get operations to reduce network round-trips</li>
- * <li>Atomic increment/decrement operations</li>
- * <li>Configurable operation timeout</li>
+ * <li>Synchronous and {@link Future}-based asynchronous operations.</li>
+ * <li>Bulk get operations to reduce network round-trips.</li>
+ * <li>Atomic increment/decrement operations.</li>
+ * <li>Configurable operation timeout.</li>
  * </ul>
  *
- * <p><b>Thread Safety:</b> Instances of this class are safe for concurrent use by multiple threads.
- * The wrapper delegates to a single shared {@link MemcachedClient}, which performs network I/O on a
- * dedicated selector thread and serializes commands through its internal operation queue; concurrent
- * calls from application threads enqueue operations safely.
+ * <p><b>Thread Safety:</b> Instances of this class are safe for concurrent use by multiple
+ * threads. The wrapper delegates to a single shared {@link MemcachedClient}, which performs
+ * network I/O on a dedicated selector thread and serializes commands through its internal
+ * operation queue; concurrent calls from application threads enqueue operations safely.
  *
  * <p>Example usage:
  * <pre>{@code
@@ -83,7 +83,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     private volatile boolean isShutdown = false;
 
     /**
-     * Creates a new SpyMemcached instance using {@link DistributedCacheClient#DEFAULT_TIMEOUT}
+     * Creates a new {@code SpyMemcached} instance using {@link DistributedCacheClient#DEFAULT_TIMEOUT}
      * as the operation timeout.
      *
      * <p><b>Usage Examples:</b>
@@ -92,10 +92,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * cache.set("key1", "value1", 3600000);
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) in the format {@code "host1:port1,host2:port2,..."}.
-     *                  Must not be {@code null} or empty.
+     * @param serverUrl the Memcached server URL(s) in the format
+     *                  {@code "host1:port1,host2:port2,..."}; must not be {@code null} or empty
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null} or empty
-     * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the Memcached servers fails
+     * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the
+     *         Memcached server(s) fails
      * @see #SpyMemcached(String, long)
      */
     public SpyMemcached(final String serverUrl) {
@@ -103,10 +104,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Creates a new SpyMemcached instance with a specified timeout.
+     * Creates a new {@code SpyMemcached} instance with the specified operation timeout.
      * The timeout applies to all cache operations (get, set, delete, etc.). If Kryo is available
-     * on the classpath (checked via {@link ParserFactory#isKryoParserAvailable()}), it will be used for
-     * object serialization via {@link KryoTranscoder}; otherwise, the default SpyMemcached
+     * on the classpath (checked via {@link ParserFactory#isKryoParserAvailable()}), it is used
+     * for object serialization via {@link KryoTranscoder}; otherwise the default SpyMemcached
      * serialization mechanism is used.
      *
      * <p><b>Usage Examples:</b>
@@ -116,10 +117,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * cache.set("user:123", user, 3600000);
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
-     * @param timeout the operation timeout in milliseconds (must be positive). This timeout applies to all cache operations.
-     * @throws IllegalArgumentException if {@code timeout} is not positive, or if {@code serverUrl} is {@code null} or empty
-     * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the Memcached servers fails
+     * @param serverUrl the Memcached server URL(s) in the format
+     *                  {@code "host1:port1,host2:port2,..."}; must not be {@code null} or empty
+     * @param timeout the operation timeout in milliseconds; must be positive. Applies to all cache operations.
+     * @throws IllegalArgumentException if {@code timeout} is not positive, or if {@code serverUrl}
+     *         is {@code null} or empty
+     * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the
+     *         Memcached server(s) fails
      */
     public SpyMemcached(final String serverUrl, final long timeout) {
         super(serverUrl);
@@ -190,8 +194,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
-     * @return the cached object of type T, or {@code null} if not found, expired, or evicted
+     * @param key the cache key whose associated value is to be retrieved; must not be {@code null}
+     * @return the cached object of type {@code T}, or {@code null} if not found, expired, or evicted
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -228,8 +232,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
-     * @return a Future that will contain the cached object of type T, or {@code null} if not found, expired, or evicted
+     * @param key the cache key whose associated value is to be retrieved; must not be {@code null}
+     * @return a {@link Future} that will yield the cached object of type {@code T}, or
+     *         {@code null} if not found, expired, or evicted
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
      */
@@ -269,8 +274,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *       .forEach(key -> System.out.println("Missing: " + key));
      * }</pre>
      *
-     * @param keys the cache keys whose associated values are to be retrieved. Must not be {@code null} or contain {@code null} elements.
-     * @return a map containing the found key-value pairs. Never {@code null}, but may be empty if no keys are found.
+     * @param keys the cache keys whose associated values are to be retrieved; must not be
+     *             {@code null} and must not contain {@code null} elements
+     * @return a map containing the found key-value pairs; never {@code null}, but possibly empty
+     *         if no keys are found
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -306,8 +313,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param keys the cache keys whose associated values are to be retrieved. Must not be {@code null} or contain {@code null} elements.
-     * @return a Future that will contain the map of found key-value pairs. The map is never {@code null}, but may be empty.
+     * @param keys the cache keys whose associated values are to be retrieved; must not be
+     *             {@code null} and must not contain {@code null} elements
+     * @return a {@link Future} that will yield the map of found key-value pairs; the map is
+     *         never {@code null} but may be empty
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
      * @throws RuntimeException if the operation fails to initiate
      */
@@ -345,8 +354,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Map<String, User> users = cache.getBulk(keys);
      * }</pre>
      *
-     * @param keys the collection of cache keys whose associated values are to be retrieved. Must not be {@code null} or contain {@code null} elements.
-     * @return a map containing the found key-value pairs. Never {@code null}, but may be empty if no keys are found.
+     * @param keys the collection of cache keys whose associated values are to be retrieved;
+     *             must not be {@code null} and must not contain {@code null} elements
+     * @return a map containing the found key-value pairs; never {@code null}, but possibly empty
+     *         if no keys are found
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -379,8 +390,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Map<String, Product> products = future.get(3000, TimeUnit.MILLISECONDS);
      * }</pre>
      *
-     * @param keys the collection of cache keys whose associated values are to be retrieved. Must not be {@code null} or contain {@code null} elements.
-     * @return a Future that will contain the map of found key-value pairs. The map is never {@code null}, but may be empty.
+     * @param keys the collection of cache keys whose associated values are to be retrieved;
+     *             must not be {@code null} and must not contain {@code null} elements
+     * @return a {@link Future} that will yield the map of found key-value pairs; the map is
+     *         never {@code null} but may be empty
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
      * @throws RuntimeException if the operation fails to initiate
      */
@@ -423,10 +436,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * cache.set("product:456", product, 7200000);   // 2 hour TTL
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param value the value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
-     * @return {@code true} if the operation was successful, {@code false} otherwise
+     * @param key the cache key with which the specified value is to be associated; must not be {@code null}
+     * @param value the value to cache; may be {@code null}
+     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
+     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @return {@code true} if the operation succeeded; {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -465,10 +479,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param value the value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
-     * @return a Future that will indicate success ({@code true}) or failure ({@code false})
+     * @param key the cache key with which the specified value is to be associated; must not be {@code null}
+     * @param value the value to cache; may be {@code null}
+     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
+     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @return a {@link Future} that will yield {@code true} on success or {@code false} on failure
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation fails to initiate
      */
@@ -512,10 +527,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param value the value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
-     * @return {@code true} if the object was added, {@code false} if the key already exists
+     * @param key the cache key with which the specified value is to be associated; must not be {@code null}
+     * @param value the value to cache; may be {@code null}
+     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
+     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @return {@code true} if the object was added; {@code false} if the key already exists
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -555,10 +571,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param value the value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
-     * @return a Future that will indicate {@code true} if the add succeeded, {@code false} if the key already exists
+     * @param key the cache key with which the specified value is to be associated; must not be {@code null}
+     * @param value the value to cache; may be {@code null}
+     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
+     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @return a {@link Future} that will yield {@code true} if the add succeeded, or {@code false}
+     *         if the key already exists
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation fails to initiate
      */
@@ -598,10 +616,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param value the value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
-     * @return {@code true} if the object was replaced, {@code false} if the key doesn't exist
+     * @param key the cache key with which the specified value is to be associated; must not be {@code null}
+     * @param value the value to cache; may be {@code null}
+     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
+     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @return {@code true} if the object was replaced; {@code false} if the key does not exist
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -640,10 +659,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param value the value to cache. May be {@code null}.
-     * @param liveTime the time-to-live in milliseconds (0 means no expiration, converted to seconds, rounded up if not exact). Must not be negative.
-     * @return a Future that will indicate {@code true} if the replacement succeeded, {@code false} if the key doesn't exist
+     * @param key the cache key with which the specified value is to be associated; must not be {@code null}
+     * @param value the value to cache; may be {@code null}
+     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
+     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @return a {@link Future} that will yield {@code true} if the replacement succeeded, or
+     *         {@code false} if the key does not exist
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
      * @throws RuntimeException if the operation fails to initiate
      */
@@ -686,8 +707,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
-     * @return {@code true} if the delete operation was successfully sent to the server, {@code false} otherwise
+     * @param key the cache key whose associated value is to be removed; must not be {@code null}
+     * @return {@code true} if the delete operation was acknowledged by the server; {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -726,8 +747,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
-     * @return a Future that will indicate success ({@code true}) or failure ({@code false})
+     * @param key the cache key whose associated value is to be removed; must not be {@code null}
+     * @return a {@link Future} that will yield {@code true} on success or {@code false} on failure
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
      */
@@ -773,8 +794,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @return the value after increment, or -1 if the key doesn't exist (Memcached returns -1 for non-existent keys)
+     * @param key the cache key whose associated value is to be incremented; must not be {@code null}
+     * @return the value after the increment, or {@code -1} if the key does not exist
+     *         (Memcached returns {@code -1} for non-existent keys)
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -822,9 +844,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the amount by which to increment the value (must be non-negative)
-     * @return the value after increment, or -1 if the key doesn't exist (Memcached returns -1 for non-existent keys)
+     * @param key the cache key whose associated value is to be incremented; must not be {@code null}
+     * @param delta the amount by which to increment the value; must be non-negative
+     * @return the value after the increment, or {@code -1} if the key does not exist
+     *         (Memcached returns {@code -1} for non-existent keys)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -868,12 +891,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * System.out.println("Request " + requestCount + " to " + endpoint);
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the amount by which to increment the value when the key already exists (must be non-negative)
-     * @param defaultValue the initial value to set if the key doesn't exist; on first-write this value
-     *                     is stored verbatim — {@code delta} is NOT added on insert
-     * @return the value after the operation: {@code defaultValue} if the key did not exist (no delta
-     *         applied on insert), otherwise {@code existing value + delta}
+     * @param key the cache key whose associated value is to be incremented; must not be {@code null}
+     * @param delta the amount by which to increment the value when the key already exists;
+     *              must be non-negative
+     * @param defaultValue the initial value to set if the key does not exist; on first-write this
+     *                     value is stored verbatim ({@code delta} is NOT added on insert)
+     * @return the value after the operation: {@code defaultValue} if the key did not exist (no
+     *         delta applied on insert), otherwise the previously stored value plus {@code delta}
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -918,15 +942,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the amount by which to increment the value when the key already exists (must be non-negative)
-     * @param defaultValue the initial value to set if the key doesn't exist; on first-write this value
-     *                     is stored verbatim — {@code delta} is NOT added on insert
-     * @param liveTime the time-to-live in milliseconds for the key (0 means no expiration, converted to
-     *                 seconds, rounded up if not exact). Must not be negative.
-     * @return the value after the operation: {@code defaultValue} if the key did not exist (no delta
-     *         applied on insert), otherwise {@code existing value + delta}
-     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative, or {@code liveTime} is negative
+     * @param key the cache key whose associated value is to be incremented; must not be {@code null}
+     * @param delta the amount by which to increment the value when the key already exists;
+     *              must be non-negative
+     * @param defaultValue the initial value to set if the key does not exist; on first-write this
+     *                     value is stored verbatim ({@code delta} is NOT added on insert)
+     * @param liveTime the time-to-live in milliseconds for the key ({@code 0} means no expiration);
+     *                 the value is converted to seconds, rounded up if not exact. Must not be negative.
+     * @return the value after the operation: {@code defaultValue} if the key did not exist (no
+     *         delta applied on insert), otherwise the previously stored value plus {@code delta}
+     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative,
+     *         or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
@@ -975,8 +1001,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @return the value after decrement (cannot be negative due to Memcached underflow prevention), or -1 if the key doesn't exist
+     * @param key the cache key whose associated value is to be decremented; must not be {@code null}
+     * @return the value after the decrement (cannot be negative due to Memcached's underflow
+     *         clamping), or {@code -1} if the key does not exist
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -1037,9 +1064,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the amount by which to decrement the value (must be non-negative)
-     * @return the value after decrement (cannot be negative due to Memcached underflow prevention), or -1 if the key doesn't exist
+     * @param key the cache key whose associated value is to be decremented; must not be {@code null}
+     * @param delta the amount by which to decrement the value; must be non-negative
+     * @return the value after the decrement (cannot be negative due to Memcached's underflow
+     *         clamping), or {@code -1} if the key does not exist
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -1086,12 +1114,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the amount by which to decrement the value when the key already exists (must be non-negative)
-     * @param defaultValue the initial value to set if the key doesn't exist; on first-write this value
-     *                     is stored verbatim — {@code delta} is NOT subtracted on insert
-     * @return the value after the operation: {@code defaultValue} if the key did not exist (no delta
-     *         applied on insert), otherwise {@code existing value - delta} clamped at {@code 0}
+     * @param key the cache key whose associated value is to be decremented; must not be {@code null}
+     * @param delta the amount by which to decrement the value when the key already exists;
+     *              must be non-negative
+     * @param defaultValue the initial value to set if the key does not exist; on first-write this
+     *                     value is stored verbatim ({@code delta} is NOT subtracted on insert)
+     * @return the value after the operation: {@code defaultValue} if the key did not exist (no
+     *         delta applied on insert), otherwise the previously stored value minus {@code delta},
+     *         clamped at {@code 0}
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -1137,15 +1167,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the amount by which to decrement the value when the key already exists (must be non-negative)
-     * @param defaultValue the initial value to set if the key doesn't exist; on first-write this value
-     *                     is stored verbatim — {@code delta} is NOT subtracted on insert
-     * @param liveTime the time-to-live in milliseconds for the key (0 means no expiration, converted to
-     *                 seconds, rounded up if not exact). Must not be negative.
-     * @return the value after the operation: {@code defaultValue} if the key did not exist (no delta
-     *         applied on insert), otherwise {@code existing value - delta} clamped at {@code 0}
-     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative, or {@code liveTime} is negative
+     * @param key the cache key whose associated value is to be decremented; must not be {@code null}
+     * @param delta the amount by which to decrement the value when the key already exists;
+     *              must be non-negative
+     * @param defaultValue the initial value to set if the key does not exist; on first-write this
+     *                     value is stored verbatim ({@code delta} is NOT subtracted on insert)
+     * @param liveTime the time-to-live in milliseconds for the key ({@code 0} means no expiration);
+     *                 the value is converted to seconds, rounded up if not exact. Must not be negative.
+     * @return the value after the operation: {@code defaultValue} if the key did not exist (no
+     *         delta applied on insert), otherwise the previously stored value minus {@code delta},
+     *         clamped at {@code 0}
+     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative,
+     *         or {@code liveTime} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
@@ -1228,7 +1261,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @return a Future that will indicate when the flush completes successfully ({@code true}) or fails ({@code false})
+     * @return a {@link Future} that will yield {@code true} when the flush completes successfully,
+     *         or {@code false} on failure
      */
     public Future<Boolean> asyncFlushAll() {
         return mc.flush();
@@ -1260,8 +1294,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param delay the delay in milliseconds before the flush operation is executed (converted to seconds, rounded up if not exact). Must not be negative.
-     * @return {@code true} if the flush was scheduled successfully, {@code false} otherwise
+     * @param delay the delay in milliseconds before the flush operation is executed; converted to
+     *              seconds, rounded up if not exact. Must not be negative.
+     * @return {@code true} if the flush was scheduled successfully; {@code false} otherwise
      * @throws IllegalArgumentException if {@code delay} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -1295,8 +1330,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param delay the delay in milliseconds before the flush operation is executed (converted to seconds, rounded up if not exact). Must not be negative.
-     * @return a Future that will indicate if the flush was scheduled successfully ({@code true}) or failed ({@code false})
+     * @param delay the delay in milliseconds before the flush operation is executed; converted to
+     *              seconds, rounded up if not exact. Must not be negative.
+     * @return a {@link Future} that will yield {@code true} if the flush was scheduled
+     *         successfully, or {@code false} on failure
      * @throws IllegalArgumentException if {@code delay} is negative
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
@@ -1305,18 +1342,19 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Disconnects from all Memcached servers and releases resources.
-     * After calling this method, the cache client cannot be used anymore and any subsequent
-     * operations will fail. This method delegates to {@code MemcachedClient.shutdown()} (the no-arg
+     * After this method returns, the cache client must not be used again; any subsequent
+     * operations will fail. This method delegates to {@link MemcachedClient#shutdown()} (the no-arg
      * overload), which initiates an <b>immediate</b> shutdown — in-flight operations are not awaited.
      * Use {@link #disconnect(long)} if you need a bounded graceful shutdown that lets pending
-     * operations complete. This method is idempotent - calling it multiple times has no additional effect.
+     * operations complete. This method is idempotent: calling it multiple times has no additional effect.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe, and uses synchronization to ensure only one
-     * disconnect occurs. Once called, no other operations should be attempted on this client instance.
+     * <p><b>Thread Safety:</b> This method is thread-safe and uses synchronization to ensure only
+     * one disconnect occurs. Once called, no other operations should be attempted on this client
+     * instance.
      *
-     * <p>This method should be called when the client is no longer needed to ensure
-     * proper cleanup of network connections, thread pools, and other resources. It is
-     * safe to call this method multiple times; subsequent calls will have no effect.
+     * <p>Call this method when the client is no longer needed to ensure proper cleanup of network
+     * connections, thread pools, and other resources. It is safe to call multiple times; subsequent
+     * calls have no effect.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1354,18 +1392,20 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Disconnects from all Memcached servers with a specified timeout.
-     * Waits up to the timeout for pending operations to complete before forcefully closing
-     * connections. After calling this method, the cache client cannot be used anymore and
-     * any subsequent operations will fail. This method is idempotent - calling it multiple
-     * times has no additional effect.
+     * Disconnects from all Memcached servers, waiting up to the given timeout for pending
+     * operations to complete.
+     * After the timeout elapses, any remaining operations are abandoned and connections are
+     * closed. After this method returns, the cache client must not be used again; any subsequent
+     * operations will fail. This method is idempotent: calling it multiple times has no additional
+     * effect.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe, and uses synchronization to ensure only one
-     * disconnect occurs. Once called, no other operations should be attempted on this client instance.
+     * <p><b>Thread Safety:</b> This method is thread-safe and uses synchronization to ensure only
+     * one disconnect occurs. Once called, no other operations should be attempted on this client
+     * instance.
      *
-     * <p>This method should be called when the client is no longer needed to ensure
-     * proper cleanup of network connections, thread pools, and other resources. The timeout
-     * allows pending operations to complete gracefully.
+     * <p>Call this method when the client is no longer needed to ensure proper cleanup of network
+     * connections, thread pools, and other resources. The timeout allows pending operations to
+     * complete gracefully.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1384,7 +1424,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param timeout the maximum time to wait for shutdown in milliseconds. Must not be negative.
+     * @param timeout the maximum time, in milliseconds, to wait for shutdown; must not be negative
      * @throws IllegalArgumentException if {@code timeout} is negative
      */
     public synchronized void disconnect(final long timeout) {
@@ -1426,14 +1466,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Waits for a Future to complete and returns its result.
-     * This method blocks until the Future completes and properly handles interruptions
-     * and execution errors by converting checked exceptions to runtime exceptions.
-     * When an InterruptedException occurs, the thread's interrupted status is restored
-     * before throwing the runtime exception.
+     * Waits for a {@link Future} to complete and returns its result.
+     * Blocks until the Future completes (subject to a bounded wait derived from the configured
+     * operation timeout) and converts {@link InterruptedException}, {@link TimeoutException}, and
+     * {@link ExecutionException} into runtime exceptions. When an {@link InterruptedException}
+     * occurs, the thread's interrupted status is restored before throwing the runtime exception
+     * and the Future is cancelled.
      *
-     * <p>This is a utility method used internally to convert asynchronous operations
-     * to synchronous ones by blocking on the Future result.
+     * <p>This is a utility method used internally to convert asynchronous operations to
+     * synchronous ones by blocking on the Future's result.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1442,12 +1483,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Boolean result = resultOf(future);
      * }</pre>
      *
-     * @param <R> the type of result returned by the Future
-     * @param future the Future whose result is to be retrieved. Must not be {@code null}.
-     * @return the result value from the Future
+     * @param <R> the type of result returned by the {@link Future}
+     * @param future the {@link Future} whose result is to be retrieved; must not be {@code null}
+     * @return the result value produced by the {@link Future}
      * @throws IllegalArgumentException if {@code future} is {@code null}
-     * @throws RuntimeException if the Future execution fails, the calling thread is interrupted,
-     *         or the bounded wait (a generous multiple of the configured operation timeout) elapses
+     * @throws RuntimeException if the {@link Future} execution fails, the calling thread is
+     *         interrupted, or the bounded wait (a generous multiple of the configured operation
+     *         timeout) elapses
      */
     protected <R> R resultOf(final Future<R> future) {
         if (future == null) {
@@ -1489,9 +1531,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Creates a SpyMemcached client with the specified connection factory.
-     * This method handles the IOException that may occur during client creation
-     * and converts it to an unchecked exception for easier handling.
+     * Creates a {@link MemcachedClient} with the specified connection factory.
+     * Wraps any {@link IOException} thrown during client construction in an
+     * {@link UncheckedIOException} for easier handling by callers.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1499,10 +1541,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * MemcachedClient client = createSpyMemcachedClient("localhost:11211", factory);
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) to connect to
+     * @param serverUrl the Memcached server URL(s) to connect to (e.g.,
+     *                  {@code "host1:port1,host2:port2,..."})
      * @param connFactory the connection factory configured with timeout and transcoder settings
-     * @return a configured MemcachedClient instance
-     * @throws UncheckedIOException if the connection to Memcached servers fails
+     * @return a configured {@link MemcachedClient} instance
+     * @throws UncheckedIOException if the connection to the Memcached server(s) fails
      */
     protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory) throws UncheckedIOException {
         try {

@@ -25,29 +25,29 @@ import com.landawn.abacus.util.u.Optional;
 
 /**
  * Abstract base class for all cache implementations providing common functionality.
- * This class implements the asynchronous operations, property management, and default
- * behaviors defined in the Cache interface. It serves as the foundation for all
- * concrete cache implementations in the framework.
+ * Implements the asynchronous operations, property management, and default
+ * behaviors defined in the {@link Cache} interface, and serves as the foundation
+ * for all concrete cache implementations in the framework.
  *
  * <p>Key features provided:
  * <ul>
- * <li>Asynchronous operation implementations using a shared thread pool</li>
- * <li>Default TTL and idle time management</li>
- * <li>Property bag for custom configuration</li>
- * <li>Optional-based wrapper methods</li>
+ * <li>Asynchronous operation implementations using a shared thread pool.</li>
+ * <li>Default TTL and idle time management.</li>
+ * <li>Property bag for custom configuration.</li>
+ * <li>{@link Optional}-based wrapper methods.</li>
  * </ul>
  *
  * <p>Subclasses must implement:
  * <ul>
- * <li>{@link #getOrNull(Object)} - Direct value retrieval</li>
- * <li>{@link #put(Object, Object, long, long)} - Storage with expiration</li>
- * <li>{@link #remove(Object)} - Entry removal</li>
- * <li>{@link #containsKey(Object)} - Key existence check</li>
- * <li>{@link #keySet()} - Key enumeration (may throw {@link UnsupportedOperationException} if unsupported)</li>
- * <li>{@link #size()} - Entry count (may be approximate or unsupported depending on the implementation)</li>
- * <li>{@link #clear()} - Bulk removal</li>
- * <li>{@link #close()} - Resource cleanup</li>
- * <li>{@link #isClosed()} - State check</li>
+ * <li>{@link #getOrNull(Object)} - direct value retrieval.</li>
+ * <li>{@link #put(Object, Object, long, long)} - storage with expiration.</li>
+ * <li>{@link #remove(Object)} - entry removal.</li>
+ * <li>{@link #containsKey(Object)} - key existence check.</li>
+ * <li>{@link #keySet()} - key enumeration (may throw {@link UnsupportedOperationException} if unsupported).</li>
+ * <li>{@link #size()} - entry count (may be approximate or unsupported depending on the implementation).</li>
+ * <li>{@link #clear()} - bulk removal.</li>
+ * <li>{@link #close()} - resource cleanup.</li>
+ * <li>{@link #isClosed()} - state check.</li>
  * </ul>
  *
  * <p>Example of extending this class:
@@ -79,11 +79,11 @@ import com.landawn.abacus.util.u.Optional;
 public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
-     * Shared async executor for all cache implementations.
+     * Shared async executor used by all cache implementations.
      * Configured with a thread pool sized based on CPU cores to efficiently
      * handle asynchronous cache operations without overwhelming the system.
-     * Core pool size is max(64, CPU_CORES * 8), max pool size is max(128, CPU_CORES * 16),
-     * and threads are kept alive for 180 seconds.
+     * Core pool size is {@code max(64, CPU_CORES * 8)}, maximum pool size is
+     * {@code max(128, CPU_CORES * 16)}, and threads are kept alive for 180 seconds.
      */
     protected static final AsyncExecutor asyncExecutor = new AsyncExecutor(//
             N.max(64, IOUtil.CPU_CORES * 8), // coreThreadPoolSize
@@ -97,29 +97,31 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     protected final Properties<String, Object> properties = new Properties<>();
 
     /**
-     * Default time-to-live for cache entries in milliseconds.
-     * Used when put() is called without explicit TTL.
+     * Default time-to-live for cache entries, in milliseconds.
+     * Used when {@link #put(Object, Object)} is called without an explicit TTL.
      */
     protected final long defaultLiveTime;
 
     /**
-     * Default maximum idle time for cache entries in milliseconds.
-     * Used when put() is called without explicit idle time.
+     * Default maximum idle time for cache entries, in milliseconds.
+     * Used when {@link #put(Object, Object)} is called without an explicit idle time.
      */
     protected final long defaultMaxIdleTime;
 
     /**
-     * Creates an AbstractCache with default expiration times.
-     * Uses {@link #DEFAULT_LIVE_TIME} (3 hours) and {@link #DEFAULT_MAX_IDLE_TIME} (30 minutes)
-     * as the default TTL and idle time for entries added without explicit expiration settings.
+     * Creates an {@code AbstractCache} with default expiration times.
+     * Uses {@link Cache#DEFAULT_LIVE_TIME} (3 hours) and
+     * {@link Cache#DEFAULT_MAX_IDLE_TIME} (30 minutes) as the default TTL
+     * and idle time for entries added without explicit expiration settings.
      */
     protected AbstractCache() {
         this(DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
     /**
-     * Creates an AbstractCache with custom default expiration times.
-     * These defaults are used when entries are added without explicit expiration.
+     * Creates an {@code AbstractCache} with the supplied default expiration times.
+     * These defaults are used when entries are added via {@link #put(Object, Object)}
+     * without explicit expiration.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

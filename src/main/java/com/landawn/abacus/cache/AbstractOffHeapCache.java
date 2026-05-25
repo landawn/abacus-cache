@@ -69,27 +69,28 @@ import com.landawn.abacus.util.stream.Stream;
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
 /**
- * Abstract base class for off-heap cache implementations providing the core memory management logic.
- * This class handles memory segmentation, allocation, eviction, and optional disk spillover.
- * It serves as the foundation for both Unsafe-based and Foreign Memory API-based implementations.
+ * Abstract base class for off-heap cache implementations providing the core
+ * memory management logic. Handles memory segmentation, allocation, eviction,
+ * and optional disk spillover. Serves as the foundation for both Unsafe-based
+ * and Foreign Memory API-based implementations.
  *
  * <p>Architecture overview:
  * <ul>
- * <li>Memory is divided into fixed-size segments ({@value #SEGMENT_SIZE} bytes each)</li>
- * <li>Each segment can be subdivided into slots of various sizes</li>
- * <li>Slot sizes are multiples of {@link #MIN_BLOCK_SIZE} (64 bytes)</li>
- * <li>Large objects span multiple slots if needed</li>
- * <li>Automatic reclamation of empty segments so they can be reused with a different slot size</li>
- * <li>Optional disk spillover via the {@link OffHeapStore} interface</li>
+ * <li>Memory is divided into fixed-size segments ({@value #SEGMENT_SIZE} bytes each).</li>
+ * <li>Each segment can be subdivided into slots of various sizes.</li>
+ * <li>Slot sizes are multiples of {@link #MIN_BLOCK_SIZE} (64 bytes).</li>
+ * <li>Large objects span multiple slots if needed.</li>
+ * <li>Empty segments are automatically reclaimed so they can be reused with a different slot size.</li>
+ * <li>Optional disk spillover is supported via the {@link OffHeapStore} interface.</li>
  * </ul>
  *
  * <p>Memory management strategy:
  * <ul>
- * <li>Size-segregated segment queues with bidirectional best-fit slot search</li>
- * <li>Lazy segment allocation - segments allocated only when needed</li>
- * <li>Automatic eviction based on last-access time when capacity is reached</li>
- * <li>Vacating process evicts entries and reclaims now-empty segments</li>
- * <li>Statistics tracking for monitoring and optimization</li>
+ * <li>Size-segregated segment queues with bidirectional best-fit slot search.</li>
+ * <li>Lazy segment allocation - segments are allocated only when needed.</li>
+ * <li>Automatic eviction based on last-access time when capacity is reached.</li>
+ * <li>Vacating process evicts entries and reclaims now-empty segments.</li>
+ * <li>Statistics tracking for monitoring and optimization.</li>
  * </ul>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -212,74 +213,78 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final LongSummaryStatistics totalReadFromDiskTimeStats = new LongSummaryStatistics();
 
     /**
-     * Constructs an AbstractOffHeapCache with the specified configuration.
-     * This constructor initializes the memory segments, object pool, and eviction scheduling.
-     * The cache divides the total memory capacity into fixed-size segments (1MB each) and manages
-     * them using a sophisticated allocation strategy with size-based queuing and best-fit placement.
-     * 
+     * Constructs an {@code AbstractOffHeapCache} with the specified configuration.
+     * Initializes the memory segments, object pool, and eviction scheduling.
+     * The cache divides the total memory capacity into fixed-size segments (1 MB each)
+     * and manages them using a size-based queuing strategy with best-fit placement.
+     *
      * <p>The constructor performs the following initialization steps:
      * <ul>
-     * <li>Allocates off-heap memory of the specified capacity</li>
-     * <li>Creates memory segments and initializes the segment tracking structures</li>
-     * <li>Sets up the keyed object pool for cache entry management</li>
-     * <li>Configures serialization/deserialization handlers</li>
-     * <li>Schedules periodic eviction tasks if evictDelay is positive</li>
-     * <li>Registers a shutdown hook for graceful resource cleanup</li>
+     * <li>Allocates off-heap memory of the specified capacity.</li>
+     * <li>Creates memory segments and initializes the segment tracking structures.</li>
+     * <li>Sets up the keyed object pool for cache entry management.</li>
+     * <li>Configures serialization/deserialization handlers.</li>
+     * <li>Schedules periodic eviction tasks if {@code evictDelay} is positive.</li>
+     * <li>Registers a shutdown hook for graceful resource cleanup.</li>
      * </ul>
      *
-     * <p>This constructor is thread-safe and all initialized data structures support concurrent access.
+     * <p>The constructor is safe to invoke from a single initializing thread; all data
+     * structures it sets up are designed for concurrent access thereafter.
      *
-     * @param capacityInMB the total off-heap memory capacity in megabytes. This determines the total
-     *                     number of segments (capacityInMB MB / 1MB per segment). Must be positive.
-     *                     The actual capacity will be exactly capacityInMB * 1048576 bytes. For very
-     *                     large caches (capacityInMB &ge; ~131072, i.e. 128 GB) the derived pool
-     *                     entry-capacity is clamped to {@code Integer.MAX_VALUE} so the int cast does
-     *                     not overflow; the off-heap memory itself is still allocated at full size.
+     * @param capacityInMB the total off-heap memory capacity in megabytes. Determines the total
+     *                     number of segments ({@code capacityInMB} MB / 1 MB per segment). Must be positive.
+     *                     The actual capacity will be exactly {@code capacityInMB * 1048576} bytes. For very
+     *                     large caches ({@code capacityInMB} &ge; ~131072, i.e. 128 GB) the derived pool
+     *                     entry-capacity is clamped to {@link Integer#MAX_VALUE} so the {@code int} cast
+     *                     does not overflow; the off-heap memory itself is still allocated at full size.
      * @param maxBlockSize the maximum size of a single memory slot in bytes. Values that fit within
-     *                     this size will be stored in a single slot; larger values will be split across
+     *                     this size are stored in a single slot; larger values are split across
      *                     multiple slots. Must be between 1024 and {@link #SEGMENT_SIZE} (1048576). The
      *                     value is rounded up to the nearest multiple of {@link #MIN_BLOCK_SIZE} (64 bytes).
      * @param evictDelay the delay between eviction runs in milliseconds. If positive, schedules a
      *                   background task to periodically evict expired entries and release empty segments.
-     *                   Use 0 or negative to disable automatic eviction (manual eviction via vacate() still works).
+     *                   Use 0 or negative to disable automatic eviction (manual eviction via the internal
+     *                   {@code vacate()} mechanism still works).
      * @param defaultLiveTime the default time-to-live for cache entries in milliseconds. Entries older
-     *                        than this will be considered expired. Use 0 or negative for no expiration.
-     *                        This can be overridden per entry when calling put().
+     *                        than this are considered expired. Use 0 or negative for no expiration.
+     *                        Can be overridden per entry when calling {@link #put(Object, Object, long, long)}.
      * @param defaultMaxIdleTime the default maximum idle time for entries in milliseconds. Entries not
-     *                           accessed within this time will be considered expired. Use 0 or negative
-     *                           for no idle timeout. This can be overridden per entry when calling put().
+     *                           accessed within this interval are considered expired. Use 0 or negative
+     *                           for no idle timeout. Can be overridden per entry when calling
+     *                           {@link #put(Object, Object, long, long)}.
      * @param vacatingFactor the fraction (0.0 to 1.0) of entries the underlying object pool removes
-     *                        during a vacate cycle. A value of {@code 0f} selects the
-     *                        {@link #DEFAULT_VACATING_FACTOR} (0.2). Typical values range from 0.1 to 0.3.
+     *                       during a vacate cycle. A value of {@code 0f} selects the
+     *                       {@link #DEFAULT_VACATING_FACTOR} (0.2). Typical values range from 0.1 to 0.3.
      * @param arrayOffset the array base offset for memory operations, used to calculate the correct
-     *                    memory address when copying data to/from byte arrays. This is implementation-specific
-     *                    (e.g., Unsafe.ARRAY_BYTE_BASE_OFFSET for Unsafe-based implementations).
-     * @param serializer the custom serializer function for converting values to byte streams, or null to
-     *                   use the default serializer (Kryo if available, otherwise JSON). The serializer
-     *                   should write the complete serialized form to the provided ByteArrayOutputStream.
+     *                    memory address when copying data to/from byte arrays. Implementation-specific
+     *                    (e.g., {@code Unsafe.ARRAY_BYTE_BASE_OFFSET} for Unsafe-based implementations).
+     * @param serializer the custom serializer function for converting values to byte streams, or
+     *                   {@code null} to use the default serializer (Kryo if available, otherwise JSON).
+     *                   The serializer must write the complete serialized form to the provided
+     *                   {@link ByteArrayOutputStream}.
      * @param deserializer the custom deserializer function for converting byte arrays back to values,
-     *                     or null to use the default deserializer. The function receives the byte array
-     *                     and type information, and should return the deserialized value.
+     *                     or {@code null} to use the default deserializer. The function receives the byte
+     *                     array and type information and must return the deserialized value.
      * @param offHeapStore the optional disk-based store for spillover storage when memory is full, or
-     *                     null to disable disk spillover. When configured, values that don't fit in memory
-     *                     can be automatically stored to disk instead of being rejected.
+     *                     {@code null} to disable disk spillover. When configured, values that do not fit
+     *                     in memory may be automatically stored to disk instead of being rejected.
      * @param statsTimeOnDisk whether to collect detailed timing statistics for disk I/O operations.
-     *                        When true, tracks min/max/average read and write times to disk. This has
-     *                        minimal performance overhead but provides valuable monitoring data.
-     * @param testerForLoadingItemFromDiskToMemory the predicate function to determine whether a disk-stored
+     *                        When {@code true}, tracks min/max/average read and write times to disk.
+     *                        Has minimal performance overhead but provides valuable monitoring data.
+     * @param testerForLoadingItemFromDiskToMemory the predicate that determines whether a disk-stored
      *                                             value should be promoted to memory based on access patterns.
-     *                                             Receives the activity print, size, and I/O elapsed time.
-     *                                             Return true to promote the value to memory. Use null to
-     *                                             disable automatic promotion.
-     * @param storeSelector the function to determine storage location for each put operation. Receives the
-     *                      key, value, and serialized size and should return: {@code 0} for default
-     *                      (memory with disk fallback when configured), {@code 1} for memory only (never
-     *                      spill to disk), or {@code 2} for disk only (skip memory). Use {@code null} for
-     *                      default behavior on every put.
+     *                                             Receives the {@link ActivityPrint}, size, and I/O elapsed
+     *                                             time, and returns {@code true} to promote the value to
+     *                                             memory. Use {@code null} to disable automatic promotion.
+     * @param storeSelector the function that determines the storage location for each put operation.
+     *                      Receives the key, value, and serialized size and must return: {@code 0} for
+     *                      default (memory with disk fallback when configured), {@code 1} for memory only
+     *                      (never spill to disk), or {@code 2} for disk only (skip memory). Use {@code null}
+     *                      for default behavior on every put.
      * @param logger the logger instance for this cache, used to log warnings and errors during cache
-     *               operations. Should not be null.
-     * @throws IllegalArgumentException if capacityInMB is not positive, or if maxBlockSize is less than
-     *                                  1024 or greater than SEGMENT_SIZE (1048576)
+     *               operations. Must not be {@code null}.
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if {@code maxBlockSize}
+     *                                  is less than 1024 or greater than {@link #SEGMENT_SIZE} (1048576)
      * @throws OutOfMemoryError if the underlying call to {@link #allocate(long)} fails because the host
      *                          cannot reserve {@code capacityInMB} MB of native memory
      */
@@ -359,49 +364,50 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Allocates the specified amount of off-heap memory.
-     * This is an abstract method that must be implemented by concrete subclasses
-     * based on their specific memory management approach (e.g., Unsafe API or Foreign Memory API).
-     * The allocated memory must remain valid until deallocate() is called.
-     * 
-     * <p>Thread safety: This method is called only once during constructor initialization,
+     * Concrete subclasses implement this method using their specific memory management
+     * approach (e.g., the Unsafe API or the Foreign Memory API). The allocated memory
+     * must remain valid until {@link #deallocate()} is called.
+     *
+     * <p>Thread safety: this method is called only once during constructor initialization,
      * so thread-safety is not required for the implementation.
      *
      * @param capacityInBytes the number of bytes to allocate in off-heap memory. Must be positive.
-     *                        Typically this will be a multiple of SEGMENT_SIZE (1048576 bytes).
+     *                        Typically a multiple of {@link #SEGMENT_SIZE} (1048576 bytes).
      * @return the base memory address (pointer) of the allocated off-heap memory region.
-     *         This address will be used for all subsequent memory access operations.
+     *         This address is used for all subsequent memory access operations.
      * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
      */
     protected abstract long allocate(long capacityInBytes);
 
     /**
      * Deallocates all off-heap memory used by this cache.
-     * This is an abstract method that must be implemented by concrete subclasses
-     * to properly release native memory resources allocated by allocate().
-     * After this method is called, the memory address returned by allocate() becomes invalid
-     * and must not be accessed.
-     * 
-     * <p>This method is called during cache shutdown, specifically in the close() method's
-     * finally block to ensure memory is always released even if errors occur during cleanup.
-     * 
-     * <p>Thread safety: This method is called only during the close() operation which is
-     * synchronized, so thread-safety is not required for the implementation.
+     * Concrete subclasses implement this method to release the native memory resources
+     * previously reserved by {@link #allocate(long)}. After this method is called, the
+     * memory address returned by {@link #allocate(long)} becomes invalid and must not be
+     * accessed.
+     *
+     * <p>This method is called during cache shutdown, specifically in the {@code finally}
+     * block of {@link #close()}, to ensure that memory is always released even if errors
+     * occur during cleanup.
+     *
+     * <p>Thread safety: this method is called only from the synchronized {@link #close()}
+     * operation, so thread-safety is not required for the implementation.
      */
     protected abstract void deallocate();
 
     /**
      * Copies data from a byte array to off-heap memory.
-     * This is an abstract method that must be implemented by concrete subclasses
-     * to perform the low-level memory copy operation using the appropriate API
-     * (e.g., Unsafe.copyMemory() or MemorySegment operations).
-     * 
-     * <p>Thread safety: This method may be called concurrently from multiple threads
-     * during put operations. The implementation must ensure that concurrent copies
+     * Concrete subclasses implement this method to perform the low-level memory copy
+     * operation using the appropriate API (e.g., {@code Unsafe.copyMemory()} or
+     * {@code MemorySegment} operations).
+     *
+     * <p>Thread safety: this method may be called concurrently from multiple threads
+     * during put operations. Implementations must ensure that concurrent copies
      * to different memory regions are safe.
      *
-     * @param bytes the source byte array containing the data to copy. Must not be null.
+     * @param bytes the source byte array containing the data to copy. Must not be {@code null}.
      * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
-     *                  implementations, this already includes the array base offset (arrayOffset).
+     *                  implementations, this already includes the array base offset ({@code arrayOffset}).
      * @param startPtr the destination memory address in off-heap memory. Must be a valid
      *                 address within the allocated off-heap memory region.
      * @param len the number of bytes to copy. Must be positive and must not exceed the
@@ -411,22 +417,22 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Copies data from off-heap memory to a byte array.
-     * This is an abstract method that must be implemented by concrete subclasses
-     * to perform the low-level memory copy operation using the appropriate API
-     * (e.g., Unsafe.copyMemory() or MemorySegment operations).
-     * 
-     * <p>Thread safety: This method may be called concurrently from multiple threads
-     * during get operations. The implementation must ensure that concurrent copies
+     * Concrete subclasses implement this method to perform the low-level memory copy
+     * operation using the appropriate API (e.g., {@code Unsafe.copyMemory()} or
+     * {@code MemorySegment} operations).
+     *
+     * <p>Thread safety: this method may be called concurrently from multiple threads
+     * during get operations. Implementations must ensure that concurrent copies
      * from different memory regions are safe.
      *
      * @param startPtr the source memory address in off-heap memory. Must be a valid
      *                 address within the allocated off-heap memory region.
-     * @param bytes the destination byte array to copy data into. Must not be null and
+     * @param bytes the destination byte array to copy data into. Must not be {@code null} and
      *              must have sufficient capacity to hold the copied data.
      * @param destOffset the byte offset within the destination array object in memory. For Unsafe-based
-     *                   implementations, this already includes the array base offset (arrayOffset).
+     *                   implementations, this already includes the array base offset ({@code arrayOffset}).
      * @param len the number of bytes to copy. Must be positive and must not exceed the
-     *            available space in the destination array starting from destOffset.
+     *            available space in the destination array starting from {@code destOffset}.
      */
     protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
 
@@ -441,8 +447,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param key the key whose associated value is to be returned
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
      *         or the disk-backed entry has been removed from the store
-     * @throws IllegalStateException if a stored value cannot be reconstructed because its size no
-     *                               longer matches the recorded size (data corruption detected)
+     * @throws IllegalStateException if a stored value cannot be reconstructed because the fetched
+     *                               size no longer matches the recorded size (data corruption detected)
      */
     @Override
     public V getOrNull(final K key) {
@@ -754,39 +760,40 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Stores a value to disk when memory is unavailable or based on storage policy.
-     * This is an internal method called by put() when memory allocation fails or when
-     * the storeSelector determines the value should be stored on disk. The method delegates
-     * to the offHeapStore for actual disk persistence and creates a StoreWrapper to track
-     * the disk-stored value within the cache.
+     * Stores a value to disk when memory is unavailable or directed by the storage policy.
+     * Internal helper called by {@link #put(Object, Object, long, long)} when memory
+     * allocation fails or when the {@code storeSelector} determines the value should be
+     * stored on disk. Delegates to {@code offHeapStore} for actual disk persistence and
+     * creates a {@code StoreWrapper} to track the disk-stored value within the cache.
      *
      * <p>Before writing the new bytes, any existing wrapper at this key is removed from the
-     * pool and destroyed. This is required so that a prior {@code StoreWrapper}'s destroy()
-     * calls {@code offHeapStore.remove(k)} on the OLD bytes rather than wiping the NEW bytes
-     * that are about to be written. For memory-backed prior wrappers (Slot / MultiSlots), this
-     * just releases their slots a moment earlier than the pool's own replace would. The prior
-     * wrapper's bookkeeping (sizeOnDisk / dataSizeOnDisk / totalDataSize) is decremented as part
-     * of the destroy.
+     * pool and destroyed. This is required so that a prior {@code StoreWrapper}'s
+     * {@code destroy()} call invokes {@code offHeapStore.remove(k)} on the OLD bytes rather
+     * than wiping the NEW bytes that are about to be written. For memory-backed prior
+     * wrappers ({@code SlotWrapper} / {@code MultiSlotsWrapper}), this just releases their
+     * slots a moment earlier than the pool's own replace would. The prior wrapper's
+     * bookkeeping ({@code sizeOnDisk} / {@code dataSizeOnDisk} / {@code totalDataSize}) is
+     * decremented as part of the destroy.
      *
      * <p>The new {@code StoreWrapper} maintains metadata about the disk-stored value including
      * its type, size, expiration settings, and the key needed to retrieve it from the
-     * offHeapStore. Statistics are automatically updated when creating the wrapper (sizeOnDisk,
-     * dataSizeOnDisk, totalDataSize).
+     * {@code offHeapStore}. Disk-related statistics are automatically updated when the wrapper
+     * is constructed ({@code sizeOnDisk}, {@code dataSizeOnDisk}, {@code totalDataSize}).
      *
-     * <p>Thread safety: This method may be called concurrently from multiple threads during put
-     * operations. The offHeapStore implementation must handle concurrent put operations safely.
+     * <p>Thread safety: this method may be called concurrently from multiple threads during put
+     * operations. The {@code offHeapStore} implementation must handle concurrent put operations safely.
      *
-     * @param k the cache key to associate with the disk-stored value. Must not be null.
-     *          This key is stored in the StoreWrapper for later retrieval and removal.
+     * @param k the cache key to associate with the disk-stored value. Must not be {@code null}.
+     *          This key is stored in the {@code StoreWrapper} for later retrieval and removal.
      * @param liveTime the time-to-live in milliseconds for the disk-stored entry
      * @param maxIdleTime the maximum idle time in milliseconds for the disk-stored entry
      * @param type the value type information needed for deserialization when reading from disk
      * @param bytes the serialized value bytes to store on disk. The array may be larger than
-     *              the actual data size, so only the first 'size' bytes are stored.
+     *              the actual data size, so only the first {@code size} bytes are stored.
      * @param size the actual size of the serialized data in bytes. Must be positive and
-     *             must not exceed the length of the bytes array.
-     * @return a StoreWrapper for the disk-stored value if storage was successful,
-     *         or null if the offHeapStore.put() operation failed
+     *             must not exceed the length of the {@code bytes} array.
+     * @return a {@code StoreWrapper} for the disk-stored value if storage was successful,
+     *         or {@code null} if the {@code offHeapStore.put()} operation failed
      */
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
         // Pre-destroy any prior wrapper at this key BEFORE writing new bytes. If the prior wrapper
@@ -808,32 +815,33 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Finds and allocates an available memory slot of the specified size.
-     * This method implements a sophisticated allocation strategy using size-segregated segment queues
-     * and a best-fit search pattern. The algorithm minimizes fragmentation while maintaining good
-     * performance through bidirectional searching and queue reordering.
-     * 
+     * Uses size-segregated segment queues and a best-fit search pattern. The algorithm
+     * minimizes fragmentation while maintaining good performance through bidirectional
+     * searching and queue reordering.
+     *
      * <p>Allocation algorithm:
      * <ol>
-     * <li>Rounds the requested size up to the nearest multiple of MIN_BLOCK_SIZE (64 bytes),
-     *     with a maximum of maxBlockSize</li>
-     * <li>Determines the segment queue index based on the rounded slot size</li>
+     * <li>Rounds the requested size up to the nearest multiple of {@link #MIN_BLOCK_SIZE}
+     *     (64 bytes), capped at {@code maxBlockSize}.</li>
+     * <li>Determines the segment queue index based on the rounded slot size.</li>
      * <li>Searches the queue bidirectionally (from both ends toward the middle) for a segment
-     *     with an available slot</li>
-     * <li>If a slot is found in a segment that's not near the front of the queue (position > 3),
-     *     moves that segment to the front for faster future access</li>
+     *     with an available slot.</li>
+     * <li>If a slot is found in a segment that is not near the front of the queue (position
+     *     &gt; 3), moves that segment to the front for faster future access.</li>
      * <li>If no slot is found in existing segments, allocates a new segment from the pool
-     *     (if capacity allows) and adds it to the queue</li>
+     *     (if capacity allows) and adds it to the queue.</li>
      * </ol>
      *
-     * <p>Thread safety: This method is thread-safe. The fast path uses per-queue locks scoped to a
+     * <p>Thread safety: this method is thread-safe. The fast path uses per-queue locks scoped to a
      * single slot size, so threads allocating slots of different sizes do not contend. When a new
      * segment must be allocated from the global pool, a global lock on {@code _segmentBitSet} is
      * briefly held to assign a fresh segment index.
      *
-     * @param size the required slot size in bytes. Must be positive. Will be rounded up to the
-     *             nearest multiple of MIN_BLOCK_SIZE (64 bytes) or capped at maxBlockSize.
-     * @return the allocated Slot containing the slot index and parent segment reference,
-     *         or null if no space is available in the cache (all segments are full)
+     * @param size the required slot size in bytes. Non-positive values are treated as
+     *             {@link #MIN_BLOCK_SIZE}; otherwise the value is rounded up to the nearest
+     *             multiple of {@link #MIN_BLOCK_SIZE} (64 bytes) and capped at {@code maxBlockSize}.
+     * @return the allocated {@link Slot} containing the slot index and parent segment reference,
+     *         or {@code null} if no space is available in the cache (all segments are full)
      */
     private Slot getAvailableSlot(final int size) {
         int slotSize = 0;
@@ -925,10 +933,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Triggers asynchronous vacating to free up memory space.
-     * This method is called when memory allocation fails during a put operation, indicating
-     * that the cache has reached capacity. It initiates a background cleanup process to evict
-     * least recently used entries and release empty memory segments.
-     * 
+     * Called when memory allocation fails during a put operation, indicating
+     * that the cache has reached capacity. Initiates a background cleanup process to evict
+     * least-recently-used entries and release empty memory segments.
+     *
      * <p>Vacating process:
      * <ol>
      * <li>Debounce gate: if a vacate completed within the last {@code VACATE_DEBOUNCE_MILLIS}
@@ -937,21 +945,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *     if so, returns immediately to avoid redundant work.</li>
      * <li>Otherwise, schedules an asynchronous task that:
      *     <ul>
-     *     <li>Calls {@code _pool.evict()} to evict LRU entries based on the vacatingFactor threshold</li>
-     *     <li>Calls {@link #evict()} to release now-empty segments back to the pool</li>
-     *     <li>Records its completion time so a debounce window suppresses immediately
-     *         re-triggered vacations (without pinning a pool thread in a sleep)</li>
+     *     <li>Calls {@code _pool.evict()} to evict LRU entries based on the {@code vacatingFactor} threshold.</li>
+     *     <li>Calls {@link #evict()} to release now-empty segments back to the pool.</li>
+     *     <li>Records its completion time so that the debounce window suppresses immediately
+     *         re-triggered vacations (without pinning a pool thread in a sleep).</li>
      *     </ul>
      * </li>
      * </ol>
      * If the asynchronous executor rejects the scheduling, the in-flight counter is released so
-     * subsequent vacate() calls are not permanently silenced.
+     * subsequent {@code vacate()} calls are not permanently silenced.
      *
-     * <p>The method returns immediately after scheduling the vacating task, allowing the calling
-     * thread to continue. This non-blocking behavior ensures that put operations don't hang
+     * <p>This method returns immediately after scheduling the vacating task, allowing the calling
+     * thread to continue. This non-blocking behavior ensures that put operations do not hang
      * waiting for cleanup to complete.
-     * 
-     * <p>Thread safety: This method is thread-safe and uses an atomic counter to ensure only
+     *
+     * <p>Thread safety: this method is thread-safe and uses an atomic counter to ensure only
      * one vacating task runs at a time, even when called concurrently from multiple threads.
      */
     private void vacate() {
@@ -1020,7 +1028,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Returns a set view of all keys currently held in the cache.
+     * Returns a set view of all keys currently held in the cache,
+     * including the keys of entries that have been spilled to disk.
      *
      * @return the set of cache keys; never {@code null}
      */
@@ -1052,11 +1061,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Returns a point-in-time snapshot of cache statistics.
      * The snapshot includes entry counts, hit/miss counters, eviction counters, memory and disk usage,
      * disk I/O timing aggregates, and segment-slot occupancy details.
-     * 
+     *
      * <p>This method collects statistics from the underlying pool and segment queues, then assembles
      * an immutable {@link OffHeapCacheStats} view. Segment queues and the disk I/O timing aggregates
-     * are synchronized while being read (under the same monitors used by put() and getOrNull()),
-     * so the returned values are internally consistent for the capture moment.
+     * are synchronized while being read (under the same monitors used by
+     * {@link #put(Object, Object, long, long)} and {@link #getOrNull(Object)}), so the returned
+     * values are internally consistent for the capture moment.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1172,37 +1182,38 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Performs periodic eviction of empty segments to release them back to the pool.
-     * This is an internal maintenance method that reclaims memory segments that have become
-     * completely empty (all slots freed) and makes them available for reuse with different slot sizes.
-     * This process is essential for memory management as it allows segments to be repurposed when
-     * workload patterns change.
-     * 
+     * Internal maintenance method that reclaims memory segments that have become completely
+     * empty (all slots freed) and makes them available for reuse with different slot sizes.
+     * This process is essential for memory management because it allows segments to be
+     * repurposed when workload patterns change.
+     *
      * <p>Eviction process:
      * <ol>
-     * <li>Iterates through all segments in the segment array</li>
-     * <li>For each segment with an empty slot BitSet (no allocated slots):
+     * <li>Iterates through all segments in the segment array.</li>
+     * <li>For each segment with an empty slot {@link BitSet} (no allocated slots):
      *     <ul>
-     *     <li>Locates the segment's queue in the segmentQueueMap</li>
-     *     <li>Uses double-checked locking to verify the segment is still empty</li>
-     *     <li>Removes the segment from its queue</li>
-     *     <li>Removes the segment from the segmentQueueMap</li>
-     *     <li>Clears the segment's bit in the segmentBitSet, marking it as available</li>
+     *     <li>Locates the segment's queue in {@code _segmentQueueMap}.</li>
+     *     <li>Uses double-checked locking to verify the segment is still empty.</li>
+     *     <li>Removes the segment from its queue.</li>
+     *     <li>Removes the segment from {@code _segmentQueueMap}.</li>
+     *     <li>Clears the segment's bit in {@code _segmentBitSet}, marking it as available.</li>
      *     </ul>
      * </li>
      * </ol>
      *
      * <p>This method is called:
      * <ul>
-     * <li>By the scheduled eviction task at regular intervals (if evictDelay > 0)</li>
-     * <li>By the vacate() method after evicting entries from the pool</li>
+     * <li>By the scheduled eviction task at regular intervals (if {@code evictDelay} &gt; 0).</li>
+     * <li>By the {@code vacate()} method after evicting entries from the pool.</li>
      * </ul>
      *
      * <p>The method uses double-checked locking to minimize lock contention while ensuring thread safety.
      * It first checks if a segment is empty without holding the queue lock, then re-checks after
-     * acquiring the lock to ensure the segment hasn't been allocated in the meantime.
-     * 
-     * <p>Thread safety: This method is thread-safe and uses fine-grained locking on the segmentBitSet
-     * and individual segment queues. It can be called concurrently with allocation operations.
+     * acquiring the lock to ensure the segment has not been allocated in the meantime.
+     *
+     * <p>Thread safety: this method is thread-safe and uses fine-grained locking on
+     * {@code _segmentBitSet} and individual segment queues. It can be called concurrently
+     * with allocation operations.
      */
     protected void evict() {
         synchronized (_segmentBitSet) {
@@ -1233,19 +1244,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Represents a memory segment that can be divided into fixed-size slots.
-     * Each segment is SEGMENT_SIZE bytes (1MB) and can be configured with a specific slot size.
-     * A segment can be reset and reused with a different slot size when all its slots are freed.
-     * Uses a BitSet to track which slots are allocated, providing efficient allocation and
-     * deallocation operations.
-     * 
-     * <p>This is an internal class used by AbstractOffHeapCache for memory management.
+     * Each segment is {@link #SEGMENT_SIZE} bytes (1 MB) and can be configured with a
+     * specific slot size. A segment can be reset and reused with a different slot size
+     * once all of its slots are freed. A {@link BitSet} tracks which slots are allocated,
+     * providing efficient allocation and deallocation operations.
+     *
+     * <p>This is an internal class used by {@link AbstractOffHeapCache} for memory management.
      * Segments are allocated from the fixed array of segments created during cache initialization.
-     * The sizeOfSlot field can be reconfigured to different multiples of MIN_BLOCK_SIZE (64, 128,
-     * 256, 512, 1024, 2048, 4096, 8192, etc.) when the segment becomes empty and is reused.
-     * 
-     * <p>Thread safety: The slot allocation and deallocation methods ({@link #allocateSlot()} and
-     * {@link #releaseSlot(int)}) are synchronized on the internal slot BitSet to ensure thread-safe
-     * slot management. {@link #index()} simply returns an immutable field and requires no synchronization.
+     * The {@code sizeOfSlot} field can be reconfigured to different multiples of
+     * {@link #MIN_BLOCK_SIZE} (64, 128, 256, 512, 1024, 2048, 4096, 8192, etc.) when the
+     * segment becomes empty and is reused.
+     *
+     * <p>Thread safety: the slot allocation and deallocation methods ({@link #allocateSlot()} and
+     * {@link #releaseSlot(int)}) are synchronized on the internal slot {@link BitSet} to ensure
+     * thread-safe slot management. {@link #index()} simply returns an immutable field and
+     * requires no synchronization.
      */
     static final class Segment {
 
@@ -1337,28 +1350,30 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Represents an allocated memory slot within a segment.
-     * This record encapsulates the slot index and its parent segment,
-     * providing a convenient way to release the slot when no longer needed.
-     * 
-     * <p>This is an internal record used by AbstractOffHeapCache for memory management.
-     * The slot must be released explicitly by calling release() to free the memory for reuse.
-     * If a slot is allocated but not properly released, it will result in a memory leak within
-     * the segment (the slot remains marked as occupied in the segment's BitSet).
-     * 
-     * <p>Thread safety: The release() method is thread-safe as it delegates to the thread-safe
-     * Segment.releaseSlot() method.
+     * Encapsulates the slot index and its parent segment, providing a convenient way to
+     * release the slot when it is no longer needed.
      *
-     * @param indexOfSlot the slot index within the parent segment (0 to SEGMENT_SIZE/sizeOfSlot-1)
-     * @param segment the parent Segment that contains this slot
+     * <p>This is an internal record used by {@link AbstractOffHeapCache} for memory management.
+     * The slot must be released explicitly by calling {@link #release()} to free the memory
+     * for reuse. If a slot is allocated but not properly released, it will result in a memory
+     * leak within the segment (the slot remains marked as occupied in the segment's
+     * {@link BitSet}).
+     *
+     * <p>Thread safety: {@link #release()} is thread-safe because it delegates to the
+     * thread-safe {@link Segment#releaseSlot(int)} method.
+     *
+     * @param indexOfSlot the slot index within the parent segment
+     *                    (0 to {@code SEGMENT_SIZE/sizeOfSlot - 1})
+     * @param segment the parent {@link Segment} that contains this slot
      */
     record Slot(int indexOfSlot, Segment segment) {
 
         /**
          * Releases this slot back to its parent segment, making it available for reuse.
-         * This method delegates to the segment's releaseSlot() method to clear the
-         * corresponding bit in the segment's allocation BitSet.
-         * 
-         * <p>Thread safety: This method is thread-safe.
+         * Delegates to {@link Segment#releaseSlot(int)} to clear the corresponding bit in
+         * the segment's allocation {@link BitSet}.
+         *
+         * <p>Thread safety: this method is thread-safe.
          */
         void release() {
             segment.releaseSlot(indexOfSlot);
@@ -1367,23 +1382,24 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Base wrapper class for cached values with metadata.
-     * Extends AbstractPoolable to support TTL and idle time tracking through the object pool.
-     * Each wrapper stores the value's type information and serialized size.
-     * 
-     * <p>This is an internal abstract class with three concrete implementations for
+     * Extends {@link AbstractPoolable} to support TTL and idle-time tracking through the
+     * object pool. Each wrapper stores the value's type information and serialized size.
+     *
+     * <p>This is an internal abstract class with three concrete implementations for the
      * different storage strategies:
      * <ul>
-     * <li>SlotWrapper - Values stored in a single memory slot (size &lt;= maxBlockSize)</li>
-     * <li>MultiSlotsWrapper - Values stored across multiple memory slots (size &gt; maxBlockSize)</li>
-     * <li>StoreWrapper - Values stored on disk via OffHeapStore</li>
+     * <li>{@link SlotWrapper} - values stored in a single memory slot ({@code size <= maxBlockSize}).</li>
+     * <li>{@link MultiSlotsWrapper} - values stored across multiple memory slots ({@code size > maxBlockSize}).</li>
+     * <li>{@link StoreWrapper} - values stored on disk via {@link OffHeapStore}.</li>
      * </ul>
      *
-     * <p>All wrappers are managed by the KeyedObjectPool which handles expiration and eviction
-     * based on liveTime and maxIdleTime settings. The destroy() method is called by the pool
-     * when entries are evicted, removed, or during cache shutdown to release resources.
-     * 
-     * <p>Thread safety: Concrete implementations must ensure thread-safe read() and destroy()
-     * operations, typically through synchronization.
+     * <p>All wrappers are managed by the {@link KeyedObjectPool}, which handles expiration and
+     * eviction based on {@code liveTime} and {@code maxIdleTime} settings. The
+     * {@link #destroy(Caller)} method is called by the pool when entries are evicted, removed,
+     * or during cache shutdown, to release resources.
+     *
+     * <p>Thread safety: concrete implementations must ensure thread-safe {@link #read()} and
+     * {@link #destroy(Caller)} operations, typically through synchronization.
      *
      * @param <T> the value type
      */
@@ -1426,11 +1442,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * Reads and deserializes the cached value.
          * Concrete implementations retrieve the raw bytes from their storage location
          * (memory or disk) and deserialize them based on the value type.
-         * 
-         * <p>Thread safety: Implementations must be thread-safe.
+         *
+         * <p>Thread safety: implementations must be thread-safe.
          *
          * @return the deserialized value, or {@code null} if the value cannot be retrieved
-         *         (for example, the entry was already destroyed by concurrent eviction)
+         *         (for example, when the entry was already destroyed by concurrent eviction)
          * @throws IllegalStateException if the retrieved data size does not match the recorded
          *                               size (data corruption detected)
          */
@@ -1439,19 +1455,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Wrapper for values stored in a single memory slot.
-     * Used for values that fit within the maximum block size (maxBlockSize). The slot reference
-     * is used to release the memory when the entry is evicted or removed.
-     * 
-     * <p>This is an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
-     * with synchronized access to read and destroy operations.
-     * 
-     * <p>Memory layout: The value's serialized bytes are stored at the memory address
-     * calculated as slotStartPtr = segment.segmentStartPtr + slot.indexOfSlot * segment.sizeOfSlot.
-     * The actual data size may be less than the slot size (segment.sizeOfSlot), with the
-     * difference being wasted space (internal fragmentation).
-     * 
-     * <p>Thread safety: Both read() and destroy() methods are synchronized on the wrapper instance
-     * to prevent concurrent access issues.
+     * Used for values that fit within the configured maximum block size ({@code maxBlockSize}).
+     * The slot reference is used to release the memory when the entry is evicted or removed.
+     *
+     * <p>This is an internal class used by {@link AbstractOffHeapCache}. The wrapper is
+     * thread-safe via synchronized access to its read and destroy operations.
+     *
+     * <p>Memory layout: the value's serialized bytes are stored at the memory address
+     * {@code slotStartPtr = segment.segmentStartPtr + slot.indexOfSlot * segment.sizeOfSlot}.
+     * The actual data size may be less than the slot size ({@code segment.sizeOfSlot}), with
+     * the difference being wasted space (internal fragmentation).
+     *
+     * <p>Thread safety: both {@link #read()} and {@link #destroy(Caller)} are synchronized
+     * on the wrapper instance to prevent concurrent access issues.
      */
     final class SlotWrapper extends Wrapper<V> {
 
@@ -1511,19 +1527,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Wrapper for values stored across multiple memory slots.
-     * Used for large values that exceed the maximum block size (maxBlockSize). The value is split
-     * across multiple slots (potentially in different segments), and all slots are released together
-     * when evicted or removed.
-     * 
-     * <p>This is an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
-     * with synchronized access to read and destroy operations.
-     * 
-     * <p>Memory layout: The value's serialized bytes are split into chunks of up to maxBlockSize each.
-     * Each chunk is stored in a separate slot, which may be in a different segment. The slots list
-     * maintains the order of chunks, so during read(), the bytes are reassembled in the correct order.
-     * 
-     * <p>Thread safety: Both read() and destroy() methods are synchronized on the wrapper instance
-     * to prevent concurrent access issues.
+     * Used for large values that exceed the configured maximum block size
+     * ({@code maxBlockSize}). The value is split across multiple slots (potentially in
+     * different segments), and all slots are released together when the entry is evicted
+     * or removed.
+     *
+     * <p>This is an internal class used by {@link AbstractOffHeapCache}. The wrapper is
+     * thread-safe via synchronized access to its read and destroy operations.
+     *
+     * <p>Memory layout: the value's serialized bytes are split into chunks of up to
+     * {@code maxBlockSize} each. Each chunk is stored in a separate slot, which may be in
+     * a different segment. The slots list maintains the order of chunks, so during
+     * {@link #read()}, the bytes are reassembled in the correct order.
+     *
+     * <p>Thread safety: both {@link #read()} and {@link #destroy(Caller)} are synchronized
+     * on the wrapper instance to prevent concurrent access issues.
      */
     final class MultiSlotsWrapper extends Wrapper<V> {
 
@@ -1603,19 +1621,22 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Wrapper for values stored on disk via OffHeapStore.
-     * Used when memory is full or when the storeSelector determines the value
-     * should be stored on disk. The permanentKey is used to retrieve and remove
+     * Wrapper for values stored on disk via {@link OffHeapStore}.
+     * Used when memory is full or when the {@code storeSelector} determines the value
+     * should be stored on disk. The {@code permanentKey} is used to retrieve and remove
      * the value from the disk store.
-     * 
-     * <p>This is an internal class used by AbstractOffHeapCache. The wrapper is thread-safe
-     * with synchronized access to read and destroy operations.
-     * 
-     * <p>Statistics: Upon construction, this wrapper increments sizeOnDisk, dataSizeOnDisk, and
-     * totalDataSize counters. Upon destruction, these counters are decremented accordingly.
-     * 
-     * <p>Thread safety: Both read() and destroy() methods are synchronized on the wrapper instance
-     * to prevent concurrent access issues.
+     *
+     * <p>This is an internal class used by {@link AbstractOffHeapCache}. The wrapper is
+     * thread-safe via synchronized access to its read and destroy operations.
+     *
+     * <p>Statistics: upon construction this wrapper increments the {@code sizeOnDisk},
+     * {@code dataSizeOnDisk}, and {@code totalDataSize} counters. Upon destruction these
+     * counters are decremented accordingly.
+     *
+     * <p>Thread safety: {@link #readBytes()} and {@link #destroy(Caller)} are synchronized
+     * on the wrapper instance to prevent concurrent access issues. {@link #deserialize(byte[])}
+     * is intentionally not synchronized so the (potentially expensive) deserialization step
+     * can run outside the lock.
      */
     final class StoreWrapper extends Wrapper<V> {
         private K permanentKey;

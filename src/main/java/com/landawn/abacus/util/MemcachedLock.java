@@ -48,7 +48,7 @@ import com.landawn.abacus.logging.LoggerFactory;
  * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
  * 
  * // Simple lock without value
- * if (lock.lock("resource1", 30000)) { // 30 second timeout
+ * if (lock.lock("resource1", 30000)) { // 30 second TTL on the lock
  *     try {
  *         // Critical section - exclusive access to resource1
  *         performExclusiveOperation();
@@ -114,7 +114,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p>This is a non-spinning operation: it makes a single atomic attempt and never retries
      * or busy-waits. It does, however, block the calling thread for the duration of the one
-     * Memcached round-trip (up to the configured spymemcached operation timeout). If the lock
+     * Memcached round-trip (up to the configured SpyMemcached operation timeout). If the lock
      * is already held by another client, this method returns {@code false} without retrying. The requested
      * {@code liveTime} is converted to Memcached's second-granularity TTL before being forwarded
      * to the server, so sub-second values are rounded up to the next second.
@@ -127,7 +127,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Choose an appropriate liveTime to balance between deadlock prevention and operational needs</li>
      * <li>Always release locks in a finally block to prevent resource leaks</li>
      * <li><b>Memcached TTL upper bound:</b> Memcached treats any TTL greater than 30 days
-     *     (2,592,000 seconds &asymp; 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
+     *     (2,592,000 seconds = 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
      *     A {@code liveTime} larger than that will be interpreted as a tiny epoch time (i.e., the
      *     lock will appear to have expired in the past), which can cause the lock to evaporate
      *     immediately or silently allow two holders. Keep {@code liveTime} comfortably below 30 days.</li>
@@ -137,7 +137,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
-     * // Basic lock usage with 30-second timeout
+     * // Basic lock usage with 30-second TTL
      * if (lock.lock("resource1", 30000)) {
      *     try {
      *         // Critical section - perform exclusive operations
@@ -192,7 +192,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * </ul>
      *
      * <p><b>Memcached TTL upper bound:</b> Memcached treats any TTL greater than 30 days
-     * (2,592,000 seconds &asymp; 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
+     * (2,592,000 seconds = 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
      * A {@code liveTime} larger than that will be interpreted as a tiny epoch time (i.e., the
      * lock will appear to have expired in the past), which can cause the lock to evaporate
      * immediately or silently allow two holders. Keep {@code liveTime} comfortably below 30 days.

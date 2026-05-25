@@ -18,28 +18,28 @@ package com.landawn.abacus.cache;
 
 /**
  * Interface for persistent storage backing an off-heap cache.
- * This interface defines the contract for disk-based storage that can be used
- * as a spillover mechanism when off-heap memory is full. Implementations might
- * use various storage technologies such as memory-mapped files, embedded databases,
- * or custom file formats.
+ * Defines the contract for disk-based storage that can be used as a spillover
+ * mechanism when off-heap memory is full. Implementations may use various
+ * storage technologies such as memory-mapped files, embedded databases, or
+ * custom file formats.
  *
  * <p>
  * Key characteristics:
  * <ul>
- * <li>Stores raw byte arrays associated with keys</li>
- * <li>Should handle concurrent access safely</li>
- * <li>Performance should be optimized for cache spillover scenarios</li>
- * <li>May implement compression or other optimizations</li>
+ * <li>Stores raw byte arrays associated with keys.</li>
+ * <li>Should handle concurrent access safely.</li>
+ * <li>Performance should be optimized for cache spillover scenarios.</li>
+ * <li>May implement compression or other optimizations.</li>
  * </ul>
  *
  * <p>
  * Implementation considerations:
  * <ul>
- * <li>Thread safety - implementations must handle concurrent operations safely</li>
- * <li>Persistence - data should survive JVM restarts if required</li>
- * <li>Performance - optimize for cache access patterns (frequent reads)</li>
- * <li>Resource management - handle file handles and disk space efficiently</li>
- * <li>Error handling - return null or false on failures rather than throwing exceptions</li>
+ * <li>Thread safety - implementations must handle concurrent operations safely.</li>
+ * <li>Persistence - data should survive JVM restarts if required.</li>
+ * <li>Performance - optimize for cache access patterns (frequent reads).</li>
+ * <li>Resource management - handle file handles and disk space efficiently.</li>
+ * <li>Error handling - return {@code null} or {@code false} on failures rather than throwing exceptions.</li>
  * </ul>
  *
  * <p><b>Usage Examples:</b>
@@ -105,10 +105,11 @@ public interface OffHeapStore<K> {
      * Retrieves the byte array associated with the specified key.
      * Returns {@code null} if the key is not found or if an error occurs during retrieval.
      * Implementations should consider returning a defensive copy to prevent external
-     * modifications, though this is implementation-specific.
+     * modifications, though this behavior is implementation-specific.
      *
      * <p><b>Thread Safety:</b>
-     * This method must be thread-safe and support concurrent access from multiple threads.
+     * Implementations of this method must be thread-safe and support concurrent
+     * access from multiple threads.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -128,13 +129,14 @@ public interface OffHeapStore<K> {
     byte[] get(K key);
 
     /**
-     * Stores a byte array with the specified key.
-     * If a value already exists for the key, it should be replaced.
+     * Stores a byte array under the specified key.
+     * If a value already exists for the key, it is replaced.
      * Implementations should consider making a defensive copy of the byte array
-     * if necessary to prevent external modifications, though this is implementation-specific.
+     * to prevent external modifications, though this behavior is implementation-specific.
      *
      * <p><b>Thread Safety:</b>
-     * This method must be thread-safe and support concurrent access from multiple threads.
+     * Implementations of this method must be thread-safe and support concurrent
+     * access from multiple threads.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -158,10 +160,12 @@ public interface OffHeapStore<K> {
     /**
      * Removes the value associated with the specified key.
      * Returns {@code true} if a value was removed, {@code false} if the key was not found
-     * or if an error occurred during removal. It is safe to call this method for a non-existent key.
+     * or if an error occurred during removal. It is safe to call this method for a
+     * non-existent key.
      *
      * <p><b>Thread Safety:</b>
-     * This method must be thread-safe and support concurrent access from multiple threads.
+     * Implementations of this method must be thread-safe and support concurrent
+     * access from multiple threads.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

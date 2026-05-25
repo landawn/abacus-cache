@@ -490,10 +490,11 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * Creates a new builder instance with default configuration values.
          * Set {@code capacityInMB} to a positive value before calling {@link #build()}.
+         * Prefer the factory method {@link OffHeapCache#builder()} over invoking this constructor directly.
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code
-         * Builder<String, Data> builder = new Builder<>();
+         * OffHeapCache.Builder<String, Data> builder = OffHeapCache.builder();
          * builder.capacityInMB(100)
          *        .evictDelay(60000)
          *        .defaultLiveTime(3600000);

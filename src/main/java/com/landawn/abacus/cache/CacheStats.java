@@ -21,30 +21,30 @@ package com.landawn.abacus.cache;
  * This record provides comprehensive metrics about cache performance and usage,
  * including hit rates, miss counts, evictions, and memory consumption.
  *
- * <p>As a Java record, this class automatically generates the following methods:
+ * <p>As a Java record, this class automatically generates the following members:
  * <ul>
  *   <li>Accessor methods: {@code capacity()}, {@code size()}, {@code putCount()}, {@code getCount()},
- *       {@code hitCount()}, {@code missCount()}, {@code evictionCount()}, {@code maxMemory()}, {@code dataSize()}</li>
- *   <li>{@code equals(Object)}: Compares all fields for equality</li>
- *   <li>{@code hashCode()}: Generates hash code based on all fields</li>
- *   <li>{@code toString()}: Returns a string representation of all fields</li>
+ *       {@code hitCount()}, {@code missCount()}, {@code evictionCount()}, {@code maxMemory()}, {@code dataSize()}.</li>
+ *   <li>{@code equals(Object)}: compares all components for equality.</li>
+ *   <li>{@code hashCode()}: generates a hash code based on all components.</li>
+ *   <li>{@code toString()}: returns a string representation of all components.</li>
  * </ul>
  *
- * <p>This class is immutable and thread-safe. Once created, its values cannot be changed.
- * To get updated statistics, call the {@code stats()} method on the cache again to
- * obtain a new snapshot.
+ * <p>Instances are immutable and thread-safe. Once created, the captured values cannot change;
+ * to get updated statistics, call the {@code stats()} method on the cache again to obtain a
+ * new snapshot.
  *
- * <p><b>Statistics Categories:</b>
+ * <p><b>Statistics categories:</b>
  * <ul>
- *   <li><b>Capacity metrics:</b> {@code capacity()} - Maximum cache size, {@code size()} - Current number of entries</li>
- *   <li><b>Operation counts:</b> {@code putCount()} - Total puts, {@code getCount()} - Total gets</li>
- *   <li><b>Performance metrics:</b> {@code hitCount()} - Successful gets, {@code missCount()} - Failed gets</li>
- *   <li><b>Eviction metrics:</b> {@code evictionCount()} - Total entries removed</li>
- *   <li><b>Memory metrics:</b> {@code maxMemory()} - Maximum allowed memory, {@code dataSize()} - Current memory usage</li>
+ *   <li><b>Capacity metrics:</b> {@code capacity()} (maximum cache size) and {@code size()} (current number of entries).</li>
+ *   <li><b>Operation counts:</b> {@code putCount()} (total puts) and {@code getCount()} (total gets).</li>
+ *   <li><b>Performance metrics:</b> {@code hitCount()} (successful gets) and {@code missCount()} (failed gets).</li>
+ *   <li><b>Eviction metrics:</b> {@code evictionCount()} (total entries removed by eviction).</li>
+ *   <li><b>Memory metrics:</b> {@code maxMemory()} (maximum allowed memory) and {@code dataSize()} (current memory usage).</li>
  * </ul>
  *
- * <p><b>Thread Safety:</b> This class is immutable and thread-safe. Multiple threads can
- * safely read the statistics without synchronization.
+ * <p><b>Thread Safety:</b> Instances are immutable and thread-safe; multiple threads may read
+ * the statistics concurrently without external synchronization.
  *
  * <p>Inspired by <a href="https://github.com/ben-manes/caffeine">Caffeine</a>'s cache statistics concept.
  *

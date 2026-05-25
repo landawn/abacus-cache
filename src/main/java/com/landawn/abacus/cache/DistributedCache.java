@@ -36,7 +36,7 @@ import com.landawn.abacus.util.Strings;
  * <li>Base64 encoding of keys for compatibility with cache systems that restrict key characters</li>
  * <li>Circuit breaker pattern on read operations to protect against cascading failures</li>
  * <li>Transparent error recovery with configurable retry behavior</li>
- * <li>Adaptation of TTL-only expiration to TTL+idle interface (maxIdleTime ignored)</li>
+ * <li>Adapts the TTL+idle Cache interface to the TTL-only model used by most distributed caches ({@code maxIdleTime} is ignored)</li>
  * </ul>
  *
  * <p><b>Thread Safety:</b>
@@ -67,8 +67,8 @@ import com.landawn.abacus.util.Strings;
  * cache.close();
  * }</pre>
  *
- * @param <K> the key type
- * @param <V> the value type
+ * @param <K> the type of keys used to identify cache entries
+ * @param <V> the type of values stored in the cache
  * @see AbstractCache
  * @see DistributedCacheClient
  * @see CacheFactory
@@ -568,7 +568,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Would return keys from all applications sharing the cache servers, not just this instance</li>
      * </ul>
      *
-     * @return never returns normally
+     * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always thrown for distributed caches
      * @see #size()
      * @see #containsKey(Object)
@@ -593,7 +593,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>No efficient way to distinguish this instance's keys from others without full server scan</li>
      * </ul>
      *
-     * @return never returns normally
+     * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always thrown for distributed caches
      * @see #keySet()
      * @see #containsKey(Object)
@@ -632,7 +632,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * cache.clear();
      *
      * // Safe usage in testing (with dedicated test cache server)
-     * @After
+     * // @After
      * public void cleanupCache() {
      *     if (isTestEnvironment()) {
      *         testCache.clear();   // OK - dedicated test server

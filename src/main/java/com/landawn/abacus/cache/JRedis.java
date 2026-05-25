@@ -160,7 +160,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
-     * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE}.
+     * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
      * @see #JRedis(String)
@@ -361,7 +361,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
-     * @return {@code true} if the delete operation was successfully sent to the server (always returns {@code true} unless an exception occurs)
+     * @return {@code true} if the DEL command was issued without throwing. This method does not
+     *         distinguish between "key existed and was removed" and "key did not exist"; it always
+     *         returns {@code true} on a normal completion.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      * @see #get(String)
@@ -674,10 +676,12 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * This is a destructive operation that affects all data across all shards and all databases
      * within each Redis instance. Use with extreme caution in production environments.
      *
-     * <p><b>Redis-specific behavior:</b> This operation uses the Redis FLUSHALL command on each shard.
+     * <p><b>Redis-specific behavior:</b> This operation issues the Redis FLUSHALL command on each shard.
      * It removes all keys from all databases (not just the currently selected database). The operation
      * is synchronous and blocks until all keys are removed from all shards. The time complexity is
-     * O(N) where N is the total number of keys across all databases on all shards.
+     * O(N) where N is the total number of keys across all databases on all shards. If a FLUSHALL on
+     * one shard fails, the remaining shards are still attempted (each failure is logged at WARN level)
+     * and the <em>first</em> encountered exception is rethrown after all shards have been processed.
      *
      * <p><b>Warning:</b> This operation affects ALL databases on each Redis instance (DB 0 through DB 15
      * by default), not just the one being used by this client. If other applications share the same
@@ -739,7 +743,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @throws RuntimeException if a network error or timeout occurs while flushing any shard
+     * @throws RuntimeException the first exception encountered while flushing any shard (all remaining
+     *         shards are still attempted before the exception is rethrown). Typically a network error
+     *         or timeout from the underlying Jedis client.
      * @see #disconnect()
      */
     @Override

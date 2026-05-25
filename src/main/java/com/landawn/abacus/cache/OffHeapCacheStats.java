@@ -9,8 +9,8 @@ import java.util.Objects;
  * An immutable snapshot of off-heap cache statistics at a specific point in time.
  * This record provides comprehensive metrics about off-heap cache performance, including
  * memory usage, disk operations, and segment allocation details. In addition to the basic
- * cache counters (size, put/get/hit/miss/eviction counts) it exposes off-heap specific
- * metrics like disk I/O performance and memory segment utilization.
+ * cache counters (size, put/get/hit/miss/eviction counts) it exposes off-heap-specific
+ * metrics such as disk I/O timings and memory segment utilization.
  *
  * <p>Understanding the metrics:
  * <ul>
@@ -72,10 +72,10 @@ import java.util.Objects;
  * @param putCount the total number of <em>successful</em> put operations performed since cache creation,
  *                 counting both memory-backed and disk-spilled stores. A put that fails before the wrapper
  *                 is installed in the pool (e.g., neither memory nor disk could accept the value) is NOT
- *                 counted here
+ *                 counted here.
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
  *                       when off-heap memory is full and the value is stored to disk via the configured
- *                       {@link OffHeapStore}, or when the storeSelector explicitly routes the value to disk
+ *                       {@link OffHeapStore}, or when the {@code storeSelector} explicitly routes the value to disk.
  * @param getCount the total number of get operations performed since cache creation. The identity is
  *                 {@code getCount = hitCount + missCount}. {@code hitCountByDisk} is NOT additive here
  *                 because it is already part of {@code hitCount}.
@@ -87,7 +87,7 @@ import java.util.Objects;
  *                       after the pool lookup hit, which is the reason the pool's {@code hitCount} already
  *                       includes this case.
  * @param missCount the number of failed get operations where the entry was not found in either memory or
- *                  disk. This can occur when the key never existed, was explicitly removed, or has expired
+ *                  disk. This can occur when the key never existed, was explicitly removed, or has expired.
  * @param evictionCount the total number of entries removed by the eviction / vacate paths (i.e., entries
  *                      reclaimed because the cache reached capacity, or because the periodic eviction sweep
  *                      noticed they had expired). Explicit {@code remove()} / {@code clear()} calls and
@@ -96,10 +96,10 @@ import java.util.Objects;
  *                              or reclaimed to free capacity). Explicit {@code remove()} / {@code clear()}
  *                              and {@code put()} replacements of a disk-stored key are NOT counted here.
  * @param allocatedMemory the total allocated off-heap memory in bytes. This represents the maximum memory
- *                        that has been reserved for the cache, typically organized into fixed-size segments
+ *                        that has been reserved for the cache, typically organized into fixed-size segments.
  * @param occupiedMemory the currently occupied off-heap memory in bytes, including both data and internal
  *                       overhead. This value includes the actual data size plus any metadata and alignment
- *                       padding required by the slot-based allocation system
+ *                       padding required by the slot-based allocation system.
  * @param dataSize the total size of actual serialized data tracked by the cache in bytes, across both
  *                 the off-heap memory pool and the disk store, excluding any slot-allocation padding or
  *                 internal overhead. To isolate the in-memory portion, subtract {@code dataSizeOnDisk}
@@ -109,18 +109,18 @@ import java.util.Objects;
  *                       disk storage.
  * @param writeToDiskTimeStats statistics for disk write operations, tracking the minimum, maximum, and
  *                             average time in milliseconds for writing entries to disk. This helps monitor
- *                             disk write performance and identify potential I/O bottlenecks
+ *                             disk write performance and identify potential I/O bottlenecks.
  * @param readFromDiskTimeStats statistics for disk read operations, tracking the minimum, maximum, and
  *                              average time in milliseconds for reading entries from disk. This helps
- *                              monitor disk read performance and cache hit efficiency
+ *                              monitor disk read performance and cache hit efficiency.
  * @param segmentSize the size of each memory segment in bytes. The off-heap memory is organized into
  *                    fixed-size segments (typically 1MB = 1048576 bytes) to manage memory allocation
- *                    and reduce fragmentation
+ *                    and reduce fragmentation.
  * @param occupiedSlots a detailed map showing memory slot occupation across segments. The outer map's key
  *                      is the slot size in bytes (e.g., 64, 128, 256, 512, 1024, 2048, 4096, 8192), and
  *                      the inner map contains segment index as key and the number of occupied slots in
  *                      that segment as value. This provides granular visibility into memory fragmentation
- *                      and utilization patterns
+ *                      and utilization patterns.
  * @see AbstractOffHeapCache#stats()
  * @see OffHeapCache
  * @see OffHeapCache25
@@ -146,12 +146,12 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
 
     /**
      * Returns a map of occupied memory slots organized by slot size.
-     * The outer map's key is the slot size in bytes, and the inner map contains
-     * segment index as key and number of occupied slots in that segment as value.
-     * This provides detailed information about memory fragmentation and utilization.
+     * The outer map's key is the slot size in bytes, and the inner map contains the segment
+     * index as key and the number of occupied slots in that segment as value. This provides
+     * detailed information about memory fragmentation and utilization.
      *
-     * <p>Note: The map returned by this accessor is deeply unmodifiable. Both the outer map and
-     * nested maps are defensive copies captured during record construction.
+     * <p>The map returned by this accessor is deeply unmodifiable: both the outer map and
+     * the nested maps are defensive copies captured during record construction.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -160,7 +160,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * // meaning: 5 slots of 1KB in segment 0, 3 slots of 1KB in segment 1, etc.
      * }</pre>
      *
-     * @return map of slot sizes to segment occupation details
+     * @return an unmodifiable map of slot sizes (in bytes) to per-segment occupation details;
+     *         never {@code null}
      */
     @Override
     public Map<Integer, Map<Integer, Integer>> occupiedSlots() {
@@ -186,10 +187,10 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
     }
 
     /**
-     * Statistics for minimum, maximum, and average values of a metric.
-     * Within {@link OffHeapCacheStats} this is used to track disk I/O timings
-     * (values are in milliseconds). When no observations have been recorded yet,
-     * all three values are reported as {@code 0.0}.
+     * Statistics for the minimum, maximum, and average values of a metric.
+     * Within {@link OffHeapCacheStats} this is used to track disk I/O timings (values are in
+     * milliseconds). When no observations have been recorded yet, all three values are reported
+     * as {@code 0.0}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -199,15 +200,16 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      *                    "Avg: " + writeStats.avg() + "ms");
      * }</pre>
      *
-     * @param min the minimum observed value (0.0 if no observations have been recorded)
-     * @param max the maximum observed value (0.0 if no observations have been recorded)
-     * @param avg the average of all observed values (0.0 if no observations have been recorded)
+     * @param min the minimum observed value ({@code 0.0} if no observations have been recorded)
+     * @param max the maximum observed value ({@code 0.0} if no observations have been recorded)
+     * @param avg the average of all observed values ({@code 0.0} if no observations have been recorded)
      */
     public record MinMaxAvg(double min, double max, double avg) {
         /**
-         * Returns a string representation of the statistics in JSON-like format.
-         * The format is: {@code {min: <value>, max: <value>, avg: <value>}} where
-         * each value is a double representing milliseconds.
+         * Returns a string representation of the statistics in a JSON-like format.
+         * The format is {@code {min: <value>, max: <value>, avg: <value>}}, where each value is
+         * a {@code double} (typically representing milliseconds in the context of
+         * {@link OffHeapCacheStats}).
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code
@@ -216,7 +218,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
          * // Output: {min: 5.2, max: 150.8, avg: 45.3}
          * }</pre>
          *
-         * @return formatted string showing min, max, and avg values in JSON-like format
+         * @return a formatted string showing the min, max, and avg values in a JSON-like format
          */
         @Override
         public String toString() {
@@ -226,9 +228,9 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
 
     /**
      * Represents the occupation details of a specific slot size in the cache.
-     * This record provides information about how many slots of a particular size
-     * are occupied across different memory segments. This is useful for analyzing
-     * memory fragmentation and understanding how memory is being utilized.
+     * This record provides information about how many slots of a particular size are occupied
+     * across different memory segments, which is useful for analyzing memory fragmentation and
+     * understanding how memory is being utilized.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -241,7 +243,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * }</pre>
      *
      * @param sizeOfSlot the size of each slot in bytes (e.g., 64, 128, 256, 512, 1024, 2048, 4096, 8192)
-     * @param occupiedSlots map of segment index to number of occupied slots in that segment
+     * @param occupiedSlots a map from segment index to the number of occupied slots in that segment;
+     *                      stored as an unmodifiable defensive copy
      */
     public record OccupiedSlot(int sizeOfSlot, Map<Integer, Integer> occupiedSlots) {
         /**

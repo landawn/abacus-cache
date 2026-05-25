@@ -20,9 +20,10 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
 
 /**
- * A wrapper implementation that adapts Caffeine cache to the Abacus Cache interface.
- * Caffeine is a high-performance, near-optimal caching library based on Java 8.
- * This class provides a bridge between Caffeine's API and the standardized Cache interface,
+ * A wrapper implementation that adapts a Caffeine cache to the Abacus
+ * {@link com.landawn.abacus.cache.Cache Cache} interface.
+ * Caffeine is a high-performance, near-optimal caching library for Java 8 and later.
+ * This class bridges Caffeine's API and the standardized {@code Cache} interface,
  * allowing Caffeine to be used seamlessly within the Abacus caching framework.
  *
  * <p>
@@ -68,7 +69,7 @@ import com.github.benmanes.caffeine.cache.stats.CacheStats;
  */
 public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
-    /** The underlying Caffeine cache instance that this wrapper delegates all operations to. */
+    /** The underlying Caffeine cache instance that this wrapper delegates supported operations to. */
     private final Cache<K, V> cacheImpl;
 
     /** Flag indicating whether this cache wrapper has been closed via {@link #close()}. */
@@ -104,9 +105,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Retrieves a value from the cache by its key.
-     * This method uses Caffeine's getIfPresent which doesn't trigger cache loading.
-     * The operation may update access time depending on the eviction policy configured
-     * when the Caffeine cache was created.
+     * Delegates to Caffeine's {@code getIfPresent}, which does not trigger cache loading.
+     * The operation may update the entry's access time depending on the eviction policy
+     * configured when the Caffeine cache was built.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads.
@@ -161,14 +162,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * // All entries expire based on the cache-level configuration (10 minutes)
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated (must not be null)
-     * @param value the cache value to be associated with the specified key (must not be null; the underlying Caffeine cache rejects null values)
-     * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration via Caffeine builder)
-     * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration via Caffeine builder)
-     * @return {@code true} always (operation always succeeds unless an exception is thrown)
-     * @throws IllegalArgumentException if key is null
-     * @throws NullPointerException if value is null (thrown by the underlying Caffeine cache,
-     *         which does not allow null values)
+     * @param key the cache key with which the specified value is to be associated (must not be {@code null})
+     * @param value the cache value to be associated with the specified key (must not be {@code null}; the underlying Caffeine cache rejects {@code null} values)
+     * @param liveTime the time-to-live in milliseconds (ignored; configure expiration via the Caffeine builder)
+     * @param maxIdleTime the maximum idle time in milliseconds (ignored; configure expiration via the Caffeine builder)
+     * @return {@code true} (this implementation always succeeds unless an exception is thrown)
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws NullPointerException if {@code value} is {@code null} (thrown by the underlying Caffeine cache,
+     *         which does not allow {@code null} values)
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -254,11 +255,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Returns the set of keys in the cache.
-     * This operation is not supported by the CaffeineCache wrapper as Caffeine doesn't provide
-     * efficient key iteration for performance reasons. Caffeine prioritizes performance and
-     * thread-safety over providing a key set view, which would require additional memory and
-     * synchronization overhead.
+     * Unsupported by this implementation; always throws {@link UnsupportedOperationException}.
+     * Caffeine prioritizes performance and thread-safety over providing a snapshot key-set
+     * view, so this wrapper does not expose one. If key iteration is required, use a different
+     * cache implementation (e.g., {@link LocalCache}).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -271,9 +271,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @return never returns normally
-     * @throws UnsupportedOperationException always thrown as this operation is not supported
-     * @deprecated Unsupported operation. Consider using {@link LocalCache} if key iteration is required.
+     * @return this method never returns; it always throws
+     * @throws UnsupportedOperationException always
+     * @deprecated unsupported operation. Consider using {@link LocalCache} if key iteration is required.
      */
     @Deprecated
     @Override
@@ -284,10 +284,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns the estimated number of entries in the cache.
      * This is an approximation and may not be exact: Caffeine maintains internal read/write buffers,
-     * and entries that have been added/removed but not yet drained from those buffers are not
+     * and entries that have been added or removed but not yet drained from those buffers are not
      * reflected in this count, so the returned value can lag slightly behind the true size. It may
      * also include entries that have expired but have not yet been removed by Caffeine's housekeeping.
-     * If the underlying long count exceeds {@link Integer#MAX_VALUE}, it is clamped.
+     * If the underlying {@code long} estimate exceeds {@link Integer#MAX_VALUE}, it is clamped to
+     * {@code Integer.MAX_VALUE}.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads without blocking.
@@ -313,10 +314,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes all entries from the cache immediately.
-     * This operation invalidates all cached key-value pairs. The actual removal
+     * Removes all entries from the cache.
+     * Invalidates every cached key-value pair. The actual reclamation of memory
      * may be performed asynchronously by Caffeine's cleanup process, but all entries
-     * will be logically invalidated when this method returns.
+     * are logically invalidated by the time this method returns.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. However, concurrent put operations
      * may add new entries while the clear is in progress.
@@ -341,14 +342,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes the cache and releases resources.
-     * After closing, the cache cannot be used - subsequent operations will throw IllegalStateException.
-     * This method invalidates all entries and marks the wrapper as closed. Unlike some other cache implementations,
-     * the underlying Caffeine cache instance is not explicitly closed (as Caffeine caches don't implement
-     * Closeable), but all entries are invalidated.
+     * Closes this cache wrapper and releases its references to cached entries.
+     * After closing, subsequent operations throw {@link IllegalStateException}.
+     * This method invalidates all entries and marks the wrapper as closed. Unlike some other
+     * cache implementations, the underlying Caffeine cache instance is not explicitly closed
+     * (Caffeine caches do not implement {@link AutoCloseable}); only its entries are invalidated.
      *
-     * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
-     * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.
+     * <p><b>Thread Safety:</b> This method is {@code synchronized}, thread-safe, and idempotent.
+     * Calling it again has no additional effect and does not throw.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -390,13 +391,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if the cache has been closed.
-     * This method can be used to verify cache state before performing operations,
-     * though most operations will throw IllegalStateException if the cache is closed.
-     * Returns true if {@link #close()} has been called on this cache.
+     * Returns whether this cache has been closed.
+     * Use this method to check cache state before performing operations; otherwise,
+     * most operations will throw {@link IllegalStateException} once the cache is closed.
+     * Returns {@code true} if {@link #close()} has been called on this cache.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
-     * The field is declared volatile to ensure visibility across threads.
+     * The backing field is declared {@code volatile} to ensure visibility across threads.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -420,14 +421,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns Caffeine-specific cache statistics.
-     * Statistics are only available if the cache was created with {@code recordStats()} enabled
-     * in the Caffeine builder. The returned statistics provide detailed metrics about cache
-     * performance including hit rate, miss rate, load count, eviction count, and average load time.
+     * Statistics are only meaningful if the cache was created with {@code recordStats()} enabled
+     * on the Caffeine builder. The returned snapshot provides detailed metrics about cache
+     * performance, including hit rate, miss rate, load count, eviction count, and average load time.
      *
-     * <p><b>Note:</b> This is a Caffeine-specific method not present in the base Cache interface.
-     * If stats recording was not enabled during cache creation, this method returns a stats object
-     * with all zero values. Statistics recording has a small performance overhead, so it should
-     * only be enabled when monitoring is required.
+     * <p><b>Note:</b> This is a Caffeine-specific method not present in the base
+     * {@link com.landawn.abacus.cache.Cache Cache} interface.
+     * If stats recording was not enabled, this method returns a stats object with all-zero values.
+     * Recording carries a small overhead, so it should only be enabled when monitoring is required.
+     * This method does not check whether the cache has been closed.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and returns a consistent snapshot
      * of statistics at the time of invocation.
@@ -466,16 +468,16 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Ensures the cache is not closed before performing operations.
-     * This is a utility method called by cache operations that need to verify the cache
-     * is still in an operational state. It provides a consistent way to enforce the
-     * "closed" state across cache methods. This method checks the volatile {@code isClosed}
-     * field to ensure visibility across threads.
+     * Asserts that this cache has not been closed.
+     * This utility method is invoked by cache operations that need to verify the cache
+     * is still operational; it provides a consistent way to enforce the closed-state
+     * contract across cache methods. It reads the {@code volatile isClosed} field to
+     * ensure visibility across threads.
      *
      * <p>Note: {@link #keySet()} does not call this method because it always throws
      * {@link UnsupportedOperationException} regardless of whether the cache is open.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe due to the volatile
+     * <p><b>Thread Safety:</b> This method is thread-safe due to the {@code volatile}
      * {@code isClosed} field.
      *
      * @throws IllegalStateException if the cache has been closed via {@link #close()}

@@ -339,8 +339,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Returns a set of all keys currently in the cache.
      * The returned set is a snapshot taken at the time of the call and may include
      * keys for expired entries that have not been evicted yet by the background
-     * eviction process. Modifications to the returned set do not affect the cache
-     * contents - it is a read-only view.
+     * eviction process. The returned set is not a live view of the cache: subsequent
+     * cache changes are not reflected in it, and changes to the returned set (if
+     * mutation is supported at all) do not propagate back to the cache.
      *
      * <p>Use this method to enumerate all cached keys, inspect cache contents,
      * or perform bulk operations. Be aware that accessing values for returned keys
@@ -384,7 +385,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * This count may include expired entries that have not been evicted yet
      * by the background eviction process, so the actual number of accessible
      * (non-expired) entries may be lower. For the maximum capacity of the cache,
-     * use {@link #stats()}.capacity().
+     * use {@code stats().capacity()}.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *

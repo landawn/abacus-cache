@@ -38,16 +38,16 @@ import lombok.experimental.Accessors;
 
 /**
  * A modern off-heap cache implementation using Java's Foreign Function &amp; Memory API.
- * This implementation leverages the new Foreign Memory API introduced in recent Java versions
- * as a safer alternative to sun.misc.Unsafe. It provides the same functionality as OffHeapCache
+ * This class leverages the Foreign Memory API introduced in recent Java versions as a safer
+ * alternative to {@code sun.misc.Unsafe}. It provides the same functionality as {@link OffHeapCache}
  * but with better safety guarantees and future compatibility.
  *
  * <p>Key features:
  * <ul>
- * <li>Uses Foreign Memory API instead of Unsafe</li>
- * <li>Automatic memory management with Arena</li>
- * <li>Type-safe memory access via MemorySegment</li>
- * <li>Same performance characteristics as Unsafe-based implementation</li>
+ * <li>Uses the Foreign Memory API instead of {@code Unsafe}</li>
+ * <li>Automatic memory management via {@link Arena}</li>
+ * <li>Type-safe memory access via {@link MemorySegment}</li>
+ * <li>Comparable performance to an {@code Unsafe}-based implementation</li>
  * <li>Better compatibility with future Java versions</li>
  * </ul>
  *
@@ -99,16 +99,16 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     private MemorySegment buffer;
 
     /**
-     * Creates an OffHeapCache25 with the specified capacity in megabytes.
-     * Uses default eviction delay of 3 seconds (3000 milliseconds) and default expiration times
+     * Creates an {@code OffHeapCache25} with the specified capacity in megabytes.
+     * Uses a default eviction delay of 3 seconds (3000 milliseconds) and default expiration times
      * ({@link Cache#DEFAULT_LIVE_TIME 3 hours TTL} and {@link Cache#DEFAULT_MAX_IDLE_TIME 30 minutes idle time}).
      * Memory is allocated at construction time and held until {@link #close()}.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
      * <p><b>Memory Management:</b>
-     * The memory is allocated immediately from native (off-heap) memory using the Foreign Memory API (Arena).
+     * The memory is allocated immediately from native (off-heap) memory using the Foreign Memory API ({@link Arena}).
      * This memory remains allocated until {@link #close()} is called. The actual allocation size is
-     * capacityInMB * 1048576 bytes (1MB = 1048576 bytes).
+     * {@code capacityInMB * 1048576} bytes (1MB = 1,048,576 bytes).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -120,8 +120,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
-     *                     The actual capacity will be capacityInMB * 1048576 bytes.
-     * @throws IllegalArgumentException if capacityInMB is not positive
+     *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache25(final int capacityInMB) {
@@ -129,7 +129,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     /**
-     * Creates an OffHeapCache25 with specified capacity and eviction delay.
+     * Creates an {@code OffHeapCache25} with the specified capacity and eviction delay.
      * Uses default {@link Cache#DEFAULT_LIVE_TIME TTL of 3 hours} and
      * {@link Cache#DEFAULT_MAX_IDLE_TIME idle time of 30 minutes}.
      * The eviction delay controls how frequently the cache scans for expired entries and reclaims empty segments.
@@ -151,9 +151,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
-     *                     The actual capacity will be capacityInMB * 1048576 bytes.
-     * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
-     * @throws IllegalArgumentException if capacityInMB is not positive
+     *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
+     * @param evictDelay the delay between eviction runs in milliseconds. Use {@code 0} or negative to disable automatic eviction.
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache25(final int capacityInMB, final long evictDelay) {
@@ -161,7 +161,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     /**
-     * Creates an OffHeapCache25 with fully specified basic parameters.
+     * Creates an {@code OffHeapCache25} with fully specified basic parameters.
      * Memory is allocated at construction time and held until {@link #close()}.
      * This constructor provides complete control over cache timing behavior.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
@@ -181,11 +181,11 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
-     *                     The actual capacity will be capacityInMB * 1048576 bytes.
-     * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
-     * @param defaultLiveTime default time-to-live for entries in milliseconds. Use 0 or negative for no TTL expiration.
-     * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
-     * @throws IllegalArgumentException if capacityInMB is not positive
+     *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
+     * @param evictDelay the delay between eviction runs in milliseconds. Use {@code 0} or negative to disable automatic eviction.
+     * @param defaultLiveTime default time-to-live for entries in milliseconds. Use {@code 0} or negative for no TTL expiration.
+     * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use {@code 0} or negative for no idle timeout.
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache25(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
@@ -194,53 +194,55 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     /**
-     * Package-private constructor with complete configuration for use by the Builder.
-     * This constructor is called internally by the Builder's build() method and should not be
-     * invoked directly. It provides access to all advanced configuration options including
-     * custom serialization, disk spillover, and memory management tuning.
-     * 
+     * Package-private constructor with complete configuration, intended for use by the {@link Builder}.
+     * This constructor is called internally by {@link Builder#build()} and should not be invoked
+     * directly. It exposes all advanced configuration options, including custom serialization,
+     * disk spillover, and memory-management tuning.
+     *
      * <p>This is the most flexible constructor, delegating to the parent {@link AbstractOffHeapCache} with all
-     * configuration parameters. For typical usage, prefer the simpler constructors or use the Builder
-     * created via {@link #builder()}.
+     * configuration parameters. For typical usage, prefer the simpler constructors or the builder
+     * obtained from {@link #builder()}.
      *
      * <p><b>Memory Management:</b>
-     * Memory is allocated immediately using the Foreign Memory API (Arena). The maxBlockSize parameter
-     * controls how values are stored -- values larger than maxBlockSize are split across multiple blocks.
-     * The vacatingFactor controls how much of the pool is evicted (LRU first) once the pool reaches
-     * capacity.
+     * Memory is allocated immediately using the Foreign Memory API ({@link Arena}). The {@code maxBlockSize}
+     * parameter controls how values are stored: values larger than {@code maxBlockSize} are split across
+     * multiple blocks. The {@code vacatingFactor} controls how much of the pool is evicted (LRU first)
+     * once the pool reaches capacity.
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
-     *                     The actual capacity will be capacityInMB * 1048576 bytes.
-     * @param maxBlockSize maximum size of a single memory block in bytes for memory allocation efficiency.
-     *                     Must be between 1024 and SEGMENT_SIZE (1048576). The value will be rounded up to
-     *                     the nearest multiple of MIN_BLOCK_SIZE (64 bytes). Values larger than maxBlockSize
-     *                     will be split across multiple blocks. Default is 8192 bytes.
-     * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
-     * @param defaultLiveTime default time-to-live for entries in milliseconds. Use 0 or negative for no TTL expiration.
-     * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
-     * @param vacatingFactor factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when
-     *                       the underlying pool reaches capacity; this fraction of the pool's current size is
-     *                       then evicted (LRU first) to free space. It does NOT control when vacating starts.
-     *                       Use 0.0 to apply the DEFAULT_VACATING_FACTOR (0.2). Typical values range from 0.1 to 0.3.
-     * @param serializer custom serializer for converting values to byte streams, or null for default serialization
-     *                   (Kryo if available, otherwise JSON). The serializer should write the complete serialized
-     *                   form to the provided ByteArrayOutputStream.
-     * @param deserializer custom deserializer for converting bytes to values, or null for default deserialization
-     *                     (Kryo if available, otherwise JSON). The function receives the byte array and type
-     *                     information, and should return the deserialized value.
-     * @param offHeapStore optional disk store for spillover when memory is full, or null for memory-only cache.
-     *                     When configured, values that don't fit in memory can be stored to disk instead of being rejected.
-     * @param statsTimeOnDisk whether to collect detailed disk I/O timing statistics. When true, tracks min/max/average
-     *                        read and write times to disk. This has minimal performance overhead.
-     * @param testerForLoadingItemFromDiskToMemory predicate to determine when to load items from disk back to memory
-     *                                             based on access patterns. Receives the activity print, size, and
-     *                                             I/O elapsed time. Return true to promote the value to memory.
-     *                                             Use null to disable automatic promotion.
+     *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
+     * @param maxBlockSize maximum size of a single memory block in bytes used for allocation efficiency.
+     *                     Must be between 1024 and {@code SEGMENT_SIZE} (1,048,576). The value is rounded up to
+     *                     the nearest multiple of {@code MIN_BLOCK_SIZE} (64 bytes). Values larger than
+     *                     {@code maxBlockSize} are split across multiple blocks. Default is 8192 bytes.
+     * @param evictDelay the delay between eviction runs in milliseconds. Use {@code 0} or negative to disable automatic eviction.
+     * @param defaultLiveTime default time-to-live for entries in milliseconds. Use {@code 0} or negative for no TTL expiration.
+     * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use {@code 0} or negative for no idle timeout.
+     * @param vacatingFactor factor in {@code [0.0, 1.0]} controlling how aggressive a vacate is. Vacate is
+     *                       triggered when the underlying pool reaches capacity; this fraction of the pool's
+     *                       current size is then evicted (LRU first) to free space. It does NOT control when
+     *                       vacating starts. Use {@code 0.0} to apply the default factor (0.2). Typical values
+     *                       range from 0.1 to 0.3.
+     * @param serializer custom serializer for converting values to byte streams, or {@code null} for default
+     *                   serialization (Kryo if available, otherwise JSON). The serializer should write the
+     *                   complete serialized form to the provided {@link ByteArrayOutputStream}.
+     * @param deserializer custom deserializer for converting bytes back to values, or {@code null} for default
+     *                     deserialization (Kryo if available, otherwise JSON). The function receives the byte
+     *                     array and value {@link Type}, and must return the deserialized value.
+     * @param offHeapStore optional disk store for spillover when memory is full, or {@code null} for a memory-only
+     *                     cache. When configured, values that don't fit in memory can be stored to disk instead
+     *                     of being rejected.
+     * @param statsTimeOnDisk whether to collect detailed disk I/O timing statistics. When {@code true}, tracks
+     *                        min/max/average read and write times to disk. This has minimal performance overhead.
+     * @param testerForLoadingItemFromDiskToMemory predicate to determine when to promote items from disk back to
+     *                                             memory based on access patterns. Receives the {@link ActivityPrint},
+     *                                             entry size, and I/O elapsed time. Return {@code true} to promote
+     *                                             the value to memory. Use {@code null} to disable automatic promotion.
      * @param storeSelector function to determine storage location for each put operation. Receives the key, value,
-     *                      and size, and should return: 0 for default (try memory, fallback to disk), 1 for memory
-     *                      only (never store to disk), or 2 for disk only (always store to disk). Use null for
-     *                      default behavior (always try memory first).
-     * @throws IllegalArgumentException if capacityInMB is not positive, or if maxBlockSize is outside valid range
+     *                      and size, and should return: {@code 0} for default (try memory, fallback to disk),
+     *                      {@code 1} for memory only (never store to disk), or {@code 2} for disk only (always
+     *                      store to disk). Use {@code null} for default behavior (always try memory first).
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if {@code maxBlockSize} is outside the valid range
      * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache25(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
@@ -253,19 +255,19 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Allocates off-heap memory using the Foreign Memory API.
-     * Creates a shared Arena (allowing access from multiple threads) and allocates
-     * a MemorySegment of the specified size. The shared Arena ensures thread-safe
-     * access to the memory segment across the cache operations. This is an internal
-     * method called automatically during cache construction and should not be called directly.
-     * 
-     * <p>The memory is allocated from the native heap, not managed by the Java garbage collector.
-     * This reduces GC pressure but requires manual deallocation via {@link #deallocate()} to prevent memory leaks.
+     * Creates a shared {@link Arena} (allowing access from multiple threads) and allocates a
+     * {@link MemorySegment} of the requested size. The shared arena ensures thread-safe access
+     * to the memory segment across cache operations. This is an internal hook called automatically
+     * during cache construction and should not be invoked directly.
+     *
+     * <p>The memory is allocated from the native heap and is not managed by the Java garbage collector.
+     * This reduces GC pressure but requires explicit release via {@link #deallocate()} to avoid leaks.
      *
      * @param capacityInBytes the number of bytes to allocate. Must be positive. This is typically a multiple
-     *                        of SEGMENT_SIZE (1048576 bytes).
-     * @return the memory address (pointer) of the allocated memory segment in native memory. This address is
-     *         used for all subsequent memory access operations via copyToMemory and copyFromMemory.
-     * @throws OutOfMemoryError if the allocation fails due to insufficient native memory available on the system
+     *                        of {@code SEGMENT_SIZE} (1,048,576 bytes).
+     * @return the base address (pointer) of the allocated memory segment in native memory. This address is
+     *         used for all subsequent memory-access operations via {@link #copyToMemory} and {@link #copyFromMemory}.
+     * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
      */
     @Override
     protected long allocate(final long capacityInBytes) {
@@ -276,15 +278,15 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     /**
-     * Deallocates the off-heap memory by closing the Arena.
-     * Called during cache shutdown to release native memory and prevent memory leaks.
-     * This method is automatically invoked by close(). This is an internal method
-     * and should not be called directly.
-     * 
-     * <p>Once called, the memory address (_startPtr) becomes invalid and must not be accessed.
-     * All cache operations should be stopped before calling this method. This releases all
-     * memory associated with the Arena and makes the MemorySegment inaccessible. Any subsequent
-     * attempts to access the memory segment will result in an IllegalStateException.
+     * Deallocates the off-heap memory by closing the {@link Arena}.
+     * Called during cache shutdown to release native memory and prevent leaks.
+     * This method is automatically invoked by {@link #close()} and is an internal hook
+     * that should not be called directly.
+     *
+     * <p>Once called, the memory base address ({@code _startPtr}) becomes invalid and must not be
+     * accessed. All cache operations should be stopped before calling this method. Closing the
+     * arena releases all memory associated with it and makes the {@link MemorySegment} inaccessible;
+     * any subsequent attempt to access the segment will result in an {@link IllegalStateException}.
      *
      * @see #close()
      * @see #allocate(long)
@@ -296,22 +298,23 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     /**
-     * Copies bytes from off-heap memory to a Java array using MemorySegment API.
-     * This provides type-safe memory access compared to Unsafe operations. This is an internal method
-     * called automatically during cache get operations and should not be called directly.
-     * 
-     * <p>The method performs a low-level memory copy using MemorySegment.copy, which is
-     * type-safe and efficient. The method calculates the relative offset within the buffer
-     * by subtracting _startPtr from startPtr to determine the correct position in the memory segment.
+     * Copies bytes from off-heap memory to a Java array using the {@link MemorySegment} API.
+     * This provides type-safe memory access compared with {@code Unsafe} operations. It is an
+     * internal hook called automatically during cache get operations and should not be called directly.
+     *
+     * <p>The method performs a low-level copy via {@link MemorySegment#copy}, which is type-safe and
+     * efficient. The relative offset within the buffer is computed by subtracting {@code _startPtr}
+     * from {@code startPtr} to determine the correct position in the segment.
      *
      * @param startPtr the source memory address in off-heap memory from which to copy data. Must be a
-     *                 valid address within the allocated memory region (between _startPtr and _startPtr + capacity).
-     * @param bytes the destination byte array. Must not be null and must have sufficient capacity to
-     *              hold the copied data.
-     * @param destOffset the index of the first byte in {@code bytes} to write to (zero-based, no array
+     *                 valid address within the allocated memory region (between {@code _startPtr} and
+     *                 {@code _startPtr + capacity}).
+     * @param bytes the destination byte array. Must not be {@code null} and must have sufficient capacity
+     *              to hold the copied data.
+     * @param destOffset the index of the first byte in {@code bytes} to write to (zero-based; no array
      *                   header offset is applied by this implementation).
-     * @param len the number of bytes to copy. Must be positive and must not exceed the available
-     *            space in the destination array starting from destOffset.
+     * @param len the number of bytes to copy. Must be non-negative and must not exceed the available
+     *            space in the destination array starting from {@code destOffset}.
      */
     @Override
     protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
@@ -319,20 +322,21 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     /**
-     * Copies bytes from a Java array to off-heap memory using MemorySegment API.
-     * This provides type-safe memory access compared to Unsafe operations. This is an internal method
-     * called automatically during cache put operations and should not be called directly.
-     * 
-     * <p>The method performs a low-level memory copy using MemorySegment.copy, which is
-     * type-safe and efficient. The method calculates the relative offset within the buffer
-     * by subtracting _startPtr from startPtr to determine the correct position in the memory segment.
+     * Copies bytes from a Java array to off-heap memory using the {@link MemorySegment} API.
+     * This provides type-safe memory access compared with {@code Unsafe} operations. It is an
+     * internal hook called automatically during cache put operations and should not be called directly.
      *
-     * @param srcBytes the source byte array from which to copy data. Must not be null.
-     * @param srcOffset the index of the first byte in {@code srcBytes} to read (zero-based, no array
+     * <p>The method performs a low-level copy via {@link MemorySegment#copy}, which is type-safe and
+     * efficient. The relative offset within the buffer is computed by subtracting {@code _startPtr}
+     * from {@code startPtr} to determine the correct position in the segment.
+     *
+     * @param srcBytes the source byte array from which to copy data. Must not be {@code null}.
+     * @param srcOffset the index of the first byte in {@code srcBytes} to read (zero-based; no array
      *                  header offset is applied by this implementation).
      * @param startPtr the destination memory address in off-heap memory. Must be a valid address
-     *                 within the allocated memory region (between _startPtr and _startPtr + capacity).
-     * @param len the number of bytes to copy. Must be positive and must not exceed the available
+     *                 within the allocated memory region (between {@code _startPtr} and
+     *                 {@code _startPtr + capacity}).
+     * @param len the number of bytes to copy. Must be non-negative and must not exceed the available
      *            space at the destination address or the size of the source array.
      */
     @Override
@@ -378,14 +382,13 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     }
 
     /**
-     * Builder class for creating OffHeapCache25 instances with custom configuration.
-     * Provides a fluent API for setting all cache parameters including capacity,
-     * eviction policies, serialization, and disk spillover options. All setters
-     * return the builder instance for method chaining.
-     * 
-     * <p>The builder uses Lombok's {@code @Data} and {@code @Accessors} annotations to generate fluent
-     * setter methods automatically. All fields have sensible defaults and can be
-     * overridden as needed before calling {@link #build()}.
+     * Fluent builder for creating {@link OffHeapCache25} instances with custom configuration.
+     * Exposes all cache parameters, including capacity, eviction policies, serialization, and
+     * disk spillover options. All setters return this builder instance to allow method chaining.
+     *
+     * <p>The builder uses Lombok's {@code @Data} and {@code @Accessors(chain = true, fluent = true)}
+     * annotations to generate fluent setter methods automatically. All fields have sensible defaults
+     * (except {@code capacityInMB}) and can be overridden before calling {@link #build()}.
      *
      * <p><b>Default Values:</b>
      * <ul>
@@ -441,7 +444,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Creates a new builder instance with default configuration values.
-         * Set {@code capacityInMB} to a positive value before calling {@link #build()}.
+         * {@code capacityInMB} must be set to a positive value before calling {@link #build()}.
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code
@@ -459,7 +462,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * The total off-heap memory capacity in megabytes.
          * This is a required field and must be set to a positive value before calling {@link #build()}.
-         * The actual capacity will be capacityInMB * 1048576 bytes.
+         * The actual capacity will be {@code capacityInMB * 1048576} bytes.
          *
          * <p>Default: 0 (must be set to a positive value)
          */
@@ -467,9 +470,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Maximum size of a single memory block in bytes.
-         * Values larger than this will be split across multiple blocks.
-         * Must be between 1024 and SEGMENT_SIZE (1048576), and is rounded up to the
-         * nearest multiple of MIN_BLOCK_SIZE (64 bytes).
+         * Values larger than this are split across multiple blocks.
+         * Must be between 1024 and {@code SEGMENT_SIZE} (1,048,576), and is rounded up to the
+         * nearest multiple of {@code MIN_BLOCK_SIZE} (64 bytes).
          * Larger blocks reduce fragmentation but may waste space for small objects.
          *
          * <p>Default: 8192 bytes (8KB)
@@ -479,7 +482,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * Delay between eviction runs in milliseconds.
          * Controls how frequently the cache scans for expired entries and reclaims empty segments.
-         * Use 0 or negative to disable automatic eviction (expired entries still removed on access).
+         * Use {@code 0} or negative to disable automatic eviction (expired entries are still removed lazily on access).
          *
          * <p>Default: 0 (automatic eviction disabled)
          */
@@ -487,9 +490,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Default time-to-live for cache entries in milliseconds.
-         * Entries older than this will be considered expired and removed.
-         * Use 0 or negative for no TTL expiration.
-         * Can be overridden per entry in put() operations.
+         * Entries older than this are considered expired and removed.
+         * Use {@code 0} or negative for no TTL expiration.
+         * Can be overridden per entry in {@code put} operations.
          *
          * <p>Default: 0 (no TTL expiration)
          */
@@ -497,19 +500,20 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Default maximum idle time for cache entries in milliseconds.
-         * Entries not accessed within this time will be considered expired and removed.
-         * Use 0 or negative for no idle timeout.
-         * Can be overridden per entry in put() operations.
+         * Entries not accessed within this duration are considered expired and removed.
+         * Use {@code 0} or negative for no idle timeout.
+         * Can be overridden per entry in {@code put} operations.
          *
          * <p>Default: 0 (no idle timeout)
          */
         private long defaultMaxIdleTime;
 
         /**
-         * Factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when the underlying
-         * pool reaches capacity; this fraction of the pool's current size is then evicted (LRU first) to
-         * free space. It does NOT control when vacating starts. Typical values 0.1-0.3. Higher values free
-         * more space per vacate but cause larger pauses in put throughput while the eviction runs.
+         * Factor in {@code [0.0, 1.0]} controlling how aggressive a vacate is. Vacate is triggered when the
+         * underlying pool reaches capacity; this fraction of the pool's current size is then evicted (LRU
+         * first) to free space. It does NOT control when vacating starts. Typical values are 0.1-0.3.
+         * Higher values free more space per vacate but cause larger pauses in put throughput while the
+         * eviction runs.
          *
          * <p>Default: 0.2 (20%)
          */
@@ -517,7 +521,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Custom serializer for converting values to byte streams.
-         * The serializer receives the value and a ByteArrayOutputStream, and should write
+         * The serializer receives the value and a {@link ByteArrayOutputStream}, and should write
          * the complete serialized form to the stream.
          *
          * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
@@ -526,7 +530,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Custom deserializer for converting byte arrays back to values.
-         * The function receives the byte array and type information, and should return
+         * The function receives the byte array and the value {@link Type}, and should return
          * the deserialized value instance.
          *
          * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
@@ -582,14 +586,13 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
         private TriFunction<K, V, Integer, Integer> storeSelector;
 
         /**
-         * Builds and returns a new {@link OffHeapCache25} with the current builder settings.
-         * All configured values are validated and forwarded to the full constructor.
-         * If {@code maxBlockSizeInBytes} is {@code 0}, the default block size (8192)
-         * is applied.
+         * Builds and returns a new {@link OffHeapCache25} configured with the current builder settings.
+         * All configured values are forwarded to the full constructor, where they are validated.
+         * If {@code maxBlockSizeInBytes} is {@code 0}, the default block size (8192) is applied.
          *
          * <p><b>Memory Management:</b>
-         * Calling this method allocates native memory immediately by using the Foreign Memory API.
-         * The returned cache must be closed by calling {@link OffHeapCache25#close()}.
+         * Calling this method immediately allocates native memory using the Foreign Memory API.
+         * The returned cache must be released by calling {@link OffHeapCache25#close()}.
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code

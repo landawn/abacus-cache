@@ -15,20 +15,20 @@
 package com.landawn.abacus.cache;
 
 /**
- * A compatibility adapter for the ChronicleMap API name.
+ * A compatibility adapter that preserves the {@code ChronicleMap} class name.
  * <p>
- * This class is now backed by {@link LocalCache} so existing code that references
+ * This class is backed by {@link LocalCache} so existing code that references
  * {@code ChronicleMap} remains functional even when the optional Chronicle-Map
  * dependency is unavailable.
  * <p>
  * Note: this is not a true Chronicle-Map integration. The behavior matches
- * {@code LocalCache} semantics and exists to keep the public API usable.
+ * {@link LocalCache} semantics and exists solely to keep the public API usable.
  *
  * @param <K> the key type
  * @param <V> the value type
  *
- * @deprecated This is a compatibility wrapper. A dedicated Chronicle-Map adapter
- *             is not implemented yet.
+ * @deprecated this is a compatibility wrapper; a dedicated Chronicle-Map adapter
+ *             is not implemented yet
  */
 @Deprecated
 public class ChronicleMap<K, V> extends LocalCache<K, V> {

@@ -464,7 +464,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always thrown, because the underlying Ehcache 3.x API does not provide key iteration
-     * @deprecated unsupported operation. Ehcache does not provide efficient key iteration.
+     * @deprecated Unsupported operation. Ehcache does not provide efficient key iteration.
      *             Track keys externally or use a cache implementation that supports key enumeration instead.
      */
     @Deprecated
@@ -509,7 +509,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always thrown, because the underlying Ehcache 3.x API does not provide size reporting
-     * @deprecated unsupported operation. Ehcache does not provide a size-reporting API.
+     * @deprecated Unsupported operation. Ehcache does not provide a size-reporting API.
      *             Track the entry count externally or use a cache implementation that supports size reporting instead.
      */
     @Deprecated
