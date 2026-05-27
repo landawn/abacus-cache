@@ -134,4 +134,34 @@ public class CaffeineCacheTest extends TestBase {
             assertNotNull(cache.stats());
         }
     }
+
+    /**
+     * Regression coverage for the asymmetric null-key handling defect.
+     *
+     * <p>Before the fix {@link CaffeineCache#put(Object, Object, long, long)} explicitly rejected
+     * null keys with {@code IllegalArgumentException}, but the read-side methods
+     * ({@code getOrNull}, {@code remove}, {@code containsKey}) delegated straight to Caffeine,
+     * which raises an unrelated {@code NullPointerException}. The fix harmonises the contract so
+     * every key-taking operation rejects nulls with the same {@code IllegalArgumentException}.
+     */
+    @Test
+    public void testGetOrNull_EdgeCase_NullKey() {
+        try (CaffeineCache<String, String> cache = newCache()) {
+            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+        }
+    }
+
+    @Test
+    public void testRemove_EdgeCase_NullKey() {
+        try (CaffeineCache<String, String> cache = newCache()) {
+            assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        }
+    }
+
+    @Test
+    public void testContainsKey_EdgeCase_NullKey() {
+        try (CaffeineCache<String, String> cache = newCache()) {
+            assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
+        }
+    }
 }

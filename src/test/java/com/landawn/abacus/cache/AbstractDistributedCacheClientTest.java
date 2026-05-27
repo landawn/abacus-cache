@@ -143,8 +143,12 @@ public class AbstractDistributedCacheClientTest extends TestBase {
 
     @Test
     public void testToSeconds_EdgeCase_NegativeLiveTime() {
+        // Per DistributedCacheClient.set(...) contract: 0 or negative means "no expiration".
+        // toSeconds must therefore normalize any negative input to 0 rather than throwing.
         final DummyClient<String> client = new DummyClient<>("s");
-        assertThrows(IllegalArgumentException.class, () -> client.callToSeconds(-1));
+        assertEquals(0, client.callToSeconds(-1));
+        assertEquals(0, client.callToSeconds(-1000));
+        assertEquals(0, client.callToSeconds(Long.MIN_VALUE));
     }
 
     @Test
@@ -152,5 +156,12 @@ public class AbstractDistributedCacheClientTest extends TestBase {
         final DummyClient<String> client = new DummyClient<>("s");
         // (Integer.MAX_VALUE + 1) * 1000 milliseconds -> seconds exceeds Integer.MAX_VALUE.
         assertThrows(IllegalArgumentException.class, () -> client.callToSeconds(((long) Integer.MAX_VALUE + 1L) * 1000L));
+    }
+
+    @Test
+    public void testToSeconds_MaxValidMillisRoundsDownAtBoundary() {
+        // Exactly Integer.MAX_VALUE seconds in milliseconds — should NOT throw and should equal Integer.MAX_VALUE.
+        final DummyClient<String> client = new DummyClient<>("s");
+        assertEquals(Integer.MAX_VALUE, client.callToSeconds((long) Integer.MAX_VALUE * 1000L));
     }
 }

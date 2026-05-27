@@ -85,29 +85,24 @@ public class LocalCacheTest {
 
     @org.junit.jupiter.api.Test
     public void testConstructor_EdgeCase_InvalidCapacity() {
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-                () -> new LocalCache<String, String>(0, 0));
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-                () -> new LocalCache<String, String>(-1, 0));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(0, 0));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(-1, 0));
     }
 
     @org.junit.jupiter.api.Test
     public void testConstructor_EdgeCase_NegativeEvictDelay() {
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-                () -> new LocalCache<String, String>(100, -1));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(100, -1));
     }
 
     @org.junit.jupiter.api.Test
     public void testConstructor_EdgeCase_NullPool() {
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-                () -> new LocalCache<String, String>(0L, 0L, null));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(0L, 0L, null));
     }
 
     @org.junit.jupiter.api.Test
     public void testPut_EdgeCase_NullKey() {
         try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
-            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-                    () -> cache.put(null, "v", 1000, 1000));
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 1000, 1000));
         }
     }
 
@@ -160,6 +155,39 @@ public class LocalCacheTest {
             final com.landawn.abacus.cache.CacheStats stats = cache.stats();
             org.junit.jupiter.api.Assertions.assertNotNull(stats);
             org.junit.jupiter.api.Assertions.assertEquals(100, stats.capacity());
+        }
+    }
+
+    /**
+     * Regression coverage for the asymmetric null-key handling defect.
+     *
+     * <p>Before the fix {@link LocalCache#put(Object, Object, long, long)} threw
+     * {@code IllegalArgumentException("Key cannot be null")} on a null key, but the read-side
+     * methods ({@link LocalCache#getOrNull(Object)},
+     * {@link LocalCache#remove(Object)}, and {@link LocalCache#containsKey(Object)})
+     * delegated straight to the pool, where a null key triggered a raw NPE from the underlying
+     * pool. Callers therefore got two different exception types depending on which method was
+     * called. The fix harmonizes the contract: all four reject null keys with
+     * {@code IllegalArgumentException} up front.
+     */
+    @org.junit.jupiter.api.Test
+    public void testGetOrNull_EdgeCase_NullKeyThrowsIAE() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testRemove_EdgeCase_NullKeyThrowsIAE() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testContainsKey_EdgeCase_NullKeyThrowsIAE() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
         }
     }
 

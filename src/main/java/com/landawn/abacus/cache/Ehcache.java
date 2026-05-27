@@ -119,14 +119,19 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be returned
+     * @param key the cache key whose associated value is to be returned (must not be null)
      * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
+     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      */
     @Override
     public V getOrNull(final K key) {
         assertNotClosed();
+
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
 
         return cacheImpl.get(key);
     }
@@ -187,13 +192,18 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * // The entry is now removed from the cache
      * }</pre>
      *
-     * @param key the cache key whose mapping is to be removed from the cache
+     * @param key the cache key whose mapping is to be removed from the cache (must not be null)
+     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
     public void remove(final K key) {
         assertNotClosed();
+
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
 
         cacheImpl.remove(key);
     }
@@ -214,16 +224,21 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose presence in the cache is to be tested
+     * @param key the cache key whose presence in the cache is to be tested (must not be null)
      * @return {@code true} if the cache currently has a mapping for the specified key; {@code false}
      *         otherwise. Note that Ehcache's {@code containsKey} does NOT actively evaluate expiration:
      *         an expired entry that has not yet been removed by Ehcache's housekeeping may still report
      *         {@code true} here while {@link #getOrNull(Object)} returns {@code null} for the same key.
+     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean containsKey(final K key) {
         assertNotClosed();
+
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
 
         return cacheImpl.containsKey(key);
     }

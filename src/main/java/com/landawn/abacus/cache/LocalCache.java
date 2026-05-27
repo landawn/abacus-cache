@@ -206,11 +206,16 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be returned
+     * @param key the cache key whose associated value is to be returned (must not be null)
      * @return the value associated with the specified key, or {@code null} if the key is not found, has expired, or has been evicted
+     * @throws IllegalArgumentException if key is null
      */
     @Override
     public V getOrNull(final K key) {
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+
         final PoolableAdapter<V> w = pool.get(key);
 
         return w == null ? null : w.value();
@@ -296,10 +301,15 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.remove("user:123");   // No error, silent no-op
      * }</pre>
      *
-     * @param key the cache key whose mapping is to be removed from the cache
+     * @param key the cache key whose mapping is to be removed from the cache (must not be null)
+     * @throws IllegalArgumentException if key is null
      */
     @Override
     public void remove(final K key) {
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+
         pool.remove(key);
     }
 
@@ -327,11 +337,16 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose presence in the cache is to be tested
+     * @param key the cache key whose presence in the cache is to be tested (must not be null)
      * @return {@code true} if the cache contains a mapping for the specified key and it has not expired; {@code false} otherwise
+     * @throws IllegalArgumentException if key is null
      */
     @Override
     public boolean containsKey(final K key) {
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+
         return pool.containsKey(key);
     }
 

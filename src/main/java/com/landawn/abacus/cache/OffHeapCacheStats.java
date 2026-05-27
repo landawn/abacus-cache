@@ -134,13 +134,24 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * Canonical constructor that validates the time-statistics arguments and stores a deeply
      * unmodifiable defensive copy of {@code occupiedSlots}.
      *
+     * <p>All numeric components must be non-negative per the field documentation. The
+     * cross-component invariants between counters (e.g. {@code getCount == hitCount + missCount})
+     * are <em>not</em> enforced because the underlying counters are sampled non-atomically and
+     * may be transiently inconsistent under concurrent activity.
+     *
      * @throws NullPointerException if {@code writeToDiskTimeStats}, {@code readFromDiskTimeStats},
      *         or {@code occupiedSlots} is {@code null}, or if {@code occupiedSlots} contains a
      *         {@code null} key or a {@code null} nested map
+     * @throws IllegalArgumentException if any numeric component is negative
      */
     public OffHeapCacheStats {
         Objects.requireNonNull(writeToDiskTimeStats, "writeToDiskTimeStats cannot be null");
         Objects.requireNonNull(readFromDiskTimeStats, "readFromDiskTimeStats cannot be null");
+        if (capacity < 0 || size < 0 || sizeOnDisk < 0 || putCount < 0 || putCountToDisk < 0 || getCount < 0 || hitCount < 0 || hitCountByDisk < 0
+                || missCount < 0 || evictionCount < 0 || evictionCountFromDisk < 0 || allocatedMemory < 0 || occupiedMemory < 0 || dataSize < 0
+                || dataSizeOnDisk < 0 || segmentSize < 0) {
+            throw new IllegalArgumentException("OffHeapCacheStats numeric components must all be non-negative");
+        }
         occupiedSlots = immutableCopyOf(Objects.requireNonNull(occupiedSlots, "occupiedSlots cannot be null"));
     }
 

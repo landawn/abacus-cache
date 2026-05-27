@@ -109,13 +109,34 @@ package com.landawn.abacus.cache;
  *                      capacity constraints, expiration policies, or explicit removal operations.
  *                      Must be non-negative.
  * @param maxMemory the maximum memory in bytes allocated for the cache. A value of 0 indicates
- *                  unlimited memory (no memory-based eviction). Must be non-negative.
+ *                  unlimited memory (no memory-based eviction); a value of {@code -1} indicates that
+ *                  the underlying cache does not track memory usage. Must be {@code -1} or non-negative.
  * @param dataSize the total size in bytes of all data currently stored in the cache at the time
- *                 of this snapshot. Must be non-negative and should not exceed {@code maxMemory} if memory limits are enforced.
+ *                 of this snapshot. Should not exceed {@code maxMemory} if memory limits are
+ *                 enforced; a value of {@code -1} indicates that the underlying cache does not
+ *                 track memory usage. Must be {@code -1} or non-negative.
  * @see Cache
  * @see LocalCache#stats()
  */
 public record CacheStats(int capacity, int size, long putCount, long getCount, long hitCount, long missCount, long evictionCount, long maxMemory,
         long dataSize) {
 
+    /**
+     * Compact constructor that enforces the documented non-negative invariant on every component
+     * except {@code maxMemory} and {@code dataSize}, which additionally allow {@code -1} as a
+     * sentinel meaning "not tracked by the underlying cache implementation". The cross-component
+     * invariant {@code getCount == hitCount + missCount} is intentionally <em>not</em> enforced
+     * because the underlying counters are sampled non-atomically and may be transiently
+     * inconsistent under concurrent activity.
+     *
+     * @throws IllegalArgumentException if any non-memory component is negative, or if
+     *         {@code maxMemory}/{@code dataSize} is negative but not {@code -1}.
+     */
+    public CacheStats {
+        if (capacity < 0 || size < 0 || putCount < 0 || getCount < 0 || hitCount < 0 || missCount < 0 || evictionCount < 0 || maxMemory < -1 || dataSize < -1) {
+            throw new IllegalArgumentException("CacheStats components must be non-negative (maxMemory/dataSize may also be -1 for 'not tracked'); got capacity="
+                    + capacity + ", size=" + size + ", putCount=" + putCount + ", getCount=" + getCount + ", hitCount=" + hitCount + ", missCount=" + missCount
+                    + ", evictionCount=" + evictionCount + ", maxMemory=" + maxMemory + ", dataSize=" + dataSize);
+        }
+    }
 }

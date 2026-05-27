@@ -392,7 +392,7 @@ public class OffHeapCache25Test {
 
     @Test
     public void test_OffHeapCache25_builder_basic() {
-        final OffHeapCache25<String, byte[]> c = OffHeapCache25.<String, byte[]>builder()
+        final OffHeapCache25<String, byte[]> c = OffHeapCache25.<String, byte[]> builder()
                 .capacityInMB(1)
                 .maxBlockSizeInBytes(0) // 0 should fall back to default
                 .build();

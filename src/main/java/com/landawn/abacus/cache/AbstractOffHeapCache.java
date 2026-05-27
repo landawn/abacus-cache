@@ -159,7 +159,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     static {
         final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(IOUtil.CPU_CORES);
-        // executor.setRemoveOnCancelPolicy(true);
+        // Without this, a cancelled scheduleFuture sits in the executor's task queue until its next
+        // scheduled run, holding a strong reference to the cache instance and preventing GC after
+        // close(). Setting the policy makes cancel() purge the task from the queue immediately.
+        executor.setRemoveOnCancelPolicy(true);
         scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
 
@@ -359,7 +362,33 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 logger.info("OffHeapCache shutdown completed");
             }
         });
-        Runtime.getRuntime().addShutdownHook(shutdownHook);
+
+        // Adding a shutdown hook can fail with IllegalStateException if the JVM is already
+        // shutting down. If it does, we still have a fully-initialised off-heap allocation that
+        // would leak. Best-effort: log, ensure the scheduled eviction task is cancelled, and
+        // release the off-heap memory before rethrowing so the constructor doesn't leave the
+        // OS-allocated buffer dangling for the lifetime of the process.
+        try {
+            Runtime.getRuntime().addShutdownHook(shutdownHook);
+        } catch (final IllegalStateException shuttingDown) {
+            if (logger.isWarnEnabled()) {
+                logger.warn("Cannot register shutdown hook (JVM is shutting down); cleaning up off-heap allocation", shuttingDown);
+            }
+            try {
+                if (scheduleFuture != null) {
+                    scheduleFuture.cancel(true);
+                }
+            } finally {
+                try {
+                    deallocate();
+                } catch (final RuntimeException deallocateFailure) {
+                    if (logger.isErrorEnabled()) {
+                        logger.error("Failed to release off-heap memory after shutdown-hook registration failure", deallocateFailure);
+                    }
+                }
+            }
+            throw shuttingDown;
+        }
     }
 
     /**

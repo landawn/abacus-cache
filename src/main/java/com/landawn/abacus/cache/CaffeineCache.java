@@ -124,13 +124,18 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be returned
+     * @param key the cache key whose associated value is to be returned (must not be {@code null})
      * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
+     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public V getOrNull(final K key) {
         assertNotClosed();
+
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
 
         return cacheImpl.getIfPresent(key);
     }
@@ -205,12 +210,17 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * cache.remove("user:999");   // No error, silent no-op
      * }</pre>
      *
-     * @param key the cache key whose mapping is to be removed from the cache
+     * @param key the cache key whose mapping is to be removed from the cache (must not be {@code null})
+     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public void remove(final K key) {
         assertNotClosed();
+
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
 
         cacheImpl.invalidate(key);
     }
@@ -241,15 +251,20 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key whose presence in the cache is to be tested
+     * @param key the cache key whose presence in the cache is to be tested (must not be {@code null})
      * @return {@code true} if the underlying {@code asMap()} view still holds a mapping for the key
      *         (which may include entries that have expired but not yet been removed by housekeeping);
      *         {@code false} otherwise
+     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean containsKey(final K key) {
         assertNotClosed();
+
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
 
         return cacheImpl.asMap().containsKey(key);
     }

@@ -14,6 +14,8 @@ import java.util.Map;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import com.landawn.abacus.cache.OffHeapCacheStats;
+import com.landawn.abacus.cache.OffHeapCacheStats.MinMaxAvg;
 import com.landawn.abacus.cache.OffHeapCacheStats.OccupiedSlot;
 
 @Tag("2025")
@@ -58,5 +60,40 @@ public class OffHeapCacheStatsTest {
         final OccupiedSlot slot = new OccupiedSlot(64, new LinkedHashMap<>());
         assertTrue(slot.occupiedSlots().isEmpty());
         assertThrows(UnsupportedOperationException.class, () -> slot.occupiedSlots().put(1, 1));
+    }
+
+    /**
+     * Regression coverage for the missing non-negative validation on
+     * {@link OffHeapCacheStats}'s numeric components. The Javadoc has long stated that every
+     * counter, size, and memory metric must be non-negative, but the canonical constructor
+     * previously enforced this only for {@code writeToDiskTimeStats}, {@code readFromDiskTimeStats},
+     * and {@code occupiedSlots}. The compact constructor now rejects any negative numeric input.
+     */
+    @Test
+    public void testRecord_NegativeComponentRejected() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+        // capacity negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // size negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // sizeOnDisk negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // putCount negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // missCount negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // segmentSize negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, -1, Map.of()));
+        // dataSizeOnDisk negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, z, z, 0, Map.of()));
+    }
+
+    @Test
+    public void testRecord_AllZerosOk() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of());
+        assertEquals(0, stats.capacity());
+        assertEquals(0, stats.segmentSize());
+        assertTrue(stats.occupiedSlots().isEmpty());
     }
 }

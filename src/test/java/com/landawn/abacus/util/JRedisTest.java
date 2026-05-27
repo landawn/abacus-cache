@@ -149,6 +149,35 @@ public class JRedisTest {
         verify(mockJedis).del(utf8("k"));
     }
 
+    /**
+     * Regression coverage for the {@code delete()} return value defect. Previously the method
+     * returned {@code true} unconditionally on a successful DEL call, conflating "key existed and
+     * was removed" with "key did not exist". The fix returns {@code true} only when Redis reports
+     * that at least one key was actually removed (DEL > 0), matching the documented Redis semantics.
+     */
+    @Test
+    public void test_delete_returns_false_when_key_did_not_exist() {
+        when(mockJedis.del(any(byte[].class))).thenReturn(0L);
+
+        assertFalse(cache.delete("missing"));
+        verify(mockJedis).del(utf8("missing"));
+    }
+
+    @Test
+    public void test_delete_returns_false_on_null_reply() {
+        when(mockJedis.del(any(byte[].class))).thenReturn(null);
+
+        assertFalse(cache.delete("k"));
+    }
+
+    @Test
+    public void test_delete_returns_true_when_multiple_removed() {
+        // A single-key DEL would report 1; just verify any positive count maps to true.
+        when(mockJedis.del(any(byte[].class))).thenReturn(2L);
+
+        assertTrue(cache.delete("k"));
+    }
+
     @Test
     public void test_incr_returns_zero_for_null_reply() {
         when(mockJedis.incr(any(byte[].class))).thenReturn(null);

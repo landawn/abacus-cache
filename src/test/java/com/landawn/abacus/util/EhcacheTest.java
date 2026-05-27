@@ -297,6 +297,49 @@ public class EhcacheTest {
         }
     }
 
+    /**
+     * Regression coverage for the asymmetric null-key handling defect.
+     *
+     * <p>Before the fix {@link Ehcache#put(Object, Object, long, long)} and
+     * {@code putIfAbsent} rejected null keys with {@code IllegalArgumentException}, but the
+     * read-side methods ({@link Ehcache#getOrNull(Object)}, {@link Ehcache#remove(Object)},
+     * {@link Ehcache#containsKey(Object)}) delegated straight to Ehcache 3, which raises an
+     * unrelated {@code NullPointerException}. The fix harmonises the contract so every key-taking
+     * operation rejects nulls with the same {@code IllegalArgumentException}.
+     */
+    @Test
+    public void testGetOrNull_EdgeCase_NullKey() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            assertThrows(IllegalArgumentException.class, () -> wrapper.getOrNull(null));
+        } finally {
+            cm.close();
+        }
+    }
+
+    @Test
+    public void testRemove_EdgeCase_NullKey() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            assertThrows(IllegalArgumentException.class, () -> wrapper.remove(null));
+        } finally {
+            cm.close();
+        }
+    }
+
+    @Test
+    public void testContainsKey_EdgeCase_NullKey() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            assertThrows(IllegalArgumentException.class, () -> wrapper.containsKey(null));
+        } finally {
+            cm.close();
+        }
+    }
+
     @Test
     public void testOperations_AfterClose_Throw() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);

@@ -351,7 +351,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <li>Exact seconds (e.g., 2000ms) are converted exactly (2000ms → 2s)</li>
      * <li>Fractional seconds are rounded up (e.g., 1500ms → 2s, 999ms → 1s)</li>
      * <li>This ensures cached items live at least as long as requested</li>
-     * <li>Zero milliseconds returns zero seconds (no expiration)</li>
+     * <li>Zero or negative milliseconds returns zero seconds (no expiration), matching the
+     *     {@link DistributedCacheClient#set(String, Object, long)} contract that documents
+     *     "0 or negative for no expiration"</li>
      * </ul>
      *
      * <p><b>Implementation Details:</b> The conversion algorithm uses integer division
@@ -377,7 +379,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * int seconds2 = toSeconds(2000);       // Returns 2 (exactly 2s)
      * int seconds3 = toSeconds(999);        // Returns 1 (rounds up to 1s)
      * int seconds4 = toSeconds(0);          // Returns 0 (no expiration)
-     * int seconds5 = toSeconds(3600000);    // Returns 3600 (1 hour)
+     * int seconds5 = toSeconds(-1);         // Returns 0 (no expiration)
+     * int seconds6 = toSeconds(3600000);    // Returns 3600 (1 hour)
      *
      * // Common TTL values:
      * int oneMinute = toSeconds(60000);     // 60 seconds
@@ -386,14 +389,14 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * int oneWeek = toSeconds(604800000);   // 604800 seconds
      * }</pre>
      *
-     * @param liveTime the time-to-live in milliseconds, must not be negative
-     * @return the time-to-live in seconds, rounded up if there's a fractional second
-     * @throws IllegalArgumentException if {@code liveTime} is negative, or if the converted value
-     *         exceeds Integer.MAX_VALUE seconds (approximately 68 years)
+     * @param liveTime the time-to-live in milliseconds; zero or negative values are normalized to
+     *                 {@code 0} (no expiration) per the {@link DistributedCacheClient#set(String, Object, long)} contract
+     * @return the time-to-live in seconds, rounded up if there's a fractional second, or {@code 0} if {@code liveTime <= 0}
+     * @throws IllegalArgumentException if the converted value exceeds Integer.MAX_VALUE seconds (approximately 68 years)
      */
     protected int toSeconds(final long liveTime) {
-        if (liveTime < 0) {
-            throw new IllegalArgumentException("liveTime must not be negative: " + liveTime);
+        if (liveTime <= 0) {
+            return 0;
         }
 
         final long seconds = (liveTime % 1000 == 0) ? (liveTime / 1000) : (liveTime / 1000) + 1;

@@ -7,6 +7,7 @@ package com.landawn.abacus.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Tag;
@@ -63,5 +64,60 @@ public class CacheStatsTest extends TestBase {
         assertEquals(0, zero.capacity());
         assertEquals(0, zero.size());
         assertEquals(0L, zero.putCount());
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativeCapacityRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(-1, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativeSizeRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, -1, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativePutCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, -1L, 0L, 0L, 0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativeGetCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, -1L, 0L, 0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativeHitCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, -1L, 0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativeMissCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, -1L, 0L, 0L, 0L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativeEvictionCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, -1L, 0L, 0L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativeMaxMemoryBelowSentinelRejected() {
+        // -1 is the documented "not tracked" sentinel; anything more-negative is invalid.
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, -2L, 0L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_NegativeDataSizeBelowSentinelRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, 0L, -2L));
+    }
+
+    @Test
+    public void testRecord_EdgeCase_MaxMemoryAndDataSize_NotTrackedSentinelAccepted() {
+        // -1 is reserved as the "not tracked" sentinel for maxMemory and dataSize, returned by
+        // the underlying KeyedObjectPool when memory accounting is disabled.
+        final CacheStats stats = new CacheStats(10, 5, 1L, 2L, 1L, 1L, 0L, -1L, -1L);
+        assertEquals(-1L, stats.maxMemory());
+        assertEquals(-1L, stats.dataSize());
     }
 }

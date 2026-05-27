@@ -410,7 +410,7 @@ public class OffHeapCacheTest {
     /** Exercises the keySet / size / clear / containsKey / isClosed lifecycle on AbstractOffHeapCache. */
     @Test
     public void test_OffHeapCache_keySet_size_clear_lifecycle() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]>builder().capacityInMB(1).build();
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
         try {
             c.put("a", new byte[256]);
             c.put("b", new byte[256]);
@@ -433,7 +433,7 @@ public class OffHeapCacheTest {
         }
 
         // Second close is idempotent and isClosed reflects state.
-        final OffHeapCache<String, byte[]> c2 = OffHeapCache.<String, byte[]>builder().capacityInMB(1).build();
+        final OffHeapCache<String, byte[]> c2 = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
         c2.close();
         c2.close();
         assertTrue(c2.isClosed());
@@ -442,7 +442,7 @@ public class OffHeapCacheTest {
     /** Verifies stats() returns a non-null snapshot after some traffic. */
     @Test
     public void test_OffHeapCache_stats_returns_snapshot() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]>builder().capacityInMB(1).build();
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
         try {
             c.put("k", new byte[256]);
             c.get("k");
@@ -456,7 +456,7 @@ public class OffHeapCacheTest {
     public void test_OffHeapCache_simpleConstructor_capacityOnly() {
         // Exercises the (capacityInMB) and (capacityInMB, evictDelay) constructors via the Builder
         // path. The Builder is the public API; the underlying simple constructors are package-private.
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]>builder().capacityInMB(1).build();
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
         try {
             assertTrue(c.put("k", new byte[256]));
             assertNotNull(c.get("k"));
@@ -468,7 +468,7 @@ public class OffHeapCacheTest {
     @Test
     public void test_OffHeapCache_builder_defaults() {
         // Builder with default values for everything other than capacity.
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]>builder()
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
                 .capacityInMB(1)
                 .maxBlockSizeInBytes(0) // 0 should fall back to default
                 .build();

@@ -361,9 +361,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
-     * @return {@code true} if the DEL command was issued without throwing. This method does not
-     *         distinguish between "key existed and was removed" and "key did not exist"; it always
-     *         returns {@code true} on a normal completion.
+     * @return {@code true} if Redis reported at least one key was actually removed; {@code false}
+     *         if the key did not exist at the time the {@code DEL} command was issued. This matches
+     *         Redis's DEL semantics (returns the number of keys removed) and gives callers a way to
+     *         distinguish a real delete from an idempotent no-op.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      * @see #get(String)
@@ -371,9 +372,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public boolean delete(final String key) {
-        jedis.del(getKeyBytes(key));
+        final Long removed = jedis.del(getKeyBytes(key));
 
-        return true;
+        return removed != null && removed > 0L;
     }
 
     /**
