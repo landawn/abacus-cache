@@ -153,6 +153,16 @@ public class CacheFactoryTest extends TestBase {
     }
 
     @Test
+    public void testCreateCache_Memcached_EdgeCase_BlankTimeoutRejected() {
+        // A trailing comma yields a blank third parameter. Numbers.toLong("") silently returns 0,
+        // so the factory must still reject it via the "timeout must be positive" guard rather than
+        // silently constructing a client with a zero timeout.
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,prefix:,)"));
+        }
+    }
+
+    @Test
     public void testCreateCache_Memcached_EdgeCase_TooManyParameters() {
         try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
             assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(a,b,1000,extra)"));

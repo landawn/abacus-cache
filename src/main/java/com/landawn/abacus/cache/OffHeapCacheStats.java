@@ -31,7 +31,7 @@ import java.util.Objects;
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
- * OffHeapCache<String, byte[]> cache = OffHeapCache.builder()
+ * OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]>builder()
  *     .capacityInMB(100)
  *     .evictDelay(60000)
  *     .build();

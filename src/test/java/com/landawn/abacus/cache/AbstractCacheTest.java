@@ -11,6 +11,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -174,6 +178,109 @@ public class AbstractCacheTest extends TestBase {
             assertEquals("this-is-a-property", cache.getProperty("a"));
             assertDoesNotThrow(() -> cache.removeProperty("a"));
             assertEquals("1", cache.getOrNull("a"));
+        }
+    }
+
+    // --- Default put(K, V) delegation contract --------------------------------------------------
+    // Verifies that AbstractCache.put(k, v) forwards the configured defaults to
+    // put(k, v, liveTime, maxIdleTime) in the correct argument positions (no swap).
+
+    @Test
+    public void testPutTwoArg_DelegatesDefaultLiveAndIdleTimes_NoSwap() {
+        final long liveTime = 111_000L;
+        final long idleTime = 222_000L;
+        try (RecordingCache<String, String> cache = new RecordingCache<>(liveTime, idleTime)) {
+            assertTrue(cache.put("k", "v"));
+            assertEquals(liveTime, cache.lastLiveTime, "defaultLiveTime must be forwarded as liveTime");
+            assertEquals(idleTime, cache.lastMaxIdleTime, "defaultMaxIdleTime must be forwarded as maxIdleTime");
+        }
+    }
+
+    @Test
+    public void testPutTwoArg_UsesInterfaceDefaultsWhenConstructedWithoutArgs() {
+        try (RecordingCache<String, String> cache = new RecordingCache<>()) {
+            assertTrue(cache.put("k", "v"));
+            assertEquals(Cache.DEFAULT_LIVE_TIME, cache.lastLiveTime);
+            assertEquals(Cache.DEFAULT_MAX_IDLE_TIME, cache.lastMaxIdleTime);
+        }
+    }
+
+    @Test
+    public void testGet_WrapsGetOrNull() {
+        try (RecordingCache<String, String> cache = new RecordingCache<>()) {
+            cache.put("k", "v");
+            assertTrue(cache.get("k").isPresent());
+            assertEquals("v", cache.get("k").get());
+            assertFalse(cache.get("missing").isPresent());
+        }
+    }
+
+    /**
+     * Minimal in-memory {@link AbstractCache} used to assert the base-class delegation logic
+     * directly, without relying on {@link LocalCache} internals. It records the expiration
+     * arguments seen by the four-arg {@link #put(Object, Object, long, long)}.
+     */
+    private static final class RecordingCache<K, V> extends AbstractCache<K, V> {
+        private final Map<K, V> store = new HashMap<>();
+        long lastLiveTime = Long.MIN_VALUE;
+        long lastMaxIdleTime = Long.MIN_VALUE;
+        private boolean closed = false;
+
+        RecordingCache() {
+            super();
+        }
+
+        RecordingCache(final long defaultLiveTime, final long defaultMaxIdleTime) {
+            super(defaultLiveTime, defaultMaxIdleTime);
+        }
+
+        @Override
+        public V getOrNull(final K key) {
+            return store.get(key);
+        }
+
+        @Override
+        public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+            lastLiveTime = liveTime;
+            lastMaxIdleTime = maxIdleTime;
+            store.put(key, value);
+            return true;
+        }
+
+        @Override
+        public void remove(final K key) {
+            store.remove(key);
+        }
+
+        @Override
+        public boolean containsKey(final K key) {
+            return store.containsKey(key);
+        }
+
+        @Override
+        public Set<K> keySet() {
+            return store.keySet();
+        }
+
+        @Override
+        public int size() {
+            return store.size();
+        }
+
+        @Override
+        public void clear() {
+            store.clear();
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            store.clear();
+        }
+
+        @Override
+        public boolean isClosed() {
+            return closed;
         }
     }
 }

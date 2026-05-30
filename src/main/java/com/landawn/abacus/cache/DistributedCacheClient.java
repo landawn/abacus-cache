@@ -226,8 +226,8 @@ public interface DistributedCacheClient<T> {
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns the server's acknowledgement of the delete
      *     operation. Typically returns {@code false} when the key did not exist.</li>
-     * <li><b>Redis (JRedis):</b> Always returns {@code true} on success (the underlying client
-     *     fires the DEL command and does not distinguish missing keys via this return value).</li>
+     * <li><b>Redis (JRedis):</b> Returns {@code true} when the key existed and was removed,
+     *     {@code false} when the key did not exist (based on the count returned by the DEL command).</li>
      * </ul>
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.

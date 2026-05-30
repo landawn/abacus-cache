@@ -292,13 +292,21 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key, must not be null
      * @return the cached value, or {@code null} if not found, expired, evicted, circuit breaker is open, or on error
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null (thrown by {@link #generateKey(Object)})
+     * @throws IllegalArgumentException if the key is null (validated up-front, before the circuit breaker
+     *         check and before {@link #generateKey(Object)})
      * @see #generateKey(Object)
      * @see DistributedCacheClient#get(String)
      */
     @Override
     public V getOrNull(final K key) {
         assertNotClosed();
+
+        // Validate the key up-front (cheap null check) so the documented IllegalArgumentException
+        // for a null key is thrown consistently, even when the circuit breaker would otherwise
+        // short-circuit to null before generateKey(key) is reached.
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
 
         // Read circuit breaker state atomically to avoid race conditions
         final int currentFailedCount = failedCounter.get();

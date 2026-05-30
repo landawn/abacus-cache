@@ -438,10 +438,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
-     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
-     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
+     *                 positive value is converted to seconds, rounded up if not exact.
      * @return {@code true} if the operation succeeded; {@code false} otherwise
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
@@ -481,10 +481,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
-     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
-     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
+     *                 positive value is converted to seconds, rounded up if not exact.
      * @return a {@link Future} that will yield {@code true} on success or {@code false} on failure
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncSet(final String key, final T value, final long liveTime) {
@@ -529,10 +529,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
-     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
-     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
+     *                 positive value is converted to seconds, rounded up if not exact.
      * @return {@code true} if the object was added; {@code false} if the key already exists
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean add(final String key, final T value, final long liveTime) {
@@ -573,11 +573,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
-     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
-     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
+     *                 positive value is converted to seconds, rounded up if not exact.
      * @return a {@link Future} that will yield {@code true} if the add succeeded, or {@code false}
      *         if the key already exists
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncAdd(final String key, final T value, final long liveTime) {
@@ -618,10 +618,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
-     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
-     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
+     *                 positive value is converted to seconds, rounded up if not exact.
      * @return {@code true} if the object was replaced; {@code false} if the key does not exist
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean replace(final String key, final T value, final long liveTime) {
@@ -661,11 +661,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
-     * @param liveTime the time-to-live in milliseconds ({@code 0} means no expiration); the value is
-     *                 converted to seconds, rounded up if not exact. Must not be negative.
+     * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
+     *                 positive value is converted to seconds, rounded up if not exact.
      * @return a {@link Future} that will yield {@code true} if the replacement succeeded, or
      *         {@code false} if the key does not exist
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code liveTime} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
      */
     public Future<Boolean> asyncReplace(final String key, final T value, final long liveTime) {
@@ -677,9 +677,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Removes an object from the cache.
-     * The method blocks until the operation completes or times out. The return value indicates
-     * whether the operation was acknowledged by the server, not necessarily whether the key existed
-     * before deletion. This operation succeeds whether or not the key exists in the cache.
+     * The method blocks until the operation completes or times out. The return value reflects the
+     * server's response: {@code true} when the key existed and was removed (a {@code DELETED}
+     * response), {@code false} when the key was not found ({@code NOT_FOUND}).
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -708,7 +708,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed; must not be {@code null}
-     * @return {@code true} if the delete operation was acknowledged by the server; {@code false} otherwise
+     * @return {@code true} if the key existed and was removed; {@code false} if the key was not found
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -722,9 +722,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Asynchronously removes an object from the cache.
-     * The method returns immediately without blocking. The returned Future indicates if the
-     * operation was acknowledged by the server, not necessarily whether the key existed before
-     * deletion. This operation succeeds whether or not the key exists in the cache.
+     * The method returns immediately without blocking. The returned Future yields {@code true} when
+     * the key existed and was removed (a {@code DELETED} response), or {@code false} when the key was
+     * not found ({@code NOT_FOUND}).
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
@@ -748,7 +748,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed; must not be {@code null}
-     * @return a {@link Future} that will yield {@code true} on success or {@code false} on failure
+     * @return a {@link Future} that will yield {@code true} if the key existed and was removed, or
+     *         {@code false} if the key was not found
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
      */
@@ -947,12 +948,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *              must be non-negative
      * @param defaultValue the initial value to set if the key does not exist; on first-write this
      *                     value is stored verbatim ({@code delta} is NOT added on insert)
-     * @param liveTime the time-to-live in milliseconds for the key ({@code 0} means no expiration);
-     *                 the value is converted to seconds, rounded up if not exact. Must not be negative.
+     * @param liveTime the time-to-live in milliseconds for the key ({@code 0} or negative means no
+     *                 expiration); a positive value is converted to seconds, rounded up if not exact.
      * @return the value after the operation: {@code defaultValue} if the key did not exist (no
      *         delta applied on insert), otherwise the previously stored value plus {@code delta}
-     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative,
-     *         or {@code liveTime} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
@@ -1172,13 +1172,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *              must be non-negative
      * @param defaultValue the initial value to set if the key does not exist; on first-write this
      *                     value is stored verbatim ({@code delta} is NOT subtracted on insert)
-     * @param liveTime the time-to-live in milliseconds for the key ({@code 0} means no expiration);
-     *                 the value is converted to seconds, rounded up if not exact. Must not be negative.
+     * @param liveTime the time-to-live in milliseconds for the key ({@code 0} or negative means no
+     *                 expiration); a positive value is converted to seconds, rounded up if not exact.
      * @return the value after the operation: {@code defaultValue} if the key did not exist (no
      *         delta applied on insert), otherwise the previously stored value minus {@code delta},
      *         clamped at {@code 0}
-     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative,
-     *         or {@code liveTime} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
@@ -1294,10 +1293,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param delay the delay in milliseconds before the flush operation is executed; converted to
-     *              seconds, rounded up if not exact. Must not be negative.
+     * @param delay the delay in milliseconds before the flush operation is executed; a positive value
+     *              is converted to seconds, rounded up if not exact. A value of {@code 0} or negative
+     *              flushes immediately.
      * @return {@code true} if the flush was scheduled successfully; {@code false} otherwise
-     * @throws IllegalArgumentException if {@code delay} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean flushAll(final long delay) {
@@ -1330,11 +1329,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @param delay the delay in milliseconds before the flush operation is executed; converted to
-     *              seconds, rounded up if not exact. Must not be negative.
+     * @param delay the delay in milliseconds before the flush operation is executed; a positive value
+     *              is converted to seconds, rounded up if not exact. A value of {@code 0} or negative
+     *              flushes immediately.
      * @return a {@link Future} that will yield {@code true} if the flush was scheduled
      *         successfully, or {@code false} on failure
-     * @throws IllegalArgumentException if {@code delay} is negative
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
         return mc.flush(toSeconds(delay));

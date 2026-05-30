@@ -234,6 +234,27 @@ public class DistributedCacheTest extends TestBase {
         }
     }
 
+    /**
+     * The documented contract of {@link DistributedCache#getOrNull(Object)} is
+     * "{@code @throws IllegalArgumentException if the key is null}", with no carve-out for the
+     * circuit-breaker-open state. Before the fix, a null key was only rejected inside
+     * generateKey(...), which runs AFTER the circuit-breaker fast path — so once the circuit was
+     * open, getOrNull(null) silently returned null instead of throwing. This verifies the null key
+     * is rejected even when the circuit is open.
+     */
+    @Test
+    public void testGetOrNull_NullKey_ThrowsEvenWhenCircuitOpen() {
+        final InMemoryClient client = new InMemoryClient();
+        client.failGet = true;
+        // maxFailed=1, long retry window so the circuit stays open after the first failure.
+        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 1, 60_000)) {
+            // Drive one failure to open the circuit.
+            assertNull(cache.getOrNull("k"));
+            // Circuit is now open; a null key must still throw rather than short-circuit to null.
+            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+        }
+    }
+
     @Test
     public void testCircuitBreaker_ClosesOnSuccess() {
         final InMemoryClient client = new InMemoryClient();

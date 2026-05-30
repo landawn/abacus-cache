@@ -105,8 +105,8 @@ package com.landawn.abacus.cache;
  *                 Must be non-negative and not exceed {@code getCount}.
  * @param missCount the number of get operations that did not find a cached value (cache miss).
  *                  Must be non-negative and not exceed {@code getCount}.
- * @param evictionCount the total number of entries that have been removed from the cache due to
- *                      capacity constraints, expiration policies, or explicit removal operations.
+ * @param evictionCount the total number of entries that have been evicted from the cache due to
+ *                      capacity constraints or expiration policies (TTL or idle timeout).
  *                      Must be non-negative.
  * @param maxMemory the maximum memory in bytes allocated for the cache. A value of 0 indicates
  *                  unlimited memory (no memory-based eviction); a value of {@code -1} indicates that
