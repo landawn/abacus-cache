@@ -70,7 +70,7 @@ import org.ehcache.spi.loaderwriter.CacheWritingException;
  */
 public class Ehcache<K, V> extends AbstractCache<K, V> {
 
-    /** The underlying Ehcache 3.x instance that this wrapper delegates all operations to. */
+    /** The underlying Ehcache 3.x instance that this wrapper delegates supported operations to. */
     private final Cache<K, V> cacheImpl;
 
     /** Flag indicating whether this cache wrapper has been closed via {@link #close()}. */
@@ -157,11 +157,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
-     * @param value the cache value to be associated with the specified key
+     * @param value the cache value to be associated with the specified key (must not be null; the underlying Ehcache rejects null values)
      * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration via Ehcache builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration via Ehcache builder)
-     * @return {@code true} always (operation always succeeds unless an exception is thrown)
+     * @return {@code true} (this implementation always succeeds unless an exception is thrown)
      * @throws IllegalArgumentException if key is null
+     * @throws NullPointerException if value is null (thrown by the underlying Ehcache, which does not allow null values)
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */

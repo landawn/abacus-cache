@@ -30,6 +30,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedConstruction;
 import org.mockito.Mockito;
 
@@ -110,6 +111,25 @@ public class SpyMemcachedTest {
         cache.set("k", "value", 1_500); // 1.5s -> rounds up to 2s
 
         verify(mockMc).set("k", 2, "value");
+    }
+
+    @Test
+    public void test_set_long_ttl_uses_memcached_absolute_expiration() {
+        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(ok);
+
+        final long liveTime = 31L * 24 * 60 * 60 * 1000;
+        final long expectedEarliest = System.currentTimeMillis() / 1000L + (liveTime / 1000);
+
+        assertTrue(cache.set("k", "value", liveTime));
+
+        final long expectedLatest = System.currentTimeMillis() / 1000L + (liveTime / 1000);
+        final ArgumentCaptor<Integer> expirationCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(mockMc).set(eq("k"), expirationCaptor.capture(), eq("value"));
+
+        assertTrue(expirationCaptor.getValue() > 30 * 24 * 60 * 60);
+        assertTrue(expirationCaptor.getValue() >= expectedEarliest);
+        assertTrue(expirationCaptor.getValue() <= expectedLatest);
     }
 
     @Test
@@ -265,6 +285,14 @@ public class SpyMemcachedTest {
         cache.flushAll();
 
         verify(mockMc).flush();
+    }
+
+    @Test
+    public void test_flushAll_throws_when_server_returns_false() {
+        OperationFuture<Boolean> no = immediateBooleanFuture(false);
+        when(mockMc.flush()).thenReturn(no);
+
+        assertThrows(IllegalStateException.class, cache::flushAll);
     }
 
     @Test

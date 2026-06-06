@@ -18,6 +18,7 @@ import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedConstruction;
 import org.mockito.Mockito;
 
@@ -186,6 +187,54 @@ public class MemcachedLockTest {
 
             assertTrue(lock.lock("k", Long.valueOf(42), 5_000L));
             verify(mockMc).add(eq("k"), eq(5), any());
+        }
+    }
+
+    @Test
+    public void testLock_longTtl_usesMemcachedAbsoluteExpiration() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            OperationFuture<Boolean> addOk = immediateBooleanFuture(true);
+            when(mockMc.add(any(String.class), anyInt(), any())).thenReturn(addOk);
+
+            final long liveTime = 31L * 24 * 60 * 60 * 1000;
+            final long expectedEarliest = System.currentTimeMillis() / 1000L + (liveTime / 1000);
+
+            assertTrue(lock.lock("k", Long.valueOf(42), liveTime));
+
+            final long expectedLatest = System.currentTimeMillis() / 1000L + (liveTime / 1000);
+            final ArgumentCaptor<Integer> expirationCaptor = ArgumentCaptor.forClass(Integer.class);
+            verify(mockMc).add(eq("k"), expirationCaptor.capture(), any());
+
+            assertTrue(expirationCaptor.getValue() > 30 * 24 * 60 * 60);
+            assertTrue(expirationCaptor.getValue() >= expectedEarliest);
+            assertTrue(expirationCaptor.getValue() <= expectedLatest);
+        }
+    }
+
+    @Test
+    public void testLock_preservesMemcachedIllegalArgumentException() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            when(mockMc.add(any(String.class), anyInt(), any())).thenThrow(new IllegalArgumentException("bad memcached key"));
+
+            assertThrows(IllegalArgumentException.class, () -> lock.lock("k", Long.valueOf(42), 5_000L));
+        }
+    }
+
+    @Test
+    public void testUnlock_preservesMemcachedIllegalArgumentException() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            when(mockMc.delete("k")).thenThrow(new IllegalArgumentException("bad memcached key"));
+
+            assertThrows(IllegalArgumentException.class, () -> lock.unlock("k"));
         }
     }
 

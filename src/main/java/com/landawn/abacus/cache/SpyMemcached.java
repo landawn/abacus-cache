@@ -77,6 +77,7 @@ import net.spy.memcached.transcoders.Transcoder;
 public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     static final Logger logger = LoggerFactory.getLogger(SpyMemcached.class);
+    private static final int MEMCACHED_MAX_RELATIVE_EXPIRATION_SECONDS = 30 * 24 * 60 * 60;
 
     private final MemcachedClient mc;
     private final long operationTimeout;
@@ -449,7 +450,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return resultOf(mc.set(key, toSeconds(liveTime), value));
+        return resultOf(mc.set(key, toMemcachedExpiration(liveTime), value));
     }
 
     /**
@@ -491,7 +492,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return mc.set(key, toSeconds(liveTime), value);
+        return mc.set(key, toMemcachedExpiration(liveTime), value);
     }
 
     /**
@@ -539,7 +540,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return resultOf(mc.add(key, toSeconds(liveTime), value));
+        return resultOf(mc.add(key, toMemcachedExpiration(liveTime), value));
     }
 
     /**
@@ -584,7 +585,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return mc.add(key, toSeconds(liveTime), value);
+        return mc.add(key, toMemcachedExpiration(liveTime), value);
     }
 
     /**
@@ -628,7 +629,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return resultOf(mc.replace(key, toSeconds(liveTime), value));
+        return resultOf(mc.replace(key, toMemcachedExpiration(liveTime), value));
     }
 
     /**
@@ -672,7 +673,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (key == null) {
             throw new IllegalArgumentException("key cannot be null");
         }
-        return mc.replace(key, toSeconds(liveTime), value);
+        return mc.replace(key, toMemcachedExpiration(liveTime), value);
     }
 
     /**
@@ -688,7 +689,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <pre>{@code
      * // Simple delete
      * boolean success = cache.delete("user:123");
-     * System.out.println("Delete operation sent: " + success);
+     * System.out.println("Key removed: " + success);
      *
      * // Delete after update
      * User user = cache.get("user:456");
@@ -962,7 +963,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (delta < 0) {
             throw new IllegalArgumentException("delta must be non-negative: " + delta);
         }
-        return mc.incr(key, delta, defaultValue, toSeconds(liveTime));
+        return mc.incr(key, delta, defaultValue, toMemcachedExpiration(liveTime));
     }
 
     /**
@@ -1187,7 +1188,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         if (delta < 0) {
             throw new IllegalArgumentException("delta must be non-negative: " + delta);
         }
-        return mc.decr(key, delta, defaultValue, toSeconds(liveTime));
+        return mc.decr(key, delta, defaultValue, toMemcachedExpiration(liveTime));
     }
 
     /**
@@ -1229,7 +1230,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public void flushAll() {
-        resultOf(mc.flush());
+        if (!Boolean.TRUE.equals(resultOf(mc.flush()))) {
+            throw new IllegalStateException("Failed to flush all Memcached servers");
+        }
     }
 
     /**
@@ -1300,7 +1303,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean flushAll(final long delay) {
-        return resultOf(mc.flush(toSeconds(delay)));
+        return resultOf(mc.flush(toMemcachedExpiration(delay)));
     }
 
     /**
@@ -1336,7 +1339,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *         successfully, or {@code false} on failure
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
-        return mc.flush(toSeconds(delay));
+        return mc.flush(toMemcachedExpiration(delay));
     }
 
     /**
@@ -1435,6 +1438,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             mc.shutdown(timeout, TimeUnit.MILLISECONDS);
             isShutdown = true;
         }
+    }
+
+    private int toMemcachedExpiration(final long liveTime) {
+        final int seconds = toSeconds(liveTime);
+
+        if (seconds <= MEMCACHED_MAX_RELATIVE_EXPIRATION_SECONDS) {
+            return seconds;
+        }
+
+        final long expiresAt = System.currentTimeMillis() / 1000L + seconds;
+
+        if (expiresAt > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Time value too large for Memcached expiration: " + liveTime + " ms");
+        }
+
+        return (int) expiresAt;
     }
 
     private static void validateBulkKeys(final String... keys) {

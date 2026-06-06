@@ -128,9 +128,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <li>Always release locks in a finally block to prevent resource leaks</li>
      * <li><b>Memcached TTL upper bound:</b> Memcached treats any TTL greater than 30 days
      *     (2,592,000 seconds = 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
-     *     A {@code liveTime} larger than that will be interpreted as a tiny epoch time (i.e., the
-     *     lock will appear to have expired in the past), which can cause the lock to evaporate
-     *     immediately or silently allow two holders. Keep {@code liveTime} comfortably below 30 days.</li>
+     *     The underlying {@link SpyMemcached} adapter converts longer relative {@code liveTime}
+     *     values to absolute expiration timestamps before sending them to Memcached.</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -193,9 +192,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>Memcached TTL upper bound:</b> Memcached treats any TTL greater than 30 days
      * (2,592,000 seconds = 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
-     * A {@code liveTime} larger than that will be interpreted as a tiny epoch time (i.e., the
-     * lock will appear to have expired in the past), which can cause the lock to evaporate
-     * immediately or silently allow two holders. Keep {@code liveTime} comfortably below 30 days.
+     * The underlying {@link SpyMemcached} adapter converts longer relative {@code liveTime}
+     * values to absolute expiration timestamps before sending them to Memcached.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -252,6 +250,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
             }
 
             return acquired;
+        } catch (final IllegalArgumentException e) {
+            throw e;
         } catch (final Exception e) {
             if (logger.isWarnEnabled()) {
                 logger.warn("Failed to acquire lock for key: " + key + " (liveTime=" + liveTime + "ms) due to a Memcached communication error", e);
@@ -483,6 +483,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
             }
 
             return released;
+        } catch (final IllegalArgumentException e) {
+            throw e;
         } catch (final Exception e) {
             if (logger.isWarnEnabled()) {
                 logger.warn("Failed to release lock for key: " + key + " due to a Memcached communication error; the lock may remain held until it expires", e);

@@ -201,6 +201,12 @@ public class JRedisTest {
     }
 
     @Test
+    public void test_incr_with_delta_rejects_negative_delta() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1));
+        verify(mockJedis, never()).incrBy(any(byte[].class), eq(-1L));
+    }
+
+    @Test
     public void test_decr_returns_zero_for_null_reply() {
         when(mockJedis.decr(any(byte[].class))).thenReturn(null);
 
@@ -220,6 +226,12 @@ public class JRedisTest {
 
         assertEquals(-3L, cache.decr("counter", 3));
         verify(mockJedis).decrBy(utf8("counter"), 3L);
+    }
+
+    @Test
+    public void test_decr_with_delta_rejects_negative_delta() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("counter", -1));
+        verify(mockJedis, never()).decrBy(any(byte[].class), eq(-1L));
     }
 
     @Test

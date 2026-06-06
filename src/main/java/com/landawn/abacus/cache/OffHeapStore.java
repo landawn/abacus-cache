@@ -68,9 +68,14 @@ package com.landawn.abacus.cache;
  *
  *     public boolean put(K key, byte[] value) {
  *         try {
- *             Path file = storageDir.resolve(key.hashCode() + ".cache");
+ *             // Use a unique file name per put; deriving it from key.hashCode() would let two
+ *             // distinct keys with the same hash code overwrite each other's data.
+ *             Path file = storageDir.resolve(UUID.randomUUID() + ".cache");
  *             Files.write(file, value);
- *             keyToFile.put(key, file);
+ *             Path previous = keyToFile.put(key, file);
+ *             if (previous != null) {
+ *                 Files.deleteIfExists(previous); // drop the file superseded by this put
+ *             }
  *             return true;
  *         } catch (IOException e) {
  *             // Log error and return false
@@ -82,8 +87,8 @@ package com.landawn.abacus.cache;
  *         Path file = keyToFile.remove(key);
  *         if (file != null) {
  *             try {
- *                 Files.deleteIfExists(file);
- *                 return true;
+ *                 // Propagate the real result: false means nothing was actually deleted.
+ *                 return Files.deleteIfExists(file);
  *             } catch (IOException e) {
  *                 // Log error and return false
  *                 return false;

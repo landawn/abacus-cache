@@ -348,7 +348,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 // This ensures that when another thread sees the incremented counter,
                 // it will also see the corresponding timestamp
                 lastFailedTime.set(System.currentTimeMillis());
-                failedCounter.incrementAndGet();
+
+                // Stop incrementing once the threshold is reached: the circuit-open condition
+                // (failedCounter >= maxFailedNumForRetry) is already satisfied, and letting the
+                // counter grow without bound would eventually overflow to a negative value and
+                // silently disable the breaker after Integer.MAX_VALUE consecutive failures.
+                if (failedCounter.get() < maxFailedNumForRetry) {
+                    failedCounter.incrementAndGet();
+                }
             }
         }
 

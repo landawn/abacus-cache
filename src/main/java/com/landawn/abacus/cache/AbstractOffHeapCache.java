@@ -487,8 +487,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         if (w != null && w.kind == Wrapper.KIND_STORE) {
             final StoreWrapper storeWrapper = (StoreWrapper) w;
 
-            readCountFromDisk.increment();
-
             if (statsTimeOnDisk || testerForLoadingItemFromDiskToMemory != null) {
                 final long startTime = System.currentTimeMillis();
 
@@ -511,8 +509,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
 
                 if (diskBytes == null) {
+                    removeStaleStoreWrapperIfCurrent(key, storeWrapper);
                     return null;
                 }
+
+                readCountFromDisk.increment();
 
                 final V value = storeWrapper.deserialize(diskBytes);
 
@@ -610,10 +611,41 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 return value;
             } else {
-                return w.read();
+                final V value = w.read();
+
+                if (value == null) {
+                    removeStaleStoreWrapperIfCurrent(key, storeWrapper);
+                } else {
+                    readCountFromDisk.increment();
+                }
+
+                return value;
             }
         } else {
             return w == null ? null : w.read();
+        }
+    }
+
+    private void removeStaleStoreWrapperIfCurrent(final K key, final StoreWrapper storeWrapper) {
+        final Wrapper<V> removed = _pool.remove(key);
+
+        if (removed == null) {
+            return;
+        }
+
+        if (removed == storeWrapper) {
+            removed.destroy(Caller.REMOVE_REPLACE_CLEAR);
+            return;
+        }
+
+        final boolean restored = _pool.put(key, removed);
+
+        if (!restored) {
+            removed.destroy(Caller.PUT_ADD_FAILURE);
+
+            if (logger.isWarnEnabled()) {
+                logger.warn("Failed to restore off-heap cache entry after removing stale disk wrapper for key: " + key);
+            }
         }
     }
 
@@ -655,6 +687,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final long effectiveMaxIdleTime = maxIdleTime > 0 ? maxIdleTime : Long.MAX_VALUE;
 
         final Type<V> type = N.typeOf(value.getClass());
+        final boolean replacingExisting = _pool.peek(key) != null;
         Wrapper<V> w = null;
 
         // final byte[] bytes = parser.serialize(value).getBytes();
@@ -749,9 +782,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
 
             if (w == null) {
-                _pool.remove(key);
+                if (!replacingExisting) {
+                    vacate();
+                }
 
-                vacate();
                 return false;
             }
         }
@@ -825,18 +859,34 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *         or {@code null} if the {@code offHeapStore.put()} operation failed
      */
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
-        // Pre-destroy any prior wrapper at this key BEFORE writing new bytes. If the prior wrapper
-        // is also a StoreWrapper, its destroy() calls offHeapStore.remove(k); doing it now means
-        // it operates on the OLD bytes rather than wiping the NEW bytes we are about to write.
-        // For non-Store prior wrappers this just releases their memory slots a moment early, which
-        // is harmless because they would have been released by _pool.put()'s replace anyway.
+        // Temporarily remove any prior wrapper at this key before writing disk bytes. On a
+        // successful disk write, the prior wrapper is retired before the new wrapper is installed.
+        // On a failed disk write, the prior wrapper is restored so a failed replacement does not
+        // silently delete the existing cache entry.
         final Wrapper<V> prior = _pool.remove(k);
-        if (prior != null) {
-            prior.destroy(Caller.REMOVE_REPLACE_CLEAR);
-        }
 
         if (offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size))) {
+            if (prior != null) {
+                if (prior.kind == Wrapper.KIND_STORE) {
+                    ((StoreWrapper) prior).discardReplacedStoreMetadata();
+                } else {
+                    prior.destroy(Caller.REMOVE_REPLACE_CLEAR);
+                }
+            }
+
             return new StoreWrapper(type, liveTime, maxIdleTime, size, k);
+        }
+
+        if (prior != null) {
+            final boolean restored = _pool.put(k, prior);
+
+            if (!restored) {
+                prior.destroy(Caller.PUT_ADD_FAILURE);
+
+                if (logger.isWarnEnabled()) {
+                    logger.warn("Failed to restore previous off-heap cache entry after disk write failure for key: " + k);
+                }
+            }
         }
 
         return null;
@@ -855,8 +905,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <li>Determines the segment queue index based on the rounded slot size.</li>
      * <li>Searches the queue bidirectionally (from both ends toward the middle) for a segment
      *     with an available slot.</li>
-     * <li>If a slot is found in a segment that is not near the front of the queue (position
-     *     &gt; 3), moves that segment to the front for faster future access.</li>
+     * <li>If a slot is found after examining more than 3 segments from the front of the queue,
+     *     moves that segment to the front for faster future access.</li>
      * <li>If no slot is found in existing segments, allocates a new segment from the pool
      *     (if capacity allows) and adds it to the queue.</li>
      * </ol>
@@ -1084,6 +1134,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     @Override
     public void clear() {
         _pool.clear();
+        evict();
     }
 
     /**
@@ -1746,6 +1797,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final byte[] bytes = readBytes();
 
             return bytes == null ? null : deserialize(bytes);
+        }
+
+        void discardReplacedStoreMetadata() {
+            synchronized (this) {
+                if (permanentKey != null) {
+                    sizeOnDisk.decrement();
+                    dataSizeOnDisk.add(-size);
+                    totalDataSize.add(-size);
+                    permanentKey = null;
+                }
+            }
         }
 
         @Override

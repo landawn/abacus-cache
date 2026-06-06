@@ -319,9 +319,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * The appropriate Redis shard is automatically determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> This method uses the Redis DEL command to remove the key.
-     * The operation is O(1) time complexity. The command succeeds regardless of whether the key exists.
-     * This method always returns {@code true} to indicate the DEL command was sent successfully,
-     * not to indicate whether the key actually existed.
+     * The operation is O(1) time complexity. The return value reflects Redis's DEL semantics (which
+     * returns the number of keys removed): {@code true} when the key existed and was removed,
+     * {@code false} when the key did not exist at the time the command was issued.
      *
      * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
      * note. The Redis DEL command itself is idempotent and atomic on the server side, so when multiple
@@ -333,7 +333,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <pre>{@code
      * // Simple delete
      * boolean success = cache.delete("user:123");
-     * System.out.println("Delete operation sent: " + success);
+     * System.out.println("Key removed: " + success);
      *
      * // Delete after conditional check
      * User user = cache.get("user:456");
@@ -490,16 +490,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the increment amount. The base {@link DistributedCacheClient#incr(String, int)}
-     *              contract documents this parameter as non-negative; however, the Redis INCRBY
-     *              command itself supports negative deltas (effectively decrementing), and this
-     *              implementation forwards the value as-is without validation. For portability
-     *              across cache backends (e.g. SpyMemcached, which rejects negative deltas),
-     *              prefer non-negative values.
+     * @param delta the increment amount; must be non-negative. Although the Redis INCRBY command itself
+     *              supports negative deltas, this implementation rejects them with an
+     *              {@link IllegalArgumentException} for portability across cache backends (e.g.
+     *              SpyMemcached, which also rejects negative deltas).
      * @return the value after increment (will be equal to delta if the key did not exist before).
      *         Returns {@code 0} if the Redis shard returns a {@code nil} reply, rather than throwing
      *         a {@link NullPointerException}.
-     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #incr(String)
      * @see #decr(String)
@@ -507,6 +505,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long incr(final String key, final int delta) {
+        if (delta < 0) {
+            throw new IllegalArgumentException("delta must be non-negative: " + delta);
+        }
+
         final Long v = jedis.incrBy(getKeyBytes(key), delta);
         return v == null ? 0L : v.longValue();
     }
@@ -651,12 +653,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the decrement amount. The base {@link DistributedCacheClient#decr(String, int)}
-     *              contract documents this parameter as non-negative; however, the Redis DECRBY
-     *              command itself supports negative deltas (effectively incrementing), and this
-     *              implementation forwards the value as-is without validation. For portability
-     *              across cache backends (e.g. SpyMemcached, which rejects negative deltas),
-     *              prefer non-negative values.
+     * @param delta the decrement amount; must be non-negative
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
      *         if the key did not exist before). Returns {@code 0} if the Redis shard returns a
      *         {@code nil} reply, rather than throwing a {@link NullPointerException}.
@@ -668,6 +665,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long decr(final String key, final int delta) {
+        if (delta < 0) {
+            throw new IllegalArgumentException("delta must be non-negative: " + delta);
+        }
+
         final Long v = jedis.decrBy(getKeyBytes(key), delta);
         return v == null ? 0L : v.longValue();
     }

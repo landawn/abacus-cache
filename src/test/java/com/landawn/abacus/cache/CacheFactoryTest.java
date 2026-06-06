@@ -244,4 +244,9 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_EdgeCase_ClassNotFound() {
         assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("com.example.NonExistentCache(localhost)"));
     }
+
+    @Test
+    public void testCreateCache_EdgeCase_CustomClassMustImplementCache() {
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("java.lang.String(localhost)"));
+    }
 }

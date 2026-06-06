@@ -475,7 +475,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @return a snapshot of the cache statistics at the time of invocation (all zeros if recordStats() was not enabled)
-     * @see Cache#stats()
+     * @see com.github.benmanes.caffeine.cache.Cache#stats()
      * @see com.github.benmanes.caffeine.cache.stats.CacheStats
      */
     public CacheStats stats() {

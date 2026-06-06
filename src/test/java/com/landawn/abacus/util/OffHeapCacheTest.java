@@ -4,6 +4,7 @@
 
 package com.landawn.abacus.util;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -12,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -228,6 +230,149 @@ public class OffHeapCacheTest {
      * the OLD bytes) before writing new bytes; the new bytes survive and a subsequent get(K)
      * returns the new value.
      */
+    @Test
+    public void test_failed_memory_replacement_preserves_existing_entry() {
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
+
+        try {
+            final byte[] oldValue = new byte[] { 1, 2, 3, 4 };
+
+            assertTrue(c.put("k", oldValue));
+            assertFalse(c.put("k", new byte[2 * 1024 * 1024]));
+            assertArrayEquals(oldValue, c.get("k").orElse(null));
+        } finally {
+            c.close();
+        }
+    }
+
+    @Test
+    public void test_failed_disk_replacement_preserves_existing_entry() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+        final AtomicBoolean failWrites = new AtomicBoolean(false);
+
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                if (failWrites.get()) {
+                    return false;
+                }
+
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2)
+                .build();
+
+        try {
+            final String key = "shared-key";
+            final Account first = createAccount(Account.class);
+            first.setFirstName(Strings.repeat("a", 5000));
+            assertTrue(diskCache.put(key, first));
+
+            final Account second = createAccount(Account.class);
+            second.setFirstName(Strings.repeat("b", 5000));
+            failWrites.set(true);
+
+            assertFalse(diskCache.put(key, second));
+            assertEquals(first, diskCache.get(key).orElse(null));
+            assertTrue(memStore.containsKey(key));
+            assertEquals(1, memStore.size());
+
+            final var stats = diskCache.stats();
+            assertEquals(1L, stats.sizeOnDisk());
+            assertEquals(stats.dataSizeOnDisk(), stats.dataSize());
+        } finally {
+            diskCache.close();
+        }
+    }
+
+    @Test
+    public void test_clear_reclaims_empty_segments_for_different_slot_sizes() {
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .maxBlockSizeInBytes(1024 * 1024)
+                .evictDelay(0)
+                .build();
+
+        try {
+            assertTrue(c.put("small", new byte[64]));
+            c.clear();
+
+            assertTrue(c.put("large", new byte[256 * 1024]));
+        } finally {
+            c.close();
+        }
+    }
+
+    @Test
+    public void test_missing_disk_bytes_not_counted_as_disk_hit_and_stale_wrapper_removed() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2)
+                .build();
+
+        try {
+            final Account account = createAccount(Account.class);
+            account.setFirstName(Strings.repeat("x", 5000));
+            final String key = account.getEmailAddress();
+
+            assertTrue(diskCache.put(key, account));
+            memStore.clear();
+
+            assertNull(diskCache.get(key).orElse(null));
+
+            final var stats = diskCache.stats();
+            assertEquals(0L, stats.hitCountByDisk());
+            assertEquals(0L, stats.sizeOnDisk());
+            assertEquals(0L, stats.dataSizeOnDisk());
+            assertEquals(0L, stats.dataSize());
+        } finally {
+            diskCache.close();
+        }
+    }
+
     @Test
     public void test_putToDisk_disk_to_disk_replace_preserves_new_value() {
         final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();

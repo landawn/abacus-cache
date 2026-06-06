@@ -31,7 +31,7 @@ package com.landawn.abacus.cache;
  * </ul>
  *
  * <p>Instances are immutable and thread-safe. Once created, the captured values cannot change;
- * to get updated statistics, call the {@code stats()} method on the cache again to obtain a
+ * to get updated statistics, call the {@code stats()} method on the cache implementation again to obtain a
  * new snapshot.
  *
  * <p><b>Statistics categories:</b>
@@ -102,9 +102,11 @@ package com.landawn.abacus.cache;
  *                 regardless of whether the operation resulted in a hit or miss. Must be non-negative.
  *                 This should equal {@code hitCount + missCount}.
  * @param hitCount the number of get operations that successfully found and returned a cached value.
- *                 Must be non-negative and not exceed {@code getCount}.
+ *                 Must be non-negative. Under normal conditions this does not exceed {@code getCount},
+ *                 but the relationship is not enforced because the counters are sampled non-atomically.
  * @param missCount the number of get operations that did not find a cached value (cache miss).
- *                  Must be non-negative and not exceed {@code getCount}.
+ *                  Must be non-negative. Under normal conditions this does not exceed {@code getCount},
+ *                  but the relationship is not enforced because the counters are sampled non-atomically.
  * @param evictionCount the total number of entries that have been evicted from the cache due to
  *                      capacity constraints or expiration policies (TTL or idle timeout).
  *                      Must be non-negative.

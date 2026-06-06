@@ -445,6 +445,10 @@ public final class CacheFactory {
                 throw new IllegalArgumentException("Cannot find class: " + className);
             }
 
+            if (!Cache.class.isAssignableFrom(cls)) {
+                throw new IllegalArgumentException("Custom cache class must implement Cache: " + className);
+            }
+
             return TypeAttrParser.newInstance(cls, provider);
         }
     }

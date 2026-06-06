@@ -255,6 +255,33 @@ public class DistributedCacheTest extends TestBase {
         }
     }
 
+    /**
+     * Guards the circuit-breaker failure counter against unbounded growth. With {@code retryDelay == 0}
+     * the breaker never fast-fails (the time window is always elapsed), so every failing get reaches the
+     * client and flows through the failure-increment path. Driving many failures past the threshold
+     * exercises the clamp that stops incrementing once {@code failedCounter >= maxFailedNumForRetry};
+     * without that clamp the counter would eventually overflow to a negative value and silently disable
+     * the breaker. The breaker must still recover cleanly once the backend comes back.
+     */
+    @Test
+    public void testCircuitBreaker_FailureCounterDoesNotGrowUnbounded() {
+        final InMemoryClient client = new InMemoryClient();
+        client.failGet = true;
+        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0)) {
+            // Every call reaches the client (retryDelay==0 means the circuit never short-circuits),
+            // so each failure passes through the (clamped) increment branch — well past the threshold.
+            for (int i = 0; i < 50; i++) {
+                assertNull(cache.getOrNull("k"));
+            }
+            assertEquals(50, client.getCalls.get(), "every failing get should reach the client when retryDelay==0");
+
+            // Recovery still works: counter resets to 0 on the next success.
+            client.failGet = false;
+            client.store.put(cache.generateKey("k"), "ok");
+            assertEquals("ok", cache.getOrNull("k"));
+        }
+    }
+
     @Test
     public void testCircuitBreaker_ClosesOnSuccess() {
         final InMemoryClient client = new InMemoryClient();

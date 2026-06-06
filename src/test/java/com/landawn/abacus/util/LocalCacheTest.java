@@ -5,6 +5,7 @@
 package com.landawn.abacus.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -112,6 +113,18 @@ public class LocalCacheTest {
             cache.put("a", "1");
             org.junit.jupiter.api.Assertions.assertTrue(cache.containsKey("a"));
             org.junit.jupiter.api.Assertions.assertFalse(cache.containsKey("missing"));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    public void testContainsKey_returnsFalseForExpiredEntry() throws Exception {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            assertTrue(cache.put("a", "1", 5, 0));
+
+            Thread.sleep(25);
+
+            assertFalse(cache.containsKey("a"));
+            assertNull(cache.getOrNull("a"));
         }
     }
 

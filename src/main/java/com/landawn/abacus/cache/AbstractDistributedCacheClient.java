@@ -149,12 +149,13 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("server1:11211,server2:11211");
      * }</pre>
      *
-     * @param serverUrl the server URL(s) for connecting to the distributed cache, must not be {@code null} or empty
-     * @throws IllegalArgumentException if {@code serverUrl} is {@code null} or empty
+     * @param serverUrl the server URL(s) for connecting to the distributed cache, must not be {@code null},
+     *                  empty, or blank (whitespace-only)
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
-        if (Strings.isEmpty(serverUrl)) {
-            throw new IllegalArgumentException("serverUrl cannot be empty");
+        if (Strings.isBlank(serverUrl)) {
+            throw new IllegalArgumentException("serverUrl cannot be null, empty, or blank");
         }
 
         this.serverUrl = serverUrl;

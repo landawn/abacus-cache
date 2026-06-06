@@ -91,6 +91,13 @@ public class AbstractDistributedCacheClientTest extends TestBase {
     }
 
     @Test
+    public void testConstructor_EdgeCase_BlankServerUrl() {
+        // A whitespace-only URL is semantically empty and must be rejected just like "" or null.
+        assertThrows(IllegalArgumentException.class, () -> new DummyClient<String>("   "));
+        assertThrows(IllegalArgumentException.class, () -> new DummyClient<String>("\t\n"));
+    }
+
+    @Test
     public void testServerUrl() {
         final DummyClient<String> client = new DummyClient<>("server:1234");
         assertEquals("server:1234", client.serverUrl());

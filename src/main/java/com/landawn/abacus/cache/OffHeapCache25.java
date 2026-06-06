@@ -271,8 +271,17 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      */
     @Override
     protected long allocate(final long capacityInBytes) {
-        arena = Arena.ofShared();
-        buffer = arena.allocate(capacityInBytes);
+        final Arena newArena = Arena.ofShared();
+
+        try {
+            final MemorySegment newBuffer = newArena.allocate(capacityInBytes);
+
+            arena = newArena;
+            buffer = newBuffer;
+        } catch (final Throwable e) {
+            newArena.close();
+            throw e;
+        }
 
         return buffer.address();
     }
@@ -313,7 +322,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *              to hold the copied data.
      * @param destOffset the index of the first byte in {@code bytes} to write to (zero-based; no array
      *                   header offset is applied by this implementation).
-     * @param len the number of bytes to copy. Must be non-negative and must not exceed the available
+     * @param len the number of bytes to copy. Must be positive and must not exceed the available
      *            space in the destination array starting from {@code destOffset}.
      */
     @Override
@@ -336,7 +345,7 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * @param startPtr the destination memory address in off-heap memory. Must be a valid address
      *                 within the allocated memory region (between {@code _startPtr} and
      *                 {@code _startPtr + capacity}).
-     * @param len the number of bytes to copy. Must be non-negative and must not exceed the available
+     * @param len the number of bytes to copy. Must be positive and must not exceed the available
      *            space at the destination address or the size of the source array.
      */
     @Override
@@ -444,11 +453,12 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Creates a new builder instance with default configuration values.
-         * {@code capacityInMB} must be set to a positive value before calling {@link #build()}.
+         * Set {@code capacityInMB} to a positive value before calling {@link #build()}.
+         * Prefer the factory method {@link OffHeapCache25#builder()} over invoking this constructor directly.
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code
-         * Builder<String, Data> builder = new Builder<>();
+         * OffHeapCache25.Builder<String, Data> builder = OffHeapCache25.builder();
          * builder.capacityInMB(100)
          *        .evictDelay(60000)
          *        .defaultLiveTime(3600000);
