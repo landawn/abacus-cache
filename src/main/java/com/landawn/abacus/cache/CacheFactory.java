@@ -410,9 +410,7 @@ public final class CacheFactory {
             } else if (parameters.length == 3) {
                 try {
                     final long timeout = Numbers.toLong(parameters[2]);
-                    if (timeout <= 0) {
-                        throw new IllegalArgumentException("Timeout must be positive: " + timeout);
-                    }
+                    N.checkArgPositive(timeout, "timeout");
                     return new DistributedCache<>(new SpyMemcached<>(url, timeout), parameters[1]);
                 } catch (final NumberFormatException e) {
                     throw new IllegalArgumentException("Invalid timeout parameter: " + parameters[2], e);
@@ -428,9 +426,7 @@ public final class CacheFactory {
             } else if (parameters.length == 3) {
                 try {
                     final long timeout = Numbers.toLong(parameters[2]);
-                    if (timeout <= 0) {
-                        throw new IllegalArgumentException("Timeout must be positive: " + timeout);
-                    }
+                    N.checkArgPositive(timeout, "timeout");
                     return new DistributedCache<>(new JRedis<>(url, timeout), parameters[1]);
                 } catch (final NumberFormatException e) {
                     throw new IllegalArgumentException("Invalid timeout parameter: " + parameters[2], e);
