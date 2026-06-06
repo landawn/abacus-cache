@@ -6,6 +6,7 @@ package com.landawn.abacus.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
@@ -110,6 +111,19 @@ public class OffHeapCache25Test {
 
     private static final long start = System.currentTimeMillis();
     private static final AtomicInteger counter = new AtomicInteger();
+
+    /**
+     * Null-key handling is consistent across all four key operations (mirrors {@code OffHeapCacheTest}),
+     * confirming the {@code OffHeapCache} and {@code OffHeapCache25} variants behave identically.
+     */
+    @Test
+    public void test_nullKey_and_nullValue_rejected_consistently() {
+        assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, new Account(), 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 0, 0));
+    }
 
     @Test
     public void test_ByteBuffer() {

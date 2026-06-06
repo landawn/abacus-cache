@@ -50,6 +50,18 @@ public class CaffeineCacheTest extends TestBase {
         }
     }
 
+    /**
+     * Null values are now rejected up-front with {@link IllegalArgumentException} (consistent with the
+     * null-key contract), rather than surfacing as an unrelated {@code NullPointerException} from the
+     * underlying Caffeine cache.
+     */
+    @Test
+    public void testPut_EdgeCase_NullValue() {
+        try (CaffeineCache<String, String> cache = newCache()) {
+            assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 0, 0));
+        }
+    }
+
     @Test
     public void testGetOrNull_EdgeCase_Missing() {
         try (CaffeineCache<String, String> cache = newCache()) {

@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
@@ -44,6 +45,20 @@ public class OffHeapCacheTest {
 
     private static final long start = System.currentTimeMillis();
     private static final AtomicInteger counter = new AtomicInteger();
+
+    /**
+     * Null-key handling is now consistent across all four key operations: {@code put} already
+     * rejected a null key, and {@code getOrNull}/{@code remove}/{@code containsKey} now reject it
+     * too (previously they silently delegated to the pool). {@code put} also rejects a null value.
+     */
+    @Test
+    public void test_nullKey_and_nullValue_rejected_consistently() {
+        assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, new Account(), 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 0, 0));
+    }
 
     @Test
     public void test_ByteBuffer() {

@@ -18,6 +18,7 @@ import java.util.Set;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
+import com.landawn.abacus.util.N;
 
 /**
  * A wrapper implementation that adapts a Caffeine cache to the Abacus
@@ -97,10 +98,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if cache is null
      */
     public CaffeineCache(final Cache<K, V> cache) {
-        if (cache == null) {
-            throw new IllegalArgumentException("Cache cannot be null");
-        }
-        cacheImpl = cache;
+        cacheImpl = N.checkArgNotNull(cache, "cache");
     }
 
     /**
@@ -133,9 +131,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     public V getOrNull(final K key) {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         return cacheImpl.getIfPresent(key);
     }
@@ -172,18 +168,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the time-to-live in milliseconds (ignored; configure expiration via the Caffeine builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored; configure expiration via the Caffeine builder)
      * @return {@code true} (this implementation always succeeds unless an exception is thrown)
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws NullPointerException if {@code value} is {@code null} (thrown by the underlying Caffeine cache,
-     *         which does not allow {@code null} values)
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(value, "value");
 
         cacheImpl.put(key, value); // TODO: Support per-entry expiration
 
@@ -218,9 +211,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     public void remove(final K key) {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         cacheImpl.invalidate(key);
     }
@@ -262,9 +253,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     public boolean containsKey(final K key) {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         return cacheImpl.asMap().containsKey(key);
     }

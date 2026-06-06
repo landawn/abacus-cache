@@ -299,11 +299,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
-        N.checkArgument(capacityInMB > 0, "The capacity in MB can't be: {}. It must be > 0", capacityInMB);
+        N.checkArgPositive(capacityInMB, "capacityInMB");
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "The Maximum Block size can't be: {}. It must be >= 1024 and <= {}", maxBlockSize,
                 SEGMENT_SIZE);
+        N.checkArgument(vacatingFactor >= 0f && vacatingFactor <= 1f, "vacatingFactor must be in the range [0.0, 1.0]: {}", vacatingFactor);
 
-        this.logger = logger;
+        this.logger = N.checkArgNotNull(logger, "logger");
 
         _arrayOffset = arrayOffset;
 
@@ -405,6 +406,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @return the base memory address (pointer) of the allocated off-heap memory region.
      *         This address is used for all subsequent memory access operations.
      * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
+     * @throws IllegalArgumentException if {@code capacityInBytes} is not positive (some backends, such as
+     *         the Foreign Memory API, reject a non-positive size this way). This is unreachable through
+     *         normal construction because {@code capacityInMB} is validated to be positive first.
      */
     protected abstract long allocate(long capacityInBytes);
 
@@ -435,8 +439,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * to different memory regions are safe.
      *
      * @param bytes the source byte array containing the data to copy. Must not be {@code null}.
-     * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
-     *                  implementations, this already includes the array base offset ({@code arrayOffset}).
+     * @param srcOffset the offset into the source array, expressed in the convention required by the
+     *                  concrete implementation. The interpretation is <b>implementation-defined</b>: an
+     *                  {@code Unsafe}-based implementation expects an address-style offset that already
+     *                  includes the array base offset ({@code arrayOffset}), whereas a
+     *                  {@code MemorySegment}-based implementation expects a plain zero-based index and
+     *                  applies no array header offset.
      * @param startPtr the destination memory address in off-heap memory. Must be a valid
      *                 address within the allocated off-heap memory region.
      * @param len the number of bytes to copy. Must be positive and must not exceed the
@@ -458,8 +466,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                 address within the allocated off-heap memory region.
      * @param bytes the destination byte array to copy data into. Must not be {@code null} and
      *              must have sufficient capacity to hold the copied data.
-     * @param destOffset the byte offset within the destination array object in memory. For Unsafe-based
-     *                   implementations, this already includes the array base offset ({@code arrayOffset}).
+     * @param destOffset the offset into the destination array, expressed in the convention required by the
+     *                   concrete implementation. The interpretation is <b>implementation-defined</b>: an
+     *                   {@code Unsafe}-based implementation expects an address-style offset that already
+     *                   includes the array base offset ({@code arrayOffset}), whereas a
+     *                   {@code MemorySegment}-based implementation expects a plain zero-based index and
+     *                   applies no array header offset.
      * @param len the number of bytes to copy. Must be positive and must not exceed the
      *            available space in the destination array starting from {@code destOffset}.
      */
@@ -473,14 +485,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * promoted back into memory when {@code testerForLoadingItemFromDiskToMemory} is configured
      * and returns {@code true} for it.
      *
-     * @param key the key whose associated value is to be returned
+     * @param key the key whose associated value is to be returned; must not be {@code null}
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
      *         or the disk-backed entry has been removed from the store
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws IllegalStateException if a stored value cannot be reconstructed because the fetched
      *                               size no longer matches the recorded size (data corruption detected)
      */
     @Override
     public V getOrNull(final K key) {
+        N.checkArgNotNull(key, "key");
+
         final Wrapper<V> w = _pool.get(key);
 
         // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
@@ -671,13 +686,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
-
-        if (value == null) {
-            throw new IllegalArgumentException("Value cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(value, "value");
 
         // A non-positive liveTime/maxIdleTime means "no expiration" per the documented contract
         // (see Cache#put and the OffHeapCache/OffHeapCache25 Builder javadoc). The underlying
@@ -1084,10 +1094,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * The underlying wrapper is destroyed, releasing any off-heap memory slots or
      * disk storage held by the entry.
      *
-     * @param key the key whose mapping is to be removed from the cache
+     * @param key the key whose mapping is to be removed from the cache; must not be {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public void remove(final K key) {
+        N.checkArgNotNull(key, "key");
+
         final Wrapper<V> w = _pool.remove(key);
 
         if (w != null) {
@@ -1098,11 +1111,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns whether the cache contains a mapping for the specified key.
      *
-     * @param key the key whose presence in the cache is to be tested
+     * @param key the key whose presence in the cache is to be tested; must not be {@code null}
      * @return {@code true} if the cache contains a mapping for the specified key; {@code false} otherwise
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public boolean containsKey(final K key) {
+        N.checkArgNotNull(key, "key");
+
         return _pool.containsKey(key);
     }
 

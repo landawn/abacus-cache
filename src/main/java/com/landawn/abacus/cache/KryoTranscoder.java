@@ -16,6 +16,7 @@ package com.landawn.abacus.cache;
 
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
+import com.landawn.abacus.util.N;
 
 import net.spy.memcached.CachedData;
 import net.spy.memcached.transcoders.Transcoder;
@@ -117,10 +118,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @throws IllegalArgumentException if {@code maxSize} is not positive
      */
     public KryoTranscoder(final int maxSize) {
-        if (maxSize <= 0) {
-            throw new IllegalArgumentException("maxSize must be positive: " + maxSize);
-        }
-        this.maxSize = maxSize;
+        this.maxSize = N.checkArgPositive(maxSize, "maxSize");
     }
 
     /**

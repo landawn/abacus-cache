@@ -63,6 +63,28 @@ public class OffHeapCacheStatsTest {
     }
 
     /**
+     * A negative {@code sizeOfSlot} is rejected with {@link IllegalArgumentException}, consistent with
+     * the numeric-component validation in the enclosing {@link OffHeapCacheStats} record (a null map is
+     * still rejected with {@link NullPointerException}).
+     */
+    @Test
+    public void testOccupiedSlotRejectsNegativeSize() {
+        assertThrows(IllegalArgumentException.class, () -> new OccupiedSlot(-1, new LinkedHashMap<>()));
+    }
+
+    /**
+     * {@link MinMaxAvg} tracks disk-I/O timings (milliseconds), which can never be negative, so the
+     * record now rejects a negative {@code min}, {@code max}, or {@code avg} with
+     * {@link IllegalArgumentException}.
+     */
+    @Test
+    public void testMinMaxAvgRejectsNegativeValues() {
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(-1, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, -1, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, 0, -1));
+    }
+
+    /**
      * Regression coverage for the missing non-negative validation on
      * {@link OffHeapCacheStats}'s numeric components. The Javadoc has long stated that every
      * counter, size, and memory metric must be non-negative, but the canonical constructor

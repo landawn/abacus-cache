@@ -23,6 +23,8 @@ import org.ehcache.spi.loaderwriter.BulkCacheWritingException;
 import org.ehcache.spi.loaderwriter.CacheLoadingException;
 import org.ehcache.spi.loaderwriter.CacheWritingException;
 
+import com.landawn.abacus.util.N;
+
 /**
  * A wrapper implementation that adapts Ehcache 3.x to the Abacus Cache interface.
  * Ehcache is a widely-used, standards-based caching library for Java with support for
@@ -96,9 +98,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if cache is null
      */
     public Ehcache(final Cache<K, V> cache) {
-        if (cache == null) {
-            throw new IllegalArgumentException("Cache cannot be null");
-        }
+        N.checkArgNotNull(cache, "cache");
+
         cacheImpl = cache;
     }
 
@@ -129,9 +130,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public V getOrNull(final K key) {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         return cacheImpl.get(key);
     }
@@ -161,8 +160,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration via Ehcache builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration via Ehcache builder)
      * @return {@code true} (this implementation always succeeds unless an exception is thrown)
-     * @throws IllegalArgumentException if key is null
-     * @throws NullPointerException if value is null (thrown by the underlying Ehcache, which does not allow null values)
+     * @throws IllegalArgumentException if {@code key} or {@code value} is null
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
@@ -170,9 +168,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(value, "value");
 
         cacheImpl.put(key, value);
 
@@ -202,9 +199,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public void remove(final K key) {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         cacheImpl.remove(key);
     }
@@ -237,9 +232,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public boolean containsKey(final K key) {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         return cacheImpl.containsKey(key);
     }
@@ -276,9 +269,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
-     * @param value the cache value to be associated with the specified key
+     * @param value the cache value to be associated with the specified key (must not be null; the underlying Ehcache rejects null values)
      * @return the previous value associated with the specified key, or {@code null} if there was no mapping
-     * @throws IllegalArgumentException if key is null
+     * @throws IllegalArgumentException if {@code key} or {@code value} is null
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      * @throws CacheWritingException if the cache writer fails
@@ -286,9 +279,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public V putIfAbsent(final K key, final V value) throws CacheLoadingException, CacheWritingException {
         assertNotClosed();
 
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(value, "value");
 
         return cacheImpl.putIfAbsent(key, value);
     }
@@ -349,9 +341,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public Map<K, V> getAll(final Set<? extends K> keys) throws BulkCacheLoadingException {
         assertNotClosed();
 
-        if (keys == null) {
-            throw new IllegalArgumentException("Keys cannot be null");
-        }
+        N.checkArgNotNull(keys, "keys");
 
         return cacheImpl.getAll(keys);
     }
@@ -393,9 +383,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public void putAll(final Map<? extends K, ? extends V> entries) throws BulkCacheWritingException {
         assertNotClosed();
 
-        if (entries == null) {
-            throw new IllegalArgumentException("Entries cannot be null");
-        }
+        N.checkArgNotNull(entries, "entries");
 
         cacheImpl.putAll(entries);
     }
@@ -436,9 +424,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     public void removeAll(final Set<? extends K> keys) throws BulkCacheWritingException {
         assertNotClosed();
 
-        if (keys == null) {
-            throw new IllegalArgumentException("Keys cannot be null");
-        }
+        N.checkArgNotNull(keys, "keys");
 
         cacheImpl.removeAll(keys);
     }

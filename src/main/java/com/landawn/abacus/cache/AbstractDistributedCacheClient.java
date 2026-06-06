@@ -17,7 +17,7 @@ package com.landawn.abacus.cache;
 import java.util.Collection;
 import java.util.Map;
 
-import com.landawn.abacus.util.Strings;
+import com.landawn.abacus.util.N;
 
 /**
  * Abstract base class for distributed cache client implementations.
@@ -154,11 +154,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
-        if (Strings.isBlank(serverUrl)) {
-            throw new IllegalArgumentException("serverUrl cannot be null, empty, or blank");
-        }
-
-        this.serverUrl = serverUrl;
+        this.serverUrl = N.checkArgNotBlank(serverUrl, "serverUrl");
     }
 
     /**
@@ -407,5 +403,44 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
         }
 
         return (int) seconds;
+    }
+
+    /**
+     * Validates a bulk-operation key array, rejecting a {@code null} array or any {@code null} element.
+     * Shared by concrete clients so that {@link #getBulk(String...)} validates its input identically
+     * across implementations.
+     *
+     * @param keys the keys to validate; must not be {@code null} or contain {@code null} elements
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     */
+    protected static void checkBulkKeys(final String... keys) {
+        N.checkArgNotNull(keys, "keys");
+
+        for (int i = 0, len = keys.length; i < len; i++) {
+            if (keys[i] == null) {
+                throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + i);
+            }
+        }
+    }
+
+    /**
+     * Validates a bulk-operation key collection, rejecting a {@code null} collection or any {@code null} element.
+     * Shared by concrete clients so that {@link #getBulk(Collection)} validates its input identically
+     * across implementations.
+     *
+     * @param keys the keys to validate; must not be {@code null} or contain {@code null} elements
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     */
+    protected static void checkBulkKeys(final Collection<String> keys) {
+        N.checkArgNotNull(keys, "keys");
+
+        int i = 0;
+        for (final String key : keys) {
+            if (key == null) {
+                throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + i);
+            }
+
+            i++;
+        }
     }
 }

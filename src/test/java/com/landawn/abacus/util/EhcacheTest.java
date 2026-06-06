@@ -139,6 +139,23 @@ public class EhcacheTest {
         }
     }
 
+    /**
+     * Null values are now rejected up-front with {@link IllegalArgumentException} (consistent with the
+     * null-key contract), rather than surfacing as an unrelated {@code NullPointerException} from the
+     * underlying Ehcache. Applies to both {@code put} and {@code putIfAbsent}.
+     */
+    @Test
+    public void testPut_EdgeCase_NullValue() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            assertThrows(IllegalArgumentException.class, () -> wrapper.put("k", null, 0, 0));
+            assertThrows(IllegalArgumentException.class, () -> wrapper.putIfAbsent("k", null));
+        } finally {
+            cm.close();
+        }
+    }
+
     @Test
     public void testRemove() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);

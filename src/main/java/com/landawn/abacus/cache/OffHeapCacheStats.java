@@ -5,6 +5,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import com.landawn.abacus.util.N;
+
 /**
  * An immutable snapshot of off-heap cache statistics at a specific point in time.
  * This record provides comprehensive metrics about off-heap cache performance, including
@@ -139,6 +141,12 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * are <em>not</em> enforced because the underlying counters are sampled non-atomically and
      * may be transiently inconsistent under concurrent activity.
      *
+     * <p><b>Exception convention:</b> by deliberate design, {@code null} reference components are
+     * rejected with {@link NullPointerException} (via {@link Objects#requireNonNull}), while an
+     * out-of-range numeric component is rejected with {@link IllegalArgumentException}. This mirrors
+     * the {@link java.util.Objects} convention for record/invariant null-checks and is intentionally
+     * distinct from the argument-validation helpers used elsewhere in the cache API.
+     *
      * @throws NullPointerException if {@code writeToDiskTimeStats}, {@code readFromDiskTimeStats},
      *         or {@code occupiedSlots} is {@code null}, or if {@code occupiedSlots} contains a
      *         {@code null} key or a {@code null} nested map
@@ -217,6 +225,19 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      */
     public record MinMaxAvg(double min, double max, double avg) {
         /**
+         * Canonical constructor that validates the values are non-negative. The tracked metric
+         * (disk I/O timing in milliseconds) can never be negative, so a negative value indicates a
+         * programming error.
+         *
+         * @throws IllegalArgumentException if {@code min}, {@code max}, or {@code avg} is negative
+         */
+        public MinMaxAvg {
+            N.checkArgNotNegative(min, "min");
+            N.checkArgNotNegative(max, "max");
+            N.checkArgNotNegative(avg, "avg");
+        }
+
+        /**
          * Returns a string representation of the statistics in a JSON-like format.
          * The format is {@code {min: <value>, max: <value>, avg: <value>}}, where each value is
          * a {@code double} (typically representing milliseconds in the context of
@@ -263,9 +284,15 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
          * {@code occupiedSlots}, mirroring the immutability guarantees of the enclosing
          * {@link OffHeapCacheStats} record.
          *
+         * <p>Consistent with the enclosing record, a {@code null} map is rejected with
+         * {@link NullPointerException} while a negative {@code sizeOfSlot} is rejected with
+         * {@link IllegalArgumentException}.
+         *
          * @throws NullPointerException if {@code occupiedSlots} is {@code null}
+         * @throws IllegalArgumentException if {@code sizeOfSlot} is negative
          */
         public OccupiedSlot {
+            N.checkArgNotNegative(sizeOfSlot, "sizeOfSlot");
             Objects.requireNonNull(occupiedSlots, "occupiedSlots cannot be null");
             occupiedSlots = occupiedSlots.isEmpty() ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(occupiedSlots));
         }

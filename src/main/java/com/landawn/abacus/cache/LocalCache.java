@@ -21,6 +21,7 @@ import com.landawn.abacus.pool.PoolFactory;
 import com.landawn.abacus.pool.PoolStats;
 import com.landawn.abacus.pool.Poolable;
 import com.landawn.abacus.pool.PoolableAdapter;
+import com.landawn.abacus.util.N;
 
 /**
  * A thread-safe, in-memory cache implementation with automatic eviction and expiration support.
@@ -131,12 +132,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
-        if (capacity <= 0) {
-            throw new IllegalArgumentException("Capacity must be positive: " + capacity);
-        }
-        if (evictDelay < 0) {
-            throw new IllegalArgumentException("Evict delay cannot be negative: " + evictDelay);
-        }
+        N.checkArgPositive(capacity, "capacity");
+        N.checkArgNotNegative(evictDelay, "evictDelay");
 
         pool = PoolFactory.createKeyedObjectPool(capacity, evictDelay);
     }
@@ -176,11 +173,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableAdapter<V>> pool) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
-        if (pool == null) {
-            throw new IllegalArgumentException("Pool cannot be null");
-        }
-
-        this.pool = pool;
+        this.pool = N.checkArgNotNull(pool, "pool");
     }
 
     /**
@@ -212,9 +205,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public V getOrNull(final K key) {
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         final PoolableAdapter<V> w = pool.get(key);
 
@@ -264,9 +255,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         // A liveTime/maxIdleTime of 0 or negative means "no expiration" per the Cache contract.
         // The underlying ActivityPrint requires strictly positive values, so translate
@@ -305,9 +294,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public void remove(final K key) {
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         pool.remove(key);
     }
@@ -342,9 +329,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public boolean containsKey(final K key) {
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         return pool.peek(key) != null;
     }
@@ -529,8 +514,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases all associated resources.
      * Stops the eviction scheduler, clears all entries, and releases the underlying
-     * object pool. After closing, the cache cannot be used - subsequent operations
-     * may throw {@link IllegalStateException} or have undefined behavior.
+     * object pool. After closing, the cache cannot be used - subsequent
+     * {@code get}/{@code put}/{@code remove}/{@code containsKey} operations throw
+     * {@link IllegalStateException} (raised by the underlying pool).
      *
      * <p>This method is idempotent and thread-safe - multiple calls have no additional
      * effect beyond the first invocation. The method is synchronized to ensure proper

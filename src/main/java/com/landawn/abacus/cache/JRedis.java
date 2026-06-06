@@ -16,8 +16,11 @@ package com.landawn.abacus.cache;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
@@ -124,8 +127,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * cache.set("user:123", user, 3600000);
      * }</pre>
      *
-     * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
-     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or contains no valid server addresses
+     * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses
      * @see #JRedis(String, long)
      */
     public JRedis(final String serverUrl) {
@@ -159,18 +162,16 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Data retrieved = cache.get("key");
      * }</pre>
      *
-     * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null} or empty.
+     * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
-     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or contains no valid server addresses,
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
      * @see #JRedis(String)
      */
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);
 
-        if (timeout <= 0) {
-            throw new IllegalArgumentException("timeout must be positive: " + timeout);
-        }
+        N.checkArgPositive(timeout, "timeout");
 
         if (timeout > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("timeout exceeds maximum value: " + timeout + " (max: " + Integer.MAX_VALUE + ")");
@@ -244,6 +245,65 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public T get(final String key) {
         return decode(jedis.get(getKeyBytes(key)));
+    }
+
+    /**
+     * Retrieves multiple values from the cache, returning a map of only the keys that were found.
+     * Keys that are absent, expired, or decode to {@code null} are omitted from the result.
+     *
+     * <p><b>Redis-specific behavior:</b> Because this client shards keys across multiple Redis
+     * instances using consistent hashing, a single cross-shard {@code MGET} is not possible.
+     * This method therefore issues one {@code GET} per key (each routed to its owning shard) and
+     * assembles the results. The keys are validated up-front, before any network call is made.
+     *
+     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread
+     * Safety note. Serialize access externally if needed.
+     *
+     * @param keys the cache keys to retrieve; must not be {@code null} or contain {@code null} elements
+     * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     * @throws RuntimeException if a network error, timeout, or deserialization error occurs
+     * @see #get(String)
+     * @see #getBulk(Collection)
+     */
+    @Override
+    public Map<String, T> getBulk(final String... keys) {
+        checkBulkKeys(keys);
+
+        return fetchBulk(Arrays.asList(keys));
+    }
+
+    /**
+     * Retrieves multiple values from the cache, returning a map of only the keys that were found.
+     * Collection-based counterpart of {@link #getBulk(String...)}; see that method for the
+     * Redis-specific sharding behavior.
+     *
+     * @param keys the collection of cache keys to retrieve; must not be {@code null} or contain {@code null} elements
+     * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
+     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     * @throws RuntimeException if a network error, timeout, or deserialization error occurs
+     * @see #get(String)
+     * @see #getBulk(String...)
+     */
+    @Override
+    public Map<String, T> getBulk(final Collection<String> keys) {
+        checkBulkKeys(keys);
+
+        return fetchBulk(keys);
+    }
+
+    private Map<String, T> fetchBulk(final Collection<String> keys) {
+        final Map<String, T> result = new HashMap<>(Math.max(16, keys.size() * 2));
+
+        for (final String key : keys) {
+            final T value = decode(jedis.get(getKeyBytes(key)));
+
+            if (value != null) {
+                result.put(key, value);
+            }
+        }
+
+        return result;
     }
 
     /**
@@ -505,9 +565,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long incr(final String key, final int delta) {
-        if (delta < 0) {
-            throw new IllegalArgumentException("delta must be non-negative: " + delta);
-        }
+        N.checkArgNotNegative(delta, "delta");
 
         final Long v = jedis.incrBy(getKeyBytes(key), delta);
         return v == null ? 0L : v.longValue();
@@ -657,7 +715,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
      *         if the key did not exist before). Returns {@code 0} if the Redis shard returns a
      *         {@code nil} reply, rather than throwing a {@link NullPointerException}.
-     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #decr(String)
      * @see #incr(String)
@@ -665,9 +723,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long decr(final String key, final int delta) {
-        if (delta < 0) {
-            throw new IllegalArgumentException("delta must be non-negative: " + delta);
-        }
+        N.checkArgNotNegative(delta, "delta");
 
         final Long v = jedis.decrBy(getKeyBytes(key), delta);
         return v == null ? 0L : v.longValue();
@@ -893,9 +949,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @see #decode(byte[])
      */
     protected byte[] getKeyBytes(final String key) {
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
+
         return key.getBytes(Charsets.UTF_8);
     }
 

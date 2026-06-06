@@ -95,14 +95,13 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock2 = new MemcachedLock<>("server1:11211,server2:11211");
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) to connect to (must not be null or empty)
-     * @throws IllegalArgumentException if serverUrl is null or empty
+     * @param serverUrl the Memcached server URL(s) to connect to (must not be null, empty, or blank)
+     * @throws IllegalArgumentException if serverUrl is null, empty, or blank
      * @throws RuntimeException if connection to the Memcached server(s) fails
      */
     public MemcachedLock(final String serverUrl) {
-        if (Strings.isEmpty(serverUrl)) {
-            throw new IllegalArgumentException("Server URL cannot be null or empty");
-        }
+        N.checkArgNotBlank(serverUrl, "serverUrl");
+
         mc = new SpyMemcached<>(serverUrl);
     }
 
@@ -159,12 +158,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @see #unlock(Object)
      */
     public boolean lock(final K target, final long liveTime) {
-        if (target == null) {
-            throw new IllegalArgumentException("Target cannot be null");
-        }
-        if (liveTime <= 0) {
-            throw new IllegalArgumentException("Live time must be positive: " + liveTime);
-        }
+        N.checkArgNotNull(target, "target");
+        N.checkArgPositive(liveTime, "liveTime");
 
         return lock(target, (V) N.EMPTY_BYTE_ARRAY, liveTime);
     }
@@ -233,12 +228,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @see #unlock(Object)
      */
     public boolean lock(final K target, final V value, final long liveTime) {
-        if (target == null) {
-            throw new IllegalArgumentException("Target cannot be null");
-        }
-        if (liveTime <= 0) {
-            throw new IllegalArgumentException("Live time must be positive: " + liveTime);
-        }
+        N.checkArgNotNull(target, "target");
+        N.checkArgPositive(liveTime, "liveTime");
 
         final String key = toKey(target);
 
@@ -316,9 +307,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @see #lock(Object, Object, long)
      */
     public boolean isLocked(final K target) {
-        if (target == null) {
-            throw new IllegalArgumentException("Target cannot be null");
-        }
+        N.checkArgNotNull(target, "target");
 
         return mc.get(toKey(target)) != null;
     }
@@ -391,9 +380,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     public V get(final K target) {
-        if (target == null) {
-            throw new IllegalArgumentException("Target cannot be null");
-        }
+        N.checkArgNotNull(target, "target");
 
         final Object value = mc.get(toKey(target));
 
@@ -469,9 +456,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @see #lock(Object, Object, long)
      */
     public boolean unlock(final K target) {
-        if (target == null) {
-            throw new IllegalArgumentException("Target cannot be null");
-        }
+        N.checkArgNotNull(target, "target");
 
         final String key = toKey(target);
 
@@ -553,9 +538,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
         // Match the Javadoc contract: a null target is a programming error and must be rejected.
         // Without this check, N.stringOf(null) returns the string "null", which would silently
         // collide on a single global "null" lock key across the whole application.
-        if (target == null) {
-            throw new IllegalArgumentException("target cannot be null");
-        }
+        N.checkArgNotNull(target, "target");
         return N.stringOf(target);
     }
 

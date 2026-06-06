@@ -206,17 +206,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         or {@code retryDelay} is negative
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
-        if (dcc == null) {
-            throw new IllegalArgumentException("DistributedCacheClient cannot be null");
-        }
-
-        if (maxFailedNumForRetry < 0) {
-            throw new IllegalArgumentException("maxFailedNumForRetry cannot be negative: " + maxFailedNumForRetry);
-        }
-
-        if (retryDelay < 0) {
-            throw new IllegalArgumentException("retryDelay cannot be negative: " + retryDelay);
-        }
+        N.checkArgNotNull(dcc, "dcc");
+        N.checkArgNotNegative(maxFailedNumForRetry, "maxFailedNumForRetry");
+        N.checkArgNotNegative(retryDelay, "retryDelay");
 
         this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
         this.hasKeyPrefix = Strings.isNotEmpty(this.keyPrefix);
@@ -304,9 +296,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         // Validate the key up-front (cheap null check) so the documented IllegalArgumentException
         // for a null key is thrown consistently, even when the circuit breaker would otherwise
         // short-circuit to null before generateKey(key) is reached.
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         // Read circuit breaker state atomically to avoid race conditions
         final int currentFailedCount = failedCounter.get();
@@ -883,9 +873,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @see N#stringOf(Object)
      */
     protected String generateKey(final K key) {
-        if (key == null) {
-            throw new IllegalArgumentException("Key cannot be null");
-        }
+        N.checkArgNotNull(key, "key");
 
         // Fast path for String keys: skip N.stringOf (which may do reflection/formatting
         // for arbitrary types) when the key is already a String.

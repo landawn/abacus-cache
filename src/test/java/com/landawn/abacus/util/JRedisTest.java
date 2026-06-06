@@ -22,6 +22,8 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -99,6 +101,56 @@ public class JRedisTest {
         when(mockJedis.get(any(byte[].class))).thenReturn(new byte[0]);
 
         assertNull(cache.get("empty"));
+    }
+
+    // ---- getBulk: previously JRedis inherited UnsupportedOperationException; now implemented (B1) ----
+
+    @Test
+    public void test_getBulk_varargs_returns_only_found_keys() {
+        Account a1 = createAccount();
+        when(mockJedis.get(utf8("user:1"))).thenReturn(KRYO.encode(a1));
+        when(mockJedis.get(utf8("user:2"))).thenReturn(null);          // missing key
+        when(mockJedis.get(utf8("user:3"))).thenReturn(new byte[0]);    // empty -> decoded as null
+
+        Map<String, Object> result = cache.getBulk("user:1", "user:2", "user:3");
+
+        assertEquals(1, result.size());
+        assertTrue(result.containsKey("user:1"));
+        assertFalse(result.containsKey("user:2"));
+        assertFalse(result.containsKey("user:3"));
+        assertTrue(result.get("user:1") instanceof Account);
+    }
+
+    @Test
+    public void test_getBulk_collection_returns_only_found_keys() {
+        Account a1 = createAccount();
+        when(mockJedis.get(utf8("k1"))).thenReturn(KRYO.encode(a1));
+        when(mockJedis.get(utf8("k2"))).thenReturn(null);
+
+        Map<String, Object> result = cache.getBulk(List.of("k1", "k2"));
+
+        assertEquals(1, result.size());
+        assertTrue(result.containsKey("k1"));
+    }
+
+    @Test
+    public void test_getBulk_empty_returns_empty_map() {
+        assertTrue(cache.getBulk().isEmpty());
+        assertTrue(cache.getBulk(List.of()).isEmpty());
+    }
+
+    @Test
+    public void test_getBulk_rejects_null_keys() {
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((String[]) null));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((List<String>) null));
+    }
+
+    @Test
+    public void test_getBulk_rejects_null_element() {
+        // Validation happens up-front, before any GET is issued.
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk("a", null, "c"));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk(Arrays.asList("a", null)));
+        verify(mockJedis, never()).get(any(byte[].class));
     }
 
     @Test
