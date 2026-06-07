@@ -1486,7 +1486,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * cache.disconnect(-1); // throws IllegalArgumentException (timeout must not be negative)
      * }</pre>
      *
-     * @param timeout the maximum time, in milliseconds, to wait for shutdown; must not be negative
+     * @param timeout the maximum time, in milliseconds, to wait for shutdown; must not be negative.
+     *                A value of {@code 0} returns immediately without waiting for pending operations
+     *                (unlike the constructor's operation {@code timeout}, which must be strictly positive).
      * @throws IllegalArgumentException if {@code timeout} is negative
      */
     public synchronized void disconnect(final long timeout) {

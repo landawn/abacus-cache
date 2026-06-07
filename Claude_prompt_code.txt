@@ -1,0 +1,338 @@
+
+==============================================================================================================================================
+
+Review all public methods in the classes located under foler: ./src/main/java/ for naming convention consistency, and provide suggestions for design and method naming improvements. 
+
+==============================================================================================================================================
+
+---
+
+Goal: Use multiple agents to audit input-parameter validation for consistency across all classes under src/main/java, then produce a prioritized fix plan.
+
+Problem: Validation is inconsistent. For the same category of parameter, some methods validate it (null check, range/bounds check, emptiness/blank check, sign/positivity check) while comparable methods skip the check entirely — or throw a different exception type for the same violation.
+
+Canonical validators (static helpers on N / CommonUtil): checkArgNotNull/requireNonNull (→ IAE/NPE), checkArgNotEmpty/checkArgNotBlank (→ IAE), checkIndex/checkElementIndex/checkPositionIndex (→ IOOBE), checkFromToIndex/checkFromIndexSize (→ IOOBE), checkArgNotNegative/checkArgPositive (→ IAE). Primitive collections also use rangeCheck (index ∈ [0,size)) and rangeCheckForAdd (index ∈ [0,size]).
+
+What to do:
+
+1. Group methods by validation contract — cluster methods that should share the same rules, using:
+  - Method role/semantics (takes an index; an offset/length pair; a fromIndex/toIndex range; a collection/array; a regex/delimiter; a mapping/predicate function; a count/capacity/scale/radix; etc.)
+  - Signature shape and parameter types
+  - How each parameter is used inside the body (dereferenced, indexed into, divided by, iterated, passed to a sink, invoked, etc.)
+2. Map what is validated where — for every method in a group, record which parameters are checked, the kind and exception type of each check, and which methods perform no check.
+3. Identify the inconsistencies — flag where peer methods in a group disagree (one validates, another doesn't; or they throw different exception types), and state which behavior is intended/correct, citing existing convention.
+4. Produce a fix plan — per inconsistency, recommend the correct check, the canonical method to use, and where to add it. Group the fixes; separately flag any that change observable behavior (e.g. a method that currently tolerates null/negative and would start throwing).
+5. Validation order: within a method, checks should generally run in the same order as the parameters appear in the signature; flag out-of-order or after-the-fact validation.
+
+Methodology / guardrails (important for accuracy at this scale):
+- Trace one level of delegation before concluding a check is missing — a public overload often validates inside the private impl or sibling method it calls (e.g. split/copy delegate count-checks to N.split/N.copyOfRange).
+- Intentional null-tolerance is the library's deliberate convention, not a bug — many methods treat null/empty as empty and return a default. Flag a null-related divergence only when one method throws while a directly comparable sibling silently tolerates it (and then NPEs deep inside or returns a wrong result).
+- Watch the conditional-invocation pattern — a function/predicate/mode arg that's only reached on some inputs (empty source, key present) often goes unchecked, so the same null arg throws on one input and passes silently on another.
+- Exception-type drift counts as an inconsistency — checkArgNotNull throws IllegalArgumentException, but some Javadocs promise NullPointerException for the same null-arg category.
+- Verify every candidate by reading the actual method body — treat any grep/script/agent output as candidates only; sibling primitive classes (IntList/LongList/…) are strong cross-comparison anchors but are also often already consistent.
+- Scale: src/main/java is ~800+ files. Batch the work (e.g. by package or by parameter category), and prefer high-confidence findings over exhaustive low-confidence ones.
+
+Output:
+- Summary what have been changed
+
+==============================================================================================================================================
+
+
+---
+
+TASK: Use multiple parallel agents to audit input-parameter validation consistency across all classes under src/main/java, then produce a prioritized, compatibility-aware fix plan. This is an audit-and-plan task only — do not modify any code unless explicitly asked in a follow-up.
+
+Background / problem statement:
+Parameter validation is applied inconsistently across comparable APIs. Within the same parameter category, some methods validate while semantically similar methods do not (e.g., null checks, range/bounds checks, empty/blank checks, sign/positivity checks). In other cases, comparable methods do validate the same violation but throw different exception types or emit inconsistent messages. The objective is to surface these inconsistencies, not to impose new validation universally.
+
+Method:
+1. Partition src/main/java across multiple agents (e.g., by file or class family) so the audit runs in parallel; then merge findings into a single deduplicated report.
+2. Review all public and protected methods and constructors. (Note: this codebase's src/main is mature, template-generated boilerplate, so expect strong cross-variant patterns — the highest-value signal is cross-variant inconsistency within an API family.)
+3. Compare methods that are overloaded, semantically similar, or part of the same utility/API family.
+
+Inconsistencies to detect:
+- null arguments
+- empty collections, arrays, maps, strings, or iterables
+- blank strings
+- negative values
+- zero where only positive values are meaningful
+- invalid index / range / offset / length / limit / capacity / scale / precision / timeout / size
+- invalid enum / option / flag values
+- incompatible argument combinations
+
+For each, also check:
+- Exception type consistency — especially NullPointerException, IllegalArgumentException, IndexOutOfBoundsException, NoSuchElementException, UnsupportedOperationException.
+- Message clarity and consistency across comparable methods.
+- Javadoc accuracy — whether documented @throws / behavior matches actual validation.
+
+Constraints:
+- A missing check is not automatically a bug — some methods intentionally permit null, empty, negative, or otherwise lenient input. Flag intent-ambiguous cases as open questions rather than defects.
+- Preserve backward compatibility. Adding a new exception to a public API is a behavior change — call this out explicitly.
+- Prefer consistency within an API family/class over global one-size-fits-all rules.
+- Exclude pure style preferences.
+
+Output format:
+
+A. Executive Summary — main consistency problems and the highest-risk API areas.
+
+B. Validation Consistency Matrix — per parameter category: expected/common rule · conforming classes/methods · deviating classes/methods · current exception type & message · recommended exception type & message · compatibility risk.
+
+C. Prioritized Fix Plan
+- P0: clear bugs or likely runtime failures
+- P1: high-confidence consistency fixes, low compatibility risk
+- P2: public-API behavior changes requiring review
+- P3: documentation- or message-only improvements
+
+D. Recommended Validation Policy — a concise project-wide policy per parameter category, including preferred exception types.
+
+E. Tests Needed — per recommended fix, the unit tests to add/update (null, empty, boundary, invalid-value cases).
+
+F. Open Questions — cases where intent is unclear and human review is required before any change.
+
+
+==============================================================================================================================================
+
+
+
+Use multiple agents to perform a thorough deep line by line review for classes under folder: ./src/main/java to find bugs and fix them, and add unit tests for the fixes to existing test classes. For each class, following below steps:
+
+✢ Reviewing xxx.java with multiple agents
+     ◻ Deep multi-agent review of xxx.java
+     ◻ Triage xxx findings and fix bugs
+     ◻ Add tests for xxx fixes
+     ◻ Run full test suite
+
+Use multiple agents to perform a thorough deep line by line review for all the classes under folder: ./src/main/java to find bugs and fix them, and add unit tests for the fixes to existing test classes.
+
+Use multiple agents to perform a thorough deep line by line review for all the classes in packages: com.landawn.abacus.util.stream and com.landawn.abacus.util.function under folder: ./src/main/java to find bugs and fix them, and add unit tests for the fixes to existing test classes.
+
+
+Use multiple agents to perform a thorough deep line by line review for all the classes in package: com.landawn.abacus.util under folder: ./src/main/java to find bugs and fix them, and add unit tests for the fixes to existing test classes.
+
+Use multiple agents to perform a thorough deep line by line review for all the classes under folder: ./src/main/java to find bugs and fix them, and add unit tests for the fixes to existing test classes. Exclude the classes in package: com.landawn.abacus.util and its sub packages.
+
+
+
+Are you sure you have identified and fixed all the bugs? Perform a thorough deep review again.
+
+
+
+
+
+==============================================================================================================================================
+
+---
+Goal: Improve the readability and internal consistency of the Java source under ./src/main/java through a deep, line-by-line review. Refactoring internals is encouraged where it improves clarity.
+
+What to change (readability & consistency):
+- Clarify confusing logic; extract well-named private helpers; simplify nested conditionals and redundant branches.
+- Make naming, parameter validation, null/empty handling, and early-return patterns consistent across sibling classes.
+- Tidy formatting, ordering of members, and stale or misleading comments.
+
+Constraints:
+- Preserve the public API — do not change public/protected signatures, class names, or observable behavior. Internal refactors (method bodies, private helpers, locals) are fully open. [Switch to "full freedom incl. public API" if you want signature/class changes too.]
+- This is a mature library; tests are the source of truth. Don't "fix" behavior that tests rely on.
+
+Verification (required after every batch):
+- Run mvn -o clean compile and keep it green. Run relevant tests where feasible. A batch isn't done until it compiles.
+
+
+
+
+==============================================================================================================================================
+
+codex
+
+--- 
+
+TASK: Review and improve the readability and internal consistency of the Java source code under ./src/main/java/.
+
+This is primarily a source-quality review task. Focus on clarity, naming consistency, API consistency, documentation consistency, formatting consistency, and maintainability.
+
+Do NOT change public behavior unless the change is clearly a bug fix and you explain it separately.
+
+=======================================================================
+1. SCOPE
+=======================================================================
+
+Review all Java source files under:
+
+  ./src/main/java/
+
+Focus especially on public APIs, public classes, public methods, protected methods, and widely used internal utilities.
+
+Ignore generated files, build output, test files, and third-party copied code.
+
+=======================================================================
+2. PRIMARY GOALS
+=======================================================================
+
+Improve readability and internal consistency in the following areas:
+
+1. Naming consistency
+   - Method names
+   - Parameter names
+   - Local variable names
+   - Class names
+   - Enum names
+   - Constant names
+   - Builder/factory/helper method names
+
+2. API consistency
+   - Similar methods should follow similar naming patterns.
+   - Similar overloads should use consistent parameter order.
+   - Boolean-returning methods should use consistent prefixes such as is/has/can/contains.
+   - Mutating and non-mutating methods should be clearly distinguishable.
+   - Methods with similar behavior should have similar exception behavior.
+
+3. Javadoc consistency
+   - Similar methods should have similarly structured Javadocs.
+   - Parameter descriptions should match actual behavior.
+   - Return descriptions should be precise and not misleading.
+   - Exception descriptions should match actual thrown exceptions.
+   - Usage examples should be accurate, compilable in spirit, and consistent with the method behavior.
+   - Do not over-document obvious implementation details.
+
+4. Code readability
+   - Simplify overly complex expressions where appropriate.
+   - Improve variable names where they are unclear.
+   - Remove redundant comments.
+   - Add short clarifying comments only where the logic is genuinely non-obvious.
+   - Prefer straightforward code over clever code.
+
+5. Internal consistency
+   - Ensure similar classes use similar style and terminology.
+   - Ensure utility methods follow common conventions across the project.
+   - Ensure null/empty/boundary handling is consistent among related methods.
+   - Ensure exception messages and validation style are consistent.
+   - Ensure deprecated/Beta/experimental APIs are documented consistently.
+
+=======================================================================
+3. STRICT LIMITS
+=======================================================================
+
+Do NOT make broad behavioral changes.
+
+Do NOT change:
+  - Public method signatures
+  - Public class names
+  - Package names
+  - Existing generic type bounds
+  - Serialization-related fields
+  - Thread-safety behavior
+  - Performance-sensitive algorithms
+
+Unless explicitly requested, do NOT:
+  - Rename public APIs
+  - Remove public APIs
+  - Change checked/unchecked exception behavior
+  - Change null-handling behavior
+  - Reformat the entire file
+  - Rewrite large sections of logic
+
+If you believe a public API should be renamed or redesigned, do NOT change it directly. Instead, report it as a recommendation.
+
+=======================================================================
+4. WHAT TO CHANGE DIRECTLY
+=======================================================================
+
+You may directly change:
+
+1. Comments and Javadocs
+   - Fix grammar, spelling, and unclear wording.
+   - Make terminology consistent.
+   - Correct inaccurate examples.
+   - Improve parameter/return/exception descriptions.
+
+2. Local implementation readability
+   - Rename unclear local variables.
+   - Extract small local variables to clarify complex expressions.
+   - Simplify equivalent expressions.
+   - Remove obviously redundant code.
+   - Normalize formatting in touched areas only.
+
+3. Internal/private names
+   - Rename private helper methods or private fields only if this improves clarity and all references are updated.
+
+4. Minor consistency fixes
+   - Make similar code blocks follow the same style when behavior is unchanged.
+   - Align exception message wording among related methods.
+   - Normalize comments and section headers.
+
+=======================================================================
+5. WHAT TO REPORT INSTEAD OF CHANGING
+=======================================================================
+
+For anything that may affect compatibility or behavior, report it separately instead of changing it.
+
+Report:
+  - Public method names that seem inconsistent
+  - Public parameter order inconsistencies
+  - Ambiguous or misleading API names
+  - Suspicious null-handling differences
+  - Inconsistent exception behavior
+  - Inconsistent mutability behavior
+  - Possible bugs discovered during review
+  - Performance concerns
+  - Thread-safety concerns
+
+For each reported issue, include:
+  - File and class
+  - Method name
+  - Current behavior/name
+  - Why it seems inconsistent
+  - Suggested fix
+  - Whether it is source-compatible or breaking
+
+=======================================================================
+6. STYLE REQUIREMENTS
+=======================================================================
+
+Use the existing project style.
+
+Prefer:
+  - Clear names over short names
+  - Simple conditionals over clever expressions
+  - Existing utility methods from the project when appropriate
+  - Minimal diffs
+  - Localized changes
+
+Avoid:
+  - Large rewrites
+  - Personal style preferences
+  - Unnecessary abstraction
+  - Reformatting unrelated code
+  - Changing logic just to make it look cleaner
+
+=======================================================================
+7. VALIDATION
+=======================================================================
+
+After changes:
+
+1. Ensure the project compiles.
+2. Ensure existing tests still pass.
+3. Ensure no public API behavior was changed unintentionally.
+4. Review diffs to confirm changes are limited to readability and consistency.
+5. Summarize all files changed.
+6. Separately list recommendations that were not applied because they may be breaking or behavioral.
+
+=======================================================================
+8. OUTPUT
+=======================================================================
+
+Provide the result in three sections:
+
+A. Applied Changes
+   - List files changed.
+   - Summarize the readability/internal-consistency improvements.
+
+B. Potential API Consistency Issues
+   - List issues found but not changed.
+   - Include suggested fixes.
+
+C. Behavior/Risk Notes
+   - Mention any suspicious behavior discovered.
+   - Clearly state whether any behavior was changed.
+   
+

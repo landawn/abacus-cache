@@ -419,7 +419,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return {@code true} if the operation was successful, {@code false} otherwise (as reported
      *         by the underlying cache client)
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null (thrown by {@link #generateKey(Object)})
+     * @throws IllegalArgumentException if the key is null
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #generateKey(Object)
      * @see DistributedCacheClient#set(String, Object, long)
@@ -427,6 +427,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
+
+        N.checkArgNotNull(key, "key");
 
         return dcc.set(generateKey(key), value, liveTime);
     }
@@ -482,7 +484,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key, must not be {@code null}
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null (thrown by {@link #generateKey(Object)})
+     * @throws IllegalArgumentException if the key is null
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #clear()
      * @see #generateKey(Object)
@@ -491,6 +493,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     @Override
     public void remove(final K key) {
         assertNotClosed();
+
+        N.checkArgNotNull(key, "key");
 
         dcc.delete(generateKey(key));
     }

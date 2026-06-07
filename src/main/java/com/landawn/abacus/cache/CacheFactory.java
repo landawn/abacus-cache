@@ -454,13 +454,7 @@ public final class CacheFactory {
             } else if (parameters.length == 2) {
                 return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
-                try {
-                    final long timeout = Numbers.toLong(parameters[2]);
-                    N.checkArgPositive(timeout, "timeout");
-                    return new DistributedCache<>(new SpyMemcached<>(url, timeout), parameters[1]);
-                } catch (final NumberFormatException e) {
-                    throw new IllegalArgumentException("Invalid timeout parameter: " + parameters[2], e);
-                }
+                return new DistributedCache<>(new SpyMemcached<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
             } else {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
@@ -470,13 +464,7 @@ public final class CacheFactory {
             } else if (parameters.length == 2) {
                 return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
-                try {
-                    final long timeout = Numbers.toLong(parameters[2]);
-                    N.checkArgPositive(timeout, "timeout");
-                    return new DistributedCache<>(new JRedis<>(url, timeout), parameters[1]);
-                } catch (final NumberFormatException e) {
-                    throw new IllegalArgumentException("Invalid timeout parameter: " + parameters[2], e);
-                }
+                return new DistributedCache<>(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
             } else {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
@@ -500,5 +488,27 @@ public final class CacheFactory {
 
             return TypeAttrParser.newInstance(cls, provider);
         }
+    }
+
+    /**
+     * Parses the optional timeout token from a {@code createCache(String)} provider specification,
+     * shared by the Memcached and Redis branches to keep their parsing identical.
+     *
+     * @param timeoutValue the raw timeout token (in milliseconds)
+     * @return the parsed, strictly-positive timeout
+     * @throws IllegalArgumentException if the token is not a valid number or is not positive
+     */
+    private static long parseTimeoutParameter(final String timeoutValue) {
+        final long timeout;
+
+        try {
+            timeout = Numbers.toLong(timeoutValue);
+        } catch (final NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid timeout parameter: " + timeoutValue, e);
+        }
+
+        N.checkArgPositive(timeout, "timeout");
+
+        return timeout;
     }
 }

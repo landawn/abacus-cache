@@ -149,8 +149,11 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * }</pre>
      *
      * @param target the target resource on which to acquire the lock (must not be null)
-     * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive;
-     *                 converted to whole seconds for Memcached, with fractional seconds rounded up)
+     * @param liveTime the time-to-live in milliseconds before the lock automatically expires. Must be
+     *                 positive: a zero or non-expiring lock is disallowed because it would risk a
+     *                 permanent deadlock if the holder died before releasing it. This is a deliberate
+     *                 exception to the lenient TTL handling used by the cache {@code put} APIs. Converted
+     *                 to whole seconds for Memcached, with fractional seconds rounded up.
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws IllegalArgumentException if target is null or liveTime is not positive
      * @throws RuntimeException if a communication error occurs with Memcached
@@ -161,6 +164,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
         N.checkArgNotNull(target, "target");
         N.checkArgPositive(liveTime, "liveTime");
 
+        // The empty byte[] is only a value-less lock marker; get() maps an empty marker back to null,
+        // so it is never returned to the caller as a V and this unchecked cast cannot raise a ClassCastException.
         return lock(target, (V) N.EMPTY_BYTE_ARRAY, liveTime);
     }
 

@@ -126,7 +126,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * for {@code ByteBuffer} types, and otherwise delegates to {@link #parser}.
      */
     static final BiFunction<byte[], Type<?>, Object> DESERIALIZER = (bytes, type) -> {
-        // it's destroyed after read from memory. dirty data may be read.
         if (type.isPrimitiveByteArray()) {
             return bytes;
         } else if (type.isByteBuffer()) {
@@ -150,6 +149,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Default maximum size for a single memory block (8 KB).
      */
     static final int DEFAULT_MAX_BLOCK_SIZE = 8192; // 8K
+
+    /**
+     * When {@link #getAvailableSlot(int)} locates a non-full segment only after scanning past this
+     * many segments from the head of the size-class queue, that segment is moved to the front so
+     * subsequent allocations of the same slot size find it immediately, keeping the common case fast.
+     */
+    private static final int SEGMENT_REORDER_THRESHOLD = 3;
 
     /**
      * Shared scheduled executor used for the background eviction task of all
@@ -301,8 +307,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         N.checkArgPositive(capacityInMB, "capacityInMB");
-        N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "The Maximum Block size can't be: {}. It must be >= 1024 and <= {}", maxBlockSize,
-                SEGMENT_SIZE);
+        N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "maxBlockSize must be in the range [1024, {}]: {}", SEGMENT_SIZE, maxBlockSize);
         N.checkArgument(vacatingFactor >= 0f && vacatingFactor <= 1f, "vacatingFactor must be in the range [0.0, 1.0]: {}", vacatingFactor);
 
         this.logger = N.checkArgNotNull(logger, "logger");
@@ -1003,6 +1008,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         synchronized (queue) {
             final Iterator<Segment> iterator = queue.iterator();
             final Iterator<Segment> descendingIterator = queue.descendingIterator();
+            // Scan from both ends toward the middle, so the two iterators together cover the whole
+            // queue in at most half its length (the +1 covers the odd/middle element).
             int half = queue.size() / 2 + 1;
             int cnt = 0;
             while (iterator.hasNext() && half-- >= 0) {
@@ -1010,7 +1017,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 segment = iterator.next();
 
                 if ((indexOfAvailableSlot = segment.allocateSlot()) >= 0) {
-                    if (cnt > 3) {
+                    if (cnt > SEGMENT_REORDER_THRESHOLD) {
                         iterator.remove();
                         queue.addFirst(segment);
                     }
@@ -1022,7 +1029,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     segment = descendingIterator.next();
 
                     if ((indexOfAvailableSlot = segment.allocateSlot()) >= 0) {
-                        if (cnt > 3) {
+                        if (cnt > SEGMENT_REORDER_THRESHOLD) {
                             descendingIterator.remove();
                             queue.addFirst(segment);
                         }
@@ -1723,13 +1730,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * @param liveTime the time-to-live in milliseconds
          * @param maxIdleTime the maximum idle time in milliseconds
          * @param size the actual serialized size of the value in bytes
-         * @param segments the list of allocated slots holding the value chunks, in order (despite the
-         *                 parameter name, the elements are {@link Slot} instances, not {@link Segment}s)
+         * @param slots the list of allocated slots holding the value chunks, in order
          */
-        MultiSlotsWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slot> segments) {
+        MultiSlotsWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slot> slots) {
             super(type, liveTime, maxIdleTime, size, KIND_MULTI_SLOTS);
 
-            slots = segments;
+            this.slots = slots;
         }
 
         @Override
@@ -1740,28 +1746,29 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
 
                 final byte[] bytes = new byte[size];
-                int size = this.size;
+                int remaining = this.size;
                 int destOffset = _arrayOffset;
                 Segment segment = null;
 
                 for (final Slot slot : slots) {
                     segment = slot.segment;
                     final long startPtr = segment.segmentStartPtr + (long) slot.indexOfSlot * segment.sizeOfSlot;
-                    final int sizeToCopy = Math.min(size, segment.sizeOfSlot);
+                    final int sizeToCopy = Math.min(remaining, segment.sizeOfSlot);
 
                     copyFromMemory(startPtr, bytes, destOffset, sizeToCopy);
 
                     destOffset += sizeToCopy;
-                    size -= sizeToCopy;
+                    remaining -= sizeToCopy;
                 }
 
                 // should never happen.
-                if (size != 0) {
+                if (remaining != 0) {
                     throw new IllegalStateException(
-                            "Failed to retrieve value: " + size + " bytes remaining after reading all segments (data corruption detected)");
+                            "Failed to retrieve value: " + remaining + " bytes remaining after reading all segments (data corruption detected)");
                 }
 
-                // it's destroyed after read from memory. dirty data may be read.
+                // `bytes` is a freshly read private copy of the value: expose it directly for raw
+                // byte[]/ByteBuffer types, otherwise hand it to the deserializer.
                 if (type.isPrimitiveByteArray()) {
                     return (V) bytes;
                 } else if (type.isByteBuffer()) {

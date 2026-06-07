@@ -302,7 +302,10 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      */
     @Override
     protected void deallocate() {
-        // buffer.asSlice(_startPtr, _capacityB).fill((byte) 0);   // Is it unnecessary?
+        // The buffer is intentionally not zeroed before the arena is closed: closing releases the
+        // memory, and during normal operation a slot is always fully written before it is ever read,
+        // so no stale bytes are exposed. Zeroing here would only add cost.
+        //
         // Guard against a null arena: deallocate() is an overridable cleanup hook that the parent
         // constructor may invoke on an error path (e.g. shutdown-hook registration failure) before
         // allocate() has assigned arena, in which case an unguarded arena.close() would mask the

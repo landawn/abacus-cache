@@ -40,6 +40,9 @@ package com.landawn.abacus.cache;
  * <li>Performance - optimize for cache access patterns (frequent reads).</li>
  * <li>Resource management - handle file handles and disk space efficiently.</li>
  * <li>Error handling - return {@code null} or {@code false} on failures rather than throwing exceptions.</li>
+ * <li>Argument validation - the cache always passes non-null, already-validated keys and values, so
+ *     implementations need not null-check arguments; behavior on a {@code null} key or value is left
+ *     to the implementation.</li>
  * </ul>
  *
  * <p><b>Usage Examples:</b>

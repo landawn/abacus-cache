@@ -141,6 +141,11 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * are <em>not</em> enforced because the underlying counters are sampled non-atomically and
      * may be transiently inconsistent under concurrent activity.
      *
+     * <p>Unlike {@link CacheStats}, which uses {@code -1} as a "not tracked" sentinel for its
+     * {@code maxMemory}/{@code dataSize} components, the off-heap cache always tracks its memory and
+     * data sizes, so every numeric component here is strictly non-negative (there is no {@code -1}
+     * sentinel).
+     *
      * <p><b>Exception convention:</b> by deliberate design, {@code null} reference components are
      * rejected with {@link NullPointerException} (via {@link Objects#requireNonNull}), while an
      * out-of-range numeric component is rejected with {@link IllegalArgumentException}. This mirrors

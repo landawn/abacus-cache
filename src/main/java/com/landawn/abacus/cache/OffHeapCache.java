@@ -316,7 +316,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     @SuppressWarnings("removal")
     @Override
     protected void deallocate() {
-        // UNSAFE.setMemory(_startPtr, _capacityB, 0);   // Is it unnecessary?
+        // The region is intentionally not zeroed before being freed: freeMemory() returns it to the
+        // OS, and during normal operation a slot is always fully written before it is ever read, so
+        // no stale bytes are exposed. Zeroing here would only add cost.
         UNSAFE.freeMemory(_startPtr);
     }
 

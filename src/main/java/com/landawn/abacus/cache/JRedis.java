@@ -568,11 +568,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long incr(final String key) {
-        // BinaryShardedJedis.incr returns a boxed Long; auto-unboxing a null reply (which can
-        // occur on a transient shard error returning nil) would NPE rather than surfacing a
-        // meaningful exception. Treat null as "no value" / 0.
-        final Long v = jedis.incr(getKeyBytes(key));
-        return v == null ? 0L : v.longValue();
+        return nullToZero(jedis.incr(getKeyBytes(key)));
     }
 
     /**
@@ -638,8 +634,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public long incr(final String key, final int delta) {
         N.checkArgNotNegative(delta, "delta");
 
-        final Long v = jedis.incrBy(getKeyBytes(key), delta);
-        return v == null ? 0L : v.longValue();
+        return nullToZero(jedis.incrBy(getKeyBytes(key), delta));
     }
 
     /**
@@ -705,8 +700,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long decr(final String key) {
-        final Long v = jedis.decr(getKeyBytes(key));
-        return v == null ? 0L : v.longValue();
+        return nullToZero(jedis.decr(getKeyBytes(key)));
     }
 
     /**
@@ -779,8 +773,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public long decr(final String key, final int delta) {
         N.checkArgNotNegative(delta, "delta");
 
-        final Long v = jedis.decrBy(getKeyBytes(key), delta);
-        return v == null ? 0L : v.longValue();
+        return nullToZero(jedis.decrBy(getKeyBytes(key), delta));
     }
 
     /**
@@ -1016,5 +1009,19 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
             return null;
         }
         return kryoParser.decode(bytes);
+    }
+
+    /**
+     * Coalesces a possibly-{@code null} reply from a Redis counter command (incr/decr) to {@code 0}.
+     *
+     * <p>{@link BinaryShardedJedis} returns a boxed {@link Long}; auto-unboxing a {@code null}/nil reply
+     * (which can occur on a transient shard error) would throw a {@link NullPointerException} rather than
+     * surfacing a meaningful value. Treat {@code null} as "no value" / {@code 0}.
+     *
+     * @param value the boxed reply from an incr/decr command, possibly {@code null}
+     * @return {@code value} unboxed, or {@code 0} when {@code value} is {@code null}
+     */
+    private static long nullToZero(final Long value) {
+        return value == null ? 0L : value.longValue();
     }
 }
