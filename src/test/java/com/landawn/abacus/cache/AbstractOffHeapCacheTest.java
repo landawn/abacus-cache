@@ -4,13 +4,23 @@
 
 package com.landawn.abacus.cache;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.ByteBuffer;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+
+import com.landawn.abacus.type.ByteBufferType;
+import com.landawn.abacus.type.Type;
+import com.landawn.abacus.util.N;
 
 @Tag("2025")
 public class AbstractOffHeapCacheTest {
@@ -175,4 +185,243 @@ public class AbstractOffHeapCacheTest {
             }
         }
     }
+
+    // ByteBufferType.byteArrayOf() reads bytes [0, position); build a buffer whose written content
+    // (position advanced to the end) is exactly the supplied data so it round-trips through the cache.
+    private static ByteBuffer bufferOf(final byte[] data) {
+        final ByteBuffer bb = ByteBuffer.allocate(data.length);
+        bb.put(data);
+        return bb;
+    }
+
+    private static OffHeapStore<String> newInMemoryStore(final Map<String, byte[]> backing) {
+        return new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                backing.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return backing.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return backing.remove(key) != null;
+            }
+        };
+    }
+
+    // --- Default DESERIALIZER raw-type branches -------------------------------------------------
+    // The memory/disk wrappers special-case byte[] and ByteBuffer values before ever calling the
+    // configured deserializer, so the raw-type branches of the package-private default DESERIALIZER
+    // are only reachable by invoking it directly. These two tests exercise those branches.
+
+    /** {@code DESERIALIZER} returns the supplied array unchanged for a primitive {@code byte[]} type. */
+    @Test
+    public void testDeserializer_PrimitiveByteArray() {
+        final byte[] raw = { 1, 2, 3, 4, 5 };
+        final Type<?> type = N.typeOf(byte[].class);
+
+        final Object result = AbstractOffHeapCache.DESERIALIZER.apply(raw, type);
+
+        assertSame(raw, result, "primitive byte[] must be returned as-is without copying");
+    }
+
+    /** {@code DESERIALIZER} wraps the supplied bytes in a {@link ByteBuffer} for a ByteBuffer type. */
+    @Test
+    public void testDeserializer_ByteBuffer() {
+        final byte[] raw = "byte-buffer-payload".getBytes();
+        final Type<?> type = N.typeOf(ByteBuffer.class);
+
+        final Object result = AbstractOffHeapCache.DESERIALIZER.apply(raw, type);
+
+        assertTrue(result instanceof ByteBuffer, "ByteBuffer type must deserialize to a ByteBuffer");
+        assertArrayEquals(raw, ByteBufferType.byteArrayOf((ByteBuffer) result));
+    }
+
+    // --- ByteBuffer value round-trips through each wrapper kind ---------------------------------
+    // Exercise the ByteBuffer serialization branch in put() and the ByteBuffer read branch in each
+    // wrapper (single-slot, multi-slot, and disk-backed StoreWrapper).
+
+    /** Small ByteBuffer value: stored in a single slot and read back through SlotWrapper. */
+    @Test
+    public void testByteBufferValue_SingleSlot_roundtrip() {
+        final byte[] data = "hello-single-slot-byte-buffer".getBytes();
+        try (OffHeapCache<String, ByteBuffer> cache = OffHeapCache.<String, ByteBuffer> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .build()) {
+            assertTrue(cache.put("k", bufferOf(data)));
+
+            final ByteBuffer out = cache.getOrNull("k");
+            assertNotNull(out);
+            assertArrayEquals(data, ByteBufferType.byteArrayOf(out));
+        }
+    }
+
+    /** Large ByteBuffer value (> maxBlockSize): split across slots and read back through MultiSlotsWrapper. */
+    @Test
+    public void testByteBufferValue_MultiSlot_roundtrip() {
+        final byte[] data = new byte[20_000];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 31 + 7);
+        }
+        try (OffHeapCache<String, ByteBuffer> cache = OffHeapCache.<String, ByteBuffer> builder()
+                .capacityInMB(16)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .build()) {
+            assertTrue(cache.put("big", bufferOf(data)));
+
+            final ByteBuffer out = cache.getOrNull("big");
+            assertNotNull(out);
+            assertArrayEquals(data, ByteBufferType.byteArrayOf(out));
+        }
+    }
+
+    /** Disk-routed ByteBuffer value: read back through StoreWrapper.deserialize. */
+    @Test
+    public void testByteBufferValue_DiskStore_roundtrip() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final byte[] data = "disk-resident-byte-buffer-payload".getBytes();
+        try (OffHeapCache<String, ByteBuffer> cache = OffHeapCache.<String, ByteBuffer> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2) // disk only
+                .build()) {
+            assertTrue(cache.put("k", bufferOf(data)));
+            assertEquals(1L, cache.stats().sizeOnDisk());
+
+            final ByteBuffer out = cache.getOrNull("k");
+            assertNotNull(out);
+            assertArrayEquals(data, ByteBufferType.byteArrayOf(out));
+        }
+    }
+
+    // --- Disk -> memory promotion (testerForLoadingItemFromDiskToMemory) ------------------------
+    // With a promotion tester that always returns true, a disk-only put followed by a get reads the
+    // bytes from disk and copies them back into off-heap memory, retiring the on-disk copy.
+
+    /** Promotion of a small disk-stored value back into a single memory slot. */
+    @Test
+    public void testDiskToMemoryPromotion_SingleSlot() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final byte[] data = new byte[256];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i + 1);
+        }
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2) // disk only on put
+                .testerForLoadingItemFromDiskToMemory((activityPrint, size, elapsed) -> true)
+                .build()) {
+            assertTrue(cache.put("k", data));
+            assertEquals(1L, cache.stats().sizeOnDisk());
+
+            // First get reads from disk and promotes the value into a memory slot.
+            assertArrayEquals(data, cache.getOrNull("k"));
+            // After promotion the on-disk copy is retired.
+            assertEquals(0L, cache.stats().sizeOnDisk());
+            // Value is still readable from memory.
+            assertArrayEquals(data, cache.getOrNull("k"));
+        }
+    }
+
+    /** Promotion of a large disk-stored value back into multiple memory slots. */
+    @Test
+    public void testDiskToMemoryPromotion_MultiSlot() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final byte[] data = new byte[20_000];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 17 + 3);
+        }
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(16)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2) // disk only on put
+                .testerForLoadingItemFromDiskToMemory((activityPrint, size, elapsed) -> true)
+                .build()) {
+            assertTrue(cache.put("big", data));
+            assertEquals(1L, cache.stats().sizeOnDisk());
+
+            // First get reads from disk and promotes the value into multiple memory slots.
+            assertArrayEquals(data, cache.getOrNull("big"));
+            assertEquals(0L, cache.stats().sizeOnDisk());
+            assertArrayEquals(data, cache.getOrNull("big"));
+        }
+    }
+
+    /**
+     * A failed in-memory put of a brand-new (non-replacing) oversized key schedules the asynchronous
+     * vacating task. Exercises the {@code vacate()} scheduling path and keeps the cache usable.
+     */
+    @Test
+    public void testVacateScheduledWhenMemoryFullForNewKey() throws InterruptedException {
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build()) {
+            // 2 MB value cannot fit the 1 MB cache; key is new so this is not a replacement and
+            // therefore triggers vacate().
+            assertFalse(cache.put("brand-new-oversized-key", new byte[2 * 1024 * 1024]));
+
+            // Allow the asynchronously-scheduled vacating task to run (covers its lambda body).
+            Thread.sleep(200);
+
+            // Slots allocated during the failed put were released, so the cache is still usable.
+            final byte[] ok = new byte[128];
+            for (int i = 0; i < ok.length; i++) {
+                ok[i] = (byte) i;
+            }
+            assertTrue(cache.put("ok", ok));
+            assertArrayEquals(ok, cache.getOrNull("ok"));
+        }
+    }
+
+    /**
+     * Replacing a memory-backed entry with a disk-routed value: {@code putToDisk} removes and
+     * destroys the prior in-memory wrapper before installing the new {@code StoreWrapper}.
+     */
+    @Test
+    public void testPutToDisk_replacesMemoryWrapper() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        // Small values (< 1000 bytes) go to memory; larger values go to disk.
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> size < 1000 ? 1 : 2)
+                .build()) {
+            assertTrue(cache.put("k", new byte[100])); // memory-backed SlotWrapper
+            assertEquals(0L, cache.stats().sizeOnDisk());
+
+            final byte[] large = new byte[5000];
+            for (int i = 0; i < large.length; i++) {
+                large[i] = (byte) (i % 251);
+            }
+            // Replace the same key with a disk-routed value: prior memory wrapper is destroyed.
+            assertTrue(cache.put("k", large));
+            assertEquals(1L, cache.stats().sizeOnDisk());
+            assertArrayEquals(large, cache.getOrNull("k"));
+        }
+    }
+
+    // TODO: The shutdown-hook-registration failure path and the background-eviction error handler
+    // (AbstractOffHeapCache constructor catch blocks) require the JVM to be mid-shutdown, which cannot
+    // be simulated deterministically in an isolated unit test; left uncovered intentionally.
 }

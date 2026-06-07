@@ -342,6 +342,40 @@ public class MemcachedLockTest {
     }
 
     /**
+     * A non-IllegalArgument communication error from the underlying client during lock() is wrapped
+     * in a RuntimeException carrying the lock key (the IllegalArgument branch is covered separately).
+     */
+    @Test
+    public void testLock_wrapsMemcachedCommunicationError() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            when(mockMc.add(any(String.class), anyInt(), any())).thenThrow(new IllegalStateException("memcached down"));
+
+            final RuntimeException ex = assertThrows(RuntimeException.class, () -> lock.lock("k", 5_000L));
+            assertTrue(ex.getMessage().contains("Failed to acquire lock for key: k"));
+        }
+    }
+
+    /**
+     * A non-IllegalArgument communication error from the underlying client during unlock() is wrapped
+     * in a RuntimeException carrying the lock key.
+     */
+    @Test
+    public void testUnlock_wrapsMemcachedCommunicationError() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            when(mockMc.delete("k")).thenThrow(new IllegalStateException("memcached down"));
+
+            final RuntimeException ex = assertThrows(RuntimeException.class, () -> lock.unlock("k"));
+            assertTrue(ex.getMessage().contains("Failed to release lock for key: k"));
+        }
+    }
+
+    /**
      * Returns an immediately-complete future yielding the supplied value. Used so that
      * spymemcached's resultOf() returns the canned value without blocking on the wire.
      */

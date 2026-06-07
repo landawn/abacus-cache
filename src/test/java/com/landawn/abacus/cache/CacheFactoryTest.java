@@ -272,4 +272,50 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_EdgeCase_CustomClassMustImplementCache() {
         assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("java.lang.String(localhost)"));
     }
+
+    /**
+     * A non-empty parameter list whose first (server-URL) parameter is empty is rejected with the
+     * "server URL cannot be empty" message. {@code Memcached(,prefix:)} parses to a two-element
+     * parameter array with an empty first element (distinct from {@code Memcached()}, which has no
+     * parameters at all).
+     */
+    @Test
+    public void testCreateCache_EdgeCase_EmptyServerUrlWithTrailingParam() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(,prefix:)"));
+        assertTrue(ex.getMessage() != null && ex.getMessage().contains("server URL cannot be empty"),
+                "expected a 'server URL cannot be empty' message but was: " + ex.getMessage());
+    }
+
+    /**
+     * A provider specification with an empty class name (the text before the parenthesis) is rejected
+     * with the "class name cannot be empty" message.
+     */
+    @Test
+    public void testCreateCache_EdgeCase_EmptyClassName() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("(localhost:11211)"));
+        assertTrue(ex.getMessage() != null && ex.getMessage().contains("class name cannot be empty"),
+                "expected a 'class name cannot be empty' message but was: " + ex.getMessage());
+    }
+
+    /**
+     * A custom provider class that implements {@link Cache} and exposes a {@code (String)} constructor
+     * is resolved and instantiated through the reflective custom-class branch of {@code createCache}.
+     */
+    @Test
+    public void testCreateCache_CustomClassImplementingCache() {
+        try (Cache<String, Object> cache = CacheFactory.createCache(DummyProviderCache.class.getName() + "(localhost:9999)")) {
+            assertNotNull(cache);
+            assertTrue(cache instanceof DummyProviderCache);
+            assertEquals("localhost:9999", ((DummyProviderCache<String, Object>) cache).serverUrl());
+            assertTrue(cache.put("k", "v"));
+            assertEquals("v", cache.getOrNull("k"));
+        }
+    }
+
+    // TODO: createCache's "attrResult == null" and "Cannot find class (cls == null)" guards are
+    // unreachable — TypeAttrParser.parse never returns null and ClassUtil.forName throws (rather than
+    // returning null) for a missing class. The "catch (IllegalArgumentException) -> rethrow" guard is
+    // likewise unreachable because TypeAttrParser.parse only throws non-IAE RuntimeExceptions
+    // (ParsingException / StringIndexOutOfBoundsException), which are handled by the RuntimeException
+    // branch instead.
 }

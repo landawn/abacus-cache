@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -23,6 +24,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.core.config.Configurator;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -41,6 +44,7 @@ public class DistributedCacheTest extends TestBase {
         final AtomicInteger flushCalls = new AtomicInteger();
         final AtomicInteger disconnectCalls = new AtomicInteger();
         volatile boolean failGet = false;
+        volatile boolean failDisconnect = false;
 
         @Override
         public String serverUrl() {
@@ -107,8 +111,13 @@ public class DistributedCacheTest extends TestBase {
         @Override
         public void disconnect() {
             disconnectCalls.incrementAndGet();
+            if (failDisconnect) {
+                throw new RuntimeException("simulated disconnect failure");
+            }
         }
     }
+
+    private static final String DISTRIBUTED_CACHE_LOGGER = "com.landawn.abacus.cache.DistributedCache";
 
     @Test
     public void testConstructor_EdgeCase_NullClient() {
@@ -351,6 +360,64 @@ public class DistributedCacheTest extends TestBase {
                 Thread.currentThread().interrupt();
             }
             assertEquals("ok", cache.getOrNull("k"));
+        }
+    }
+
+    /**
+     * A read failure is swallowed (treated as a cache miss) and logged at debug. Raising the logger
+     * level to DEBUG exercises the debug-logging line inside the read-failure catch block.
+     */
+    @Test
+    public void testGetOrNull_readFailureLoggedAtDebug() {
+        Configurator.setLevel(DISTRIBUTED_CACHE_LOGGER, Level.DEBUG);
+        try {
+            final InMemoryClient client = new InMemoryClient();
+            client.failGet = true;
+            // High threshold + long retry window so the breaker stays closed and the failing get
+            // actually reaches the client (and the debug-logging branch).
+            try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 5, 10_000)) {
+                assertNull(cache.getOrNull("k"));
+                assertEquals(1, client.getCalls.get());
+            }
+        } finally {
+            Configurator.setLevel(DISTRIBUTED_CACHE_LOGGER, Level.ERROR);
+        }
+    }
+
+    /**
+     * {@code close()} must stay idempotent and not propagate even if the underlying client's
+     * {@code disconnect()} throws. Raising the logger level to WARN exercises the warn-logging line
+     * inside the disconnect-failure catch block.
+     */
+    @Test
+    public void testClose_disconnectFailureIsSwallowedAndLogged() {
+        Configurator.setLevel(DISTRIBUTED_CACHE_LOGGER, Level.WARN);
+        try {
+            final InMemoryClient client = new InMemoryClient();
+            client.failDisconnect = true;
+            final DistributedCache<String, String> cache = new DistributedCache<>(client);
+
+            cache.close(); // disconnect throws; close() must swallow it and remain closed.
+
+            assertTrue(cache.isClosed());
+            assertEquals(1, client.disconnectCalls.get());
+        } finally {
+            Configurator.setLevel(DISTRIBUTED_CACHE_LOGGER, Level.ERROR);
+        }
+    }
+
+    /**
+     * {@code generateKey} rejects a non-null key whose string representation is null. An empty
+     * {@link Optional} is non-null yet {@code N.stringOf(Optional.empty())} returns {@code null},
+     * so it trips the "Key string representation cannot be null" guard.
+     */
+    @Test
+    public void testGenerateKey_EdgeCase_NullStringRepresentation() {
+        final InMemoryClient client = new InMemoryClient();
+        try (DistributedCache<Optional<Object>, String> cache = new DistributedCache<>(client)) {
+            final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> cache.generateKey(Optional.empty()));
+            assertTrue(ex.getMessage() != null && ex.getMessage().contains("Key string representation cannot be null"),
+                    "expected the null-string-representation message but was: " + ex.getMessage());
         }
     }
 }

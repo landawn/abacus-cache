@@ -19,12 +19,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeoutException;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -529,6 +532,98 @@ public class SpyMemcachedTest {
     public void test_disconnect_with_timeout_EdgeCase_Negative() {
         assertThrows(IllegalArgumentException.class, () -> cache.disconnect(-1));
     }
+
+    // --- Expiration overflow ------------------------------------------------------------------
+
+    /**
+     * A liveTime so large that the derived absolute Unix expiration second overflows {@code int}
+     * (but the relative seconds still fit in {@code int}) is rejected by {@code toMemcachedExpiration}.
+     */
+    @Test
+    public void test_set_expiration_overflow_throws() {
+        // 2e9 seconds is < Integer.MAX_VALUE (so toSeconds() itself does not throw) but
+        // now/1000 + 2e9 exceeds Integer.MAX_VALUE, tripping the absolute-expiration overflow guard.
+        assertThrows(IllegalArgumentException.class, () -> cache.set("k", "v", 2_000_000_000_000L));
+    }
+
+    // --- resultOf(...) exception conversion ----------------------------------------------------
+    // resultOf() is exercised indirectly through set(): the mocked client returns a future whose
+    // get(...) throws, and the cache must convert each checked failure into a RuntimeException.
+
+    /** {@code ExecutionException} with a cause is unwrapped to a RuntimeException. */
+    @SuppressWarnings("unchecked")
+    @Test
+    public void test_resultOf_executionException_withCause_isConverted() throws Exception {
+        final OperationFuture<Boolean> failing = mock(OperationFuture.class);
+        when(failing.get(anyLong(), any())).thenThrow(new ExecutionException(new IllegalStateException("boom")));
+        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(failing);
+
+        assertThrows(RuntimeException.class, () -> cache.set("k", "v", 60_000));
+    }
+
+    /** {@code ExecutionException} with a null cause falls back to wrapping the ExecutionException itself. */
+    @SuppressWarnings("unchecked")
+    @Test
+    public void test_resultOf_executionException_nullCause_isConverted() throws Exception {
+        final OperationFuture<Boolean> failing = mock(OperationFuture.class);
+        when(failing.get(anyLong(), any())).thenThrow(new ExecutionException("no cause", null));
+        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(failing);
+
+        assertThrows(RuntimeException.class, () -> cache.set("k", "v", 60_000));
+    }
+
+    /** A {@code TimeoutException} from the future is converted to a RuntimeException and the future cancelled. */
+    @SuppressWarnings("unchecked")
+    @Test
+    public void test_resultOf_timeout_isConverted() throws Exception {
+        final OperationFuture<Boolean> failing = mock(OperationFuture.class);
+        when(failing.get(anyLong(), any())).thenThrow(new TimeoutException("slow"));
+        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(failing);
+
+        assertThrows(RuntimeException.class, () -> cache.set("k", "v", 60_000));
+        verify(failing).cancel(true);
+    }
+
+    /** An {@code InterruptedException} is converted to a RuntimeException and the interrupt status restored. */
+    @SuppressWarnings("unchecked")
+    @Test
+    public void test_resultOf_interrupted_restoresInterruptStatusAndConverts() throws Exception {
+        final OperationFuture<Boolean> failing = mock(OperationFuture.class);
+        when(failing.get(anyLong(), any())).thenThrow(new InterruptedException("interrupted"));
+        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(failing);
+
+        assertThrows(RuntimeException.class, () -> cache.set("k", "v", 60_000));
+        // resultOf() must re-assert the thread's interrupt status; consume (and assert) it so the
+        // flag does not leak into later tests.
+        assertTrue(Thread.interrupted(), "interrupt status must be restored after InterruptedException");
+        verify(failing).cancel(true);
+    }
+
+    // --- Constructor failure (client creation throws IOException) -------------------------------
+
+    /**
+     * When constructing the underlying {@link MemcachedClient} fails with an {@link IOException},
+     * the failure is wrapped (UncheckedIOException) and surfaced as a RuntimeException from the
+     * SpyMemcached constructor.
+     */
+    @Test
+    public void test_constructor_wrapsClientCreationIOException() {
+        // Replace the BeforeEach interceptor (which constructs a plain mock) with one that fails
+        // construction; null the field so tearDown does not double-close it.
+        ctorIntercept.close();
+        ctorIntercept = null;
+
+        try (MockedConstruction<MemcachedClient> failing = Mockito.mockConstruction(MemcachedClient.class, (mock, ctx) -> {
+            throw new IOException("simulated connect failure");
+        })) {
+            assertThrows(RuntimeException.class, () -> new SpyMemcached<>("localhost:11211", 1000L));
+        }
+    }
+
+    // TODO: SpyMemcached constructor line "No valid server addresses found" is unreachable —
+    // AddrUtil.getAddressList(...) always throws IllegalArgumentException for invalid input and never
+    // returns an empty list. Likewise the super.getDefaultTranscoder() fallback only runs when the
+    // Kryo parser is absent from the classpath, which cannot be simulated in this build.
 
     private static Object readField(Object target, String fieldName) throws Exception {
         Field f = target.getClass().getDeclaredField(fieldName);
