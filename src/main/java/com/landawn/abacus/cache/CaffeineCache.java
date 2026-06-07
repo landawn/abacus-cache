@@ -90,8 +90,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Cache<String, User> caffeine = Caffeine.newBuilder()
      *     .maximumSize(1000)
      *     .expireAfterWrite(10, TimeUnit.MINUTES)
-     *     .build();
-     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
+     *     .build();                                                        // build the pre-configured Caffeine instance
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);   // wrap it (cache.isClosed() == false)
+     *
+     * new CaffeineCache<String, User>((Cache<String, User>) null);   // throws IllegalArgumentException (null cache)
      * }</pre>
      *
      * @param cache the underlying Caffeine cache instance to wrap
@@ -113,13 +115,16 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user, 0, 0);
-     * User retrieved = cache.getOrNull("user:123");
+     * cache.put("user:123", user, 0, 0);                 // seed one entry
+     * User retrieved = cache.getOrNull("user:123");      // returns the stored user (hit)
      * if (retrieved != null) {
-     *     System.out.println("Found user: " + retrieved.getName());
+     *     System.out.println("Found user: " + retrieved.getName());   // prints "Found user: ..."
      * } else {
-     *     System.out.println("Cache miss - entry not found or evicted");
+     *     System.out.println("Cache miss - entry not found or evicted");   // not reached in this scenario (hit)
      * }
+     *
+     * User absent = cache.getOrNull("user:999");         // returns null (miss; getIfPresent does not load)
+     * cache.getOrNull((String) null);                    // throws IllegalArgumentException (null key)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be returned (must not be {@code null})
@@ -153,12 +158,17 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * // Configure expiration at cache creation time
      * Cache<String, User> caffeine = Caffeine.newBuilder()
      *     .expireAfterWrite(10, TimeUnit.MINUTES)
-     *     .build();
+     *     .build();                                            // expiry lives on the builder, not per-entry
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
      *
      * // liveTime and maxIdleTime parameters are ignored
-     * cache.put("user:123", user, 0, 0);
-     * cache.put("user:456", anotherUser, 3600000, 1800000);   // Time params still ignored
+     * boolean stored = cache.put("user:123", user, 0, 0);     // returns true
+     * cache.put("user:456", anotherUser, 3600000, 1800000);   // returns true; time params still ignored
+     * cache.put("user:123", updatedUser, 0, 0);               // returns true; replaces existing value atomically
+     *
+     * // null key or null value are both rejected
+     * cache.put((String) null, user, 0, 0);                   // throws IllegalArgumentException (null key)
+     * cache.put("user:789", (User) null, 0, 0);               // throws IllegalArgumentException (null value)
      *
      * // All entries expire based on the cache-level configuration (10 minutes)
      * }</pre>
@@ -195,12 +205,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user, 0, 0);
-     * cache.remove("user:123");
-     * User retrieved = cache.getOrNull("user:123");   // returns null
+     * cache.put("user:123", user, 0, 0);              // seed one entry
+     * cache.remove("user:123");                       // invalidates the mapping
+     * User retrieved = cache.getOrNull("user:123");   // returns null (entry gone)
      *
      * // Removing non-existent key is safe
-     * cache.remove("user:999");   // No error, silent no-op
+     * cache.remove("user:999");                       // no error, silent no-op
+     * cache.remove((String) null);                    // throws IllegalArgumentException (null key)
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache (must not be {@code null})
@@ -234,12 +245,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user, 0, 0);
-     * if (cache.containsKey("user:123")) {
-     *     System.out.println("User exists in cache");
+     * cache.put("user:123", user, 0, 0);              // seed one entry
+     * if (cache.containsKey("user:123")) {            // returns true (mapping present)
+     *     System.out.println("User exists in cache"); // this branch runs
      * } else {
-     *     System.out.println("User not in cache or has expired");
+     *     System.out.println("User not in cache or has expired");   // not reached in this scenario (present)
      * }
+     *
+     * boolean absent = cache.containsKey("user:999"); // returns false (no mapping)
+     * cache.containsKey((String) null);               // throws IllegalArgumentException (null key)
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested (must not be {@code null})
@@ -268,9 +282,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * try {
-     *     Set<String> keys = cache.keySet();   // throws UnsupportedOperationException
+     *     Set<String> keys = cache.keySet();   // throws UnsupportedOperationException (always, even when open)
      * } catch (UnsupportedOperationException e) {
-     *     System.out.println("Key iteration is not supported in CaffeineCache");
+     *     System.out.println("Key iteration is not supported in CaffeineCache");   // this branch runs
      *     // Use a different cache implementation if key iteration is required
      * }
      * }</pre>
@@ -300,10 +314,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user1, 0, 0);
-     * cache.put("user:456", user2, 0, 0);
-     * int count = cache.size();   // approximately 2
-     * System.out.println("Cache contains approximately " + count + " entries");
+     * int empty = cache.size();                                                 // returns 0 (no entries yet)
+     * cache.put("user:123", user1, 0, 0);                                       // seed first entry
+     * cache.put("user:456", user2, 0, 0);                                       // seed second entry
+     * int count = cache.size();                                                 // returns approximately 2 (estimate, never negative)
+     * System.out.println("Cache contains approximately " + count + " entries"); // prints "...approximately 2..."
      * }</pre>
      *
      * @return the estimated number of cache entries
@@ -329,11 +344,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * cache.put("user:123", user1, 0, 0);
-     * cache.put("user:456", user2, 0, 0);
-     * System.out.println("Before clear: " + cache.size());
-     * cache.clear();                                        // Removes all cached entries
-     * System.out.println("After clear: " + cache.size());   // Approximately 0
+     * cache.put("user:123", user1, 0, 0);                   // seed first entry
+     * cache.put("user:456", user2, 0, 0);                   // seed second entry
+     * System.out.println("Before clear: " + cache.size());  // prints approximately 2
+     * cache.clear();                                        // removes all cached entries
+     * System.out.println("After clear: " + cache.size());   // prints approximately 0
+     * User gone = cache.getOrNull("user:123");              // returns null (all entries invalidated)
      * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
@@ -359,30 +375,31 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * // Try-with-resources pattern (recommended)
      * try (CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance)) {
-     *     cache.put("user:123", user, 0, 0);
-     *     User retrieved = cache.getOrNull("user:123");
-     *     // Cache is automatically closed
+     *     cache.put("user:123", user, 0, 0);             // seed one entry
+     *     User retrieved = cache.getOrNull("user:123");  // returns the stored user
+     *     // Cache is automatically closed (invalidateAll() + marked closed) on block exit
      * }
      *
      * // Manual close
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
      * try {
-     *     cache.put("user:123", user, 0, 0);
+     *     cache.put("user:123", user, 0, 0);   // seed one entry
      * } finally {
-     *     cache.close();   // Always close to release resources
+     *     cache.close();   // always close to release entry references
      * }
      *
-     * // Safe to call multiple times
-     * cache.close();
-     * cache.close();   // No exception thrown
+     * // Safe to call multiple times (idempotent)
+     * cache.close();       // first call closes the wrapper
+     * cache.close();       // no-op; no exception thrown
      *
      * // After closing, operations throw IllegalStateException
      * try {
-     *     cache.getOrNull("user:123");   // Throws IllegalStateException
+     *     cache.getOrNull("user:123");   // throws IllegalStateException
      * } catch (IllegalStateException e) {
-     *     System.out.println("Cache is closed");
+     *     System.out.println("Cache is closed");   // this branch runs
      * }
      * }</pre>
+     *
      */
     @Override
     public synchronized void close() {
@@ -406,13 +423,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * if (!cache.isClosed()) {
-     *     cache.put("user:123", user, 0, 0);
+     * if (!cache.isClosed()) {                 // returns false on a fresh cache, so this branch runs
+     *     cache.put("user:123", user, 0, 0);   // seed one entry
      * } else {
-     *     System.out.println("Cache is closed, cannot perform operation");
+     *     System.out.println("Cache is closed, cannot perform operation");   // not reached on a fresh cache
      * }
      *
-     * cache.close();
+     * cache.close();                       // close the wrapper
      * boolean closed = cache.isClosed();   // returns true
      * }</pre>
      *
@@ -443,24 +460,24 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * // Create cache with stats enabled
      * Cache<String, User> caffeine = Caffeine.newBuilder()
      *     .maximumSize(1000)
-     *     .recordStats()  // Enable stats recording
-     *     .build();
+     *     .recordStats()      // enable stats recording (otherwise all counters stay 0)
+     *     .build();           // build the configured Caffeine instance
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
      *
      * // Perform operations
-     * cache.put("user:123", user, 0, 0);
-     * User retrieved = cache.getOrNull("user:123");   // Hit
-     * User missing = cache.getOrNull("user:999");     // Miss
+     * cache.put("user:123", user, 0, 0);              // seed one entry
+     * User retrieved = cache.getOrNull("user:123");   // hit  -> increments hitCount
+     * User missing = cache.getOrNull("user:999");     // miss -> increments missCount
      *
      * // Get statistics
-     * CacheStats stats = cache.stats();
-     * System.out.println("Hit rate: " + stats.hitRate());
-     * System.out.println("Miss rate: " + stats.missRate());
-     * System.out.println("Hit count: " + stats.hitCount());
-     * System.out.println("Miss count: " + stats.missCount());
-     * System.out.println("Eviction count: " + stats.evictionCount());
-     * System.out.println("Load success count: " + stats.loadSuccessCount());
-     * System.out.println("Average load penalty: " + stats.averageLoadPenalty() + " ns");
+     * CacheStats stats = cache.stats();                                                  // returns a non-null snapshot (works even after close())
+     * System.out.println("Hit rate: " + stats.hitRate());                                // prints a value in [0.0, 1.0]
+     * System.out.println("Miss rate: " + stats.missRate());                              // prints a value in [0.0, 1.0]
+     * System.out.println("Hit count: " + stats.hitCount());                              // prints >= 1 here
+     * System.out.println("Miss count: " + stats.missCount());                            // prints >= 1 here
+     * System.out.println("Eviction count: " + stats.evictionCount());                    // prints >= 0
+     * System.out.println("Load success count: " + stats.loadSuccessCount());             // prints >= 0
+     * System.out.println("Average load penalty: " + stats.averageLoadPenalty() + " ns"); // prints >= 0.0
      * }</pre>
      *
      * @return a snapshot of the cache statistics at the time of invocation (all zeros if recordStats() was not enabled)

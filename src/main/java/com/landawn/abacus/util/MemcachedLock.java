@@ -135,16 +135,16 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
-     * // Basic lock usage with 30-second TTL
-     * if (lock.lock("resource1", 30000)) {
+     * // Basic lock usage with 30-second TTL (30000 ms -> 30 s on the server)
+     * if (lock.lock("resource1", 30000)) {   // true: acquired (key was absent, value-less lock stored)
      *     try {
      *         // Critical section - perform exclusive operations
-     *         performOperation();
+     *         performOperation();            // your exclusive work runs here
      *     } finally {
-     *         lock.unlock("resource1");
+     *         lock.unlock("resource1");      // returns true: the lock key was deleted
      *     }
-     * } else {
-     *     System.out.println("Failed to acquire lock - already held by another process");
+     * } else {                               // false: key already exists (held by another process)
+     *     System.out.println("Failed to acquire lock - already held by another process");   // reached on contention
      * }
      * }</pre>
      *
@@ -194,27 +194,27 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
-     * // Example 1: Store hostname with lock
+     * // Example 1: Store hostname with lock (60000 ms -> 60 s TTL)
      * String lockHolder = InetAddress.getLocalHost().getHostName();
-     * if (lock.lock("resource1", lockHolder, 60000)) {
+     * if (lock.lock("resource1", lockHolder, 60000)) {   // true: acquired, lockHolder stored as the value
      *     try {
-     *         System.out.println("Lock acquired by: " + lock.get("resource1"));
+     *         System.out.println("Lock acquired by: " + lock.get("resource1"));   // prints lockHolder
      *         // Perform operations
      *     } finally {
-     *         lock.unlock("resource1");
+     *         lock.unlock("resource1");                  // returns true: the lock key was deleted
      *     }
-     * } else {
-     *     System.out.println("Lock is held by: " + lock.get("resource1"));
+     * } else {                                           // false: key already exists (held)
+     *     System.out.println("Lock is held by: " + lock.get("resource1"));        // prints the current holder's value
      * }
      *
      * // Example 2: Store structured metadata (V must be a compatible type,
      * // e.g., MemcachedLock<String, Map<String, Object>>)
      * MemcachedLock<String, Map<String, Object>> metaLock = new MemcachedLock<>("localhost:11211");
      * Map<String, Object> metadata = new HashMap<>();
-     * metadata.put("host", "server1");
-     * metadata.put("thread", Thread.currentThread().getName());
-     * metadata.put("timestamp", System.currentTimeMillis());
-     * metaLock.lock("resource2", metadata, 30000);
+     * metadata.put("host", "server1");                                // seed metadata map
+     * metadata.put("thread", Thread.currentThread().getName());       // seed metadata map
+     * metadata.put("timestamp", System.currentTimeMillis());          // seed metadata map
+     * metaLock.lock("resource2", metadata, 30000);                    // returns true: acquired, metadata stored as the value
      * }</pre>
      *
      * @param target the target resource on which to acquire the lock (must not be null)
@@ -277,24 +277,24 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
      * // Example 1: Check lock status for monitoring
-     * if (lock.isLocked("resource1")) {
-     *     System.out.println("Resource is currently locked");
-     * } else {
-     *     System.out.println("Resource is available");
+     * if (lock.isLocked("resource1")) {                         // true iff the key exists (even a value-less lock counts as held)
+     *     System.out.println("Resource is currently locked");   // reached when isLocked() returned true
+     * } else {                                                  // false: no key present
+     *     System.out.println("Resource is available");          // reached when isLocked() returned false
      * }
      *
      * // Example 2: INCORRECT usage - race condition
-     * if (!lock.isLocked("resource1")) {
+     * if (!lock.isLocked("resource1")) {       // point-in-time check only; not atomic with the lock below
      *     // Lock could be acquired by another process here!
-     *     lock.lock("resource1", 30000);   // Might fail
+     *     lock.lock("resource1", 30000);       // may return false: another process raced in and acquired it
      * }
      *
      * // Example 3: CORRECT usage - atomic check
-     * if (lock.lock("resource1", 30000)) {
+     * if (lock.lock("resource1", 30000)) {     // true: acquired atomically (single add-if-absent attempt)
      *     try {
      *         // Lock successfully acquired
      *     } finally {
-     *         lock.unlock("resource1");
+     *         lock.unlock("resource1");        // returns true: the lock key was deleted
      *     }
      * }
      * }</pre>
@@ -340,33 +340,33 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
      * // Example 1: Check who holds the lock
-     * String holder = lock.get("resource1");
+     * String holder = lock.get("resource1");   // the stored value, or null if absent / value-less lock
      * if (holder != null) {
-     *     System.out.println("Lock held by: " + holder);
-     * } else {
-     *     System.out.println("No lock exists or value is empty");
+     *     System.out.println("Lock held by: " + holder);            // reached when get() returned a non-null value
+     * } else {                                                      // null: no lock, or a value-less lock(target, liveTime)
+     *     System.out.println("No lock exists or value is empty");   // reached when get() returned null
      * }
      *
      * // Example 2: Verify lock ownership before unlocking
      * String myId = InetAddress.getLocalHost().getHostName();
-     * if (lock.lock("resource2", myId, 60000)) {
+     * if (lock.lock("resource2", myId, 60000)) {       // true: acquired, myId stored as the value
      *     try {
      *         // Perform operations
      *     } finally {
-     *         // Verify we still own the lock before unlocking
-     *         if (myId.equals(lock.get("resource2"))) {
-     *             lock.unlock("resource2");
+     *         // Verify we still own the lock before unlocking (note: this read-then-delete is itself racy)
+     *         if (myId.equals(lock.get("resource2"))) {   // get() returns myId while we hold it
+     *             lock.unlock("resource2");               // returns true: the lock key was deleted
      *         } else {
-     *             System.out.println("Lock ownership changed - not unlocking");
+     *             System.out.println("Lock ownership changed - not unlocking");   // reached if the value no longer matches
      *         }
      *     }
      * }
      *
      * // Example 3: Retrieve structured metadata
-     * Map<String, Object> lockInfo = (Map<String, Object>) lock.get("resource3");
+     * Map<String, Object> lockInfo = (Map<String, Object>) lock.get("resource3");   // stored map, or null if absent
      * if (lockInfo != null) {
-     *     System.out.println("Locked by: " + lockInfo.get("host"));
-     *     System.out.println("Thread: " + lockInfo.get("thread"));
+     *     System.out.println("Locked by: " + lockInfo.get("host"));    // reads a field from the stored map
+     *     System.out.println("Thread: " + lockInfo.get("thread"));     // reads a field from the stored map
      * }
      * }</pre>
      *
@@ -419,28 +419,28 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
      * // Example 1: Basic unlock in finally block
-     * if (lock.lock("resource1", 30000)) {
+     * if (lock.lock("resource1", 30000)) {                     // true: acquired
      *     try {
-     *         performOperation();
+     *         performOperation();                              // your exclusive work runs here
      *     } finally {
-     *         boolean unlocked = lock.unlock("resource1");
+     *         boolean unlocked = lock.unlock("resource1");     // true: key deleted; false: already expired/removed
      *         if (!unlocked) {
-     *             System.out.println("Lock may have already expired or been removed");
+     *             System.out.println("Lock may have already expired or been removed");   // reached when unlock() returned false
      *         }
      *     }
      * }
      *
-     * // Example 2: Unlock with ownership verification
+     * // Example 2: Unlock with ownership verification (still racy - only narrows the window)
      * String myId = "server-1";
-     * if (lock.lock("resource2", myId, 60000)) {
+     * if (lock.lock("resource2", myId, 60000)) {               // true: acquired, myId stored as the value
      *     try {
-     *         performOperation();
+     *         performOperation();                              // your exclusive work runs here
      *     } finally {
-     *         // Only unlock if we still own it
-     *         if (myId.equals(lock.get("resource2"))) {
-     *             lock.unlock("resource2");
+     *         // Only unlock if we still own it (unlock itself does NO ownership check)
+     *         if (myId.equals(lock.get("resource2"))) {        // get() returns myId while we hold it
+     *             lock.unlock("resource2");                    // returns true: the lock key was deleted
      *         } else {
-     *             System.out.println("Lock no longer owned by us - skipping unlock");
+     *             System.out.println("Lock no longer owned by us - skipping unlock");   // reached if the value no longer matches
      *         }
      *     }
      * }
@@ -569,20 +569,20 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
      * // Example 1: Access the underlying client for custom operations
-     * SpyMemcached<String> client = lock.client();
-     * client.set("custom:key", "value", 60000);
+     * SpyMemcached<String> client = lock.client();          // never null; the same instance on every call
+     * client.set("custom:key", "value", 60000);             // returns true on success (60000 ms -> 60 s TTL)
      *
      * // Example 2: Store metadata alongside lock
-     * String metadata = client.get("custom:key");
-     * System.out.println("Metadata: " + metadata);
+     * String metadata = client.get("custom:key");           // returns "value" (or null if absent/expired)
+     * System.out.println("Metadata: " + metadata);          // prints: value
      *
      * // Example 3: Perform bulk operations
      * Map<String, String> data = new HashMap<>();
-     * data.put("data:key1", "value1");
-     * data.put("data:key2", "value2");
+     * data.put("data:key1", "value1");                      // seed local data map
+     * data.put("data:key2", "value2");                      // seed local data map
      * // Note: Use different key prefix to avoid conflicts with lock keys
      * for (Map.Entry<String, String> entry : data.entrySet()) {
-     *     client.set(entry.getKey(), entry.getValue(), 300000);
+     *     client.set(entry.getKey(), entry.getValue(), 300000);   // returns true on success (300000 ms -> 300 s TTL)
      * }
      * }</pre>
      *
@@ -614,46 +614,47 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <pre>{@code
      * // Example 1: Recommended pattern with try-with-resources
      * try (MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211")) {
-     *     if (lock.lock("resource", 30000)) {
+     *     if (lock.lock("resource", 30000)) {        // true: acquired
      *         try {
      *             // Critical section
-     *             performOperation();
+     *             performOperation();                // your exclusive work runs here
      *         } finally {
-     *             lock.unlock("resource");
+     *             lock.unlock("resource");           // returns true: the lock key was deleted
      *         }
      *     }
-     * } // Automatically closed, resources released
+     * } // close() runs automatically: disconnects the client; does NOT release any still-held locks
      *
      * // Example 2: Manual close (not recommended)
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      * try {
-     *     if (lock.lock("resource", 30000)) {
+     *     if (lock.lock("resource", 30000)) {        // true: acquired
      *         try {
-     *             performOperation();
+     *             performOperation();                // your exclusive work runs here
      *         } finally {
-     *             lock.unlock("resource");
+     *             lock.unlock("resource");           // returns true: the lock key was deleted
      *         }
      *     }
      * } finally {
-     *     lock.close();   // Ensure close is called
+     *     lock.close();   // idempotent: disconnects the client; safe to call more than once
      * }
      *
      * // Example 3: Multiple locks with single client
      * try (MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211")) {
-     *     boolean lock1 = lock.lock("resource1", 30000);
-     *     boolean lock2 = lock.lock("resource2", 30000);
+     *     boolean lock1 = lock.lock("resource1", 30000);   // true: acquired
+     *     boolean lock2 = lock.lock("resource2", 30000);   // true: acquired (distinct key)
      *
      *     try {
      *         if (lock1 && lock2) {
      *             // Both locks acquired
-     *             performOperation();
+     *             performOperation();                      // your exclusive work runs here
      *         }
      *     } finally {
-     *         if (lock1) lock.unlock("resource1");
-     *         if (lock2) lock.unlock("resource2");
+     *         if (lock1) lock.unlock("resource1");         // returns true: the lock key was deleted
+     *         if (lock2) lock.unlock("resource2");         // returns true: the lock key was deleted
      *     }
-     * }
+     * } // close() runs automatically here
      * }</pre>
+     *
      */
     @Override
     public void close() {

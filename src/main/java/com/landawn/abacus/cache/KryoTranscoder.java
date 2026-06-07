@@ -74,13 +74,13 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Create transcoder with default max size
-     * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
+     * // Create transcoder with the default max size
+     * KryoTranscoder<String> transcoder = new KryoTranscoder<>();
+     * int max = transcoder.getMaxSize();   // CachedData.MAX_SIZE
      *
-     * // Use with MemcachedClient
-     * User user = new User("Alice", 25);
-     * CachedData encoded = transcoder.encode(user);
-     * User decoded = transcoder.decode(encoded);
+     * // Encode then decode round-trips the value
+     * CachedData encoded = transcoder.encode("Alice");
+     * String decoded = transcoder.decode(encoded);   // "Alice" -- equal to the encoded value
      * }</pre>
      *
      * @see #KryoTranscoder(int)
@@ -102,10 +102,15 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Create transcoder with 1MB max size
-     * KryoTranscoder<User> transcoder = new KryoTranscoder<>(1024 * 1024);
+     * // Create transcoder with a 1MB max size
+     * KryoTranscoder<String> transcoder = new KryoTranscoder<>(1024 * 1024);
+     * int max = transcoder.getMaxSize();   // 1048576 -- the value passed in
      *
-     * // Use with custom ConnectionFactory
+     * // A non-positive maxSize is rejected
+     * new KryoTranscoder<String>(0);    // throws IllegalArgumentException
+     * new KryoTranscoder<String>(-1);   // throws IllegalArgumentException
+     *
+     * // Use with a custom ConnectionFactory
      * ConnectionFactory connFactory = new DefaultConnectionFactory() {
      *     @Override
      *     public Transcoder<Object> getDefaultTranscoder() {
@@ -132,15 +137,15 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
-     * User user = new User("Bob", 30);
-     * CachedData data = transcoder.encode(user);
+     * KryoTranscoder<String> transcoder = new KryoTranscoder<>();
+     * CachedData data = transcoder.encode("Bob");
      *
-     * // Check if async decoding is supported
-     * boolean supportsAsync = transcoder.asyncDecode(data);   // Returns false
+     * // Async decoding is never supported, regardless of the argument
+     * boolean supportsAsync = transcoder.asyncDecode(data);   // false
+     * boolean forNull = transcoder.asyncDecode(null);         // false (the argument is ignored)
      *
-     * // Decoding will be performed synchronously
-     * User decoded = transcoder.decode(data);
+     * // Decoding is therefore performed synchronously
+     * String decoded = transcoder.decode(data);   // "Bob"
      * }</pre>
      *
      * @param d the cached data whose asynchronous-decode capability is being queried (ignored;
@@ -168,20 +173,21 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
+     * KryoTranscoder<String> transcoder = new KryoTranscoder<>();
      *
      * // Encode a simple object
-     * User user = new User("John", 30);
-     * CachedData cached = transcoder.encode(user);
-     * byte[] serialized = cached.getData();
-     * System.out.println("Serialized size: " + serialized.length + " bytes");
+     * CachedData cached = transcoder.encode("John");
+     * int flags = cached.getFlags();              // 0 (this transcoder never sets flags)
+     * byte[] serialized = cached.getData();       // non-empty Kryo payload (serialized.length > 0)
+     * String back = transcoder.decode(cached);    // "John" -- round-trips equal
      *
-     * // Encode null is supported
-     * CachedData nullData = transcoder.encode(null);
+     * // Encode null is supported: a non-null CachedData is produced...
+     * CachedData nullData = transcoder.encode(null);   // never null
+     * String none = transcoder.decode(nullData);       // null -- decodes back to null
      *
-     * // Complex objects with nested structures
-     * Order order = new Order(123, Arrays.asList(item1, item2), customer);
-     * CachedData orderData = transcoder.encode(order);
+     * // Encoding past the configured maxSize is rejected
+     * KryoTranscoder<String> tiny = new KryoTranscoder<>(8);
+     * tiny.encode("payload larger than 8 bytes once Kryo-encoded");   // throws IllegalArgumentException
      * }</pre>
      *
      * @param o the object to encode and serialize (may be {@code null})
@@ -216,24 +222,22 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * KryoTranscoder<User> transcoder = new KryoTranscoder<>();
+     * KryoTranscoder<String> transcoder = new KryoTranscoder<>();
      *
      * // Basic encode-decode cycle
-     * User originalUser = new User("Alice", 25);
-     * CachedData cached = transcoder.encode(originalUser);
-     * User decoded = transcoder.decode(cached);
-     * assert originalUser.equals(decoded);
+     * CachedData cached = transcoder.encode("Alice");
+     * String decoded = transcoder.decode(cached);   // "Alice" -- equal to the encoded value
      *
-     * // Handling null values
+     * // A null CachedData decodes to null
+     * String fromNull = transcoder.decode((CachedData) null);   // null
+     *
+     * // Zero-length data also decodes to null (the empty-data short-circuit)
+     * CachedData empty = new CachedData(0, new byte[0], 100);
+     * String fromEmpty = transcoder.decode(empty);   // null
+     *
+     * // A value that was encoded as null decodes back to null
      * CachedData nullCached = transcoder.encode(null);
-     * User nullDecoded = transcoder.decode(nullCached);   // Returns null
-     *
-     * // With MemcachedClient
-     * MemcachedClient client = new MemcachedClient(connFactory, addresses);
-     * CachedData data = (CachedData) client.get("user:123");
-     * if (data != null) {
-     *     User user = transcoder.decode(data);
-     * }
+     * String nullDecoded = transcoder.decode(nullCached);   // null
      * }</pre>
      *
      * @param d the cached data to decode and deserialize; if {@code null}, {@code null} is returned
@@ -266,24 +270,20 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * KryoTranscoder<User> transcoder = new KryoTranscoder<>(1024 * 1024);
+     * KryoTranscoder<String> transcoder = new KryoTranscoder<>(1024 * 1024);
      *
-     * // Query the max size
-     * int maxSize = transcoder.getMaxSize();   // Returns 1048576 (1MB)
+     * // Query the configured max size
+     * int maxSize = transcoder.getMaxSize();   // 1048576 (1MB) -- the value passed to the constructor
      *
-     * // Check before encoding large objects
-     * if (estimatedSize < transcoder.getMaxSize()) {
-     *     CachedData data = transcoder.encode(largeObject);
-     * } else {
-     *     // Handle oversized object differently
-     *     log.warn("Object too large to cache: {} bytes", estimatedSize);
-     * }
+     * // A default transcoder reports CachedData.MAX_SIZE
+     * int defaultMax = new KryoTranscoder<String>().getMaxSize();   // CachedData.MAX_SIZE
      *
      * // Compare transcoders
-     * KryoTranscoder<User> smallTranscoder = new KryoTranscoder<>(512 * 1024);
-     * KryoTranscoder<User> largeTranscoder = new KryoTranscoder<>(2 * 1024 * 1024);
-     * System.out.println("Size difference: " +
-     *     (largeTranscoder.getMaxSize() - smallTranscoder.getMaxSize()) + " bytes");
+     * KryoTranscoder<String> smallTranscoder = new KryoTranscoder<>(512 * 1024);
+     * KryoTranscoder<String> largeTranscoder = new KryoTranscoder<>(2 * 1024 * 1024);
+     * int small = smallTranscoder.getMaxSize();   // 524288 (512KB)
+     * int large = largeTranscoder.getMaxSize();   // 2097152 (2MB)
+     * int diff = large - small;                   // 1572864
      * }</pre>
      *
      * @return the maximum size, in bytes, for objects that can be cached

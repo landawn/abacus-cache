@@ -12,7 +12,7 @@ clobbering each other.
 
 Prerequisites (the orchestrator sets these up once, while no agents are running):
   * target/classes is up to date  (mvn -o compile)
-  * scripts/.testcp.txt exists    (mvn -o dependency:build-classpath -Dmdep.outputFile=scripts/.testcp.txt)
+  * scripts/.testcp.txt exists    (mvn -o dependency:build-classpath -Dmdep.outputFile=scripts/.testcp.txt -DincludeScope=test)
   * scripts/runner-classes/JdocTestRunner.class exists
       (javac -cp "@scripts/.testcp.txt-as-cp" -d scripts/runner-classes scripts/JdocTestRunner.java)
   verify_jdoc_test.py will auto-build the last two if missing.
@@ -44,8 +44,12 @@ def deps_classpath() -> str:
     if not os.path.exists(CP_FILE):
         print("scripts/.testcp.txt missing; generating (one-time)...", file=sys.stderr)
         subprocess.run(
+            # includeScope=test is the widest scope: it pulls in compile, runtime, test AND
+            # provided dependencies. The source classes under test (e.g. Ehcache, SpyMemcached,
+            # JRedis, CaffeineCache, KryoTranscoder) depend on provided-scope libraries, so the
+            # throwaway verification tests that exercise them must compile against those jars.
             ["mvn", "-o", "dependency:build-classpath",
-             f"-Dmdep.outputFile={CP_FILE}", "-q"],
+             f"-Dmdep.outputFile={CP_FILE}", "-DincludeScope=test", "-q"],
             cwd=ROOT, check=True, shell=(os.name == "nt"))
     with open(CP_FILE, encoding="utf-8") as fh:
         return fh.read().strip()

@@ -40,10 +40,15 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * Cache<String, String> map = new ChronicleMap<>();
-     * map.put("k", "v");
-     * String value = map.getOrNull("k");
+     * Cache<String, String> map = new ChronicleMap<>();   // capacity 1024, 60s eviction delay
+     * map.stats().capacity();                             // returns 1024 (default capacity)
+     * map.isClosed();                                     // returns false (freshly created)
+     * map.put("k", "v");                                  // returns true (stored with default 3h TTL / 30min idle)
+     * String value = map.getOrNull("k");                  // returns "v"
+     * map.getOrNull("absent");                            // returns null (key not present)
+     * map.getOrNull((String) null);                       // throws IllegalArgumentException (key must not be null)
      * }</pre>
+     *
      */
     public ChronicleMap() {
         this(1024, 60_000L);
@@ -56,8 +61,17 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * Cache<String, Integer> map = new ChronicleMap<>(1_024, 60_000L);
-     * map.put("count", 42);
+     * Cache<String, Integer> map = new ChronicleMap<>(1_024, 60_000L);   // capacity 1024, 60s eviction delay
+     * map.stats().capacity();                                            // returns 1024 (capacity reflected in stats)
+     * map.put("count", 42);                                              // returns true (uses default 3h TTL / 30min idle)
+     * map.getOrNull("count");                                            // returns 42
+     *
+     * // An evictDelay of 0 is allowed and disables automatic background eviction.
+     * Cache<String, Integer> noEvict = new ChronicleMap<>(64, 0L);   // valid
+     *
+     * // Edge cases (validated by the constructor):
+     * new ChronicleMap<>(0, 60_000L);    // throws IllegalArgumentException (capacity must be positive)
+     * new ChronicleMap<>(1_024, -1L);    // throws IllegalArgumentException (evictDelay must be non-negative)
      * }</pre>
      *
      * @param capacity the maximum number of entries the cache can hold (must be positive)
@@ -77,8 +91,24 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
+     * // capacity 2048, 30s eviction delay, default 1h TTL, default 5min idle
      * Cache<String, String> map = new ChronicleMap<>(2_048, 30_000L, 3_600_000L, 300_000L);
-     * map.put("session", "abc", 10_000L, 5_000L);
+     * map.stats().capacity();                       // returns 2048 (capacity reflected in stats)
+     *
+     * // Per-entry overrides win over the constructor defaults.
+     * map.put("session", "abc", 10_000L, 5_000L);   // returns true (10s TTL, 5s idle for this entry)
+     * map.getOrNull("session");                     // returns "abc"
+     *
+     * // A null value is accepted; getOrNull then returns null, indistinguishable from an absent key.
+     * map.put("nullable", (String) null);           // returns true (uses the constructor defaults)
+     * map.getOrNull("nullable");                    // returns null
+     *
+     * // Non-positive default times mean "no expiration" for entries added via put(key, value).
+     * Cache<String, String> noExpire = new ChronicleMap<>(16, 0L, 0L, 0L);   // valid
+     *
+     * // Edge cases (validated by the constructor):
+     * new ChronicleMap<>(0, 30_000L, 3_600_000L, 300_000L);      // throws IllegalArgumentException (capacity must be positive)
+     * new ChronicleMap<>(2_048, -1L, 3_600_000L, 300_000L);      // throws IllegalArgumentException (evictDelay must be non-negative)
      * }</pre>
      *
      * @param capacity the maximum number of entries the cache can hold (must be positive)

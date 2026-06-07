@@ -85,9 +85,13 @@ public final class CacheFactory {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create cache with 1000 entries capacity, checking for expired entries every minute
-     * LocalCache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
-     * cache.put("user:123", user);
-     * User retrieved = cache.getOrNull("user:123");
+     * LocalCache<String, User> cache = CacheFactory.createLocalCache(1000, 60000); // returns a non-null LocalCache
+     * cache.put("user:123", user);                                                 // returns true (entry stored)
+     * User retrieved = cache.getOrNull("user:123");                                // returns the stored user (null if absent/expired)
+     *
+     * // Edge cases (validated by the underlying constructor):
+     * CacheFactory.createLocalCache(0, 60000);      // throws IllegalArgumentException (capacity must be positive)
+     * CacheFactory.createLocalCache(1000, -1);      // throws IllegalArgumentException (evictDelay must be non-negative)
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -115,12 +119,15 @@ public final class CacheFactory {
      * <pre>{@code
      * // Create session cache: 500 capacity, check every 30s, expire after 30min or 15min idle
      * LocalCache<String, Session> cache = CacheFactory.createLocalCache(
-     *     500,       // capacity: 500 entries max
-     *     30000,     // evictDelay: check every 30 seconds
-     *     1800000,   // defaultLiveTime: 30 minutes TTL
-     *     900000     // defaultMaxIdleTime: 15 minutes idle timeout
-     * );
-     * cache.put("session:abc123", session);   // Uses default TTL and idle time
+     *     500,                                // capacity: 500 entries max
+     *     30000,                              // evictDelay: check every 30 seconds
+     *     1800000,                            // defaultLiveTime: 30 minutes TTL
+     *     900000                              // defaultMaxIdleTime: 15 minutes idle timeout
+     * );                                      // returns a non-null LocalCache
+     * cache.put("session:abc123", session);   // returns true; uses default TTL and idle time
+     *
+     * // Edge case: capacity must be positive (TTL/idle of 0 are accepted as "no expiration")
+     * CacheFactory.createLocalCache(0, 30000, 1800000, 900000);   // throws IllegalArgumentException (capacity must be positive)
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -153,14 +160,19 @@ public final class CacheFactory {
      * <pre>{@code
      * // Create custom pool with specific configuration
      * KeyedObjectPool<String, PoolableAdapter<User>> customPool =
-     *     PoolFactory.createKeyedObjectPool(1000, 60000);
+     *     PoolFactory.createKeyedObjectPool(1000, 60000);   // capacity 1000, 60s eviction delay
      *
      * // Create cache using the custom pool
      * LocalCache<String, User> cache = CacheFactory.createLocalCache(
-     *     3600000,   // defaultLiveTime: 1 hour
-     *     1800000,   // defaultMaxIdleTime: 30 minutes
-     *     customPool // custom pool implementation
-     * );
+     *     3600000,                 // defaultLiveTime: 1 hour
+     *     1800000,                 // defaultMaxIdleTime: 30 minutes
+     *     customPool               // custom pool implementation
+     * );                           // returns a non-null LocalCache backed by customPool
+     * cache.put("user:123", user); // returns true (entry stored in customPool)
+     *
+     * // Edge case: a null pool is rejected
+     * CacheFactory.createLocalCache(3600000L, 1800000L, (KeyedObjectPool<String, PoolableAdapter<User>>) null);
+     *     // throws IllegalArgumentException (pool must not be null)
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -194,11 +206,14 @@ public final class CacheFactory {
      * <pre>{@code
      * // Create Memcached client and wrap it
      * SpyMemcached<User> memcachedClient = new SpyMemcached<>("localhost:11211", 5000);
-     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(memcachedClient);
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(memcachedClient);   // returns a non-null DistributedCache
      *
      * // Use the cache
-     * cache.put("user:123", user, 3600000, 0);
-     * User retrieved = cache.getOrNull("user:123");
+     * cache.put("user:123", user, 3600000, 0);      // returns true (sent to the wrapped client)
+     * User retrieved = cache.getOrNull("user:123"); // returns the value, or null if absent/circuit-open
+     *
+     * // Edge case: a null client is rejected
+     * CacheFactory.createDistributedCache((DistributedCacheClient<User>) null);   // throws IllegalArgumentException (dcc must not be null)
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -235,12 +250,18 @@ public final class CacheFactory {
      *
      * // Create cache with namespace prefix
      * DistributedCache<String, Session> cache =
-     *     CacheFactory.createDistributedCache(redisClient, "myapp:sessions:");
+     *     CacheFactory.createDistributedCache(redisClient, "myapp:sessions:");   // returns a non-null DistributedCache
      *
      * // Keys are automatically prefixed and Base64-encoded
-     * cache.put("user123", session, 3600000, 0);
+     * cache.put("user123", session, 3600000, 0);    // returns true
      * // Actual cache key: "myapp:sessions:" + Base64("user123")
-     * Session s = cache.getOrNull("user123");
+     * Session s = cache.getOrNull("user123");        // returns the value, or null if absent/circuit-open
+     *
+     * // A null or empty prefix is accepted (no prefix applied)
+     * CacheFactory.createDistributedCache(redisClient, (String) null);   // returns a DistributedCache with no key prefix
+     *
+     * // Edge case: a null client is rejected
+     * CacheFactory.createDistributedCache((DistributedCacheClient<Session>) null, "myapp:");   // throws IllegalArgumentException (dcc must not be null)
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -283,11 +304,15 @@ public final class CacheFactory {
      *     "app:",    // Key prefix for namespace isolation
      *     50,        // Open circuit after 50 consecutive failures
      *     2000       // Wait 2 seconds before attempting retry after circuit opens
-     * );
+     * );             // returns a non-null DistributedCache
      *
      * // Circuit breaker protects against cascading failures on reads
-     * User user = cache.getOrNull("user:123");
-     * cache.put("user:123", user, 3600000, 0);
+     * User user = cache.getOrNull("user:123");      // returns the value, or null if absent/circuit-open
+     * cache.put("user:123", user, 3600000, 0);      // returns true
+     *
+     * // Edge cases (validated by the underlying constructor):
+     * CacheFactory.createDistributedCache(redisClient, "app:", -1, 2000);   // throws IllegalArgumentException (maxFailedNumForRetry must be non-negative)
+     * CacheFactory.createDistributedCache(redisClient, "app:", 50, -1);     // throws IllegalArgumentException (retryDelay must be non-negative)
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
@@ -333,27 +358,37 @@ public final class CacheFactory {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Memcached with single server and default timeout
-     * Cache<String, User> cache1 = CacheFactory.createCache("Memcached(localhost:11211)");
+     * // Memcached with single server and default timeout; the result is a DistributedCache
+     * Cache<String, User> cache1 = CacheFactory.createCache("Memcached(localhost:11211)");   // returns a non-null DistributedCache
      *
      * // Redis with key prefix and custom 5-second timeout
      * Cache<String, Session> cache2 = CacheFactory.createCache(
      *     "Redis(localhost:6379,app:cache:,5000)"
-     * );
+     * );                                            // returns a non-null DistributedCache
      *
      * // Multiple Memcached servers (space-separated in serverUrl)
      * Cache<String, Object> cache3 = CacheFactory.createCache(
      *     "Memcached(host1:11211 host2:11211,myprefix:,3000)"
-     * );
+     * );                                            // returns a non-null DistributedCache
      *
-     * // Load from configuration
-     * String cacheConfig = System.getProperty("cache.provider");
-     * Cache<String, Data> cache4 = CacheFactory.createCache(cacheConfig);
+     * // Provider name matching is case-insensitive
+     * Cache<String, Object> cache4 = CacheFactory.createCache("memcached(localhost:11211)");   // returns a non-null DistributedCache
      *
-     * // Custom cache implementation
+     * // Custom cache implementation (fully qualified class name implementing Cache)
      * Cache<String, Object> cache5 = CacheFactory.createCache(
      *     "com.mycompany.CustomCache(param1,param2)"
-     * );
+     * );                                            // returns an instance of the named Cache class
+     *
+     * // Edge cases (all throw IllegalArgumentException):
+     * CacheFactory.createCache(null);                              // "Provider specification cannot be null or empty"
+     * CacheFactory.createCache("");                                // "Provider specification cannot be null or empty"
+     * CacheFactory.createCache("Memcached()");                     // "server URL cannot be empty"
+     * CacheFactory.createCache("Memcached(localhost,p:,0)");       // non-positive timeout rejected
+     * CacheFactory.createCache("Memcached(localhost,p:,abc)");     // "Invalid timeout parameter: abc"
+     * CacheFactory.createCache("Memcached(a,b,1000,extra)");       // "Unsupported parameters" (more than 3)
+     * CacheFactory.createCache("Memcached(localhost,app:");        // unbalanced parenthesis -> "Failed to parse provider specification"
+     * CacheFactory.createCache("com.example.NoSuchCache(host)");   // "Cannot find class: com.example.NoSuchCache"
+     * CacheFactory.createCache("java.lang.String(host)");          // "Custom cache class must implement Cache"
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache

@@ -257,24 +257,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:", 100, 1000);
      *
      * // Basic retrieval with null check
-     * User user = cache.getOrNull("user:123");
+     * User user = cache.getOrNull("user:123");          // returns the cached User, or null on miss
      * if (user != null) {
-     *     System.out.println("Found: " + user.getName());
+     *     System.out.println("Found: " + user.getName());   // prints when present
      * } else {
      *     // Could be: not found, expired, evicted, circuit open, or network error
-     *     System.out.println("Cache miss - loading from database");
+     *     System.out.println("Cache miss - loading from database");   // prints on null result
      *     user = loadFromDatabase("user:123");
-     *     cache.put("user:123", user, 3600000, 0);
+     *     cache.put("user:123", user, 3600000, 0);      // returns true on successful store
      * }
      *
      * // Cache-aside pattern with circuit breaker protection
      * User getUser(String userId) {
-     *     User user = cache.getOrNull("user:" + userId);
+     *     User user = cache.getOrNull("user:" + userId);   // returns cached value or null
      *     if (user == null) {
      *         // Fallback to database (could be cache miss or circuit breaker open)
      *         user = database.findUser(userId);
      *         if (user != null) {
-     *             cache.put("user:" + userId, user, 3600000, 0);
+     *             cache.put("user:" + userId, user, 3600000, 0);   // returns true; re-populates cache
      *         }
      *     }
      *     return user;
@@ -389,26 +389,26 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // Cache with 1 hour TTL (maxIdleTime ignored)
      * User user = new User("John");
-     * boolean success = cache.put("user:123", user, 3600000, 0);
+     * boolean success = cache.put("user:123", user, 3600000, 0);   // returns true on success
      * if (success) {
-     *     System.out.println("User cached successfully");
+     *     System.out.println("User cached successfully");   // prints when put returned true
      * } else {
-     *     System.out.println("Failed to cache user (network error or timeout)");
+     *     System.out.println("Failed to cache user (network error or timeout)");   // prints when put returned false
      * }
      *
      * // Session caching with 30 minute TTL
      * Session session = new Session("abc123");
-     * cache.put("session:" + session.getId(), session, 1800000, 1800000);   // idle time ignored
+     * cache.put("session:" + session.getId(), session, 1800000, 1800000);   // returns true; idle time ignored
      *
      * // No expiration (permanent until manually deleted or evicted)
      * Config config = loadConfig();
-     * cache.put("app:config", config, 0, 0);
+     * cache.put("app:config", config, 0, 0);            // returns true; liveTime 0 = no expiration
      *
      * // Update existing cache entry with new TTL
-     * User updated = cache.getOrNull("user:123");
+     * User updated = cache.getOrNull("user:123");       // returns the previously cached User
      * if (updated != null) {
-     *     updated.setLastLogin(System.currentTimeMillis());
-     *     cache.put("user:123", updated, 7200000, 0);   // 2 hour TTL
+     *     updated.setLastLogin(System.currentTimeMillis());   // mutate the loaded value before re-caching
+     *     cache.put("user:123", updated, 7200000, 0);   // returns true; overwrites with 2 hour TTL
      * }
      * }</pre>
      *
@@ -457,26 +457,26 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // Basic removal
-     * cache.remove("user:123");   // Removes if exists, no-op if doesn't exist
+     * cache.remove("user:123");   // removes if present, no-op if absent; returns void
      *
      * // Safe to call multiple times (idempotent)
-     * cache.remove("user:123");
-     * cache.remove("user:123");   // No exception thrown
+     * cache.remove("user:123");   // removes the entry
+     * cache.remove("user:123");   // no-op; no exception thrown
      *
      * // Cache invalidation on update (write-through pattern)
      * void updateUser(User user) {
-     *     database.save(user);
-     *     cache.remove("user:" + user.getId());   // Invalidate cache
+     *     database.save(user);                    // persist the authoritative copy first
+     *     cache.remove("user:" + user.getId());   // invalidates cache; returns void
      * }
      *
      * // Batch removal
      * List<String> userIds = Arrays.asList("123", "456", "789");
-     * userIds.forEach(id -> cache.remove("user:" + id));
+     * userIds.forEach(id -> cache.remove("user:" + id));   // removes each key in turn
      *
      * // Remove on business logic event
      * void logoutUser(String sessionId) {
-     *     cache.remove("session:" + sessionId);
-     *     database.updateLastLogout(sessionId);
+     *     cache.remove("session:" + sessionId);   // evicts the session entry; returns void
+     *     database.updateLastLogout(sessionId);   // record the logout in the backing store
      * }
      * }</pre>
      *
@@ -526,28 +526,28 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // Basic existence check
-     * if (cache.containsKey("user:123")) {
-     *     System.out.println("User exists in cache");
+     * if (cache.containsKey("user:123")) {              // returns true only if value present and non-null
+     *     System.out.println("User exists in cache");   // prints when containsKey returned true
      * } else {
-     *     System.out.println("User not in cache (or circuit breaker open)");
+     *     System.out.println("User not in cache (or circuit breaker open)");   // prints when containsKey returned false
      * }
      *
      * // Conditional caching
-     * if (!cache.containsKey("config:settings")) {
+     * if (!cache.containsKey("config:settings")) {      // returns false when absent
      *     Config config = loadConfigFromFile();
-     *     cache.put("config:settings", config, 0, 0);
+     *     cache.put("config:settings", config, 0, 0);   // returns true; populates the missing entry
      * }
      *
      * // INEFFICIENT - performs GET twice:
-     * if (cache.containsKey("user:123")) {
-     *     User user = cache.getOrNull("user:123");   // Second GET operation!
-     *     processUser(user);
+     * if (cache.containsKey("user:123")) {              // first GET (returns true)
+     *     User user = cache.getOrNull("user:123");      // second GET operation!
+     *     processUser(user);                            // consume the fetched value
      * }
      *
      * // EFFICIENT - performs GET once:
-     * User user = cache.getOrNull("user:123");
+     * User user = cache.getOrNull("user:123");          // single GET; returns value or null
      * if (user != null) {
-     *     processUser(user);
+     *     processUser(user);                            // consume the fetched value
      * }
      * }</pre>
      *
@@ -577,6 +577,23 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Would return keys from all applications sharing the cache servers, not just this instance</li>
      * </ul>
      *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
+     *
+     * // keySet() is never supported on a distributed cache.
+     * cache.keySet();                                  // throws UnsupportedOperationException
+     *
+     * // It throws even on an empty cache (nothing has been put yet).
+     * try {
+     *     Set<String> keys = cache.keySet();           // throws UnsupportedOperationException
+     * } catch (UnsupportedOperationException e) {
+     *     // Use containsKey(key) to test a specific key instead of enumerating keys.
+     *     boolean present = cache.containsKey("user:123");   // returns false (nothing cached yet)
+     * }
+     * }</pre>
+     *
      * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always thrown for distributed caches
      * @see #size()
@@ -601,6 +618,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>The result would be immediately stale in concurrent distributed environments</li>
      * <li>No efficient way to distinguish this instance's keys from others without full server scan</li>
      * </ul>
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
+     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
+     *
+     * // size() is never supported on a distributed cache.
+     * cache.size();                                    // throws UnsupportedOperationException
+     *
+     * // It throws even right after a successful put (the count is not tracked).
+     * cache.put("user:123", new User("John"), 3600000, 0);   // returns true
+     * try {
+     *     int count = cache.size();                    // throws UnsupportedOperationException
+     * } catch (UnsupportedOperationException e) {
+     *     // No entry count is available; probe individual keys with containsKey(key) instead.
+     *     boolean present = cache.containsKey("user:123");   // returns true (just cached above)
+     * }
+     * }</pre>
      *
      * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always thrown for distributed caches
@@ -638,24 +673,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * // WARNING: This will flush ALL data from all cache servers!
      * // Not just "myapp:" prefixed keys, but EVERYTHING!
-     * cache.clear();
+     * cache.clear();   // flushes every entry on all servers; returns void
      *
      * // Safe usage in testing (with dedicated test cache server)
      * // @After
      * public void cleanupCache() {
      *     if (isTestEnvironment()) {
-     *         testCache.clear();   // OK - dedicated test server
+     *         testCache.clear();   // OK - dedicated test server; flushes all and returns void
      *     }
      * }
      *
      * // Production usage - AVOID or require explicit confirmation
      * public void clearProductionCache(String confirmationToken) {
      *     if (!"CONFIRM_FLUSH_ALL_PRODUCTION".equals(confirmationToken)) {
-     *         throw new IllegalArgumentException("Invalid confirmation");
+     *         throw new IllegalArgumentException("Invalid confirmation");   // throws on bad token
      *     }
-     *     logger.warn("DANGEROUS: Flushing ALL cache data from production servers");
-     *     cache.clear();   // Will affect all apps using these cache servers!
-     *     auditLog.record("CACHE_FLUSH_ALL", getCurrentUser());
+     *     logger.warn("DANGEROUS: Flushing ALL cache data from production servers");   // audit warning before flush
+     *     cache.clear();   // affects all apps sharing these servers; returns void
+     *     auditLog.record("CACHE_FLUSH_ALL", getCurrentUser());   // records the destructive action
      * }
      * }</pre>
      *
@@ -699,8 +734,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * // Try-with-resources (recommended - implements AutoCloseable)
      * try (DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:")) {
-     *     cache.put("user:123", user, 3600000, 0);
-     *     User cached = cache.getOrNull("user:123");
+     *     cache.put("user:123", user, 3600000, 0);      // returns true
+     *     User cached = cache.getOrNull("user:123");    // returns the cached User
      *     // Cache automatically closed when exiting try block
      * }
      *
@@ -708,26 +743,26 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      * try {
-     *     cache.put("key", value, 3600000, 0);
+     *     cache.put("key", value, 3600000, 0);          // returns true
      *     // ... use cache
      * } finally {
-     *     cache.close();   // Always close to release resources
+     *     cache.close();   // releases resources; disconnects the client
      * }
      *
      * // Application shutdown hook
      * Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-     *     if (!cache.isClosed()) {
-     *         cache.close();
+     *     if (!cache.isClosed()) {                       // returns false until close() runs
+     *         cache.close();                             // disconnects; sets isClosed() to true
      *     }
      * }));
      *
      * // Safe to call multiple times (idempotent)
-     * cache.close();
-     * cache.close();   // No exception thrown
+     * cache.close();   // first call disconnects the client
+     * cache.close();   // no-op; no exception thrown, disconnect not repeated
      *
      * // Verify operations fail after close
-     * cache.close();
-     * cache.getOrNull("key");   // Throws IllegalStateException
+     * cache.close();              // marks the cache closed
+     * cache.getOrNull("key");     // throws IllegalStateException (cache is closed)
      * }</pre>
      *
      * @see DistributedCacheClient#disconnect()
@@ -780,31 +815,31 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
      * // Check before operations
-     * if (!cache.isClosed()) {
-     *     cache.put("user:123", user, 3600000, 0);
+     * if (!cache.isClosed()) {                          // returns false while the cache is open
+     *     cache.put("user:123", user, 3600000, 0);      // returns true
      * } else {
-     *     logger.warn("Cache is closed, skipping cache operation");
+     *     logger.warn("Cache is closed, skipping cache operation");   // logged when isClosed() is true
      * }
      *
      * // Verify state after closing
-     * cache.close();
-     * System.out.println("Is closed: " + cache.isClosed());   // true
+     * cache.close();                                    // disconnects the client
+     * System.out.println("Is closed: " + cache.isClosed());   // isClosed() returns true
      *
      * // Safe guard in long-running operations
      * public void processUsers(List<User> users) {
      *     for (User user : users) {
-     *         if (cache.isClosed()) {
-     *             logger.warn("Cache closed during processing");
+     *         if (cache.isClosed()) {                   // returns true once close() has been called
+     *             logger.warn("Cache closed during processing");   // logged and loop aborted
      *             break;
      *         }
-     *         cache.put("user:" + user.getId(), user, 3600000, 0);
+     *         cache.put("user:" + user.getId(), user, 3600000, 0);   // returns true while open
      *     }
      * }
      *
      * // Conditional cleanup in shutdown hooks
      * public void shutdown() {
-     *     if (!cache.isClosed()) {
-     *         cache.close();
+     *     if (!cache.isClosed()) {                      // returns false if not yet closed
+     *         cache.close();                            // disconnects; isClosed() becomes true
      *     }
      * }
      * }</pre>

@@ -368,22 +368,22 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * <pre>{@code
      * // Basic configuration
      * OffHeapCache25<String, Data> cache = OffHeapCache25.<String, Data>builder()
-     *     .capacityInMB(100)
-     *     .evictDelay(60000)
-     *     .defaultLiveTime(3600000)
-     *     .defaultMaxIdleTime(1800000)
-     *     .build();
+     *     .capacityInMB(100)             // 100MB off-heap (= 100 * 1048576 bytes); required, must be positive
+     *     .evictDelay(60000)             // scan for expired entries every 60s
+     *     .defaultLiveTime(3600000)      // default 1h TTL
+     *     .defaultMaxIdleTime(1800000)   // default 30min idle timeout
+     *     .build();                      // allocates native memory now; returns an OffHeapCache25
      *
      * // Advanced configuration with disk spillover
-     * OffHeapStore<String> diskStore = myOffHeapStoreImplementation;
+     * OffHeapStore<String> diskStore = myOffHeapStoreImplementation;   // your disk-backed store
      * OffHeapCache25<String, byte[]> advancedCache = OffHeapCache25.<String, byte[]>builder()
-     *     .capacityInMB(200)
-     *     .maxBlockSizeInBytes(16384)
-     *     .evictDelay(30000)
-     *     .vacatingFactor(0.3f)
-     *     .offHeapStore(diskStore)
-     *     .statsTimeOnDisk(true)
-     *     .build();
+     *     .capacityInMB(200)             // 200MB off-heap
+     *     .maxBlockSizeInBytes(16384)    // 16KB max block; larger values split across blocks
+     *     .evictDelay(30000)             // scan every 30s
+     *     .vacatingFactor(0.3f)          // evict 30% of the pool (LRU first) when capacity is reached
+     *     .offHeapStore(diskStore)       // spill to disk when memory is full
+     *     .statsTimeOnDisk(true)         // track disk read/write timing
+     *     .build();                      // returns an OffHeapCache25 with disk spillover enabled
      * }</pre>
      *
      * @param <K> the type of keys used to identify cache entries
@@ -464,12 +464,13 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code
-         * OffHeapCache25.Builder<String, Data> builder = OffHeapCache25.builder();
-         * builder.capacityInMB(100)
+         * OffHeapCache25.Builder<String, Data> builder = OffHeapCache25.builder();   // new builder, defaults applied
+         * builder.capacityInMB(100)                                                  // each fluent setter returns the same builder instance
          *        .evictDelay(60000)
-         *        .defaultLiveTime(3600000);
-         * OffHeapCache25<String, Data> cache = builder.build();
+         *        .defaultLiveTime(3600000);                       // mutates builder in place; result is the same builder reference
+         * OffHeapCache25<String, Data> cache = builder.build();   // allocates native memory; returns an OffHeapCache25
          * }</pre>
+         *
          */
         public Builder() {
             // Default constructor with default values
@@ -614,29 +615,34 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
          * <pre>{@code
          * // Basic cache with required fields
          * OffHeapCache25<String, Data> cache = OffHeapCache25.<String, Data>builder()
-         *     .capacityInMB(200)
-         *     .evictDelay(60000)
-         *     .vacatingFactor(0.3f)
-         *     .build();
+         *     .capacityInMB(200)         // 200MB off-heap (required, must be positive)
+         *     .evictDelay(60000)         // scan for expired entries every 60s
+         *     .vacatingFactor(0.3f)      // evict 30% of the pool (LRU first) when capacity is reached
+         *     .build();                  // allocates native memory now; returns an OffHeapCache25
          * try {
-         *     cache.put("key", data);
-         *     Data retrieved = cache.getOrNull("key");
+         *     cache.put("key", data);                    // serializes + copies the value off-heap; returns true on success
+         *     Data retrieved = cache.getOrNull("key");   // returns the cached value, or null if absent/expired
          * } finally {
-         *     cache.close();
+         *     cache.close();             // releases the native memory (Arena); required to avoid leaks
          * }
          *
          * // Advanced cache with disk spillover
-         * OffHeapStore<String> store = myOffHeapStoreImplementation;
+         * OffHeapStore<String> store = myOffHeapStoreImplementation;   // your disk-backed store
          * OffHeapCache25<String, Data> advancedCache = OffHeapCache25.<String, Data>builder()
-         *     .capacityInMB(100)
-         *     .maxBlockSizeInBytes(16384)
-         *     .evictDelay(30000)
-         *     .defaultLiveTime(3600000)
-         *     .defaultMaxIdleTime(1800000)
-         *     .vacatingFactor(0.25f)
-         *     .offHeapStore(store)
-         *     .statsTimeOnDisk(true)
-         *     .build();
+         *     .capacityInMB(100)         // 100MB off-heap
+         *     .maxBlockSizeInBytes(16384)   // 16KB max block; larger values split across blocks
+         *     .evictDelay(30000)         // scan every 30s
+         *     .defaultLiveTime(3600000)  // default 1h TTL
+         *     .defaultMaxIdleTime(1800000)   // default 30min idle timeout
+         *     .vacatingFactor(0.25f)     // evict 25% of the pool (LRU first) on vacate
+         *     .offHeapStore(store)       // spill to disk when memory is full
+         *     .statsTimeOnDisk(true)     // track disk read/write timing
+         *     .build();                  // returns an OffHeapCache25 with disk spillover enabled
+         *
+         * // build() validates eagerly:
+         * OffHeapCache25.<String, Data>builder().build();                          // throws IllegalArgumentException (capacityInMB not set / 0)
+         * OffHeapCache25.<String, Data>builder().capacityInMB(8).maxBlockSizeInBytes(512).build();   // throws IllegalArgumentException (maxBlockSizeInBytes < 1024)
+         * OffHeapCache25.<String, Data>builder().capacityInMB(8).maxBlockSizeInBytes(0).build();      // ok: 0 is replaced with the default 8192
          * }</pre>
          *
          * @return a new {@link OffHeapCache25} instance configured with the builder settings

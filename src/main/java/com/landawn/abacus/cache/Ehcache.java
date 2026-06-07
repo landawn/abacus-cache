@@ -89,9 +89,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *     .withCache("userCache",
      *         CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, User.class,
      *             ResourcePoolsBuilder.heap(1000)))
-     *     .build(true);
+     *     .build(true);   // build the cache manager
      * Cache<String, User> ehcache = cacheManager.getCache("userCache", String.class, User.class);
-     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     *
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);   // wraps the Ehcache instance
+     * boolean open = cache.isClosed();                        // returns false (freshly created)
+     *
+     * new Ehcache<>((Cache<String, User>) null);              // throws IllegalArgumentException (null cache)
      * }</pre>
      *
      * @param cache the underlying Ehcache instance to wrap
@@ -114,10 +118,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
-     * User user = cache.getOrNull("userId123");
-     * if (user != null) {
-     *     // Process the retrieved user
-     * }
+     * cache.put("userId123", user, 0, 0);          // returns true; seeds an entry
+     * User found = cache.getOrNull("userId123");   // returns the stored user
+     * User missing = cache.getOrNull("absent");    // returns null (no such key)
+     *
+     * cache.getOrNull(null);                        // throws IllegalArgumentException (null key)
+     * cache.close();                                // cache is now closed
+     * cache.getOrNull("userId123");                 // throws IllegalStateException (cache closed)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be returned (must not be null)
@@ -151,8 +158,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * User user = new User("John", "john@example.com");
-     * // Note: liveTime and maxIdleTime are ignored by Ehcache
-     * cache.put("userId123", user, 0, 0);
+     * // Note: liveTime and maxIdleTime are ignored by Ehcache (expiration is cache-level config)
+     * boolean stored = cache.put("userId123", user, 0, 0);   // returns true
+     * cache.put("userId123", new User("Jane"), 0, 0);        // returns true; replaces the existing value
+     *
+     * cache.put(null, user, 0, 0);                            // throws IllegalArgumentException (null key)
+     * cache.put("userId123", null, 0, 0);                     // throws IllegalArgumentException (null value)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
@@ -186,8 +197,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
-     * cache.remove("userId123");
-     * // The entry is now removed from the cache
+     * cache.put("userId123", user, 0, 0);   // returns true; seeds an entry
+     * cache.remove("userId123");            // entry removed; getOrNull("userId123") now returns null
+     * cache.remove("absent");               // idempotent: removing a missing key is a no-op (no exception)
+     *
+     * cache.remove(null);             // throws IllegalArgumentException (null key)
+     * cache.close();                  // cache is now closed
+     * cache.remove("userId123");      // throws IllegalStateException (cache closed)
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache (must not be null)
@@ -214,10 +230,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
-     * if (cache.containsKey("userId123")) {
-     *     User user = cache.getOrNull("userId123");
-     *     // Process the user
-     * }
+     * cache.put("userId123", user, 0, 0);                 // returns true; seeds an entry
+     * boolean present = cache.containsKey("userId123");   // returns true
+     * boolean absent = cache.containsKey("missing");      // returns false
+     *
+     * cache.containsKey(null);                            // throws IllegalArgumentException (null key)
+     * cache.close();                                      // cache is now closed
+     * cache.containsKey("userId123");                     // throws IllegalStateException (cache closed)
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested (must not be null)
@@ -249,23 +268,17 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Simple conditional caching
-     * User newUser = createUser();
-     * User existingUser = cache.putIfAbsent("user:123", newUser);
-     * if (existingUser == null) {
-     *     System.out.println("User was added to cache");
-     * } else {
-     *     System.out.println("User already exists, using existing: " + existingUser);
-     * }
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      *
-     * // Cache-based initialization (ensures single initialization)
-     * ExpensiveObject obj = cache.putIfAbsent("config:main", loadExpensiveConfiguration());
-     * if (obj == null) {
-     *     obj = cache.getOrNull("config:main");   // Retrieve the newly stored value
-     * }
+     * // First insert: key absent, value is stored and null is returned
+     * User previous = cache.putIfAbsent("user:123", newUser);   // returns null; newUser is stored
      *
-     * // Thread-safe counter initialization
-     * AtomicInteger counter = cache.putIfAbsent("counter", new AtomicInteger(0));
+     * // Second insert for the same key: existing value returned, cache left unchanged
+     * User existing = cache.putIfAbsent("user:123", otherUser); // returns newUser; cache unchanged
+     * cache.getOrNull("user:123");                              // returns newUser (not otherUser)
+     *
+     * cache.putIfAbsent(null, newUser);                         // throws IllegalArgumentException (null key)
+     * cache.putIfAbsent("user:123", null);                      // throws IllegalArgumentException (null value)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
@@ -311,23 +324,17 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Batch retrieval
-     * Set<String> keys = new HashSet<>(Arrays.asList("user:1", "user:2", "user:3"));
-     * Map<String, User> results = cache.getAll(keys);
-     * for (Map.Entry<String, User> entry : results.entrySet()) {
-     *     System.out.println("Found: " + entry.getKey() + " -> " + entry.getValue());
-     * }
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * cache.put("user:1", alice, 0, 0);   // returns true; seeds an entry
+     * cache.put("user:2", bob, 0, 0);     // returns true; seeds an entry
      *
-     * // Handle missing keys (use result.get(key) == null, NOT !containsKey,
-     * // because Ehcache without a loader returns an entry for every requested key
-     * // with a null value for absent keys)
-     * Set<String> requestedKeys = Set.of("key1", "key2", "key3");
-     * Map<String, Value> cached = cache.getAll(requestedKeys);
-     * for (String key : requestedKeys) {
-     *     if (cached.get(key) == null) {
-     *         System.out.println("Missing key: " + key);
-     *     }
-     * }
+     * Set<String> keys = new HashSet<>(Arrays.asList("user:1", "user:2", "user:3"));
+     * Map<String, User> results = cache.getAll(keys);   // size 3: an entry for every requested key
+     * results.get("user:1");                            // returns alice
+     * results.get("user:3");                            // returns null (requested but absent; no loader)
+     * results.containsKey("user:3");                    // returns true (key present, mapped to a null value)
+     *
+     * cache.getAll(null);                               // throws IllegalArgumentException (null keys)
      * }</pre>
      *
      * @param keys the set of cache keys to retrieve
@@ -361,18 +368,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Batch insertion
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * Map<String, User> users = new HashMap<>();
-     * users.put("user:1", new User("John"));
-     * users.put("user:2", new User("Jane"));
-     * users.put("user:3", new User("Bob"));
-     * cache.putAll(users);
+     * users.put("user:1", new User("John"));   // add to the batch map
+     * users.put("user:2", new User("Jane"));   // add to the batch map
+     * cache.putAll(users);                     // both entries stored (any existing keys are overwritten)
+     * cache.getOrNull("user:1");               // returns the John user
      *
-     * // Bulk update from database
-     * List<Product> products = loadProductsFromDatabase();
-     * Map<String, Product> productMap = products.stream()
-     *     .collect(Collectors.toMap(p -> "product:" + p.getId(), p -> p));
-     * cache.putAll(productMap);
+     * cache.putAll(null);             // throws IllegalArgumentException (null entries)
+     * cache.close();                  // cache is now closed
+     * cache.putAll(users);            // throws IllegalStateException (cache closed)
      * }</pre>
      *
      * @param entries the map of key-value pairs to store
@@ -403,17 +408,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Batch removal
-     * Set<String> keysToRemove = new HashSet<>(Arrays.asList("user:1", "user:2", "user:3"));
-     * cache.removeAll(keysToRemove);
+     * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * cache.put("user:1", alice, 0, 0);   // returns true; seeds an entry
+     * cache.put("user:2", bob, 0, 0);     // returns true; seeds an entry
      *
-     * // Remove all keys matching a pattern
-     * Set<String> allKeys = findKeysMatchingPattern("temp:*");
-     * cache.removeAll(allKeys);
+     * Set<String> keysToRemove = new HashSet<>(Arrays.asList("user:1", "user:2"));
+     * cache.removeAll(keysToRemove);                 // both entries removed
+     * cache.getOrNull("user:1");                     // returns null
+     * cache.removeAll(Set.of("absent"));             // idempotent: non-existent keys are ignored (no exception)
      *
-     * // Cleanup expired session keys
-     * Set<String> expiredSessions = getExpiredSessionKeys();
-     * cache.removeAll(expiredSessions);
+     * cache.removeAll(null);                         // throws IllegalArgumentException (null keys)
      * }</pre>
      *
      * @param keys the set of cache keys to remove
@@ -452,16 +456,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
-     * try {
-     *     Set<String> keys = cache.keySet();   // throws UnsupportedOperationException
-     * } catch (UnsupportedOperationException e) {
-     *     System.out.println("Key iteration is not supported by Ehcache");
-     *     // Alternative: maintain keys externally
-     *     Set<String> trackedKeys = new HashSet<>();
-     *     String key = "user:123";
-     *     cache.put(key, user, 0, 0);
-     *     trackedKeys.add(key);
-     * }
+     * cache.keySet();   // throws UnsupportedOperationException (Ehcache 3.x has no key iteration)
+     *
+     * // Alternative: maintain the key set yourself if you must enumerate keys
+     * Set<String> trackedKeys = new HashSet<>();
+     * cache.put("user:123", user, 0, 0);   // returns true
+     * trackedKeys.add("user:123");         // record the key in the external set
      * }</pre>
      *
      * @return this method never returns normally; it always throws
@@ -497,16 +497,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
-     * try {
-     *     int size = cache.size();   // throws UnsupportedOperationException
-     * } catch (UnsupportedOperationException e) {
-     *     System.out.println("Size operation is not supported by Ehcache");
-     *     // Alternative: track size externally
-     *     AtomicInteger counter = new AtomicInteger(0);
-     *     cache.put("user:123", user, 0, 0);
-     *     counter.incrementAndGet();
-     *     System.out.println("Tracked size: " + counter.get());
-     * }
+     * cache.size();   // throws UnsupportedOperationException (Ehcache 3.x has no size API)
+     *
+     * // Alternative: maintain the entry count yourself with an atomic counter
+     * AtomicInteger counter = new AtomicInteger(0);
+     * cache.put("user:123", user, 0, 0);   // returns true
+     * counter.incrementAndGet();           // tracked size is now 1
      * }</pre>
      *
      * @return this method never returns normally; it always throws
@@ -531,8 +527,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
-     * cache.clear();
-     * // All entries are now removed from the cache
+     * cache.put("userId123", user, 0, 0);  // returns true; seeds an entry
+     * cache.clear();                       // removes all entries from the cache
+     * cache.getOrNull("userId123");        // returns null
+     *
+     * cache.close();                 // cache is now closed
+     * cache.clear();                 // throws IllegalStateException (cache closed)
      * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
@@ -558,16 +558,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * try {
-     *     cache.put("userId123", user, 0, 0);
-     *     // Use the cache
+     *     cache.put("userId123", user, 0, 0);   // returns true
+     *     // ... use the cache ...
      * } finally {
-     *     cache.close();
+     *     cache.close();   // marks the wrapper closed; the underlying Ehcache is NOT disposed
      * }
      *
-     * // Safe to call multiple times
-     * cache.close();
-     * cache.close();   // No exception thrown
+     * cache.close();                 // idempotent: a second close is a no-op (no exception)
+     * cache.getOrNull("userId123");  // throws IllegalStateException (cache closed)
      * }</pre>
+     *
      */
     @Override
     public synchronized void close() {
@@ -590,14 +590,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
+     * boolean open = cache.isClosed();     // returns false (freshly created)
      * if (!cache.isClosed()) {
-     *     User user = cache.getOrNull("userId123");
-     *     // Process the user
-     * } else {
-     *     System.out.println("Cache is closed, cannot perform operation");
+     *     User user = cache.getOrNull("userId123");   // safe to use while the cache is open
      * }
      *
-     * cache.close();
+     * cache.close();                       // cache is now closed
      * boolean closed = cache.isClosed();   // returns true
      * }</pre>
      *

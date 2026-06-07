@@ -175,8 +175,23 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Map<Integer, Map<Integer, Integer>> slots = stats.occupiedSlots();
-     * // slots might contain: {1024 -> {0 -> 5, 1 -> 3}, 2048 -> {2 -> 2}}
-     * // meaning: 5 slots of 1KB in segment 0, 3 slots of 1KB in segment 1, etc.
+     * // For this snapshot, slots == {1024={0=5, 1=3}, 2048={2=2}}:
+     * //   5 slots of 1KB in segment 0, 3 slots of 1KB in segment 1, 2 slots of 2KB in segment 2.
+     * slots.get(1024).get(0);                                          // returns 5 (Integer)
+     * slots.get(1024).get(1);                                          // returns 3 (Integer)
+     * slots.get(2048).get(2);                                          // returns 2 (Integer)
+     *
+     * // Sum the occupied 1KB slots across every segment.
+     * int total1k = slots.get(1024).values().stream()
+     *         .mapToInt(Integer::intValue).sum();                     // total1k == 8
+     *
+     * // The returned map is deeply unmodifiable (outer map and nested maps are defensive copies).
+     * slots.put(4096, Map.of());                                      // throws UnsupportedOperationException
+     * slots.get(1024).put(9, 9);                                      // throws UnsupportedOperationException
+     *
+     * // When no slots are occupied this returns an empty (and still unmodifiable) map, never null.
+     * Map<Integer, Map<Integer, Integer>> empty = emptyStats.occupiedSlots();
+     * empty.isEmpty();                                                // returns true
      * }</pre>
      *
      * @return an unmodifiable map of slot sizes (in bytes) to per-segment occupation details;
@@ -256,8 +271,10 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
          * <p><b>Usage Examples:</b>
          * <pre>{@code
          * MinMaxAvg stats = new MinMaxAvg(5.2, 150.8, 45.3);
-         * System.out.println(stats.toString());
-         * // Output: {min: 5.2, max: 150.8, avg: 45.3}
+         * stats.toString();                                  // returns "{min: 5.2, max: 150.8, avg: 45.3}"
+         *
+         * // When no observations have been recorded every value is 0.0 (a double, so it prints as "0.0").
+         * new MinMaxAvg(0, 0, 0).toString();                 // returns "{min: 0.0, max: 0.0, avg: 0.0}"
          * }</pre>
          *
          * @return a formatted string showing the min, max, and avg values in a JSON-like format

@@ -393,25 +393,28 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
+     * // Each call returns a fresh Builder pre-populated with default values
+     * OffHeapCache.Builder<String, Data> b = OffHeapCache.builder(); // never null; a new instance each call
+     *
      * // Basic configuration
      * OffHeapCache<String, Data> cache = OffHeapCache.<String, Data>builder()
-     *     .capacityInMB(100)
-     *     .evictDelay(60000)
-     *     .defaultLiveTime(3600000)
-     *     .defaultMaxIdleTime(1800000)
-     *     .build();
+     *     .capacityInMB(100)             // required; must be positive or build() throws IAE
+     *     .evictDelay(60000)             // scan for expired entries every 60s
+     *     .defaultLiveTime(3600000)      // 1h TTL
+     *     .defaultMaxIdleTime(1800000)   // 30min idle timeout
+     *     .build();                      // returns a ready-to-use OffHeapCache (native memory allocated)
      *
      * // Advanced configuration with disk spillover
      * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
      * OffHeapStore<String> diskStore = myFileBackedOffHeapStore(Paths.get("/tmp/cache"));
      * OffHeapCache<String, byte[]> advancedCache = OffHeapCache.<String, byte[]>builder()
      *     .capacityInMB(200)
-     *     .maxBlockSizeInBytes(16384)
+     *     .maxBlockSizeInBytes(16384)    // values larger than this are split across multiple slots
      *     .evictDelay(30000)
-     *     .vacatingFactor(0.3f)
-     *     .offHeapStore(diskStore)
+     *     .vacatingFactor(0.3f)          // evict 30% of the pool (LRU first) when capacity is reached
+     *     .offHeapStore(diskStore)       // spill overflow entries to disk
      *     .statsTimeOnDisk(true)
-     *     .build();
+     *     .build();                      // returns an OffHeapCache; remember to close() to free native memory
      * }</pre>
      *
      * @param <K> the type of keys used to identify cache entries
@@ -494,12 +497,17 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code
-         * OffHeapCache.Builder<String, Data> builder = OffHeapCache.builder();
-         * builder.capacityInMB(100)
+         * // Prefer the factory; OffHeapCache.builder() simply returns new Builder()
+         * OffHeapCache.Builder<String, Data> builder = OffHeapCache.builder(); // never null
+         *
+         * // Setters are fluent (chain = true): each returns this same builder instance
+         * builder.capacityInMB(100)      // required; positive
          *        .evictDelay(60000)
-         *        .defaultLiveTime(3600000);
-         * OffHeapCache<String, Data> cache = builder.build();
+         *        .defaultLiveTime(3600000); // returns the same builder reference
+         *
+         * OffHeapCache<String, Data> cache = builder.build(); // allocates native memory; close() when done
          * }</pre>
+         *
          */
         public Builder() {
             // Default constructor with default values
@@ -647,13 +655,23 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *     .capacityInMB(200)
          *     .evictDelay(60000)
          *     .vacatingFactor(0.3f)
-         *     .build();
+         *     .build();                      // returns a new OffHeapCache; native memory now allocated
          * try {
-         *     cache.put("key", data);
-         *     Data retrieved = cache.getOrNull("key");
+         *     cache.put("key", data);                  // returns true once the value is stored
+         *     Data retrieved = cache.getOrNull("key"); // returns the stored value, or null if absent
          * } finally {
-         *     cache.close();
+         *     cache.close();                 // frees the native memory; required
          * }
+         *
+         * // maxBlockSizeInBytes(0) is replaced with the default 8192 (does NOT throw)
+         * OffHeapCache<String, Data> defaultBlock = OffHeapCache.<String, Data>builder()
+         *     .capacityInMB(100)
+         *     .maxBlockSizeInBytes(0)        // 0 -> default block size 8192
+         *     .build();                      // returns a cache; close() when done
+         *
+         * // Invalid configuration is rejected by build()
+         * OffHeapCache.<String, Data>builder().build();                          // throws IllegalArgumentException (capacityInMB not positive)
+         * OffHeapCache.<String, Data>builder().capacityInMB(8).maxBlockSizeInBytes(512).build(); // throws IllegalArgumentException (non-zero, < 1024)
          *
          * // Advanced cache with disk spillover
          * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
@@ -667,7 +685,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *     .vacatingFactor(0.25f)
          *     .offHeapStore(store)
          *     .statsTimeOnDisk(true)
-         *     .build();
+         *     .build();                      // returns an OffHeapCache backed by memory + disk spillover
          * }</pre>
          *
          * @return a new {@link OffHeapCache} instance configured with the builder settings

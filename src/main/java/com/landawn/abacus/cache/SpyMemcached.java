@@ -90,8 +90,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * SpyMemcached<String> cache = new SpyMemcached<>("localhost:11211");
-     * cache.set("key1", "value1", 3600000);
+     * SpyMemcached<String> cache = new SpyMemcached<>("localhost:11211"); // uses DEFAULT_TIMEOUT
+     * cache.set("key1", "value1", 3600000);                               // stores with 3600s TTL; returns true on success
+     *
+     * // A null/blank serverUrl is rejected before any connection attempt.
+     * new SpyMemcached<>((String) null); // throws IllegalArgumentException
+     * new SpyMemcached<>("   ");         // throws IllegalArgumentException (blank)
      * }</pre>
      *
      * @param serverUrl the Memcached server URL(s) in the format
@@ -116,8 +120,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create cache with 5-second operation timeout
-     * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211", 5000);
-     * cache.set("user:123", user, 3600000);
+     * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211", 5000); // 5000ms operation timeout
+     * cache.set("user:123", user, 3600000);                                   // stores with 3600s TTL; returns true on success
+     *
+     * // timeout must be strictly positive (checkArgPositive).
+     * new SpyMemcached<>("localhost:11211", 0);  // throws IllegalArgumentException
+     * new SpyMemcached<>("localhost:11211", -1); // throws IllegalArgumentException
      * }</pre>
      *
      * @param serverUrl the Memcached server URL(s) in the format
@@ -184,19 +192,21 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple get operation
-     * User user = cache.get("user:123");
+     * User user = cache.get("user:123"); // returns the cached User, or null if absent
      * if (user != null) {
-     *     System.out.println("Found user: " + user.getName());
+     *     System.out.println("Found user: " + user.getName()); // prints the cached user's name
      * } else {
-     *     System.out.println("User not found in cache");
+     *     System.out.println("User not found in cache"); // printed when get returned null
      * }
      *
      * // Get with fallback to database
-     * User user = cache.get("user:123");
+     * User user = cache.get("user:123"); // returns null if not cached
      * if (user == null) {
-     *     user = database.findUser(123);
-     *     cache.set("user:123", user, 3600000);
+     *     user = database.findUser(123); // load from the source of truth
+     *     cache.set("user:123", user, 3600000); // re-populate the cache; returns true on success
      * }
+     *
+     * cache.get((String) null); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved; must not be {@code null}
@@ -223,16 +233,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async get
-     * Future<User> future = cache.asyncGet("user:123");
-     * User user = future.get();   // Blocks until complete
+     * Future<User> future = cache.asyncGet("user:123"); // returns immediately; never null
+     * User user = future.get();                         // blocks until complete; yields the value or null if absent
      *
      * // Async get with timeout (requires: import java.util.concurrent.TimeoutException;)
-     * Future<User> future = cache.asyncGet("user:123");
+     * Future<User> future = cache.asyncGet("user:123"); // dispatches the get; returns the Future
      * try {
-     *     User user = future.get(1000, TimeUnit.MILLISECONDS);
+     *     User user = future.get(1000, TimeUnit.MILLISECONDS); // waits up to 1s for the result
      * } catch (TimeoutException e) {
-     *     System.out.println("Get operation timed out");
+     *     System.out.println("Get operation timed out"); // printed if the result was not ready in time
      * }
+     *
+     * cache.asyncGet((String) null); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved; must not be {@code null}
@@ -260,19 +272,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Basic bulk get
-     * Map<String, User> users = cache.getBulk("user:1", "user:2", "user:3");
-     * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));
+     * Map<String, User> users = cache.getBulk("user:1", "user:2", "user:3");         // never null; missing keys are simply absent
+     * users.forEach((key, user) -> System.out.println(key + ": " + user.getName())); // iterates only the found entries
      *
      * // Bulk get with missing key handling
-     * Map<String, Product> products = cache.getBulk("prod:1", "prod:2", "prod:3");
-     * System.out.println("Found " + products.size() + " out of 3 products");
+     * Map<String, Product> products = cache.getBulk("prod:1", "prod:2", "prod:3"); // returns only the keys present in cache
+     * System.out.println("Found " + products.size() + " out of 3 products");       // size() <= number of requested keys
      *
      * // Identify missing keys
      * String[] requestedKeys = {"user:1", "user:2", "user:3"};
-     * Map<String, User> found = cache.getBulk(requestedKeys);
+     * Map<String, User> found = cache.getBulk(requestedKeys); // returns the subset that was cached
      * Arrays.stream(requestedKeys)
      *       .filter(key -> !found.containsKey(key))
-     *       .forEach(key -> System.out.println("Missing: " + key));
+     *       .forEach(key -> System.out.println("Missing: " + key)); // prints each requested key absent from the result
+     *
+     * cache.getBulk((String[]) null);   // throws IllegalArgumentException (keys must not be null)
+     * cache.getBulk("user:1", null);    // throws IllegalArgumentException (no null elements allowed)
      * }</pre>
      *
      * @param keys the cache keys whose associated values are to be retrieved; must not be
@@ -301,17 +316,20 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async bulk get
-     * Future<Map<String, User>> future = cache.asyncGetBulk("user:1", "user:2");
-     * Map<String, User> users = future.get();   // Blocks until complete
+     * Future<Map<String, User>> future = cache.asyncGetBulk("user:1", "user:2"); // returns immediately; never null
+     * Map<String, User> users = future.get();                                    // blocks until complete; yields only the found entries
      *
      * // Async bulk get with timeout (requires: import java.util.concurrent.TimeoutException;)
-     * Future<Map<String, User>> future = cache.asyncGetBulk("user:1", "user:2", "user:3");
+     * Future<Map<String, User>> future = cache.asyncGetBulk("user:1", "user:2", "user:3"); // dispatches the bulk get
      * try {
-     *     Map<String, User> users = future.get(2000, TimeUnit.MILLISECONDS);
-     *     System.out.println("Retrieved " + users.size() + " users");
+     *     Map<String, User> users = future.get(2000, TimeUnit.MILLISECONDS); // waits up to 2s
+     *     System.out.println("Retrieved " + users.size() + " users");        // size() <= number of requested keys
      * } catch (TimeoutException e) {
-     *     future.cancel(true);
+     *     future.cancel(true); // abandon the operation if it did not complete in time
      * }
+     *
+     * cache.asyncGetBulk((String[]) null);  // throws IllegalArgumentException (keys must not be null)
+     * cache.asyncGetBulk("user:1", null);   // throws IllegalArgumentException (no null elements allowed)
      * }</pre>
      *
      * @param keys the cache keys whose associated values are to be retrieved; must not be
@@ -341,18 +359,21 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <pre>{@code
      * // Using a List (requires: import java.util.List;)
      * List<String> userKeys = Arrays.asList("user:123", "user:456", "user:789");
-     * Map<String, User> users = cache.getBulk(userKeys);
+     * Map<String, User> users = cache.getBulk(userKeys); // never null; missing keys are simply absent
      *
      * // Using a Set (requires: import java.util.Set; import java.util.HashSet;)
      * Set<String> keySet = new HashSet<>(Arrays.asList("session:1", "session:2"));
-     * Map<String, Session> sessions = cache.getBulk(keySet);
+     * Map<String, Session> sessions = cache.getBulk(keySet); // returns only the keys present in cache
      *
      * // Dynamically built key collection (requires: import java.util.stream.Collectors;)
      * List<Integer> userIds = Arrays.asList(101, 102, 103);
      * List<String> keys = userIds.stream()
      *                            .map(id -> "user:" + id)
-     *                            .collect(Collectors.toList());
-     * Map<String, User> users = cache.getBulk(keys);
+     *                            .collect(Collectors.toList()); // builds ["user:101", "user:102", "user:103"]
+     * Map<String, User> users = cache.getBulk(keys);            // returns the cached subset
+     *
+     * cache.getBulk((Collection<String>) null);      // throws IllegalArgumentException (keys must not be null)
+     * cache.getBulk(Arrays.asList("user:1", null));  // throws IllegalArgumentException (no null elements allowed)
      * }</pre>
      *
      * @param keys the collection of cache keys whose associated values are to be retrieved;
@@ -382,13 +403,16 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <pre>{@code
      * // Simple async bulk get with collection (requires: import java.util.Set;)
      * Set<String> keys = new HashSet<>(Arrays.asList("user:1", "user:2"));
-     * Future<Map<String, User>> future = cache.asyncGetBulk(keys);
-     * Map<String, User> users = future.get();   // Blocks until complete
+     * Future<Map<String, User>> future = cache.asyncGetBulk(keys); // returns immediately; never null
+     * Map<String, User> users = future.get();                      // blocks until complete; yields only the found entries
      *
      * // Async bulk get from dynamically generated keys (requires: import java.util.concurrent.TimeoutException;)
      * List<String> productKeys = generateProductKeys();
-     * Future<Map<String, Product>> future = cache.asyncGetBulk(productKeys);
-     * Map<String, Product> products = future.get(3000, TimeUnit.MILLISECONDS);
+     * Future<Map<String, Product>> future = cache.asyncGetBulk(productKeys);   // dispatches the bulk get
+     * Map<String, Product> products = future.get(3000, TimeUnit.MILLISECONDS); // waits up to 3s for the result
+     *
+     * cache.asyncGetBulk((Collection<String>) null);     // throws IllegalArgumentException (keys must not be null)
+     * cache.asyncGetBulk(Arrays.asList("user:1", null)); // throws IllegalArgumentException (no null elements allowed)
      * }</pre>
      *
      * @param keys the collection of cache keys whose associated values are to be retrieved;
@@ -418,23 +442,28 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <pre>{@code
      * // Cache with 1 hour TTL
      * User user = new User("John", "john@example.com");
-     * boolean success = cache.set("user:123", user, 3600000);
+     * boolean success = cache.set("user:123", user, 3600000); // 3600000ms -> 3600s TTL; returns true on success
      * if (success) {
-     *     System.out.println("User cached successfully");
+     *     System.out.println("User cached successfully"); // printed when the store succeeded
      * }
      *
      * // Cache session data with 30 minute TTL
      * Session session = new Session("abc123", user);
-     * cache.set("session:" + session.getId(), session, 1800000);
+     * cache.set("session:" + session.getId(), session, 1800000); // 1800000ms -> 1800s TTL; returns true on success
      *
      * // Cache with no expiration
      * Config config = loadConfig();
-     * cache.set("app:config", config, 0);   // No expiration
+     * cache.set("app:config", config, 0);   // liveTime 0 -> 0s ("no expiration"); returns true on success
+     *
+     * // A null value is accepted (memcached stores it); only a null key is rejected.
+     * cache.set("maybe-null", null, 60000); // returns true on success; stores a null value
      *
      * // Updating existing value
      * Product product = cache.get("product:456");
-     * product.setPrice(99.99);
-     * cache.set("product:456", product, 7200000);   // 2 hour TTL
+     * product.setPrice(99.99); // mutate the retrieved object before re-storing
+     * cache.set("product:456", product, 7200000);   // 7200000ms -> 7200s (2 hour) TTL; returns true on success
+     *
+     * cache.set((String) null, user, 3600000); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
@@ -462,20 +491,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async set
-     * Future<Boolean> future = cache.asyncSet("user:123", user, 3600000);
-     * boolean success = future.get();   // Blocks until complete
+     * Future<Boolean> future = cache.asyncSet("user:123", user, 3600000); // returns immediately; never null
+     * boolean success = future.get();                                     // blocks until complete; yields true on success
      * if (success) {
-     *     System.out.println("Set operation succeeded");
+     *     System.out.println("Set operation succeeded"); // printed when the store succeeded
      * }
      *
      * // Async set with timeout (requires: import java.util.concurrent.TimeoutException;)
-     * Future<Boolean> future = cache.asyncSet("product:456", product, 7200000);
+     * Future<Boolean> future = cache.asyncSet("product:456", product, 7200000); // dispatches the store
      * try {
-     *     boolean success = future.get(1000, TimeUnit.MILLISECONDS);
+     *     boolean success = future.get(1000, TimeUnit.MILLISECONDS); // waits up to 1s for completion
      * } catch (TimeoutException e) {
-     *     future.cancel(true);
-     *     System.err.println("Set operation timed out");
+     *     future.cancel(true); // abandon the operation if it did not complete in time
+     *     System.err.println("Set operation timed out"); // printed when the wait elapsed
      * }
+     *
+     * cache.asyncSet((String) null, user, 3600000); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
@@ -504,24 +535,26 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple conditional add
-     * if (cache.add("user:123", user, 3600000)) {
-     *     System.out.println("User added successfully");
+     * if (cache.add("user:123", user, 3600000)) {        // returns true only if "user:123" was absent
+     *     System.out.println("User added successfully"); // printed when the key did not previously exist
      * } else {
-     *     System.out.println("User already exists in cache");
+     *     System.out.println("User already exists in cache"); // printed when add returned false (key present)
      * }
      *
      * // Distributed locking pattern
      * String lockKey = "lock:resource:123";
-     * if (cache.add(lockKey, "locked", 30000)) { // 30 second lock
+     * if (cache.add(lockKey, "locked", 30000)) { // 30000ms -> 30s TTL; true only if we acquired the lock
      *     try {
      *         // Critical section - only one client can execute this
-     *         performCriticalOperation();
+     *         performCriticalOperation(); // runs only after the lock was acquired
      *     } finally {
-     *         cache.delete(lockKey);
+     *         cache.delete(lockKey); // release the lock; returns true if the key existed
      *     }
      * } else {
-     *     System.out.println("Resource is locked by another process");
+     *     System.out.println("Resource is locked by another process"); // add returned false (lock held elsewhere)
      * }
+     *
+     * cache.add((String) null, user, 3600000); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
@@ -549,21 +582,23 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async add
-     * Future<Boolean> future = cache.asyncAdd("user:123", user, 3600000);
-     * if (future.get()) {
-     *     System.out.println("Added");
+     * Future<Boolean> future = cache.asyncAdd("user:123", user, 3600000); // returns immediately; never null
+     * if (future.get()) {                                                 // blocks; yields true only if the key was absent
+     *     System.out.println("Added");                                    // printed when the add succeeded
      * } else {
-     *     System.out.println("Key already exists");
+     *     System.out.println("Key already exists"); // printed when add yielded false
      * }
      *
      * // Async add with timeout (requires: import java.util.concurrent.TimeoutException;)
-     * Future<Boolean> future = cache.asyncAdd("session:abc", session, 1800000);
+     * Future<Boolean> future = cache.asyncAdd("session:abc", session, 1800000); // dispatches the add
      * try {
-     *     boolean added = future.get(500, TimeUnit.MILLISECONDS);
-     *     System.out.println("Add successful: " + added);
+     *     boolean added = future.get(500, TimeUnit.MILLISECONDS); // waits up to 500ms
+     *     System.out.println("Add successful: " + added); // true if the key was newly added
      * } catch (TimeoutException e) {
-     *     future.cancel(true);
+     *     future.cancel(true); // abandon the operation if it did not complete in time
      * }
+     *
+     * cache.asyncAdd((String) null, user, 3600000); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
@@ -593,20 +628,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple replace operation
-     * if (cache.replace("user:123", updatedUser, 3600000)) {
-     *     System.out.println("User updated");
+     * if (cache.replace("user:123", updatedUser, 3600000)) { // returns true only if "user:123" already exists
+     *     System.out.println("User updated");                // printed when the key existed and was replaced
      * } else {
-     *     System.out.println("User not found in cache");
+     *     System.out.println("User not found in cache"); // printed when replace returned false (key absent)
      * }
      *
      * // Update existing cache entry
-     * User user = cache.get("user:456");
+     * User user = cache.get("user:456"); // returns null if not cached
      * if (user != null) {
-     *     user.setLastAccess(System.currentTimeMillis());
-     *     if (cache.replace("user:456", user, 7200000)) {
-     *         System.out.println("User access time updated");
+     *     user.setLastAccess(System.currentTimeMillis()); // update the field before replacing
+     *     if (cache.replace("user:456", user, 7200000)) { // 7200000ms -> 7200s TTL; true if the key existed
+     *         System.out.println("User access time updated"); // printed on successful replace
      *     }
      * }
+     *
+     * cache.replace((String) null, updatedUser, 3600000); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
@@ -634,20 +671,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async replace
-     * Future<Boolean> future = cache.asyncReplace("user:123", updatedUser, 3600000);
-     * boolean replaced = future.get();
+     * Future<Boolean> future = cache.asyncReplace("user:123", updatedUser, 3600000); // returns immediately; never null
+     * boolean replaced = future.get();                                               // blocks; yields true only if the key already existed
      * if (replaced) {
-     *     System.out.println("Replaced successfully");
+     *     System.out.println("Replaced successfully"); // printed when the replace succeeded
      * }
      *
      * // Async replace with timeout (requires: import java.util.concurrent.TimeoutException;)
-     * Future<Boolean> future = cache.asyncReplace("config:app", newConfig, 86400000);
+     * Future<Boolean> future = cache.asyncReplace("config:app", newConfig, 86400000); // dispatches the replace
      * try {
-     *     boolean replaced = future.get(1000, TimeUnit.MILLISECONDS);
-     *     System.out.println("Config replaced: " + replaced);
+     *     boolean replaced = future.get(1000, TimeUnit.MILLISECONDS); // waits up to 1s
+     *     System.out.println("Config replaced: " + replaced); // true if the key existed
      * } catch (TimeoutException e) {
-     *     future.cancel(true);
+     *     future.cancel(true); // abandon the operation if it did not complete in time
      * }
+     *
+     * cache.asyncReplace((String) null, updatedUser, 3600000); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
@@ -676,24 +715,26 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple delete
-     * boolean success = cache.delete("user:123");
-     * System.out.println("Key removed: " + success);
+     * boolean success = cache.delete("user:123");    // true if the key existed and was removed, false if absent
+     * System.out.println("Key removed: " + success); // prints "Key removed: true" or "Key removed: false"
      *
      * // Delete after update
-     * User user = cache.get("user:456");
+     * User user = cache.get("user:456"); // returns null if not cached
      * if (user != null && user.isInactive()) {
-     *     cache.delete("user:456");
+     *     cache.delete("user:456"); // returns true if the key existed
      * }
      *
      * // Delete multiple keys
      * String[] keysToDelete = {"session:1", "session:2", "session:3"};
-     * Arrays.stream(keysToDelete).forEach(cache::delete);
+     * Arrays.stream(keysToDelete).forEach(cache::delete); // deletes each key in turn
      *
      * // Invalidate cache on entity update
      * void updateUser(User user) {
-     *     database.save(user);
-     *     cache.delete("user:" + user.getId());   // Invalidate cache
+     *     database.save(user); // persist to the source of truth first
+     *     cache.delete("user:" + user.getId());   // invalidate cache; returns true if the entry existed
      * }
+     *
+     * cache.delete((String) null); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed; must not be {@code null}
@@ -718,20 +759,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async delete
-     * Future<Boolean> future = cache.asyncDelete("user:123");
-     * boolean deleted = future.get();
+     * Future<Boolean> future = cache.asyncDelete("user:123"); // returns immediately; never null
+     * boolean deleted = future.get();                         // blocks; yields true if the key existed, false if absent
      * if (deleted) {
-     *     System.out.println("Delete operation acknowledged");
+     *     System.out.println("Delete operation acknowledged"); // printed when the key was removed
      * }
      *
      * // Async delete with timeout (requires: import java.util.concurrent.TimeoutException;)
-     * Future<Boolean> future = cache.asyncDelete("session:abc");
+     * Future<Boolean> future = cache.asyncDelete("session:abc"); // dispatches the delete
      * try {
-     *     boolean deleted = future.get(500, TimeUnit.MILLISECONDS);
-     *     System.out.println("Session deleted: " + deleted);
+     *     boolean deleted = future.get(500, TimeUnit.MILLISECONDS); // waits up to 500ms
+     *     System.out.println("Session deleted: " + deleted); // true if the key existed
      * } catch (TimeoutException e) {
-     *     future.cancel(true);
+     *     future.cancel(true); // abandon the operation if it did not complete in time
      * }
+     *
+     * cache.asyncDelete((String) null); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed; must not be {@code null}
@@ -759,25 +802,27 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple counter
-     * long pageViews = cache.incr("page:views");
+     * long pageViews = cache.incr("page:views"); // returns value+1, or -1 if "page:views" does not exist
      * if (pageViews != -1) {
-     *     System.out.println("Page views: " + pageViews);
+     *     System.out.println("Page views: " + pageViews); // printed when the key existed
      * } else {
      *     // Initialize counter if it doesn't exist
-     *     cache.set("page:views", "1", 0);
+     *     cache.set("page:views", "1", 0); // seed the counter with no expiration; returns true on success
      * }
      *
      * // Rate limiting
      * String key = "rate:limit:" + userId;
-     * long attempts = cache.incr(key);
+     * long attempts = cache.incr(key); // returns value+1, or -1 if the key is absent
      * if (attempts == -1) {
      *     // Key doesn't exist, initialize it
-     *     cache.set(key, "1", 60000);
+     *     cache.set(key, "1", 60000); // seed with 60s TTL; returns true on success
      *     attempts = 1;
      * }
      * if (attempts > MAX_ATTEMPTS) {
      *     throw new RateLimitException("Too many requests");
      * }
+     *
+     * cache.incr((String) null); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented; must not be {@code null}
@@ -806,26 +851,29 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Game score increment
-     * long score = cache.incr("player:score", 10);
+     * long score = cache.incr("player:score", 10); // returns value+10, or -1 if the key is absent
      * if (score != -1) {
-     *     System.out.println("New score: " + score);
+     *     System.out.println("New score: " + score); // printed when the key existed
      * } else {
      *     // Initialize if doesn't exist
-     *     cache.set("player:score", "10", 0);
+     *     cache.set("player:score", "10", 0); // seed with no expiration; returns true on success
      * }
      *
      * // Batch processing counter
-     * long processed = cache.incr("batch:processed", 100);
+     * long processed = cache.incr("batch:processed", 100); // returns value+100, or -1 if absent
      *
      * // Points system
      * int points = calculatePoints(action);
-     * long totalPoints = cache.incr("user:points:" + userId, points);
+     * long totalPoints = cache.incr("user:points:" + userId, points); // returns value+points, or -1 if absent
      *
      * // Bandwidth tracking
-     * long bytesTransferred = cache.incr("bandwidth:today", fileSize);
+     * long bytesTransferred = cache.incr("bandwidth:today", fileSize); // returns value+fileSize, or -1 if absent
      * if (bytesTransferred > QUOTA) {
-     *     logger.warn("Bandwidth quota exceeded");
+     *     logger.warn("Bandwidth quota exceeded"); // emitted when the running total exceeds QUOTA
      * }
+     *
+     * cache.incr("counter", -1);        // throws IllegalArgumentException (delta must be non-negative)
+     * cache.incr((String) null, 1);     // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented; must not be {@code null}
@@ -862,13 +910,16 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // First call when key is absent: stores 0, returns 0 (delta is NOT applied on init).
-     * long count = cache.incr("counter:views", 1, 0);
+     * long count = cache.incr("counter:views", 1, 0); // seeds absent key with 0 (exp 0); returns 0
      * // Subsequent call: existing value 0 is incremented by 1, returns 1.
-     * count = cache.incr("counter:views", 1, 0);
+     * count = cache.incr("counter:views", 1, 0); // returns 1 (existing 0 + delta 1)
      *
      * // Auto-initializing counter
-     * long requestCount = cache.incr("api:requests:" + endpoint, 1, 0);
-     * System.out.println("Request " + requestCount + " to " + endpoint);
+     * long requestCount = cache.incr("api:requests:" + endpoint, 1, 0);  // first call returns defaultValue 0
+     * System.out.println("Request " + requestCount + " to " + endpoint); // prints the post-operation count
+     *
+     * cache.incr("counter", -1, 0L);    // throws IllegalArgumentException (delta must be non-negative)
+     * cache.incr((String) null, 1, 0L); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented; must not be {@code null}
@@ -912,14 +963,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <pre>{@code
      * // Hourly counter that expires after 1 hour. First call when key is absent stores 0 and
      * // returns 0; subsequent calls increment by 1.
-     * long count = cache.incr("counter:hourly", 1, 0, 3600000);
-     * System.out.println("Hourly count: " + count);
+     * long count = cache.incr("counter:hourly", 1, 0, 3600000); // 3600000ms -> 3600s TTL; first call returns 0
+     * System.out.println("Hourly count: " + count);             // prints the post-operation count
      *
      * // Daily quota counter
-     * long dailyRequests = cache.incr("quota:daily:" + userId, 1, 0, 86400000);
+     * long dailyRequests = cache.incr("quota:daily:" + userId, 1, 0, 86400000); // 86400000ms -> 86400s TTL; first call returns 0
      * if (dailyRequests > DAILY_LIMIT) {
      *     throw new QuotaExceededException("Daily limit reached");
      * }
+     *
+     * cache.incr("counter", -1, 0L, 1000L);    // throws IllegalArgumentException (delta must be non-negative)
+     * cache.incr((String) null, 1, 0L, 1000L); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented; must not be {@code null}
@@ -955,10 +1009,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Token bucket rate limiting
-     * long remainingTokens = cache.decr("api:tokens:" + userId);
+     * long remainingTokens = cache.decr("api:tokens:" + userId); // returns value-1 (clamped at 0), or -1 if absent
      * if (remainingTokens == -1) {
      *     // Key doesn't exist, initialize it
-     *     cache.set("api:tokens:" + userId, "100", 60000);
+     *     cache.set("api:tokens:" + userId, "100", 60000); // seed with 60s TTL; returns true on success
      *     remainingTokens = 100;
      * }
      * if (remainingTokens == 0) {
@@ -966,7 +1020,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      *
      * // Inventory management
-     * long stock = cache.decr("product:stock:123");
+     * long stock = cache.decr("product:stock:123"); // returns value-1 (never below 0), or -1 if absent
      * if (stock == -1) {
      *     // Handle key not found
      *     throw new KeyNotFoundException();
@@ -974,6 +1028,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *     // Memcached prevents going below 0
      *     throw new OutOfStockException();
      * }
+     *
+     * cache.decr((String) null); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented; must not be {@code null}
@@ -1003,20 +1059,20 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Bulk inventory decrement
-     * long inventory = cache.decr("product:stock:456", 5);
+     * long inventory = cache.decr("product:stock:456", 5); // returns value-5 (clamped at 0), or -1 if absent
      * if (inventory == -1) {
      *     // Key doesn't exist
      *     throw new KeyNotFoundException();
      * } else if (inventory == 0) {
      *     // Either reached 0 or underflow prevented (delta > original value)
-     *     System.out.println("Inventory depleted or insufficient");
+     *     System.out.println("Inventory depleted or insufficient"); // printed when the result clamped to 0
      * } else {
-     *     System.out.println("Remaining inventory: " + inventory);
+     *     System.out.println("Remaining inventory: " + inventory); // prints the post-decrement value
      * }
      *
      * // API quota management
      * int requestCost = calculateCost(request);
-     * long quotaRemaining = cache.decr("quota:" + apiKey, requestCost);
+     * long quotaRemaining = cache.decr("quota:" + apiKey, requestCost); // returns value-requestCost (>=0), or -1 if absent
      * if (quotaRemaining == -1) {
      *     throw new KeyNotFoundException();
      * } else if (quotaRemaining == 0) {
@@ -1026,15 +1082,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * // Reservation system (checking before decrement)
      * String key = "event:seats:789";
-     * Long currentSeats = cache.get(key);
+     * Long currentSeats = cache.get(key); // returns null if not cached
      * if (currentSeats != null && currentSeats >= numberOfTickets) {
-     *     long availableSeats = cache.decr(key, numberOfTickets);
+     *     long availableSeats = cache.decr(key, numberOfTickets); // returns value-numberOfTickets (>=0)
      *     if (availableSeats >= 0) {
-     *         System.out.println("Reservation successful");
+     *         System.out.println("Reservation successful"); // printed once seats were decremented
      *     }
      * } else {
      *     throw new NotEnoughSeatsException();
      * }
+     *
+     * cache.decr("counter", -1);    // throws IllegalArgumentException (delta must be non-negative)
+     * cache.decr((String) null, 1); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented; must not be {@code null}
@@ -1072,15 +1131,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // First call when key is absent: stores 100, returns 100 (delta NOT applied on init).
-     * long remaining = cache.decr("inventory:item123", 1, 100);
+     * long remaining = cache.decr("inventory:item123", 1, 100); // seeds absent key with 100 (exp 0); returns 100
      * // Subsequent call: existing value 100 is decremented by 1, returns 99.
-     * remaining = cache.decr("inventory:item123", 1, 100);
+     * remaining = cache.decr("inventory:item123", 1, 100); // returns 99 (existing 100 - delta 1)
      *
      * // Auto-initializing quota
-     * long quotaRemaining = cache.decr("quota:user:" + userId, 1, 1000);
+     * long quotaRemaining = cache.decr("quota:user:" + userId, 1, 1000); // first call returns defaultValue 1000
      * if (quotaRemaining == 0) {
-     *     System.out.println("Quota exhausted");
+     *     System.out.println("Quota exhausted"); // printed when the value clamped to 0
      * }
+     *
+     * cache.decr("counter", -1, 0L);    // throws IllegalArgumentException (delta must be non-negative)
+     * cache.decr((String) null, 1, 0L); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented; must not be {@code null}
@@ -1124,14 +1186,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <pre>{@code
      * // Daily quota that expires after 24 hours. First call when key is absent stores 1000 and
      * // returns 1000; subsequent calls decrement by 1.
-     * long remaining = cache.decr("quota:user:123", 1, 1000, 86400000);
-     * System.out.println("Remaining quota: " + remaining);
+     * long remaining = cache.decr("quota:user:123", 1, 1000, 86400000); // 86400000ms -> 86400s TTL; first call returns 1000
+     * System.out.println("Remaining quota: " + remaining);              // prints the post-operation value
      *
      * // Hourly rate limit
-     * long hourlyLimit = cache.decr("rate:hourly:" + userId, 1, 100, 3600000);
+     * long hourlyLimit = cache.decr("rate:hourly:" + userId, 1, 100, 3600000); // 3600000ms -> 3600s TTL; first call returns 100
      * if (hourlyLimit == 0) {
      *     throw new RateLimitException("Hourly limit reached");
      * }
+     *
+     * cache.decr("counter", -1, 0L, 1000L);    // throws IllegalArgumentException (delta must be non-negative)
+     * cache.decr((String) null, 1, 0L, 1000L); // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented; must not be {@code null}
@@ -1166,14 +1231,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // WARNING: This removes ALL data from ALL cache servers!
-     * cache.flushAll();
-     * System.out.println("All cache data cleared");
+     * cache.flushAll();                             // blocks until the flush is acknowledged; throws IllegalStateException if it fails
+     * System.out.println("All cache data cleared"); // printed once the flush returned successfully
      *
      * // Safe usage in testing
      * @After
      * public void cleanupCache() {
      *     if (isTestEnvironment()) {
-     *         cache.flushAll();
+     *         cache.flushAll(); // clears every server; throws IllegalStateException on non-acknowledgement
      *     }
      * }
      *
@@ -1182,9 +1247,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *     if (!"CONFIRM_FLUSH_ALL".equals(confirmationToken)) {
      *         throw new IllegalArgumentException("Invalid confirmation");
      *     }
-     *     logger.warn("Flushing all cache data");
-     *     cache.flushAll();
-     *     auditLog.record("CACHE_FLUSH_ALL", user);
+     *     logger.warn("Flushing all cache data"); // audit the impending destructive flush
+     *     cache.flushAll(); // removes all keys from all servers
+     *     auditLog.record("CACHE_FLUSH_ALL", user); // record the destructive action
      * }
      * }</pre>
      *
@@ -1211,19 +1276,19 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple async flush
-     * Future<Boolean> future = cache.asyncFlushAll();
-     * boolean flushed = future.get();
+     * Future<Boolean> future = cache.asyncFlushAll(); // returns immediately; never null
+     * boolean flushed = future.get();                 // blocks; yields true when the flush completes
      * if (flushed) {
-     *     System.out.println("All data flushed");
+     *     System.out.println("All data flushed"); // printed when the flush succeeded
      * }
      *
      * // Async flush with timeout (requires: import java.util.concurrent.TimeoutException;)
-     * Future<Boolean> future = cache.asyncFlushAll();
+     * Future<Boolean> future = cache.asyncFlushAll(); // dispatches the flush
      * try {
-     *     boolean flushed = future.get(2000, TimeUnit.MILLISECONDS);
-     *     System.out.println("Flush completed: " + flushed);
+     *     boolean flushed = future.get(2000, TimeUnit.MILLISECONDS); // waits up to 2s
+     *     System.out.println("Flush completed: " + flushed); // true on success
      * } catch (TimeoutException e) {
-     *     logger.warn("Flush operation timed out");
+     *     logger.warn("Flush operation timed out"); // emitted if the result was not ready within 2s
      * }
      * }</pre>
      *
@@ -1247,16 +1312,20 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Schedule a flush to happen in 5 seconds
-     * boolean scheduled = cache.flushAll(5000);
+     * boolean scheduled = cache.flushAll(5000); // 5000ms -> relative delay of 5s; returns true on success
      * if (scheduled) {
-     *     System.out.println("Flush scheduled for 5 seconds from now");
+     *     System.out.println("Flush scheduled for 5 seconds from now"); // printed when scheduling succeeded
      * }
+     *
+     * // The delay is ALWAYS a relative number of seconds; large values are NOT converted to an
+     * // absolute timestamp (unlike set/add/replace expirations).
+     * cache.flushAll(3_456_000_000L); // 40 days -> relative delay of 3_456_000s (not an epoch timestamp)
      *
      * // Delayed flush for maintenance window
      * long delayUntilMaintenance = calculateDelayToMaintenance();
-     * boolean scheduled = cache.flushAll(delayUntilMaintenance);
+     * boolean scheduled = cache.flushAll(delayUntilMaintenance); // converts ms to relative seconds (rounded up)
      * if (scheduled) {
-     *     logger.info("Cache flush scheduled for maintenance window");
+     *     logger.info("Cache flush scheduled for maintenance window"); // emitted once scheduling succeeded
      * }
      * }</pre>
      *
@@ -1286,16 +1355,20 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Schedule a flush to happen in 10 seconds
-     * Future<Boolean> future = cache.asyncFlushAll(10000);
-     * boolean scheduled = future.get();   // Wait for scheduling confirmation
+     * Future<Boolean> future = cache.asyncFlushAll(10000); // 10000ms -> relative delay of 10s; returns immediately
+     * boolean scheduled = future.get();                    // blocks; yields true on success
+     *
+     * // The delay is ALWAYS a relative number of seconds; large values are NOT converted to an
+     * // absolute timestamp (unlike set/add/replace expirations).
+     * cache.asyncFlushAll(3_456_000_000L); // 40 days -> relative delay of 3_456_000s (not an epoch timestamp)
      *
      * // Async delayed flush with timeout (requires: import java.util.concurrent.TimeoutException;)
-     * Future<Boolean> future = cache.asyncFlushAll(30000);
+     * Future<Boolean> future = cache.asyncFlushAll(30000); // 30000ms -> relative delay of 30s
      * try {
-     *     boolean scheduled = future.get(1000, TimeUnit.MILLISECONDS);
-     *     System.out.println("Flush scheduled: " + scheduled);
+     *     boolean scheduled = future.get(1000, TimeUnit.MILLISECONDS); // waits up to 1s for confirmation
+     *     System.out.println("Flush scheduled: " + scheduled);         // true on success
      * } catch (TimeoutException e) {
-     *     logger.warn("Failed to schedule flush");
+     *     logger.warn("Failed to schedule flush"); // emitted if confirmation was not received within 1s
      * }
      * }</pre>
      *
@@ -1331,27 +1404,28 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * // Try-finally pattern
      * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211");
      * try {
-     *     cache.set("user:123", user, 3600000);
-     *     User cached = cache.get("user:123");
+     *     cache.set("user:123", user, 3600000); // 3600s TTL; returns true on success
+     *     User cached = cache.get("user:123");  // returns the cached User, or null if absent
      * } finally {
-     *     cache.disconnect();
-     *     System.out.println("Cache client disconnected");
+     *     cache.disconnect();                              // immediate shutdown; safe to call again (idempotent)
+     *     System.out.println("Cache client disconnected"); // printed after shutdown
      * }
      *
      * // Spring Bean destruction
      * @PreDestroy
      * public void cleanup() {
      *     if (cache != null) {
-     *         cache.disconnect();
+     *         cache.disconnect(); // releases connections and threads; no-op if already shut down
      *     }
      * }
      *
      * // Application shutdown hook
      * Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-     *     logger.info("Shutting down cache client");
-     *     cache.disconnect();
+     *     logger.info("Shutting down cache client"); // emitted as the JVM shuts down
+     *     cache.disconnect(); // immediate shutdown of the shared client
      * }));
      * }</pre>
+     *
      */
     @Override
     public synchronized void disconnect() {
@@ -1383,15 +1457,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * try {
      *     // Use cache...
      * } finally {
-     *     cache.disconnect(5000);   // Wait up to 5 seconds for cleanup
+     *     cache.disconnect(5000);   // waits up to 5000ms for pending ops; safe to call again (idempotent)
      * }
      *
      * // Application shutdown with graceful timeout
      * public void shutdown() {
-     *     logger.info("Shutting down cache client");
-     *     cache.disconnect(10000);   // Wait up to 10 seconds
-     *     logger.info("Cache client shutdown complete");
+     *     logger.info("Shutting down cache client"); // emitted before the graceful shutdown
+     *     cache.disconnect(10000);   // waits up to 10000ms for pending ops to finish
+     *     logger.info("Cache client shutdown complete"); // emitted after disconnect returns
      * }
+     *
+     * cache.disconnect(-1); // throws IllegalArgumentException (timeout must not be negative)
      * }</pre>
      *
      * @param timeout the maximum time, in milliseconds, to wait for shutdown; must not be negative

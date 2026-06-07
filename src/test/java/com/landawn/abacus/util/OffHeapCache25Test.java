@@ -4,9 +4,11 @@
 
 package com.landawn.abacus.util;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
@@ -412,6 +414,33 @@ public class OffHeapCache25Test {
                 .build();
         try {
             assertEquals(true, c.put("k", new byte[256]));
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
+     * Durable boundary round-trip coverage for the MemorySegment (java.lang.foreign) off-heap
+     * arithmetic — the counterpart to OffHeapCacheTest#test_boundary_sizes_roundtrip_exact for the
+     * Unsafe-based impl. Sweeps single-slot, multi-slot (> maxBlockSize) and multi-segment-spanning
+     * (> 1 MB) sizes across the MIN_BLOCK_SIZE (64), default maxBlockSize (8192) and SEGMENT_SIZE
+     * (1 MB) boundaries; the size-dependent byte pattern makes any offset/length error fail exactly.
+     */
+    @Test
+    public void test_boundary_sizes_roundtrip_exact() {
+        final OffHeapCache25<String, byte[]> c = OffHeapCache25.<String, byte[]> builder().capacityInMB(64).evictDelay(0).build();
+        try {
+            final int[] sizes = { 0, 1, 63, 64, 65, 127, 128, 129, 8191, 8192, 8193, 16383, 16384, 16385, 24583, 1048575, 1048576,
+                    1048577, 2097152, 3158073 };
+            for (final int size : sizes) {
+                final byte[] v = new byte[size];
+                for (int i = 0; i < size; i++) {
+                    v[i] = (byte) (size * 31 + i);
+                }
+                final String key = "k" + size;
+                assertTrue(c.put(key, v), "put failed for size " + size);
+                assertArrayEquals(v, c.get(key).orElse(null), "round-trip mismatch for size " + size);
+            }
         } finally {
             c.close();
         }

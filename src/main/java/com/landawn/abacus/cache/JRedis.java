@@ -114,17 +114,27 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Single Redis instance
-     * JRedis<User> cache = new JRedis<>("localhost:6379");
+     * JRedis<User> cache = new JRedis<>("localhost:6379");           // uses DEFAULT_TIMEOUT
+     * String url = cache.serverUrl();                                // returns "localhost:6379" (preserved verbatim)
      *
      * // Multiple Redis instances for sharding
-     * JRedis<User> cache = new JRedis<>("localhost:6379,localhost:6380,localhost:6381");
+     * JRedis<User> sharded = new JRedis<>("localhost:6379,localhost:6380,localhost:6381");
      *
      * // Remote Redis servers
-     * JRedis<Data> cache = new JRedis<>("redis1.example.com:6379,redis2.example.com:6379");
+     * JRedis<Data> remote = new JRedis<>("redis1.example.com:6379,redis2.example.com:6379");
      *
      * // Use the cache
      * User user = new User("Alice", "alice@example.com");
-     * cache.set("user:123", user, 3600000);
+     * cache.set("user:123", user, 3600000);                         // returns true on success
+     *
+     * // Negative: null serverUrl is rejected up-front
+     * JRedis<User> bad = new JRedis<>((String) null);               // throws IllegalArgumentException
+     *
+     * // Negative: blank serverUrl is rejected (checkArgNotBlank)
+     * JRedis<User> blank = new JRedis<>("   ");                     // throws IllegalArgumentException
+     *
+     * // Negative: a string with no valid host:port yields no addresses -> rejected
+     * JRedis<User> empty = new JRedis<>("");                        // throws IllegalArgumentException
      * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
@@ -148,18 +158,29 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Cache with 5 second timeout
-     * JRedis<Data> cache = new JRedis<>("redis1:6379,redis2:6379", 5000);
+     * JRedis<Data> cache = new JRedis<>("redis1:6379,redis2:6379", 5000);   // timeout in milliseconds
+     * String url = cache.serverUrl();                                       // returns "redis1:6379,redis2:6379"
      *
      * // High-latency network with longer timeout
-     * JRedis<User> cache = new JRedis<>("remote-redis:6379", 10000);   // 10 seconds
+     * JRedis<User> remote = new JRedis<>("remote-redis:6379", 10000);       // 10 seconds
      *
      * // Low-latency local network with short timeout
-     * JRedis<Session> cache = new JRedis<>("localhost:6379", 2000);   // 2 seconds
+     * JRedis<Session> local = new JRedis<>("localhost:6379", 2000);         // 2 seconds
      *
      * // Use the cache
      * Data data = new Data("value");
-     * cache.set("key", data, 7200000);   // Cache for 2 hours
-     * Data retrieved = cache.get("key");
+     * cache.set("key", data, 7200000);                                      // Cache for 2 hours; returns true
+     * Data retrieved = cache.get("key");                                    // the cached Data, or null
+     *
+     * // Negative: a non-positive timeout is rejected (checkArgPositive)
+     * JRedis<Data> zero = new JRedis<>("localhost:6379", 0);              // throws IllegalArgumentException
+     * JRedis<Data> neg = new JRedis<>("localhost:6379", -1);              // throws IllegalArgumentException
+     *
+     * // Negative: a timeout above Integer.MAX_VALUE ms cannot fit the int Jedis API
+     * JRedis<Data> tooBig = new JRedis<>("localhost:6379", Integer.MAX_VALUE + 1L);   // throws IllegalArgumentException
+     *
+     * // Negative: a blank serverUrl is rejected (super(serverUrl) runs checkArgNotBlank first)
+     * JRedis<Data> blank = new JRedis<>("", 5000);                         // throws IllegalArgumentException
      * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
@@ -211,28 +232,31 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple get operation
-     * User user = cache.get("user:123");
+     * User user = cache.get("user:123");                            // the cached User, or null if absent
      * if (user != null) {
-     *     System.out.println("Found user: " + user.getName());
+     *     System.out.println("Found user: " + user.getName());     // cache hit branch
      * } else {
-     *     System.out.println("User not found in cache");
+     *     System.out.println("User not found in cache");           // cache miss branch
      * }
      *
      * // Get with fallback to database (cache-aside pattern)
-     * User user = cache.get("user:123");
-     * if (user == null) {
-     *     user = database.findUser(123);
-     *     if (user != null) {
-     *         cache.set("user:123", user, 3600000);
+     * User u = cache.get("user:123");                               // null on a cache miss
+     * if (u == null) {
+     *     u = database.findUser(123);
+     *     if (u != null) {
+     *         cache.set("user:123", u, 3600000);                    // returns true on success
      *     }
      * }
      *
-     * // Get with type safety
-     * String sessionKey = "session:" + sessionId;
-     * Session session = cache.get(sessionKey);
-     * if (session != null && !session.isExpired()) {
-     *     processSession(session);
-     * }
+     * // Edge: a missing or expired key returns null (not an exception)
+     * User missing = cache.get("does:not:exist");                   // returns null
+     *
+     * // Edge: a key whose stored value was null decodes back to null
+     * cache.set("blank", (User) null, 60000);                       // stored as an empty byte array
+     * User blank = cache.get("blank");                              // returns null
+     *
+     * // Negative: a null key is rejected
+     * User bad = cache.get(null);                                   // throws IllegalArgumentException
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
@@ -259,6 +283,33 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread
      * Safety note. Serialize access externally if needed.
      *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * // Typical: fetch several keys at once; only the keys present in Redis appear in the result.
+     * // Here "user:1" exists, "user:2" is missing.
+     * Map<String, User> found = cache.getBulk("user:1", "user:2");   // size == 1; contains only "user:1"
+     * User u1 = found.get("user:1");                                 // the cached User
+     * boolean hasU2 = found.containsKey("user:2");                   // false (missing keys are omitted)
+     *
+     * // Typical: iterate over the returned entries
+     * Map<String, Session> sessions = cache.getBulk("s:a", "s:b", "s:c");
+     * sessions.forEach((k, v) -> process(k, v));                     // only found sessions are visited
+     *
+     * // Edge: no arguments -> empty (never null) map; no GET is issued
+     * Map<String, User> none = cache.getBulk();                      // returns an empty map
+     * boolean empty = none.isEmpty();                                // true
+     *
+     * // Edge: a key stored as null decodes to null and is omitted from the result
+     * cache.set("blank", (User) null, 60000);                        // stored as empty byte array
+     * Map<String, User> r = cache.getBulk("blank");                  // returns an empty map (blank omitted)
+     *
+     * // Negative: a null array throws (validated before any network call)
+     * cache.getBulk((String[]) null);                               // throws IllegalArgumentException
+     *
+     * // Negative: a null element throws; no GET is issued for any key
+     * cache.getBulk("user:1", null, "user:3");                      // throws IllegalArgumentException
+     * }</pre>
+     *
      * @param keys the cache keys to retrieve; must not be {@code null} or contain {@code null} elements
      * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
@@ -277,6 +328,33 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * Retrieves multiple values from the cache, returning a map of only the keys that were found.
      * Collection-based counterpart of {@link #getBulk(String...)}; see that method for the
      * Redis-specific sharding behavior.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * // Typical: fetch a dynamic list of keys; only present keys appear in the result
+     * List<String> ids = List.of("user:1", "user:2", "user:3");
+     * Map<String, User> users = cache.getBulk(ids);                  // contains only the keys that exist
+     * for (Map.Entry<String, User> e : users.entrySet()) {
+     *     handle(e.getKey(), e.getValue());                         // missing keys are simply absent
+     * }
+     *
+     * // Typical: a Set of keys works too (any Collection is accepted)
+     * Set<String> keys = Set.of("a", "b");
+     * Map<String, User> found = cache.getBulk(keys);                 // never null; empty if none found
+     *
+     * // Edge: empty collection -> empty (never null) map; no GET is issued
+     * Map<String, User> none = cache.getBulk(List.of());            // returns an empty map
+     * boolean empty = none.isEmpty();                                // true
+     *
+     * // Edge: keys whose stored value is null/empty decode to null and are omitted
+     * Map<String, User> r = cache.getBulk(List.of("blank"));        // "blank" omitted if it decodes to null
+     *
+     * // Negative: a null collection throws (validated before any network call)
+     * cache.getBulk((Collection<String>) null);                     // throws IllegalArgumentException
+     *
+     * // Negative: a null element throws; no GET is issued for any key
+     * cache.getBulk(Arrays.asList("a", null));                      // throws IllegalArgumentException
+     * }</pre>
      *
      * @param keys the collection of cache keys to retrieve; must not be {@code null} or contain {@code null} elements
      * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
@@ -326,30 +404,34 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Cache with 1 hour TTL
+     * // Cache with 1 hour TTL (3600000 ms -> SETEX 3600 seconds)
      * User user = new User("John", "john@example.com");
-     * boolean success = cache.set("user:123", user, 3600000);
+     * boolean success = cache.set("user:123", user, 3600000);       // returns true when Redis replies "OK"
      * if (success) {
-     *     System.out.println("User cached successfully");
+     *     System.out.println("User cached successfully");          // reached only when set returned true
      * }
      *
-     * // Cache session data with 30 minute TTL
+     * // Cache session data with 30 minute TTL (1800000 ms -> SETEX 1800 seconds)
      * Session session = new Session("abc123", user);
-     * cache.set("session:" + session.getId(), session, 1800000);
+     * cache.set("session:" + session.getId(), session, 1800000);   // returns true on success
      *
-     * // Cache with very long expiration (30 days)
-     * Config config = loadConfig();
-     * cache.set("app:config", config, 2592000000L);   // 30 days
+     * // Edge: sub-second / fractional TTL rounds UP to whole seconds
+     * cache.set("k1", user, 1);                                     // 1 ms -> SETEX 1 second
+     * cache.set("k2", user, 1500);                                  // 1500 ms -> SETEX 2 seconds (rounds up)
      *
-     * // Updating existing value (replaces both value and TTL)
-     * Product product = cache.get("product:456");
-     * if (product != null) {
-     *     product.setPrice(99.99);
-     *     cache.set("product:456", product, 7200000);   // 2 hour TTL
-     * }
+     * // Edge: liveTime <= 0 means NO expiration -> plain SET (not SETEX 0)
+     * cache.set("forever", user, 0);                                // uses SET; key never auto-expires
+     * cache.set("forever2", user, -1);                              // also SET; negative TTL treated as 0
      *
-     * // Cache null values
-     * cache.set("empty:key", null, 3600000);   // Stores empty byte array
+     * // Edge: a null value is allowed; it is stored as an empty byte array
+     * cache.set("empty:key", (User) null, 3600000);                // SETEX with an empty byte[] payload; returns true
+     * User back = cache.get("empty:key");                          // returns null (empty bytes decode to null)
+     *
+     * // Edge: if Redis does not reply "OK", set returns false
+     * boolean ok = cache.set("k", user, 60000);                    // false if the server reply was not "OK"
+     *
+     * // Negative: a null key is rejected
+     * cache.set(null, user, 60000);                                // throws IllegalArgumentException
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
@@ -391,33 +473,23 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Simple delete
-     * boolean success = cache.delete("user:123");
-     * System.out.println("Key removed: " + success);
+     * // Typical: delete an existing key
+     * cache.set("user:123", user, 60000);                          // key now present
+     * boolean removed = cache.delete("user:123");                  // returns true (DEL count == 1)
      *
-     * // Delete after conditional check
-     * User user = cache.get("user:456");
-     * if (user != null && user.isInactive()) {
-     *     cache.delete("user:456");
-     * }
+     * // Typical: cache invalidation after a write (write-through)
+     * database.save(user);                                         // persist the new state first
+     * cache.delete("user:" + user.getId());                        // returns true if the entry existed
      *
-     * // Delete multiple keys sequentially
-     * String[] keysToDelete = {"session:1", "session:2", "session:3"};
-     * Arrays.stream(keysToDelete).forEach(cache::delete);
+     * // Edge: deleting a key that does not exist returns false (DEL count == 0)
+     * boolean wasThere = cache.delete("never:set");                // returns false
      *
-     * // Cache invalidation pattern (write-through)
-     * void updateUser(User user) {
-     *     database.save(user);
-     *     cache.delete("user:" + user.getId());   // Invalidate cache
-     *     logger.debug("Cache invalidated for user: {}", user.getId());
-     * }
+     * // Edge: delete is effectively idempotent; a second delete just reports false
+     * cache.delete("user:123");                                    // first call -> true
+     * boolean again = cache.delete("user:123");                    // second call -> false (already gone)
      *
-     * // Delete with error handling
-     * try {
-     *     cache.delete("temp:key");
-     * } catch (RuntimeException e) {
-     *     logger.error("Failed to delete cache key", e);
-     * }
+     * // Negative: a null key is rejected
+     * cache.delete(null);                                          // throws IllegalArgumentException
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
@@ -459,28 +531,29 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Simple counter (auto-initializes to 1 if not exists)
-     * long pageViews = cache.incr("page:views");
-     * System.out.println("Page views: " + pageViews);
+     * // Simple counter on a fresh key (auto-initializes to 0, then +1)
+     * long pageViews = cache.incr("page:views");                   // returns 1 the first time
+     * long again = cache.incr("page:views");                       // returns 2 the second time
      *
-     * // Request counter (auto-initializes)
-     * long requestCount = cache.incr("api:requests");
-     * System.out.println("Total API requests: " + requestCount);
-     *
-     * // Rate limiting with expiration
+     * // Rate limiting
      * String key = "rate:limit:" + userId;
-     * long attempts = cache.incr(key);
+     * long attempts = cache.incr(key);                             // value after increment
      * if (attempts > MAX_ATTEMPTS) {
      *     throw new RateLimitException("Too many requests");
      * }
      *
-     * // Daily statistics counter
-     * String dailyKey = "stats:daily:" + LocalDate.now();
-     * long todayCount = cache.incr(dailyKey);
-     * logger.info("Today's count: {}", todayCount);
-     *
      * // Distributed ID generator (caution: not persistent across Redis restarts)
-     * long uniqueId = cache.incr("id:generator");
+     * long uniqueId = cache.incr("id:generator");                  // a monotonically increasing value
+     *
+     * // Edge: a nil reply from the shard is coalesced to 0 (no NullPointerException)
+     * long safe = cache.incr("transient:counter");                 // returns 0 if the shard replied nil
+     *
+     * // Negative: a null key is rejected
+     * cache.incr(null);                                           // throws IllegalArgumentException
+     *
+     * // Negative: incrementing a key whose value is not an integer fails on the server
+     * cache.set("name", "Alice", 0);                              // stored as a non-numeric value
+     * cache.incr("name");                                        // throws RuntimeException (Redis "not an integer" error)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
@@ -524,29 +597,27 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Game score increment
-     * long score = cache.incr("player:score:123", 10);
-     * System.out.println("New score: " + score);
+     * // Game score increment on a fresh key (auto-initializes to 0, then +delta)
+     * long score = cache.incr("player:score:123", 10);            // returns 10 the first time
      *
-     * // Batch processing counter (auto-initializes to 100 if not exists)
-     * long processed = cache.incr("batch:processed", 100);
-     * logger.info("Processed {} items so far", processed);
+     * // Batch processing counter
+     * long processed = cache.incr("batch:processed", 100);        // returns the running total after +100
      *
      * // Dynamic points system
      * int points = calculatePoints(action);
-     * long totalPoints = cache.incr("user:points:" + userId, points);
-     * System.out.println("User earned " + points + " points, total: " + totalPoints);
+     * long totalPoints = cache.incr("user:points:" + userId, points);   // value after adding 'points'
      *
-     * // Bandwidth tracking
-     * int fileSize = uploadedFile.getSize();
-     * long bytesTransferred = cache.incr("bandwidth:today", fileSize);
-     * if (bytesTransferred > QUOTA) {
-     *     logger.warn("Bandwidth quota exceeded: {}/{}", bytesTransferred, QUOTA);
-     * }
+     * // Edge: a delta of 0 is allowed and returns the current value unchanged
+     * long current = cache.incr("user:points:" + userId, 0);      // returns the current counter value
      *
-     * // Aggregating metrics from multiple sources
-     * int errorCount = parseLogFile();
-     * long totalErrors = cache.incr("errors:total", errorCount);
+     * // Edge: a nil reply from the shard is coalesced to 0 (no NullPointerException)
+     * long safe = cache.incr("transient:counter", 5);             // returns 0 if the shard replied nil
+     *
+     * // Negative: a negative delta is rejected by this wrapper (for cross-backend portability)
+     * cache.incr("counter", -1);                                 // throws IllegalArgumentException
+     *
+     * // Negative: a null key is rejected
+     * cache.incr(null, 1);                                       // throws IllegalArgumentException
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
@@ -594,36 +665,32 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Token bucket rate limiting
-     * long remainingTokens = cache.decr("api:tokens:" + userId);
-     * if (remainingTokens < 0) {
-     *     cache.incr("api:tokens:" + userId);   // Restore the token
-     *     throw new RateLimitException("Rate limit exceeded");
-     * }
-     *
      * // Inventory management with rollback
-     * long stock = cache.decr("product:stock:123");
+     * long stock = cache.decr("product:stock:123");                // value after decrement
      * if (stock < 0) {
-     *     // Handle out of stock - rollback the decrement
-     *     cache.incr("product:stock:123");
+     *     cache.incr("product:stock:123");                         // rollback the decrement
      *     throw new OutOfStockException("Product out of stock");
      * }
-     * processOrder();
-     *
-     * // Download quota tracking
-     * long remaining = cache.decr("downloads:remaining:" + userId);
-     * if (remaining >= 0) {
-     *     processDownload();
-     * } else {
-     *     cache.incr("downloads:remaining:" + userId);   // Revert
-     *     throw new QuotaExceededException("Download quota exceeded");
-     * }
+     * processOrder();                                             // reached only when stock stayed >= 0
      *
      * // Countdown timer
-     * long countdown = cache.decr("event:countdown");
+     * long countdown = cache.decr("event:countdown");              // value after decrement
      * if (countdown == 0) {
-     *     triggerEvent();
+     *     triggerEvent();                                          // fires when the counter reaches 0
      * }
+     *
+     * // Edge: a fresh key auto-initializes to 0 then -1 (unlike Memcached, Redis allows negatives)
+     * long first = cache.decr("brand:new:counter");               // returns -1 the first time
+     *
+     * // Edge: a nil reply from the shard is coalesced to 0 (no NullPointerException)
+     * long safe = cache.decr("transient:counter");                // returns 0 if the shard replied nil
+     *
+     * // Negative: a null key is rejected
+     * cache.decr(null);                                          // throws IllegalArgumentException
+     *
+     * // Negative: decrementing a non-integer value fails on the server
+     * cache.set("name", "Alice", 0);                             // stored as a non-numeric value
+     * cache.decr("name");                                       // throws RuntimeException (Redis "not an integer" error)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
@@ -667,47 +734,34 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <pre>{@code
      * // Bulk inventory decrement
      * int quantity = 5;
-     * long inventory = cache.decr("product:stock:456", quantity);
-     * System.out.println("Remaining inventory: " + inventory);
+     * long inventory = cache.decr("product:stock:456", quantity);  // value after subtracting 'quantity'
      * if (inventory < 0) {
-     *     cache.incr("product:stock:456", quantity);   // Rollback
+     *     cache.incr("product:stock:456", quantity);               // rollback
      *     throw new InsufficientStockException();
      * }
      *
      * // API quota management with variable costs
      * int requestCost = calculateCost(request);
-     * long quotaRemaining = cache.decr("quota:" + apiKey, requestCost);
+     * long quotaRemaining = cache.decr("quota:" + apiKey, requestCost);   // value after the deduction
      * if (quotaRemaining < 0) {
-     *     cache.incr("quota:" + apiKey, requestCost);   // Restore quota
+     *     cache.incr("quota:" + apiKey, requestCost);              // restore quota
      *     throw new QuotaExceededException("Insufficient quota");
      * }
      *
-     * // Event reservation system
-     * int numberOfTickets = 3;
-     * long availableSeats = cache.decr("event:seats:789", numberOfTickets);
-     * if (availableSeats < 0) {
-     *     // Revert the decrement
-     *     cache.incr("event:seats:789", numberOfTickets);
-     *     throw new NotEnoughSeatsException("Only " + (availableSeats + numberOfTickets) + " seats available");
-     * }
-     * confirmReservation(numberOfTickets);
+     * // Edge: a fresh key auto-initializes to 0 then subtracts delta (negatives allowed)
+     * long first = cache.decr("brand:new:counter", 5);            // returns -5 the first time
      *
-     * // Resource pool management
-     * long availableConnections = cache.decr("pool:connections", 1);
-     * if (availableConnections >= 0) {
-     *     return acquireConnection();
-     * } else {
-     *     cache.incr("pool:connections", 1);
-     *     throw new NoAvailableConnectionException();
-     * }
+     * // Edge: a delta of 0 returns the current value unchanged
+     * long current = cache.decr("quota:" + apiKey, 0);            // returns the current counter value
      *
-     * // Batch withdrawal
-     * int withdrawAmount = 50;
-     * long balance = cache.decr("account:balance:" + accountId, withdrawAmount);
-     * if (balance < 0) {
-     *     cache.incr("account:balance:" + accountId, withdrawAmount);
-     *     throw new InsufficientFundsException();
-     * }
+     * // Edge: a nil reply from the shard is coalesced to 0 (no NullPointerException)
+     * long safe = cache.decr("transient:counter", 3);             // returns 0 if the shard replied nil
+     *
+     * // Negative: a negative delta is rejected by this wrapper
+     * cache.decr("counter", -1);                                 // throws IllegalArgumentException
+     *
+     * // Negative: a null key is rejected
+     * cache.decr(null, 1);                                       // throws IllegalArgumentException
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
@@ -754,50 +808,23 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // WARNING: This removes ALL data from ALL Redis instances!
-     * cache.flushAll();
-     * System.out.println("All cache data cleared");
-     *
-     * // Safe usage in testing environments
-     * @After
-     * public void cleanupCache() {
-     *     if (isTestEnvironment()) {
-     *         cache.flushAll();
-     *     }
-     * }
+     * cache.flushAll();                                           // issues FLUSHALL on every shard; returns void
+     * User gone = cache.get("user:123");                          // returns null afterwards (all keys cleared)
      *
      * // Integration test cleanup
      * @BeforeEach
      * public void setUp() {
-     *     cache.flushAll();   // Clean slate for each test
+     *     cache.flushAll();                                        // clean slate for each test
      * }
      *
-     * // Production usage with confirmation and audit
-     * public void clearCache(String confirmationToken, User user) {
-     *     if (!"CONFIRM_FLUSH_ALL".equals(confirmationToken)) {
-     *         throw new IllegalArgumentException("Invalid confirmation");
-     *     }
-     *     logger.warn("Flushing all cache data, requested by: {}", user.getId());
-     *     cache.flushAll();
-     *     auditLog.record("CACHE_FLUSH_ALL", user);
-     * }
+     * // Edge: with a single empty/null shard set there is simply nothing to flush (no exception)
+     * cache.flushAll();                                           // no-op safe when there are no shards
      *
-     * // Application reset sequence
-     * public void resetApplication() {
-     *     logger.info("Starting application reset");
-     *     cache.flushAll();
-     *     database.resetToDefaults();
-     *     logger.info("Application reset complete");
-     * }
-     *
-     * // Emergency cache clear
-     * public void emergencyCacheClear() {
-     *     logger.error("Emergency cache flush initiated");
-     *     try {
-     *         cache.flushAll();
-     *         logger.info("Emergency flush completed");
-     *     } catch (Exception e) {
-     *         logger.error("Emergency flush failed", e);
-     *     }
+     * // Edge/Negative: if one shard fails, the others are still flushed and the FIRST error is rethrown
+     * try {
+     *     cache.flushAll();                                       // attempts every shard even if one throws
+     * } catch (RuntimeException e) {
+     *     logger.error("Flush failed on a shard (remaining shards were still flushed)", e);   // rethrows the first failure
      * }
      * }</pre>
      *
@@ -861,51 +888,29 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Try-finally pattern (recommended)
      * JRedis<User> cache = new JRedis<>("localhost:6379");
      * try {
-     *     cache.set("user:123", user, 3600000);
-     *     User cached = cache.get("user:123");
-     *     processUser(cached);
+     *     cache.set("user:123", user, 3600000);                    // returns true on success
+     *     User cached = cache.get("user:123");                     // the cached User, or null
+     *     processUser(cached);                                     // application logic on the cached value
      * } finally {
-     *     cache.disconnect();
-     *     System.out.println("Cache client disconnected");
+     *     cache.disconnect();                                      // closes all shard connections
      * }
      *
      * // Try-with-resources pattern (requires wrapper)
      * try (AutoCloseable closeable = cache::disconnect) {
-     *     cache.set("key", value, 3600000);
-     *     // Client will be disconnected automatically
+     *     cache.set("key", value, 3600000);                        // returns true on success
+     *     // disconnect() is invoked automatically when the block exits
      * }
      *
-     * // Application shutdown hook
-     * Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-     *     logger.info("Shutting down cache client");
-     *     cache.disconnect();
-     *     logger.info("Cache client shutdown complete");
-     * }));
+     * // Edge: disconnect() is idempotent and safe to call more than once
+     * cache.disconnect();                                          // closes the underlying client
+     * cache.disconnect();                                          // no-op; the second call does nothing
      *
      * // Spring Bean destruction callback
      * @PreDestroy
      * public void cleanup() {
      *     if (cache != null) {
-     *         logger.info("Cleaning up cache client");
-     *         cache.disconnect();
+     *         cache.disconnect();                                  // releases network/socket resources
      *     }
-     * }
-     *
-     * // Graceful application shutdown
-     * public void shutdownGracefully() {
-     *     logger.info("Disconnecting from Redis cache servers");
-     *     try {
-     *         cache.disconnect();
-     *         logger.info("Disconnection successful");
-     *     } catch (Exception e) {
-     *         logger.error("Error during disconnect", e);
-     *     }
-     * }
-     *
-     * // Reconnection pattern (not recommended - create new instance instead)
-     * public void reconnect() {
-     *     oldCache.disconnect();
-     *     cache = new JRedis<>(serverUrl, timeout);   // Create new instance
      * }
      * }</pre>
      *

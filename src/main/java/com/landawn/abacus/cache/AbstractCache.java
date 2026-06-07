@@ -143,6 +143,22 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * <p>This base implementation delegates to {@link #getOrNull(Object)} and wraps the result via
      * {@link Optional#ofNullable(Object)}. Subclasses that need different semantics should
      * override {@link #getOrNull(Object)} rather than this method.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     * cache.put("k", "v");                       // seed an entry
+     *
+     * Optional<String> hit = cache.get("k");
+     * hit.isPresent();                           // returns true
+     * hit.get();                                 // returns "v"
+     *
+     * // Edge: missing key yields an empty Optional, not null.
+     * Optional<String> miss = cache.get("absent");
+     * miss.isPresent();                          // returns false
+     * miss.orElse("fallback");                   // returns "fallback"
+     * }</pre>
+     *
      */
     @Override
     public Optional<V> get(final K key) {
@@ -154,6 +170,20 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * <p>This base implementation delegates to {@link #put(Object, Object, long, long)} using the
      * {@code defaultLiveTime} and {@code defaultMaxIdleTime} configured at construction time.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     *
+     * // Stores using the construction-time defaults (3h live, 30min idle by default).
+     * boolean stored = cache.put("k", "v");      // returns true
+     * cache.get("k").get();                      // returns "v"
+     *
+     * // Re-putting the same key overwrites the existing value.
+     * cache.put("k", "v2");                      // returns true
+     * cache.get("k").get();                      // returns "v2"
+     * }</pre>
+     *
      */
     @Override
     public boolean put(final K key, final V value) {
@@ -164,6 +194,21 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation submits a call to {@link #get(Object)} on {@link #asyncExecutor}.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     * cache.put("k", "v");                       // seed an entry
+     *
+     * ContinuableFuture<Optional<String>> f = cache.asyncGet("k");
+     * Optional<String> hit = f.get();            // throws InterruptedException, ExecutionException
+     * hit.isPresent();                           // returns true
+     * hit.get();                                 // returns "v"
+     *
+     * // Edge: missing key resolves to an empty Optional.
+     * cache.asyncGet("absent").get().isPresent();  // returns false
+     * }</pre>
+     *
      */
     @Override
     public ContinuableFuture<Optional<V>> asyncGet(final K key) {
@@ -174,6 +219,19 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation submits a call to {@link #getOrNull(Object)} on {@link #asyncExecutor}.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     * cache.put("k", "v");                       // seed an entry
+     *
+     * ContinuableFuture<String> f = cache.asyncGetOrNull("k");
+     * f.get();                                   // returns "v"; throws InterruptedException, ExecutionException
+     *
+     * // Edge: missing key resolves to null (no Optional wrapper).
+     * cache.asyncGetOrNull("absent").get();      // returns null
+     * }</pre>
+     *
      */
     @Override
     public ContinuableFuture<V> asyncGetOrNull(final K key) {
@@ -184,6 +242,21 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation submits a call to {@link #put(Object, Object)} on {@link #asyncExecutor}.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     *
+     * // Stores asynchronously using the construction-time default expiration.
+     * ContinuableFuture<Boolean> f = cache.asyncPut("k", "v");
+     * f.get();                                   // returns true; throws InterruptedException, ExecutionException
+     * cache.getOrNull("k");                      // returns "v"
+     *
+     * // Overwriting an existing key also completes with true.
+     * cache.asyncPut("k", "v2").get();           // returns true
+     * cache.getOrNull("k");                      // returns "v2"
+     * }</pre>
+     *
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K key, final V value) {
@@ -195,6 +268,21 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * <p>This base implementation submits a call to {@link #put(Object, Object, long, long)} on
      * {@link #asyncExecutor}.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     *
+     * // Stores asynchronously with an explicit 5s live time and 5s idle time.
+     * ContinuableFuture<Boolean> f = cache.asyncPut("k", "v", 5000L, 5000L);
+     * f.get();                                   // returns true; throws InterruptedException, ExecutionException
+     * cache.getOrNull("k");                      // returns "v"
+     *
+     * // Edge: liveTime <= 0 means no expiration by TTL.
+     * cache.asyncPut("forever", "v", 0L, 0L).get();  // returns true
+     * cache.getOrNull("forever");                    // returns "v"
+     * }</pre>
+     *
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K key, final V value, final long liveTime, final long maxIdleTime) {
@@ -206,6 +294,20 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * <p>This base implementation submits a call to {@link #remove(Object)} on {@link #asyncExecutor}
      * and completes the returned future with a {@code null} result when the removal finishes.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     * cache.put("k", "v");                       // seed an entry
+     *
+     * ContinuableFuture<Void> f = cache.asyncRemove("k");
+     * f.get();                                   // returns null (Void); throws InterruptedException, ExecutionException
+     * cache.getOrNull("k");                      // returns null (entry removed)
+     *
+     * // Edge: removing an absent key still completes normally with a null result.
+     * cache.asyncRemove("absent").get();         // returns null
+     * }</pre>
+     *
      */
     @Override
     public ContinuableFuture<Void> asyncRemove(final K key) {
@@ -220,6 +322,19 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation submits a call to {@link #containsKey(Object)} on {@link #asyncExecutor}.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     * cache.put("k", "v");                       // seed an entry
+     *
+     * ContinuableFuture<Boolean> f = cache.asyncContainsKey("k");
+     * f.get();                                   // returns true; throws InterruptedException, ExecutionException
+     *
+     * // Edge: key never stored resolves to false.
+     * cache.asyncContainsKey("absent").get();    // returns false
+     * }</pre>
+     *
      */
     @Override
     public ContinuableFuture<Boolean> asyncContainsKey(final K key) {
@@ -230,6 +345,20 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation returns the {@link #properties} instance held by this cache.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     *
+     * Properties<String, Object> props = cache.getProperties();
+     * props.isEmpty();                           // returns true (no properties set yet)
+     *
+     * // The same backing instance is returned on each call and reflects later writes.
+     * cache.setProperty("region", "us-east");    // returns null (no previous mapping)
+     * cache.getProperties() == props;            // returns true (same instance)
+     * cache.getProperties().get("region");       // returns "us-east"
+     * }</pre>
+     *
      */
     @Override
     public Properties<String, Object> getProperties() {
@@ -241,6 +370,19 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * <p>This base implementation looks up the value in {@link #properties} and returns it
      * via an unchecked cast to {@code T}.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     * cache.setProperty("ttlSeconds", 60);       // returns null (no previous mapping)
+     *
+     * Integer ttl = cache.getProperty("ttlSeconds");
+     * ttl.intValue();                            // returns 60
+     *
+     * // Edge: an unset property returns null (the value is cast to the inferred type).
+     * String missing = cache.getProperty("absent");  // returns null
+     * }</pre>
+     *
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -253,6 +395,20 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * <p>This base implementation writes the value to {@link #properties} and returns the
      * previous value via an unchecked cast to {@code T}.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     *
+     * // First write for a name has no previous mapping.
+     * String prev1 = cache.setProperty("name", "alpha");  // returns null
+     * cache.getProperty("name");                          // returns "alpha"
+     *
+     * // Re-setting the same name returns the value it replaced.
+     * String prev2 = cache.setProperty("name", "beta");   // returns "alpha"
+     * cache.getProperty("name");                          // returns "beta"
+     * }</pre>
+     *
      */
     @SuppressWarnings("unchecked")
     @Override
@@ -265,6 +421,20 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * <p>This base implementation removes the entry from {@link #properties} and returns the
      * removed value via an unchecked cast to {@code T}.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * Cache<String, String> cache = new LocalCache<>(100, 0);
+     * cache.setProperty("foo", "bar");           // returns null (no previous mapping)
+     *
+     * String removed = cache.removeProperty("foo");
+     * removed;                                   // returns "bar"
+     * cache.getProperty("foo");                  // returns null (entry removed)
+     *
+     * // Edge: removing a name that was never set returns null.
+     * cache.removeProperty("never-set");         // returns null
+     * }</pre>
+     *
      */
     @SuppressWarnings("unchecked")
     @Override
