@@ -275,6 +275,72 @@ public class OffHeapCacheTest {
     }
 
     /**
+     * Regression coverage for the "return inside finally" exception-swallowing bug in
+     * {@code AbstractOffHeapCache.put()}. The put body's {@code finally} block ended with a bare
+     * {@code return false} whenever no wrapper was produced. A {@code return} executed in a
+     * {@code finally} silently discards any exception propagating out of the {@code try}, so an
+     * {@code offHeapStore.put()} that threw (or any copy/allocation failure inside the try) was
+     * converted into a silent {@code put == false} instead of surfacing the real error — the value
+     * was dropped with no signal that the disk store was broken.
+     *
+     * <p>After the fix the "could not store" handling (vacate + {@code return false}) was moved out
+     * of the {@code finally}, so a genuine exception now propagates while the {@code finally} still
+     * releases any allocated slots. This test forces the disk-only path with a store that throws for
+     * "BOOM" keys and succeeds for "ok" keys: the throw must propagate out of {@code put()}, and the
+     * cache must stay fully usable (every interleaved normal put/get round-trips).
+     */
+    @Test
+    public void test_put_offHeapStoreThrows_propagates_and_cacheStaysUsable() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final OffHeapStore<String> throwingStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                if (key.startsWith("BOOM")) {
+                    throw new IllegalStateException("disk store failed for: " + key);
+                }
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(throwingStore)
+                .storeSelector((k, v, size) -> 2) // disk only — route every put through offHeapStore.put
+                .build();
+
+        try {
+            for (int i = 0; i < 200; i++) {
+                final int n = i;
+                final byte[] boom = new byte[128];
+                // A throwing offHeapStore.put must propagate out of put() (it used to be silently
+                // swallowed as `return false` by the return-in-finally).
+                assertThrows(IllegalStateException.class, () -> c.put("BOOM" + n, boom));
+                // ...and the cache must stay usable: a normal disk-only put/get round-trips.
+                final byte[] ok = ("value" + n).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                assertTrue(c.put("ok" + n, ok));
+                assertArrayEquals(ok, c.get("ok" + n).orElse(null));
+            }
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
      * Durable boundary round-trip coverage for the off-heap memory arithmetic. Sweeps sizes that
      * exercise the single-slot path, the multi-slot path (values larger than maxBlockSize), and the
      * multi-segment-spanning path (values larger than the 1 MB segment), crossing the fixed

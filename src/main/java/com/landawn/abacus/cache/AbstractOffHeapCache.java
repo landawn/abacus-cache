@@ -528,7 +528,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 try {
                     diskBytes = storeWrapper.readBytes();
                 } finally {
-                    elapsedTime = System.currentTimeMillis() - startTime;
+                    // Clamp to >= 0: a backward wall-clock adjustment (NTP/manual) mid-read can make
+                    // the elapsed time negative, which would both feed a nonsensical value to the
+                    // promotion tester below and, via LongSummaryStatistics, make stats() throw from
+                    // the non-negative MinMaxAvg constructor.
+                    elapsedTime = Math.max(0L, System.currentTimeMillis() - startTime);
 
                     if (statsTimeOnDisk) {
                         synchronized (totalReadFromDiskTimeStats) {
@@ -844,14 +848,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     }
                 }
             }
+        }
 
-            if (w == null) {
-                if (!replacingExisting) {
-                    vacate();
-                }
-
-                return false;
+        // Handle the "could not store" outcome AFTER the try/finally. Doing this inside the finally
+        // with a `return false` would silently discard any exception propagating out of the try
+        // (e.g. an OutOfMemoryError while growing a slot, a copyToMemory failure, or a RuntimeException
+        // thrown by a custom offHeapStore.put) — the classic "return in finally swallows the exception"
+        // trap. The finally above still releases any allocated slots on every exit, including the
+        // exceptional one, so cleanup is unchanged; only the silent swallowing is removed.
+        if (w == null) {
+            if (!replacingExisting) {
+                vacate();
             }
+
+            return false;
         }
 
         boolean result = false;
@@ -869,15 +879,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             result = _pool.put(key, w);
         } finally {
             if (!result) {
+                // The pool rejected the wrapper; for a StoreWrapper this also removes the disk bytes
+                // that putToDisk just wrote. Since nothing was retained, do NOT count it toward the
+                // disk write stats — that keeps putCountToDisk consistent with putCount, which by
+                // contract excludes puts that fail before the wrapper is installed in the pool.
                 w.destroy(Caller.PUT_ADD_FAILURE);
-            }
-
-            if (wkind == Wrapper.KIND_STORE) {
+            } else if (wkind == Wrapper.KIND_STORE) {
                 writeCountToDisk.increment();
 
                 if (statsTimeOnDisk) {
                     synchronized (totalWriteToDiskTimeStats) {
-                        totalWriteToDiskTimeStats.accept(System.currentTimeMillis() - startTime);
+                        // Clamp to >= 0: a backward wall-clock adjustment (NTP/manual) mid-write can
+                        // make the elapsed time negative, which LongSummaryStatistics would carry into
+                        // stats() and make the non-negative MinMaxAvg constructor throw.
+                        totalWriteToDiskTimeStats.accept(Math.max(0L, System.currentTimeMillis() - startTime));
                     }
                 }
             }
@@ -1243,14 +1258,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // concurrently mutated instance can yield a torn state where, e.g., count > 0 but
         // min is still Long.MAX_VALUE, or where average's internal sum and count were sampled
         // at different moments and so represent no real point-in-time average.
+        // Clamp each component to >= 0 so a stray negative observation (e.g. recorded during a
+        // backward wall-clock jump) can never make the non-negative MinMaxAvg constructor throw and
+        // turn a monitoring call into a failure. Clamping all three keeps the snapshot self-consistent.
         final double writeMin;
         final double writeMax;
         final double writeAvg;
         synchronized (totalWriteToDiskTimeStats) {
             final long count = totalWriteToDiskTimeStats.getCount();
-            writeMin = count > 0 ? totalWriteToDiskTimeStats.getMin() : 0.0D;
-            writeMax = count > 0 ? totalWriteToDiskTimeStats.getMax() : 0.0D;
-            writeAvg = count > 0 ? Numbers.round(totalWriteToDiskTimeStats.getAverage(), 2) : 0.0D;
+            writeMin = count > 0 ? Math.max(0.0D, totalWriteToDiskTimeStats.getMin()) : 0.0D;
+            writeMax = count > 0 ? Math.max(0.0D, totalWriteToDiskTimeStats.getMax()) : 0.0D;
+            writeAvg = count > 0 ? Math.max(0.0D, Numbers.round(totalWriteToDiskTimeStats.getAverage(), 2)) : 0.0D;
         }
 
         final MinMaxAvg writeToDiskTimeStats = new MinMaxAvg(writeMin, writeMax, writeAvg);
@@ -1260,9 +1278,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final double readAvg;
         synchronized (totalReadFromDiskTimeStats) {
             final long count = totalReadFromDiskTimeStats.getCount();
-            readMin = count > 0 ? totalReadFromDiskTimeStats.getMin() : 0.0D;
-            readMax = count > 0 ? totalReadFromDiskTimeStats.getMax() : 0.0D;
-            readAvg = count > 0 ? Numbers.round(totalReadFromDiskTimeStats.getAverage(), 2) : 0.0D;
+            readMin = count > 0 ? Math.max(0.0D, totalReadFromDiskTimeStats.getMin()) : 0.0D;
+            readMax = count > 0 ? Math.max(0.0D, totalReadFromDiskTimeStats.getMax()) : 0.0D;
+            readAvg = count > 0 ? Math.max(0.0D, Numbers.round(totalReadFromDiskTimeStats.getAverage(), 2)) : 0.0D;
         }
 
         final MinMaxAvg readFromDiskTimeStats = new MinMaxAvg(readMin, readMax, readAvg);

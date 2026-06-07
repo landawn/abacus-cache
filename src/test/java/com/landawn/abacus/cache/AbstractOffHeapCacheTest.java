@@ -110,6 +110,41 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
+     * Regression coverage for {@code stats()} being crash-safe against a negative disk-I/O timing
+     * observation. Disk read/write elapsed times are measured with wall-clock
+     * {@code System.currentTimeMillis()}; a backward clock adjustment (NTP correction, manual change,
+     * VM migration) during an in-flight I/O op can yield a negative duration. That negative would
+     * flow through {@link java.util.LongSummaryStatistics} into {@code stats()}, whose
+     * {@code OffHeapCacheStats.MinMaxAvg} canonical constructor rejects negatives with
+     * {@code IllegalArgumentException} — turning a monitoring call into a failure.
+     *
+     * <p>After the fix {@code stats()} clamps each min/max/avg component to {@code >= 0}, so it
+     * returns a valid, non-negative snapshot regardless of a stray negative observation. The
+     * package-private timing accumulators are written under their own monitor in production;
+     * single-threaded direct injection here simulates the recorded-negative state.
+     */
+    @Test
+    public void testStatsClampsNegativeDiskTimingObservations() {
+        try (OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
+                .capacityInMB(16)
+                .evictDelay(0)
+                .build()) {
+            cache.totalReadFromDiskTimeStats.accept(-5L);
+            cache.totalWriteToDiskTimeStats.accept(-7L);
+
+            // Before the fix this threw IllegalArgumentException from the MinMaxAvg constructor.
+            final OffHeapCacheStats stats = cache.stats();
+
+            assertEquals(0.0D, stats.readFromDiskTimeStats().min(), "negative read min must be clamped to 0");
+            assertEquals(0.0D, stats.readFromDiskTimeStats().max(), "negative read max must be clamped to 0");
+            assertEquals(0.0D, stats.readFromDiskTimeStats().avg(), "negative read avg must be clamped to 0");
+            assertEquals(0.0D, stats.writeToDiskTimeStats().min(), "negative write min must be clamped to 0");
+            assertEquals(0.0D, stats.writeToDiskTimeStats().max(), "negative write max must be clamped to 0");
+            assertEquals(0.0D, stats.writeToDiskTimeStats().avg(), "negative write avg must be clamped to 0");
+        }
+    }
+
+    /**
      * Regression coverage for the cancelled-eviction-task GC leak in
      * {@link AbstractOffHeapCache}.
      *
