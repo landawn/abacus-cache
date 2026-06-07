@@ -191,6 +191,28 @@ public class MemcachedLockTest {
     }
 
     @Test
+    public void testLock_WithNullValue_usesValueLessSentinel() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);
+            final MemcachedClient mockMc = ctorIntercept.constructed().get(0);
+
+            OperationFuture<Boolean> addOk = immediateBooleanFuture(true);
+            when(mockMc.add(any(String.class), anyInt(), any())).thenReturn(addOk);
+
+            assertTrue(lock.lock("k", null, 5_000L));
+
+            final ArgumentCaptor<Object> valueCaptor = ArgumentCaptor.forClass(Object.class);
+            verify(mockMc).add(eq("k"), eq(5), valueCaptor.capture());
+            assertTrue(valueCaptor.getValue() instanceof byte[]);
+            assertEquals(0, ((byte[]) valueCaptor.getValue()).length);
+
+            when(mockMc.get("k")).thenReturn(valueCaptor.getValue());
+            assertTrue(lock.isLocked("k"));
+            assertNull(lock.get("k"));
+        }
+    }
+
+    @Test
     public void testLock_longTtl_usesMemcachedAbsoluteExpiration() {
         try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
             final MemcachedLock<String, Long> lock = new MemcachedLock<>(url);

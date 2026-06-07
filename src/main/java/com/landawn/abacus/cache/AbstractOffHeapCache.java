@@ -944,7 +944,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // silently delete the existing cache entry.
         final Wrapper<V> prior = _pool.remove(k);
 
-        if (offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size))) {
+        final boolean stored;
+
+        try {
+            stored = offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size));
+        } catch (final RuntimeException | Error e) {
+            try {
+                restorePriorAfterDiskWriteFailure(k, prior);
+            } catch (final RuntimeException | Error restoreFailure) {
+                e.addSuppressed(restoreFailure);
+            }
+
+            throw e;
+        }
+
+        if (stored) {
             if (prior != null) {
                 if (prior.kind == Wrapper.KIND_STORE) {
                     ((StoreWrapper) prior).discardReplacedStoreMetadata();
@@ -956,6 +970,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return new StoreWrapper(type, liveTime, maxIdleTime, size, k);
         }
 
+        restorePriorAfterDiskWriteFailure(k, prior);
+
+        return null;
+    }
+
+    private void restorePriorAfterDiskWriteFailure(final K k, final Wrapper<V> prior) {
         if (prior != null) {
             final boolean restored = _pool.put(k, prior);
 
@@ -967,8 +987,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             }
         }
-
-        return null;
     }
 
     /**

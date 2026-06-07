@@ -456,6 +456,65 @@ public class OffHeapCacheTest {
     }
 
     @Test
+    public void test_throwing_disk_replacement_preserves_existing_entry() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+        final AtomicBoolean failWrites = new AtomicBoolean(false);
+
+        final OffHeapStore<String> throwingStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                if (failWrites.get()) {
+                    throw new IllegalStateException("disk store failed for: " + key);
+                }
+
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(throwingStore)
+                .storeSelector((k, v, size) -> 2)
+                .build();
+
+        try {
+            final String key = "shared-key-throwing";
+            final Account first = createAccount(Account.class);
+            first.setFirstName(Strings.repeat("a", 5000));
+            assertTrue(diskCache.put(key, first));
+
+            final Account second = createAccount(Account.class);
+            second.setFirstName(Strings.repeat("b", 5000));
+            failWrites.set(true);
+
+            assertThrows(IllegalStateException.class, () -> diskCache.put(key, second));
+            assertEquals(first, diskCache.get(key).orElse(null));
+            assertTrue(memStore.containsKey(key));
+            assertEquals(1, memStore.size());
+
+            final var stats = diskCache.stats();
+            assertEquals(1L, stats.sizeOnDisk());
+            assertEquals(stats.dataSizeOnDisk(), stats.dataSize());
+        } finally {
+            diskCache.close();
+        }
+    }
+
+    @Test
     public void test_clear_reclaims_empty_segments_for_different_slot_sizes() {
         final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
                 .capacityInMB(1)

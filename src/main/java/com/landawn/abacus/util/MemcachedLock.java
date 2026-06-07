@@ -223,7 +223,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * }</pre>
      *
      * @param target the target resource on which to acquire the lock (must not be null)
-     * @param value the value to associate with the lock (can be {@code null})
+     * @param value the value to associate with the lock (can be {@code null}; a {@code null}
+     *              value is stored as the same value-less marker used by {@link #lock(Object, long)})
      * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive;
      *                 converted to whole seconds for Memcached, with fractional seconds rounded up)
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
@@ -233,14 +234,16 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @see #get(Object)
      * @see #unlock(Object)
      */
+    @SuppressWarnings("unchecked")
     public boolean lock(final K target, final V value, final long liveTime) {
         N.checkArgNotNull(target, "target");
         N.checkArgPositive(liveTime, "liveTime");
 
         final String key = toKey(target);
+        final V lockValue = value == null ? (V) N.EMPTY_BYTE_ARRAY : value;
 
         try {
-            final boolean acquired = mc.add(key, value, liveTime);
+            final boolean acquired = mc.add(key, lockValue, liveTime);
 
             if (logger.isDebugEnabled()) {
                 logger.debug(acquired ? "Acquired lock for key: " + key + " (liveTime=" + liveTime + "ms)" : "Lock already held for key: " + key);
