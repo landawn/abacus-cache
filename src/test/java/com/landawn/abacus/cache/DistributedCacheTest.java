@@ -11,9 +11,16 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Tag;
@@ -279,6 +286,52 @@ public class DistributedCacheTest extends TestBase {
             client.failGet = false;
             client.store.put(cache.generateKey("k"), "ok");
             assertEquals("ok", cache.getOrNull("k"));
+        }
+    }
+
+    /**
+     * The circuit-breaker failure counter must never exceed {@code maxFailedNumForRetry}, even under
+     * concurrent failing reads. The increment uses an atomic compare-and-cap ({@code getAndUpdate})
+     * rather than a separate {@code get()}-then-{@code incrementAndGet()}; the latter is a
+     * check-then-act race in which many threads can all observe {@code (cap - 1)}, all pass the guard,
+     * and overshoot the cap. With {@code retryDelay == 0} the breaker never short-circuits, so every
+     * concurrent get flows through the capped increment path.
+     */
+    @Test
+    public void testCircuitBreaker_FailureCounterNeverExceedsCapUnderConcurrency() throws Exception {
+        final InMemoryClient client = new InMemoryClient();
+        client.failGet = true;
+        final int cap = 5;
+
+        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", cap, 0)) {
+            final int threadCount = 16;
+            final ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+            final CountDownLatch start = new CountDownLatch(1);
+            final List<Future<?>> futures = new ArrayList<>();
+
+            for (int t = 0; t < threadCount; t++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    for (int i = 0; i < 2000; i++) {
+                        cache.getOrNull("k");
+                    }
+                    return null;
+                }));
+            }
+
+            start.countDown();
+
+            for (final Future<?> f : futures) {
+                f.get();
+            }
+
+            pool.shutdown();
+
+            final Field field = DistributedCache.class.getDeclaredField("failedCounter");
+            field.setAccessible(true);
+            final AtomicInteger counter = (AtomicInteger) field.get(cache);
+
+            assertEquals(cap, counter.get(), "failure counter must be capped at maxFailedNumForRetry under concurrency");
         }
     }
 

@@ -303,7 +303,13 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
     @Override
     protected void deallocate() {
         // buffer.asSlice(_startPtr, _capacityB).fill((byte) 0);   // Is it unnecessary?
-        arena.close();
+        // Guard against a null arena: deallocate() is an overridable cleanup hook that the parent
+        // constructor may invoke on an error path (e.g. shutdown-hook registration failure) before
+        // allocate() has assigned arena, in which case an unguarded arena.close() would mask the
+        // original failure with a NullPointerException.
+        if (arena != null) {
+            arena.close();
+        }
     }
 
     /**

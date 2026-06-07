@@ -376,7 +376,18 @@ public final class CacheFactory {
             throw new IllegalArgumentException("Provider specification cannot be null or empty");
         }
 
-        final TypeAttrParser attrResult = TypeAttrParser.parse(provider);
+        final TypeAttrParser attrResult;
+
+        try {
+            attrResult = TypeAttrParser.parse(provider);
+        } catch (final IllegalArgumentException e) {
+            throw e;
+        } catch (final RuntimeException e) {
+            // Malformed DSL (e.g. an unbalanced parenthesis) can make the parser throw a low-level
+            // exception such as StringIndexOutOfBoundsException. Surface it as the documented
+            // IllegalArgumentException instead of leaking the parser's internal failure.
+            throw new IllegalArgumentException("Failed to parse provider specification: " + provider, e);
+        }
 
         if (attrResult == null) {
             throw new IllegalArgumentException("Failed to parse provider specification: " + provider);
@@ -435,7 +446,14 @@ public final class CacheFactory {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }
         } else {
-            cls = ClassUtil.forName(className);
+            try {
+                cls = ClassUtil.forName(className);
+            } catch (final IllegalArgumentException e) {
+                // ClassUtil.forName throws IllegalArgumentException (not null) when the class cannot
+                // be found; rethrow with this method's documented "Cannot find class" message so the
+                // null-check below is not relied upon as dead code.
+                throw new IllegalArgumentException("Cannot find class: " + className, e);
+            }
 
             if (cls == null) {
                 throw new IllegalArgumentException("Cannot find class: " + className);

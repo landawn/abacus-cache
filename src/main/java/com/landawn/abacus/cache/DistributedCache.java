@@ -321,7 +321,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             // recovery, so callers see a cache miss rather than an exception. Logged at debug
             // to aid diagnosis without flooding logs while the circuit is open.
             if (logger.isDebugEnabled()) {
-                logger.debug("Distributed cache read failed (treated as cache miss); failure count is now " + (failedCounter.get() + 1), e);
+                // Report the current count rather than guessing the post-increment value: the
+                // increment happens in the finally block below and is capped at maxFailedNumForRetry,
+                // so "current + 1" would over-report once the breaker threshold has been reached.
+                logger.debug("Distributed cache read failed (treated as cache miss); consecutive failure count is ~" + failedCounter.get(), e);
             }
         } finally {
             if (isOK) {
@@ -343,9 +346,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 // (failedCounter >= maxFailedNumForRetry) is already satisfied, and letting the
                 // counter grow without bound would eventually overflow to a negative value and
                 // silently disable the breaker after Integer.MAX_VALUE consecutive failures.
-                if (failedCounter.get() < maxFailedNumForRetry) {
-                    failedCounter.incrementAndGet();
-                }
+                // Use an atomic compare-and-cap (getAndUpdate) instead of a separate get()/
+                // incrementAndGet(): the latter is a check-then-act race in which N concurrent
+                // failing reads can all observe (cap - 1), all pass the guard, and overshoot the cap.
+                failedCounter.getAndUpdate(current -> current < maxFailedNumForRetry ? current + 1 : current);
             }
         }
 

@@ -245,6 +245,29 @@ public class CacheFactoryTest extends TestBase {
         assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("com.example.NonExistentCache(localhost)"));
     }
 
+    /**
+     * A class-not-found custom provider must surface this method's documented "Cannot find class"
+     * IllegalArgumentException. {@code ClassUtil.forName} throws (rather than returning null) for a
+     * missing class, so the bespoke message is produced by wrapping that exception.
+     */
+    @Test
+    public void testCreateCache_ClassNotFound_HasDescriptiveMessage() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> CacheFactory.createCache("com.example.NonExistentCache(localhost)"));
+        assertTrue(ex.getMessage() != null && ex.getMessage().contains("Cannot find class"),
+                "expected a 'Cannot find class' message but was: " + ex.getMessage());
+    }
+
+    /**
+     * Malformed DSL (an unbalanced parenthesis) must be reported as the documented
+     * IllegalArgumentException rather than leaking a low-level parser exception such as
+     * StringIndexOutOfBoundsException.
+     */
+    @Test
+    public void testCreateCache_EdgeCase_UnbalancedParenthesis() {
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,app:"));
+    }
+
     @Test
     public void testCreateCache_EdgeCase_CustomClassMustImplementCache() {
         assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("java.lang.String(localhost)"));

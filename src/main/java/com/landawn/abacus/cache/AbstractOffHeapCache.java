@@ -312,6 +312,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         _maxBlockSize = maxBlockSize % MIN_BLOCK_SIZE == 0 ? maxBlockSize : (maxBlockSize / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
         _segmentQueues = new Deque[_maxBlockSize / MIN_BLOCK_SIZE];
 
+        // Populate every size-class queue eagerly (the array is small and fixed) so the queue
+        // references are safely published by the constructor. Lazily creating them with
+        // double-checked locking on a non-volatile array element risked another thread reading a
+        // non-null LinkedList reference whose internal (non-final) fields were not yet visible.
+        for (int i = 0, len = _segmentQueues.length; i < len; i++) {
+            _segmentQueues[i] = new LinkedList<>();
+        }
+
         // ByteBuffer.allocateDirect((int) capacity);
         _startPtr = allocate(_capacityInBytes);
 
@@ -604,21 +612,45 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         }
 
                         if (slotWrapper != null) {
-                            boolean result = false;
+                            // Only promote when the disk-backed entry we read is still the current
+                            // mapping. A concurrent put()/remove() may have replaced it between the
+                            // _pool.get(key) at the top of this method and now; an unconditional
+                            // remove(key) here would destroy that newer entry and resurrect the
+                            // (older) value we just read from disk - a lost update. This mirrors the
+                            // "only if current" pattern in removeStaleStoreWrapperIfCurrent().
+                            final Wrapper<V> removed = _pool.remove(key);
 
-                            try {
-                                remove(key);
+                            if (removed == storeWrapper) {
+                                // Current entry is the disk wrapper we promoted from; retire it
+                                // (this removes the now-redundant on-disk bytes) and install the
+                                // in-memory copy.
+                                removed.destroy(Caller.REMOVE_REPLACE_CLEAR);
 
-                                totalOccupiedMemorySize.add(occupiedMemory);
+                                boolean result = false;
 
-                                totalDataSize.add(size);
+                                try {
+                                    totalOccupiedMemorySize.add(occupiedMemory);
 
-                                result = _pool.put(key, slotWrapper);
-                            } finally {
-                                if (!result) {
-                                    slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
+                                    totalDataSize.add(size);
+
+                                    result = _pool.put(key, slotWrapper);
+                                } finally {
+                                    if (!result) {
+                                        slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
+                                    }
+                                }
+                            } else {
+                                // The mapping changed concurrently. Restore whatever is now current
+                                // and discard the promoted slots instead of clobbering the newer entry.
+                                if (removed != null) {
+                                    final boolean restored = _pool.put(key, removed);
+
+                                    if (!restored) {
+                                        removed.destroy(Caller.PUT_ADD_FAILURE);
+                                    }
                                 }
 
+                                slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
                             }
                         }
                     }
@@ -944,17 +976,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         final int idx = slotSize / MIN_BLOCK_SIZE - 1;
-        Deque<Segment> queue = _segmentQueues[idx];
-
-        if (queue == null) {
-            synchronized (_segmentQueues) {
-                queue = _segmentQueues[idx];
-
-                if (queue == null) {
-                    queue = (_segmentQueues[idx] = new LinkedList<>());
-                }
-            }
-        }
+        // Queues are created eagerly in the constructor, so this element is always non-null and
+        // safely published; no lazy initialization / double-checked locking is required here.
+        final Deque<Segment> queue = _segmentQueues[idx];
 
         Segment segment = null;
         int indexOfAvailableSlot = -1;
@@ -1184,7 +1208,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         final Map<Integer, Map<Integer, Integer>> occupiedSlots = Stream.of(new ArrayList<>(_segmentQueueMap.values())).distinct().flatmap(queue -> {
             synchronized (queue) {
-                return N.map(queue, it -> Tuple.of(it.sizeOfSlot, it.index, it.slotBitSet.cardinality()));
+                return N.map(queue, it -> Tuple.of(it.sizeOfSlot, it.index, it.cardinality()));
             }
         })
                 .sorted(Comparators.<Tuple3<Integer, Integer, Integer>> comparingInt(it -> it._1).thenComparingInt(it -> it._2))
@@ -1314,12 +1338,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     protected void evict() {
         synchronized (_segmentBitSet) {
             for (int i = 0, len = _segments.length; i < len; i++) {
-                if (_segments[i].slotBitSet.isEmpty()) {
+                if (_segments[i].isEmpty()) {
                     final Deque<Segment> queue = _segmentQueueMap.get(i);
 
                     if (queue != null) {
                         synchronized (queue) {
-                            if (_segments[i].slotBitSet.isEmpty()) {
+                            if (_segments[i].isEmpty()) {
                                 queue.remove(_segments[i]);
 
                                 _segmentQueueMap.remove(i);
@@ -1435,6 +1459,38 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         public void releaseSlot(final int slotIndex) {
             synchronized (slotBitSet) {
                 slotBitSet.clear(slotIndex);
+            }
+        }
+
+        /**
+         * Returns the number of slots currently allocated in this segment.
+         *
+         * <p>{@link BitSet} is not thread-safe, so this read is performed under the same
+         * {@code slotBitSet} monitor that {@link #allocateSlot()} and {@link #releaseSlot(int)}
+         * use for mutation. Reading {@code cardinality()} without this monitor can observe a torn
+         * state while another thread is in {@code set()}/{@code clear()} (which may resize the
+         * backing word array), yielding a garbage count.
+         *
+         * @return the number of allocated slots
+         */
+        public int cardinality() {
+            synchronized (slotBitSet) {
+                return slotBitSet.cardinality();
+            }
+        }
+
+        /**
+         * Returns whether this segment currently has no allocated slots.
+         *
+         * <p>Like {@link #cardinality()}, this read is performed under the {@code slotBitSet}
+         * monitor because {@link BitSet} is not thread-safe; an unsynchronized {@code isEmpty()}
+         * can race with a concurrent {@code releaseSlot(int)}/{@code allocateSlot()}.
+         *
+         * @return {@code true} if no slots are allocated; {@code false} otherwise
+         */
+        public boolean isEmpty() {
+            synchronized (slotBitSet) {
+                return slotBitSet.isEmpty();
             }
         }
 
