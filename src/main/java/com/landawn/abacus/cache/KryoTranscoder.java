@@ -25,7 +25,7 @@ import net.spy.memcached.transcoders.Transcoder;
  * A Memcached {@link Transcoder} implementation that uses Kryo for serialization.
  * Kryo is a fast and efficient serialization framework that typically delivers better
  * performance and smaller serialized payloads than Java's default serialization. This
- * transcoder integrates Kryo with SpyMemcached for caching performance.
+ * transcoder integrates Kryo with SpyMemcached to improve caching performance.
  *
  * <p>Benefits of using Kryo:
  * <ul>

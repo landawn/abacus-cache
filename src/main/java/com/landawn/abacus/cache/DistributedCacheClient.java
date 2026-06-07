@@ -76,7 +76,7 @@ public interface DistributedCacheClient<T> {
      * System.out.println("Connected to: " + url);
      * }</pre>
      *
-     * @return the server URL(s), never {@code null}
+     * @return the server URL(s), never {@code null} or blank
      */
     String serverUrl();
 

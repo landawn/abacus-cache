@@ -398,7 +398,7 @@ public final class CacheFactory {
      * @throws IllegalArgumentException if the provider string is null or empty, cannot be parsed, has no
      *         parameters, has an empty server URL, has an empty class name, specifies an unsupported number
      *         of parameters (more than 3 for Memcached/Redis), specifies a non-numeric or non-positive timeout,
-     *         names a class that cannot be found, or names a custom class with no matching constructor
+     *         or names a class that cannot be found
      * @throws RuntimeException if a custom class is found but cannot be instantiated (constructor invocation
      *         fails, security restrictions, etc.)
      * @see #createDistributedCache(DistributedCacheClient)

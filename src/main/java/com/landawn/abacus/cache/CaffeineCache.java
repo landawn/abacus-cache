@@ -174,7 +174,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be {@code null})
-     * @param value the cache value to be associated with the specified key (must not be {@code null}; the underlying Caffeine cache rejects {@code null} values)
+     * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
      * @param liveTime the time-to-live in milliseconds (ignored; configure expiration via the Caffeine builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored; configure expiration via the Caffeine builder)
      * @return {@code true} (this implementation always succeeds unless an exception is thrown)
@@ -289,7 +289,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @return this method never returns; it always throws
+     * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always
      * @deprecated unsupported operation. Consider using {@link LocalCache} if key iteration is required.
      */

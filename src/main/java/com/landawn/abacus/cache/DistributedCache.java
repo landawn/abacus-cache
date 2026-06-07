@@ -281,7 +281,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key, must not be null
+     * @param key the cache key, must not be {@code null}
      * @return the cached value, or {@code null} if not found, expired, evicted, circuit breaker is open, or on error
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null (validated up-front, before the circuit breaker
@@ -393,7 +393,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * if (success) {
      *     System.out.println("User cached successfully");   // prints when put returned true
      * } else {
-     *     System.out.println("Failed to cache user (network error or timeout)");   // prints when put returned false
+     *     System.out.println("Failed to cache user (underlying client reported failure, e.g. cache full / write rejected)");   // prints when put returned false
      * }
      *
      * // Session caching with 30 minute TTL
@@ -412,7 +412,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key, must not be null
+     * @param key the cache key, must not be {@code null}
      * @param value the value to cache (null handling depends on underlying cache client implementation)
      * @param liveTime the time-to-live in milliseconds (0 or negative for no expiration)
      * @param maxIdleTime the maximum idle time in milliseconds (<b>IGNORED - not supported by distributed caches</b>)
@@ -480,7 +480,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key, must not be null
+     * @param key the cache key, must not be {@code null}
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null (thrown by {@link #generateKey(Object)})
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
@@ -551,7 +551,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @param key the cache key, must not be null
+     * @param key the cache key, must not be {@code null}
      * @return {@code true} if the key exists and has a non-null value, {@code false} otherwise,
      *         on error, or when circuit breaker is open
      * @throws IllegalStateException if the cache has been closed

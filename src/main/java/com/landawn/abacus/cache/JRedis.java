@@ -558,7 +558,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @return the value after increment (will be 1 if the key did not exist before). Returns {@code 0}
-     *         if the Redis shard returns a {@code nil} reply (e.g., on transient errors), rather than
+     *         if the underlying client returns a {@code null}/nil reply, rather than
      *         throwing a {@link NullPointerException}.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
@@ -626,7 +626,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *              {@link IllegalArgumentException} for portability across cache backends (e.g.
      *              SpyMemcached, which also rejects negative deltas).
      * @return the value after increment (will be equal to delta if the key did not exist before).
-     *         Returns {@code 0} if the Redis shard returns a {@code nil} reply, rather than throwing
+     *         Returns {@code 0} if the underlying client returns a {@code null}/nil reply, rather than throwing
      *         a {@link NullPointerException}.
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
@@ -695,7 +695,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist
-     *         before). Returns {@code 0} if the Redis shard returns a {@code nil} reply, rather than
+     *         before). Returns {@code 0} if the underlying client returns a {@code null}/nil reply, rather than
      *         throwing a {@link NullPointerException}.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
@@ -767,8 +767,8 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @param delta the decrement amount; must be non-negative
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
-     *         if the key did not exist before). Returns {@code 0} if the Redis shard returns a
-     *         {@code nil} reply, rather than throwing a {@link NullPointerException}.
+     *         if the key did not exist before). Returns {@code 0} if the underlying client returns a
+     *         {@code null}/nil reply, rather than throwing a {@link NullPointerException}.
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #decr(String)
@@ -817,7 +817,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *     cache.flushAll();                                        // clean slate for each test
      * }
      *
-     * // Edge: with a single empty/null shard set there is simply nothing to flush (no exception)
+     * // Edge: if there are no shards (empty or null collection), flushAll() is a no-op
      * cache.flushAll();                                           // no-op safe when there are no shards
      *
      * // Edge/Negative: if one shard fails, the others are still flushed and the FIRST error is rethrown

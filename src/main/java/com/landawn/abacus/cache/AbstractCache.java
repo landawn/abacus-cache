@@ -129,8 +129,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * AbstractCache<String, User> cache = new MyCache<>(3600000L, 900000L);
      * }</pre>
      *
-     * @param defaultLiveTime default TTL in milliseconds for new entries (use 0 for no expiration)
-     * @param defaultMaxIdleTime default max idle time in milliseconds for new entries (use 0 for no idle timeout)
+     * @param defaultLiveTime default TTL in milliseconds for new entries (use 0 or any non-positive value for no expiration)
+     * @param defaultMaxIdleTime default max idle time in milliseconds for new entries (use 0 or any non-positive value for no idle timeout)
      */
     protected AbstractCache(final long defaultLiveTime, final long defaultMaxIdleTime) {
         this.defaultLiveTime = defaultLiveTime;
@@ -379,7 +379,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Integer ttl = cache.getProperty("ttlSeconds");
      * ttl.intValue();                            // returns 60
      *
-     * // Edge: an unset property returns null (the value is cast to the inferred type).
+     * // Edge: an unset property returns null ({@code null} is returned regardless of the inferred type {@code T}).
      * String missing = cache.getProperty("absent");  // returns null
      * }</pre>
      *

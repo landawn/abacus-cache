@@ -71,8 +71,8 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Retrieves a value from the cache wrapped in an Optional.
-     * This is the null-safe alternative to {@link #getOrNull(Object)}, which returns a raw {@code V}
-     * that may be {@code null}.
+     * This is the null-safe alternative to {@link #getOrNull(Object)}, which returns the value
+     * directly (or {@code null} when the key is absent or expired).
      *
      * <p><b>Behavior:</b>
      * <ul>
@@ -178,7 +178,7 @@ public interface Cache<K, V> extends Closeable {
      * }
      * }</pre>
      *
-     * @param key the cache key to store the value under; null-handling is implementation-defined
+     * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
      * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full, closed, or write failure)
      * @see #put(Object, Object, long, long)
@@ -217,7 +217,7 @@ public interface Cache<K, V> extends Closeable {
      * cache.put("otp:token", token, 300000, 60000);   // 5min TTL, 1min idle
      * }</pre>
      *
-     * @param key the cache key to store the value under; null-handling is implementation-defined
+     * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
      * @param liveTime the time-to-live in milliseconds from insertion; handling of {@code <= 0} is implementation-defined
      * @param maxIdleTime the maximum idle time in milliseconds since last access; handling of {@code <= 0} is
@@ -253,7 +253,7 @@ public interface Cache<K, V> extends Closeable {
      * }
      * }</pre>
      *
-     * @param key the cache key to remove; null-handling is implementation-defined
+     * @param key the cache key to remove; null-handling is implementation-defined (most implementations reject null)
      * @see #clear()
      * @see #containsKey(Object)
      * @see #asyncRemove(Object)
@@ -284,7 +284,7 @@ public interface Cache<K, V> extends Closeable {
      * }
      * }</pre>
      *
-     * @param key the cache key to check for; null-handling is implementation-defined
+     * @param key the cache key to check for; null-handling is implementation-defined (most implementations reject null)
      * @return {@code true} if an entry for the key exists and is not expired, {@code false} otherwise
      * @see #get(Object)
      * @see #asyncContainsKey(Object)
@@ -309,7 +309,7 @@ public interface Cache<K, V> extends Closeable {
      *      .orElse("Unknown");
      * }</pre>
      *
-     * @param key the cache key to look up; null-handling is implementation-defined
+     * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
      * @return a ContinuableFuture that completes with an Optional containing the cached value,
      *         or with {@code Optional.empty()} if the key is absent or has expired. The future
      *         completes exceptionally if the underlying {@code get} call throws.
@@ -334,7 +334,7 @@ public interface Cache<K, V> extends Closeable {
      *      });
      * }</pre>
      *
-     * @param key the cache key to look up; null-handling is implementation-defined
+     * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
      * @return a ContinuableFuture that completes with the cached value, or with {@code null}
      *         if the key is absent or has expired. The future completes exceptionally if the
      *         underlying {@code getOrNull} call throws.
@@ -359,7 +359,7 @@ public interface Cache<K, V> extends Closeable {
      *      });
      * }</pre>
      *
-     * @param key the cache key to store the value under; null-handling is implementation-defined
+     * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
      * @return a ContinuableFuture that completes with {@code true} on success, {@code false} otherwise.
      *         The future completes exceptionally if the underlying {@code put} call throws.
@@ -386,10 +386,11 @@ public interface Cache<K, V> extends Closeable {
      *      .thenRunAsync(() -> log("Temporary data cached for 5 seconds"));
      * }</pre>
      *
-     * @param key the cache key to store the value under; null-handling is implementation-defined
+     * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
      * @param liveTime the time-to-live in milliseconds from insertion; handling of {@code <= 0} is implementation-defined
-     * @param maxIdleTime the maximum idle time in milliseconds since last access; may be ignored by distributed caches
+     * @param maxIdleTime the maximum idle time in milliseconds since last access; handling of {@code <= 0} is
+     *                    implementation-defined and the parameter may be ignored entirely by distributed caches
      * @return a ContinuableFuture that completes with {@code true} on success, {@code false} otherwise.
      *         The future completes exceptionally if the underlying {@code put} call throws.
      * @see #put(Object, Object, long, long)
@@ -409,7 +410,7 @@ public interface Cache<K, V> extends Closeable {
      *      .thenRunAsync(() -> log("User removed from cache"));
      * }</pre>
      *
-     * @param key the cache key to remove; null-handling is implementation-defined
+     * @param key the cache key to remove; null-handling is implementation-defined (most implementations reject null)
      * @return a ContinuableFuture that completes (with a {@code null} result) when the removal
      *         has finished. The future completes exceptionally if the underlying {@code remove}
      *         call throws.
@@ -430,7 +431,7 @@ public interface Cache<K, V> extends Closeable {
      *      .thenAcceptAsync(exists -> log("User exists in cache: " + exists));
      * }</pre>
      *
-     * @param key the cache key to check for; null-handling is implementation-defined
+     * @param key the cache key to check for; null-handling is implementation-defined (most implementations reject null)
      * @return a ContinuableFuture that completes with {@code true} if a live entry for the key
      *         exists, {@code false} otherwise. The future completes exceptionally if the
      *         underlying {@code containsKey} call throws.

@@ -193,8 +193,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Retrieves a value from the cache by its key.
      * This operation updates the last access time for idle timeout calculation,
      * resetting the idle timer for the entry. If the entry has expired (TTL exceeded
-     * or idle timeout reached) or been evicted, {@code null} will be returned and the entry
-     * will be removed from the cache during the next eviction cycle.
+     * or idle timeout reached) or been evicted, {@code null} will be returned; an expired
+     * entry that has not yet been reclaimed is removed during the next eviction cycle.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
@@ -232,7 +232,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Stores a key-value pair in the cache with custom expiration settings.
      * If the key already exists, its value and expiration settings will be replaced.
      * The entry will be evicted when either the TTL expires (time since creation)
-     * or the idle time is exceeded (time since last access via {@link #getOrNull(Object)}).
+     * or the idle time is exceeded (time since last access (e.g. via {@link #getOrNull(Object)})).
      *
      * <p>A liveTime of 0 or negative means the entry never expires based on age.
      * A maxIdleTime of 0 or negative means the entry never expires due to inactivity.

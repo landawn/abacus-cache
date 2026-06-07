@@ -167,9 +167,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
-     * @param value the cache value to be associated with the specified key (must not be null; the underlying Ehcache rejects null values)
-     * @param liveTime the time-to-live in milliseconds (ignored - use cache-level configuration via Ehcache builder)
-     * @param maxIdleTime the maximum idle time in milliseconds (ignored - use cache-level configuration via Ehcache builder)
+     * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
+     * @param liveTime the time-to-live in milliseconds (ignored; configure expiration via the Ehcache builder)
+     * @param maxIdleTime the maximum idle time in milliseconds (ignored; configure expiration via the Ehcache builder)
      * @return {@code true} (this implementation always succeeds unless an exception is thrown)
      * @throws IllegalArgumentException if {@code key} or {@code value} is null
      * @throws IllegalStateException if the cache has been closed
@@ -282,7 +282,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
-     * @param value the cache value to be associated with the specified key (must not be null; the underlying Ehcache rejects null values)
+     * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
      * @return the previous value associated with the specified key, or {@code null} if there was no mapping
      * @throws IllegalArgumentException if {@code key} or {@code value} is null
      * @throws IllegalStateException if the cache has been closed

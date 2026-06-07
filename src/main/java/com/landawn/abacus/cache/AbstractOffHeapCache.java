@@ -287,7 +287,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param logger the logger instance for this cache, used to log warnings and errors during cache
      *               operations. Must not be {@code null}.
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if {@code maxBlockSize}
-     *                                  is less than 1024 or greater than {@link #SEGMENT_SIZE} (1048576)
+     *                                  is less than 1024 or greater than {@link #SEGMENT_SIZE} (1048576), or if
+     *                                  {@code vacatingFactor} is not in the range [0.0, 1.0]
      * @throws OutOfMemoryError if the underlying call to {@link #allocate(long)} fails because the host
      *                          cannot reserve {@code capacityInMB} MB of native memory
      */
@@ -497,7 +498,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
      *         or the disk-backed entry has been removed from the store
      * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws IllegalStateException if a stored value cannot be reconstructed because the fetched
+     * @throws IllegalStateException if a value cannot be reconstructed because the retrieved
      *                               size no longer matches the recorded size (data corruption detected)
      */
     @Override

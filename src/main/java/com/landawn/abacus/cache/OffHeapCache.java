@@ -107,13 +107,14 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     /**
      * Creates an OffHeapCache with the specified capacity in megabytes.
      * Uses default eviction delay of 3 seconds (3000 milliseconds) and default expiration times
-     * (3 hours TTL and 30 minutes idle time). Memory is allocated at construction time and held until close().
+     * ({@link Cache#DEFAULT_LIVE_TIME 3 hours TTL} and {@link Cache#DEFAULT_MAX_IDLE_TIME 30 minutes idle time}).
+     * Memory is allocated at construction time and held until close().
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
      * <p><b>Memory Management:</b>
      * The memory is allocated immediately from native (off-heap) memory using sun.misc.Unsafe.
      * This memory remains allocated until close() is called. The actual allocation size is
-     * capacityInMB * 1048576 bytes (1MB = 1048576 bytes).
+     * {@code capacityInMB * 1048576} bytes (1MB = 1,048,576 bytes).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -162,7 +163,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
-     *                     The actual capacity will be capacityInMB * 1048576 bytes.
+     *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
      * @throws IllegalArgumentException if capacityInMB is not positive
      * @throws OutOfMemoryError if native memory allocation fails
@@ -194,7 +195,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
-     *                     The actual capacity will be capacityInMB * 1048576 bytes.
+     *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
      * @param defaultLiveTime default time-to-live for entries in milliseconds. Use 0 or negative for no TTL expiration.
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
@@ -212,19 +213,19 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * invoked directly. It provides access to all advanced configuration options including
      * custom serialization, disk spillover, and memory management tuning.
      * 
-     * <p>This is the most flexible constructor, delegating to the parent AbstractOffHeapCache with all
+     * <p>This is the most flexible constructor, delegating to the parent {@link AbstractOffHeapCache} with all
      * configuration parameters. All constructors of this class are package-private; for typical usage,
-     * obtain an instance through the Builder created via {@link #builder()} or via {@link CacheFactory}.
+     * obtain an instance through the builder obtained from {@link #builder()} or via {@link CacheFactory}.
      *
      * <p><b>Memory Management:</b>
      * Memory is allocated immediately using sun.misc.Unsafe.allocateMemory(). The maxBlockSize parameter
      * controls how values are stored - values larger than maxBlockSize are split across multiple blocks.
-     * The vacatingFactor determines when defragmentation is triggered to reclaim fragmented memory.
+     * The {@code vacatingFactor} controls how much of the pool is evicted (LRU first) once the pool reaches capacity.
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
-     *                     The actual capacity will be capacityInMB * 1048576 bytes.
+     *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
      * @param maxBlockSize maximum size of a single memory block in bytes for memory allocation efficiency.
-     *                     Must be between 1024 and SEGMENT_SIZE (1048576). The value is rounded up to the
+     *                     Must be between 1024 and SEGMENT_SIZE (1,048,576). The value is rounded up to the
      *                     nearest multiple of MIN_BLOCK_SIZE (64 bytes). Values larger than maxBlockSize
      *                     will be split across multiple blocks. Default is 8192 bytes.
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
@@ -279,8 +280,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * this allocation does not trigger garbage collection or affect heap usage statistics.
      *
      * @param capacityInBytes the number of bytes to allocate. Must be positive. This is typically a multiple
-     *                        of SEGMENT_SIZE (1048576 bytes).
-     * @return the memory address (pointer) of the allocated memory block in native memory. This address is
+     *                        of SEGMENT_SIZE (1,048,576 bytes).
+     * @return the base address (pointer) of the allocated memory block in native memory. This address is
      *         used for all subsequent memory access operations via copyToMemory and copyFromMemory.
      * @throws OutOfMemoryError if the allocation fails due to insufficient native memory available on the system
      * @see #deallocate()
@@ -434,8 +435,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * return the builder instance for method chaining.
      * 
      * <p>The builder uses Lombok's {@code @Data} and {@code @Accessors} annotations to generate fluent
-     * setter methods automatically. All fields have sensible defaults and can be
-     * overridden as needed before calling {@link #build()}.
+     * setter methods automatically. All fields have sensible defaults (except {@code capacityInMB}, which is required)
+     * and can be overridden as needed before calling {@link #build()}.
      *
      * <p><b>Default Values:</b>
      * <ul>
@@ -515,8 +516,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * The total off-heap memory capacity in megabytes.
-         * This is a required field and must be set before calling build().
-         * The actual capacity will be capacityInMB * 1048576 bytes.
+         * This is a required field and must be set to a positive value before calling {@link #build()}.
+         * The actual capacity will be {@code capacityInMB * 1048576} bytes.
          *
          * <p>Default: 0 (must be set to a positive value)
          */
@@ -525,7 +526,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * Maximum size of a single memory block in bytes.
          * Values larger than this will be split across multiple blocks.
-         * Must be between 1024 and SEGMENT_SIZE (1048576), and is rounded up to the
+         * Must be between 1024 and SEGMENT_SIZE (1,048,576), and is rounded up to the
          * nearest multiple of MIN_BLOCK_SIZE (64 bytes).
          * Larger blocks reduce fragmentation but may waste space for small objects.
          *
@@ -536,7 +537,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * Delay between eviction runs in milliseconds.
          * Controls how frequently the cache scans for expired entries and reclaims empty segments.
-         * Use 0 or negative to disable automatic eviction (expired entries still removed on access).
+         * Use 0 or negative to disable automatic eviction (expired entries are still removed lazily on access).
          *
          * <p>Default: 0 (automatic eviction disabled)
          */
@@ -544,9 +545,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Default time-to-live for cache entries in milliseconds.
-         * Entries older than this will be considered expired and removed.
+         * Entries older than this are considered expired and removed.
          * Use 0 or negative for no TTL expiration.
-         * Can be overridden per entry in put() operations.
+         * Can be overridden per entry in {@code put} operations.
          *
          * <p>Default: 0 (no TTL expiration)
          */
@@ -554,9 +555,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Default maximum idle time for cache entries in milliseconds.
-         * Entries not accessed within this time will be considered expired and removed.
+         * Entries not accessed within this duration are considered expired and removed.
          * Use 0 or negative for no idle timeout.
-         * Can be overridden per entry in put() operations.
+         * Can be overridden per entry in {@code put} operations.
          *
          * <p>Default: 0 (no idle timeout)
          */
@@ -645,7 +646,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * is applied.
          *
          * <p><b>Memory Management:</b>
-         * Calling this method allocates native memory immediately by using {@code sun.misc.Unsafe}.
+         * Calling this method immediately allocates native memory using {@code sun.misc.Unsafe}.
          * The returned cache must be closed by calling {@link OffHeapCache#close()}.
          *
          * <p><b>Usage Examples:</b>

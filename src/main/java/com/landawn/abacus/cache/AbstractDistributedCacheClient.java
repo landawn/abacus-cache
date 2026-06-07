@@ -212,7 +212,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Map<String, User> result = client.getBulk(requestedKeys);                                         // size() <= 3 (only found keys)
      * System.out.println("Retrieved " + result.size() + " out of " + requestedKeys.length + " users");  // prints e.g. "Retrieved 2 out of 3 users"
      *
-     * // Without a subclass override, the base-class default rejects nothing and simply throws:
+     * // Without a subclass override, the base-class default does not validate keys and simply throws {@code UnsupportedOperationException}:
      * client.getBulk("user:123");                                                      // throws UnsupportedOperationException (default impl)
      * }</pre>
      *
@@ -270,7 +270,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *         .collect(Collectors.toSet());                                            // -> {"product:101", "product:102", "product:103"}
      * Map<String, Product> products = client.getBulk(productKeys);                     // map of found keys; missing keys are absent
      *
-     * // Without a subclass override, the base-class default rejects nothing and simply throws:
+     * // Without a subclass override, the base-class default does not validate keys and simply throws {@code UnsupportedOperationException}:
      * client.getBulk(userKeys);                                                        // throws UnsupportedOperationException (default impl)
      * }</pre>
      *
@@ -318,11 +318,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // This base-class default always throws; the call below assumes a subclass override.
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * // WARNING: This removes ALL data from all cache servers!
-     * client.flushAll();                                              // every entry on every server is gone afterwards
-     * System.out.println("All cache data cleared");                   // prints after the flush completes
+     * // WARNING: a subclass override of flushAll() removes ALL data from all cache servers!
      *
      * // Without a subclass override, the base-class default simply throws:
      * client.flushAll();                                              // throws UnsupportedOperationException (default impl)
@@ -354,7 +351,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Rounding Behavior:</b>
      * <ul>
-     * <li>Exact seconds (e.g., 2000ms) are converted exactly (2000ms → 2s)</li>
+     * <li>Exact seconds are converted directly (e.g., 2000ms → 2s)</li>
      * <li>Fractional seconds are rounded up (e.g., 1500ms → 2s, 999ms → 1s)</li>
      * <li>This ensures cached items live at least as long as requested</li>
      * <li>Zero or negative milliseconds returns zero seconds (no expiration), matching the

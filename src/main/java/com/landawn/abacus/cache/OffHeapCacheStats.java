@@ -62,7 +62,7 @@ import com.landawn.abacus.util.N;
  * @param capacity the configured upper bound on the number of in-memory entries the underlying keyed object
  *                 pool will hold before eviction kicks in. It is derived from the off-heap memory budget as
  *                 {@code allocatedMemory / MIN_BLOCK_SIZE} (currently {@code allocatedMemory / 64}), capped at
- *                 {@link Integer#MAX_VALUE}. Because each entry consumes a slot whose size is rounded up to
+ *                 {@link Integer#MAX_VALUE} (as computed by the cache). Because each entry consumes a slot whose size is rounded up to
  *                 the per-entry block size, the cache will typically exhaust off-heap memory and start evicting
  *                 long before {@code size} approaches this value.
  * @param size the current number of entries tracked by the underlying keyed object pool. Both
@@ -244,7 +244,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
          * (disk I/O timing in milliseconds) can never be negative, so a negative value indicates a
          * programming error.
          *
-         * @throws IllegalArgumentException if {@code min}, {@code max}, or {@code avg} is negative
+         * @throws IllegalArgumentException if {@code min}, {@code max}, or {@code avg} is negative, NaN, or infinite
          */
         public MinMaxAvg {
             // N.checkArgNotNegative(double) only rejects values strictly less than 0; because every

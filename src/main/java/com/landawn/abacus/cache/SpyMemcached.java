@@ -432,7 +432,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Stores an object in the cache with a specified time-to-live.
      * This operation replaces any existing value for the key. The method blocks until
      * the operation completes or times out. The liveTime is converted from milliseconds to
-     * seconds for Memcached (rounded up if not exact).
+     * seconds for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an
+     * absolute Unix expiration timestamp rather than a relative offset.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -469,7 +470,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
-     *                 positive value is converted to seconds, rounded up if not exact.
+     *                 positive value is converted to seconds, rounded up if not exact; values over 30
+     *                 days are stored as an absolute expiration timestamp.
      * @return {@code true} if the operation succeeded; {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
@@ -484,7 +486,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Asynchronously stores an object in the cache with a specified time-to-live.
      * The returned Future can be used to check if the operation succeeded. This method
      * returns immediately without blocking. The liveTime is converted from milliseconds to
-     * seconds for Memcached (rounded up if not exact).
+     * seconds for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an
+     * absolute Unix expiration timestamp rather than a relative offset.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
@@ -512,7 +515,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
-     *                 positive value is converted to seconds, rounded up if not exact.
+     *                 positive value is converted to seconds, rounded up if not exact; values over 30
+     *                 days are stored as an absolute expiration timestamp.
      * @return a {@link Future} that will yield {@code true} on success or {@code false} on failure
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
@@ -527,7 +531,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * This operation is atomic and thread-safe across all distributed cache clients. The method blocks until
      * the operation completes or times out. If the key already exists, this operation will
      * fail and return {@code false}. The liveTime is converted from milliseconds to seconds
-     * for Memcached (rounded up if not exact).
+     * for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an absolute
+     * Unix expiration timestamp rather than a relative offset.
      *
      * <p><b>Thread Safety:</b> This operation is atomic, ensuring that in concurrent scenarios, only one client
      * will successfully add the key while others will receive {@code false}.
@@ -560,7 +565,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
-     *                 positive value is converted to seconds, rounded up if not exact.
+     *                 positive value is converted to seconds, rounded up if not exact; values over 30
+     *                 days are stored as an absolute expiration timestamp.
      * @return {@code true} if the object was added; {@code false} if the key already exists
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
@@ -574,7 +580,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Asynchronously adds an object to the cache only if the key doesn't already exist.
      * This operation is atomic and thread-safe across all distributed cache clients. The method returns immediately
      * without blocking. If the key already exists, the Future will contain {@code false}. The liveTime
-     * is converted from milliseconds to seconds for Memcached (rounded up if not exact).
+     * is converted from milliseconds to seconds for Memcached (rounded up if not exact). TTLs longer
+     * than 30 days are stored as an absolute Unix expiration timestamp rather than a relative offset.
      *
      * <p><b>Thread Safety:</b> This operation is atomic, ensuring that in concurrent scenarios, only one client
      * will successfully add the key while others will receive {@code false}.
@@ -604,7 +611,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
-     *                 positive value is converted to seconds, rounded up if not exact.
+     *                 positive value is converted to seconds, rounded up if not exact; values over 30
+     *                 days are stored as an absolute expiration timestamp.
      * @return a {@link Future} that will yield {@code true} if the add succeeded, or {@code false}
      *         if the key already exists
      * @throws IllegalArgumentException if {@code key} is {@code null}
@@ -620,7 +628,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * This operation is atomic and thread-safe across all distributed cache clients. The method blocks until
      * the operation completes or times out. If the key doesn't exist, this operation will
      * fail and return {@code false}. The liveTime is converted from milliseconds to seconds
-     * for Memcached (rounded up if not exact).
+     * for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an absolute
+     * Unix expiration timestamp rather than a relative offset.
      *
      * <p><b>Thread Safety:</b> This operation is atomic, ensuring that updates are applied atomically even in
      * concurrent scenarios.
@@ -649,7 +658,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
-     *                 positive value is converted to seconds, rounded up if not exact.
+     *                 positive value is converted to seconds, rounded up if not exact; values over 30
+     *                 days are stored as an absolute expiration timestamp.
      * @return {@code true} if the object was replaced; {@code false} if the key does not exist
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
@@ -663,7 +673,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Asynchronously replaces an object in the cache only if the key already exists.
      * This operation is atomic and thread-safe across all distributed cache clients. The method returns immediately
      * without blocking. If the key doesn't exist, the Future will contain {@code false}. The liveTime
-     * is converted from milliseconds to seconds for Memcached (rounded up if not exact).
+     * is converted from milliseconds to seconds for Memcached (rounded up if not exact). TTLs longer
+     * than 30 days are stored as an absolute Unix expiration timestamp rather than a relative offset.
      *
      * <p><b>Thread Safety:</b> This operation is atomic, ensuring that updates are applied atomically even in
      * concurrent scenarios.
@@ -692,7 +703,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to cache; may be {@code null}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
-     *                 positive value is converted to seconds, rounded up if not exact.
+     *                 positive value is converted to seconds, rounded up if not exact; values over 30
+     *                 days are stored as an absolute expiration timestamp.
      * @return a {@link Future} that will yield {@code true} if the replacement succeeded, or
      *         {@code false} if the key does not exist
      * @throws IllegalArgumentException if {@code key} is {@code null}
@@ -945,7 +957,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Atomically increments a numeric value, initializing it to {@code defaultValue} with the given
      * expiration when the key doesn't exist. The {@code liveTime} is converted from milliseconds to
-     * seconds for Memcached (rounded up if not exact).
+     * seconds for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an
+     * absolute Unix expiration timestamp rather than a relative offset.
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
@@ -982,7 +995,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param defaultValue the initial value to set if the key does not exist; on first-write this
      *                     value is stored verbatim ({@code delta} is NOT added on insert)
      * @param liveTime the time-to-live in milliseconds for the key ({@code 0} or negative means no
-     *                 expiration); a positive value is converted to seconds, rounded up if not exact.
+     *                 expiration); a positive value is converted to seconds, rounded up if not exact;
+     *                 values over 30 days are stored as an absolute expiration timestamp.
      * @return the value after the operation: {@code defaultValue} if the key did not exist (no
      *         delta applied on insert), otherwise the previously stored value plus {@code delta}
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
@@ -1167,7 +1181,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Atomically decrements a numeric value, initializing it to {@code defaultValue} with the given
      * expiration when the key doesn't exist. The {@code liveTime} is converted from milliseconds to
-     * seconds for Memcached (rounded up if not exact).
+     * seconds for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an
+     * absolute Unix expiration timestamp rather than a relative offset.
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, int)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
@@ -1205,7 +1220,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param defaultValue the initial value to set if the key does not exist; on first-write this
      *                     value is stored verbatim ({@code delta} is NOT subtracted on insert)
      * @param liveTime the time-to-live in milliseconds for the key ({@code 0} or negative means no
-     *                 expiration); a positive value is converted to seconds, rounded up if not exact.
+     *                 expiration); a positive value is converted to seconds, rounded up if not exact;
+     *                 values over 30 days are stored as an absolute expiration timestamp.
      * @return the value after the operation: {@code defaultValue} if the key did not exist (no
      *         delta applied on insert), otherwise the previously stored value minus {@code delta},
      *         clamped at {@code 0}

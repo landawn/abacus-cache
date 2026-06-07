@@ -200,8 +200,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * disk spillover, and memory-management tuning.
      *
      * <p>This is the most flexible constructor, delegating to the parent {@link AbstractOffHeapCache} with all
-     * configuration parameters. For typical usage, prefer the simpler constructors or the builder
-     * obtained from {@link #builder()}.
+     * configuration parameters. All constructors of this class are package-private; for typical usage,
+     * obtain an instance through the builder obtained from {@link #builder()} or via {@link CacheFactory}.
      *
      * <p><b>Memory Management:</b>
      * Memory is allocated immediately using the Foreign Memory API ({@link Arena}). The {@code maxBlockSize}

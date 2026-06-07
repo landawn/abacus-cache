@@ -224,6 +224,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
      * @throws IllegalArgumentException if target is null or liveTime is not positive
      * @throws RuntimeException if a communication error occurs with Memcached
+     * @see #lock(Object, long)
      * @see #get(Object)
      * @see #unlock(Object)
      */
@@ -608,7 +609,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <li>After close(), any method calls will likely throw exceptions</li>
      * </ul>
      *
-     * <p>It's strongly recommended to use this class with try-with-resources to ensure proper cleanup:
+     * <p>It's strongly recommended to use this class with try-with-resources to ensure proper cleanup.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
