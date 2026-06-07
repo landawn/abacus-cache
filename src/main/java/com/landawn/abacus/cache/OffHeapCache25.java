@@ -265,8 +265,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * @param capacityInBytes the number of bytes to allocate. Must be positive. This is typically a multiple
      *                        of {@code SEGMENT_SIZE} (1,048,576 bytes).
-     * @return the base address (pointer) of the allocated memory segment in native memory. This address is
-     *         used for all subsequent memory-access operations via {@link #copyToMemory} and {@link #copyFromMemory}.
+     * @return the base address of the allocated {@link MemorySegment}, as reported by
+     *         {@link MemorySegment#address()}. It is recorded as {@code _startPtr} and serves as the base
+     *         from which {@link #copyToMemory} and {@link #copyFromMemory} derive a relative offset into the segment.
      * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
      */
     @Override
@@ -378,7 +379,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *     .build();                      // allocates native memory now; returns an OffHeapCache25
      *
      * // Advanced configuration with disk spillover
-     * OffHeapStore<String> diskStore = myOffHeapStoreImplementation;   // your disk-backed store
+     * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
+     * OffHeapStore<String> diskStore = myFileBackedOffHeapStore(Paths.get("/tmp/cache"));
      * OffHeapCache25<String, byte[]> advancedCache = OffHeapCache25.<String, byte[]>builder()
      *     .capacityInMB(200)             // 200MB off-heap
      *     .maxBlockSizeInBytes(16384)    // 16KB max block; larger values split across blocks
@@ -434,7 +436,8 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *     .build();
      *
      * // Advanced cache with disk spillover
-     * OffHeapStore<String> diskStore = myOffHeapStoreImplementation;
+     * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
+     * OffHeapStore<String> diskStore = myFileBackedOffHeapStore(Paths.get("/tmp/cache"));
      * OffHeapCache25<String, Data> advancedCache = OffHeapCache25.<String, Data>builder()
      *     .capacityInMB(100)
      *     .maxBlockSizeInBytes(16384)

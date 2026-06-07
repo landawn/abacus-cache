@@ -1236,7 +1236,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * OffHeapCacheStats stats = cache.stats();
      * System.out.println("Entries in memory: " + stats.size());
      * System.out.println("Entries on disk: " + stats.sizeOnDisk());
-     * System.out.println("Hit rate: " + stats.hitCount() + "/" + stats.getCount());
+     * System.out.println("Hits: " + stats.hitCount() + "/" + stats.getCount());
      * System.out.println("Memory usage: " + stats.dataSize() + "/" + stats.allocatedMemory());
      * }</pre>
      *
@@ -1367,6 +1367,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <ul>
      * <li>By the scheduled eviction task at regular intervals (if {@code evictDelay} &gt; 0).</li>
      * <li>By the {@code vacate()} method after evicting entries from the pool.</li>
+     * <li>By {@link #clear()} after the pool is cleared, to release the now-empty segments.</li>
      * </ul>
      *
      * <p>The method uses double-checked locking to minimize lock contention while ensuring thread safety.

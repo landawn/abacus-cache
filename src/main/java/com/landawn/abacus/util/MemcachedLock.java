@@ -46,7 +46,7 @@ import com.landawn.abacus.logging.LoggerFactory;
  * <p>Example usage:
  * <pre>{@code
  * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
- * 
+ *
  * // Simple lock without value
  * if (lock.lock("resource1", 30000)) { // 30 second TTL on the lock
  *     try {
@@ -59,7 +59,7 @@ import com.landawn.abacus.logging.LoggerFactory;
  *     // Lock is held by another process
  *     System.out.println("Could not acquire lock");
  * }
- * 
+ *
  * // Lock with associated value
  * String lockHolder = InetAddress.getLocalHost().getHostName();
  * if (lock.lock("resource2", lockHolder, 60000)) {
@@ -379,7 +379,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @param target the target resource whose associated lock value is to be retrieved (must not be null)
      * @return the value associated with the lock, or {@code null} if not locked or stores an empty byte array
      * @throws IllegalArgumentException if target is null
-     * @throws ClassCastException if V doesn't match the actual stored value type
+     * @throws ClassCastException if the stored value is not compatible with {@code V}; because of generic
+     *         type erasure this is typically surfaced at the call site rather than inside this method
      * @throws RuntimeException if a communication error occurs with Memcached
      * @see #lock(Object, Object, long)
      * @see #isLocked(Object)

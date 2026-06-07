@@ -35,7 +35,7 @@ import com.landawn.abacus.util.Strings;
  * <li>Automatic key prefixing for namespace isolation</li>
  * <li>Base64 encoding of keys for compatibility with cache systems that restrict key characters</li>
  * <li>Circuit breaker pattern on read operations to protect against cascading failures</li>
- * <li>Transparent error recovery with configurable retry behavior</li>
+ * <li>Transparent error recovery via a configurable fail-fast window after repeated failures</li>
  * <li>Adapts the TTL+idle Cache interface to the TTL-only model used by most distributed caches ({@code maxIdleTime} is ignored)</li>
  * </ul>
  *
@@ -864,7 +864,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Transformation Process:</b>
      * <ol>
      * <li>Validate key is not null (throws {@link IllegalArgumentException} if null)</li>
-     * <li>Convert key to string: {@code N.stringOf(k)}</li>
+     * <li>Convert key to string: the key itself if it is already a {@code String}, otherwise {@code N.stringOf(k)}</li>
      * <li>Encode to UTF-8 bytes: {@code toString(k).getBytes(Charsets.UTF_8)}</li>
      * <li>Base64 encode: {@code Strings.base64Encode(bytes)}</li>
      * <li>Prepend prefix if configured: {@code keyPrefix + base64Key}</li>

@@ -133,7 +133,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Negative: blank serverUrl is rejected (checkArgNotBlank)
      * JRedis<User> blank = new JRedis<>("   ");                     // throws IllegalArgumentException
      *
-     * // Negative: a string with no valid host:port yields no addresses -> rejected
+     * // Negative: an empty serverUrl is rejected as blank (super(serverUrl) runs checkArgNotBlank first)
      * JRedis<User> empty = new JRedis<>("");                        // throws IllegalArgumentException
      * }</pre>
      *
@@ -759,7 +759,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the decrement amount; must be non-negative
+     * @param delta the decrement amount; must be non-negative. Although the Redis DECRBY command itself
+     *              supports negative deltas, this implementation rejects them with an
+     *              {@link IllegalArgumentException} for portability across cache backends (e.g.
+     *              SpyMemcached, which also rejects negative deltas).
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
      *         if the key did not exist before). Returns {@code 0} if the underlying client returns a
      *         {@code null}/nil reply, rather than throwing a {@link NullPointerException}.

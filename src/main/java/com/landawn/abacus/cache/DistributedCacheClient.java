@@ -545,7 +545,6 @@ public interface DistributedCacheClient<T> {
      *     logger.info("Disconnection complete");
      * }
      * }</pre>
-     *
      */
     void disconnect();
 }

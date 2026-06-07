@@ -127,7 +127,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.getOrNull("userId123");                 // throws IllegalStateException (cache closed)
      * }</pre>
      *
-     * @param key the cache key whose associated value is to be returned (must not be null)
+     * @param key the cache key whose associated value is to be returned (must not be {@code null})
      * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
      * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
@@ -166,12 +166,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.put("userId123", null, 0, 0);                     // throws IllegalArgumentException (null value)
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated (must not be null)
+     * @param key the cache key with which the specified value is to be associated (must not be {@code null})
      * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
      * @param liveTime the time-to-live in milliseconds (ignored; configure expiration via the Ehcache builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored; configure expiration via the Ehcache builder)
      * @return {@code true} (this implementation always succeeds unless an exception is thrown)
-     * @throws IllegalArgumentException if {@code key} or {@code value} is null
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
@@ -206,7 +206,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.remove("userId123");      // throws IllegalStateException (cache closed)
      * }</pre>
      *
-     * @param key the cache key whose mapping is to be removed from the cache (must not be null)
+     * @param key the cache key whose mapping is to be removed from the cache (must not be {@code null})
      * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
@@ -239,7 +239,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.containsKey("userId123");                     // throws IllegalStateException (cache closed)
      * }</pre>
      *
-     * @param key the cache key whose presence in the cache is to be tested (must not be null)
+     * @param key the cache key whose presence in the cache is to be tested (must not be {@code null})
      * @return {@code true} if the cache currently has a mapping for the specified key; {@code false}
      *         otherwise. Note that Ehcache's {@code containsKey} does NOT actively evaluate expiration:
      *         an expired entry that has not yet been removed by Ehcache's housekeeping may still report
@@ -281,10 +281,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.putIfAbsent("user:123", null);                      // throws IllegalArgumentException (null value)
      * }</pre>
      *
-     * @param key the cache key with which the specified value is to be associated (must not be null)
+     * @param key the cache key with which the specified value is to be associated (must not be {@code null})
      * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
      * @return the previous value associated with the specified key, or {@code null} if there was no mapping
-     * @throws IllegalArgumentException if {@code key} or {@code value} is null
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      * @throws CacheWritingException if the cache writer fails

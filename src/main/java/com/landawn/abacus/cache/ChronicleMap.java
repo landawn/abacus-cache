@@ -91,7 +91,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // capacity 2048, 30s eviction delay, default 1h TTL, default 5min idle
+     * // capacity 2048, 30s eviction delay, 1h TTL, 5min idle (the per-cache defaults for put(key, value))
      * Cache<String, String> map = new ChronicleMap<>(2_048, 30_000L, 3_600_000L, 300_000L);
      * map.stats().capacity();                       // returns 2048 (capacity reflected in stats)
      *

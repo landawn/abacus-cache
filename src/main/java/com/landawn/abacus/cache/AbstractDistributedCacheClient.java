@@ -172,7 +172,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * System.out.println("Connected to: " + url);   // Output: "Connected to: localhost:11211"
      * }</pre>
      *
-     * @return the server URL(s) for this client, never {@code null}
+     * @return the server URL(s) for this client, never {@code null} or blank
      */
     @Override
     public String serverUrl() {
