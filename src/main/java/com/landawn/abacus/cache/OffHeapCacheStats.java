@@ -232,9 +232,19 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
          * @throws IllegalArgumentException if {@code min}, {@code max}, or {@code avg} is negative
          */
         public MinMaxAvg {
-            N.checkArgNotNegative(min, "min");
-            N.checkArgNotNegative(max, "max");
-            N.checkArgNotNegative(avg, "avg");
+            // N.checkArgNotNegative(double) only rejects values strictly less than 0; because every
+            // comparison with NaN is false, NaN (and +Infinity) would slip through and silently
+            // violate the documented "can never be negative" / finite-millisecond invariant. Reject
+            // non-finite values explicitly so an invalid computed statistic fails fast.
+            checkNonNegativeFinite(min, "min");
+            checkNonNegativeFinite(max, "max");
+            checkNonNegativeFinite(avg, "avg");
+        }
+
+        private static void checkNonNegativeFinite(final double value, final String name) {
+            if (Double.isNaN(value) || Double.isInfinite(value) || value < 0) {
+                throw new IllegalArgumentException("'" + name + "' must be a non-negative finite number but was: " + value);
+            }
         }
 
         /**

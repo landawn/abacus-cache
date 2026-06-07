@@ -85,6 +85,23 @@ public class OffHeapCacheStatsTest {
     }
 
     /**
+     * Regression: {@link MinMaxAvg} documents its values as non-negative, finite milliseconds, but the
+     * previous {@code N.checkArgNotNegative} guard let {@code NaN} and {@code +Infinity} through —
+     * every comparison with {@code NaN} is {@code false}, so {@code NaN < 0} never fired. The compact
+     * constructor now rejects non-finite values with {@link IllegalArgumentException} so an invalid
+     * computed statistic fails fast instead of silently violating the invariant.
+     */
+    @Test
+    public void testMinMaxAvgRejectsNonFiniteValues() {
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(Double.NaN, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, Double.NaN, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, 0, Double.NaN));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(Double.POSITIVE_INFINITY, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, Double.POSITIVE_INFINITY, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, 0, Double.POSITIVE_INFINITY));
+    }
+
+    /**
      * Regression coverage for the missing non-negative validation on
      * {@link OffHeapCacheStats}'s numeric components. The Javadoc has long stated that every
      * counter, size, and memory metric must be non-negative, but the canonical constructor

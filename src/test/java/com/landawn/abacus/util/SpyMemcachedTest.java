@@ -485,6 +485,35 @@ public class SpyMemcachedTest {
     }
 
     @Test
+    public void test_flushAll_large_delay_uses_relative_seconds() {
+        // Regression: the memcached `flush_all <delay>` command ALWAYS interprets its argument as a
+        // relative number of seconds. A delay greater than 30 days must NOT be rewritten into an
+        // absolute Unix timestamp (the rule that only applies to set/add/replace). 40 days =
+        // 3_456_000 s, which is well past the 30-day / 2_592_000 s memcached boundary.
+        final OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        final ArgumentCaptor<Integer> delayCaptor = ArgumentCaptor.forClass(Integer.class);
+        when(mockMc.flush(anyInt())).thenReturn(ok);
+
+        assertTrue(cache.flushAll(3_456_000_000L));
+
+        verify(mockMc).flush(delayCaptor.capture());
+        // Before the fix this was now/1000 + 3_456_000 (a ~1.75e9 absolute epoch second).
+        assertEquals(3_456_000, delayCaptor.getValue().intValue());
+    }
+
+    @Test
+    public void test_asyncFlushAll_large_delay_uses_relative_seconds() {
+        final OperationFuture<Boolean> ok = immediateBooleanFuture(true);
+        final ArgumentCaptor<Integer> delayCaptor = ArgumentCaptor.forClass(Integer.class);
+        when(mockMc.flush(anyInt())).thenReturn(ok);
+
+        assertNotNull(cache.asyncFlushAll(3_456_000_000L));
+
+        verify(mockMc).flush(delayCaptor.capture());
+        assertEquals(3_456_000, delayCaptor.getValue().intValue());
+    }
+
+    @Test
     public void test_disconnect_with_timeout() {
         cache.disconnect(5000);
         verify(mockMc).shutdown(5000, java.util.concurrent.TimeUnit.MILLISECONDS);

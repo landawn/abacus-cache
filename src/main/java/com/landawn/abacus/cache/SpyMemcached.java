@@ -1261,7 +1261,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean flushAll(final long delay) {
-        return resultOf(mc.flush(toMemcachedExpiration(delay)));
+        // The memcached `flush_all <delay>` command always interprets its argument as a RELATIVE
+        // delay in seconds; unlike storage commands it never treats large values as an absolute
+        // Unix timestamp. So convert with toSeconds(), not toMemcachedExpiration().
+        return resultOf(mc.flush(toSeconds(delay)));
     }
 
     /**
@@ -1297,7 +1300,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *         successfully, or {@code false} on failure
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
-        return mc.flush(toMemcachedExpiration(delay));
+        // See flushAll(long): flush_all's delay is always relative seconds, so use toSeconds().
+        return mc.flush(toSeconds(delay));
     }
 
     /**
