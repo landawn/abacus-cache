@@ -233,6 +233,48 @@ public class OffHeapCacheTest {
     }
 
     /**
+     * Regression coverage for the pooled-buffer handling on the serialization-failure path in
+     * {@code AbstractOffHeapCache.put()}. The pooled {@code ByteArrayOutputStream} is obtained
+     * before the main try/finally that recycles it, so a serializer that throws used to skip
+     * {@code Objectory.recycle(os)} and leak the pooled buffer. The fix recycles the buffer on the
+     * failure path and nulls the reference so the outer finally cannot double-recycle it.
+     *
+     * <p>This test drives many serialization failures interleaved with successful puts/gets: the
+     * serializer exception must propagate cleanly, and—critically—the shared Objectory buffer pool
+     * must not be corrupted (a double-recycle could hand a still-referenced buffer to a later
+     * successful put), so every interleaved normal put/get must round-trip correctly.
+     */
+    @Test
+    public void test_put_serializerThrows_propagates_and_cacheStaysUsable() {
+        final OffHeapCache<String, String> c = OffHeapCache.<String, String> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .serializer((v, os) -> {
+                    if (v.startsWith("BOOM")) {
+                        throw new IllegalStateException("serialization failed for: " + v);
+                    }
+                    final byte[] b = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    os.write(b, 0, b.length);
+                })
+                .deserializer((bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8))
+                .build();
+
+        try {
+            for (int i = 0; i < 300; i++) {
+                final int n = i;
+                // A throwing serializer must propagate its exception out of put()...
+                assertThrows(IllegalStateException.class, () -> c.put("BOOM" + n, "BOOM" + n));
+                // ...without corrupting the cache or the shared buffer pool: a normal put/get
+                // must still round-trip on every iteration.
+                assertTrue(c.put("ok" + n, "value" + n));
+                assertEquals("value" + n, c.get("ok" + n).orElse(null));
+            }
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
      * Regression test for the disk→disk put data-loss bug in
      * {@link com.landawn.abacus.cache.AbstractOffHeapCache#putToDisk}.
      *

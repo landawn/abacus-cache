@@ -200,10 +200,14 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_incr_with_default_value() {
-        when(mockMc.incr("counter", 1, 0L, -1)).thenReturn(1L);
+        // Regression: the no-TTL default-value overload must seed an absent key with expiration 0
+        // ("no expiration"), NOT -1. spymemcached seeds a missing key via `add <key> .. <exp> <def>`
+        // using this exp, and memcached treats a negative exp as an absolute time in the past — so a
+        // -1 seed is stored already-expired and the counter never advances past defaultValue.
+        when(mockMc.incr("counter", 1, 0L, 0)).thenReturn(1L);
 
         assertEquals(1L, cache.incr("counter", 1, 0L));
-        verify(mockMc).incr("counter", 1, 0L, -1);
+        verify(mockMc).incr("counter", 1, 0L, 0);
     }
 
     @Test
@@ -412,9 +416,11 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_decr_with_default_value() {
-        when(mockMc.decr("counter", 1, 100L, -1)).thenReturn(99L);
+        // Regression: see test_incr_with_default_value — the no-TTL default-value overload must seed
+        // with expiration 0 ("no expiration"), not -1 (which memcached stores as already-expired).
+        when(mockMc.decr("counter", 1, 100L, 0)).thenReturn(99L);
         assertEquals(99L, cache.decr("counter", 1, 100L));
-        verify(mockMc).decr("counter", 1, 100L, -1);
+        verify(mockMc).decr("counter", 1, 100L, 0);
     }
 
     @Test

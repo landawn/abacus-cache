@@ -553,7 +553,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     if (bytes != null && bytes.length == size) {
                         Slot slot = null;
                         List<Slot> slots = null;
-                        int occupiedMemory = 0;
+                        // Must be long (not int): for a multi-slot promotion of a near-2GB value this
+                        // accumulates ceil(size/maxBlockSize) slot sizes and would overflow int to a
+                        // negative number, corrupting totalOccupiedMemorySize. Matches the put() path.
+                        long occupiedMemory = 0;
                         Wrapper<V> slotWrapper = null;
 
                         try {
@@ -747,9 +750,22 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             size = bytes.length;
         } else {
             os = Objectory.createByteArrayOutputStream();
-            serializer.accept(value, os);
-            bytes = os.array();
-            size = os.size();
+            // Recycle the pooled buffer if serialization fails. os cannot be recycled in the main
+            // finally only — it is created here, outside that try — so a throwing serializer would
+            // otherwise leak the pooled ByteArrayOutputStream on every failure. Null it out on the
+            // failure path so the main finally's Objectory.recycle(os) does not double-recycle it.
+            boolean serialized = false;
+            try {
+                serializer.accept(value, os);
+                bytes = os.array();
+                size = os.size();
+                serialized = true;
+            } finally {
+                if (!serialized) {
+                    Objectory.recycle(os);
+                    os = null;
+                }
+            }
         }
 
         final int storeSelection = storeSelector == null ? 0 : storeSelector.apply(key, value, size);

@@ -844,8 +844,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically increments a numeric value, initializing it to {@code defaultValue} when the key
-     * doesn't exist. The newly-created entry will not expire (this implementation passes {@code -1}
-     * as the expiration to SpyMemcached, which means "no expiration").
+     * doesn't exist. The newly-created entry will not expire (this implementation passes {@code 0}
+     * as the expiration to Memcached, which means "no expiration").
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
@@ -884,7 +884,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public long incr(final String key, final int delta, final long defaultValue) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
-        return mc.incr(key, delta, defaultValue, -1);
+        // Memcached's "no expiration" sentinel is 0, NOT -1. When the key is absent, spymemcached
+        // seeds it with `add <key> <flags> <exp> <defaultValue>` using THIS exp; memcached treats a
+        // negative exp as an absolute time in the past, so a -1 seed is stored already-expired and the
+        // counter is re-seeded to defaultValue on every call (never advancing). Pass 0 to truly persist.
+        return mc.incr(key, delta, defaultValue, 0);
     }
 
     /**
@@ -1049,8 +1053,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Atomically decrements a numeric value, initializing it to {@code defaultValue} when the key
-     * doesn't exist. The newly-created entry will not expire (this implementation passes {@code -1}
-     * as the expiration to SpyMemcached, which means "no expiration").
+     * doesn't exist. The newly-created entry will not expire (this implementation passes {@code 0}
+     * as the expiration to Memcached, which means "no expiration").
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, int)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
@@ -1093,7 +1097,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public long decr(final String key, final int delta, final long defaultValue) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
-        return mc.decr(key, delta, defaultValue, -1);
+        // See incr(String, int, long): Memcached's "no expiration" sentinel is 0, not -1. A -1 seed
+        // expiration would store the auto-initialized value already-expired, re-seeding every call.
+        return mc.decr(key, delta, defaultValue, 0);
     }
 
     /**
