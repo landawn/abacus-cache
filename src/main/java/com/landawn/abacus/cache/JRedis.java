@@ -16,32 +16,25 @@ package com.landawn.abacus.cache;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.zip.CRC32;
 
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
-import com.landawn.abacus.parser.KryoParser;
-import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
-import com.landawn.abacus.util.Charsets;
 import com.landawn.abacus.util.N;
 
 import redis.clients.jedis.DefaultJedisClientConfig;
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisClientConfig;
 import redis.clients.jedis.RedisClient;
-import redis.clients.jedis.params.SetParams;
 
 /**
  * A Redis-based distributed cache client implementation using Jedis with client-side sharding.
- * This class provides a distributed caching solution that connects to one or more standalone Redis
- * instances for horizontal scaling and data distribution. Objects are serialized using Kryo for
- * efficient storage and retrieval.
+ * This class provides a distributed caching solution that connects to one or more <b>standalone</b>
+ * Redis instances for horizontal scaling and data distribution. Objects are serialized using Kryo for
+ * efficient storage and retrieval (see {@link AbstractJedisCacheClient}). For a <b>Redis Cluster</b>
+ * deployment (where the servers cooperate and shard by hash slot), use {@link JRedisCluster} instead.
  *
  * <p><b>Key Features:</b>
  * <ul>
@@ -60,18 +53,9 @@ import redis.clients.jedis.params.SetParams;
  * miss simply triggers a reload. With a single server there is exactly one shard and no hashing is
  * performed.
  *
- * <p><b>Redis-Specific Behaviors:</b>
- * <ul>
- *   <li>Increment/decrement operations auto-initialize non-existent keys to 0</li>
- *   <li>Decrement operations can result in negative values (unlike Memcached)</li>
- *   <li>All string keys are encoded using UTF-8</li>
- * </ul>
- *
  * <p><b>Thread Safety:</b> This client is thread-safe. Each shard is backed by a {@link RedisClient}
  * client, which maintains its own internal connection pool and transparently borrows and returns a
- * connection for each command, so the client may be freely shared across threads. The atomicity
- * advertised for counter operations is the server-side atomicity of the underlying Redis commands;
- * combined with pooling, concurrent counter updates from many threads are safe and lossless.
+ * connection for each command, so the client may be freely shared across threads.
  *
  * <p><b>Connection pooling:</b> Each shard's {@link RedisClient} uses the default connection pool
  * configuration (Apache Commons Pool). The pool is created lazily — constructing a {@code JRedis}
@@ -96,19 +80,16 @@ import redis.clients.jedis.params.SetParams;
  * }</pre>
  *
  * @param <T> the type of objects to be cached
- * @see AbstractDistributedCacheClient
+ * @see AbstractJedisCacheClient
+ * @see JRedisCluster
  * @see RedisClient
  */
-public class JRedis<T> extends AbstractDistributedCacheClient<T> {
+public class JRedis<T> extends AbstractJedisCacheClient<T> {
 
     private static final Logger logger = LoggerFactory.getLogger(JRedis.class);
 
-    private static final KryoParser kryoParser = ParserFactory.createKryoParser();
-
     /** One internally-pooled client per shard, in the order the addresses were supplied. Never empty. */
-    private final List<RedisClient> pools;
-
-    private volatile boolean isShutdown = false;
+    private final List<RedisClient> clients;
 
     /**
      * Creates a new JRedis instance with the default timeout.
@@ -129,9 +110,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Multiple Redis instances for sharding
      * JRedis<User> sharded = new JRedis<>("localhost:6379,localhost:6380,localhost:6381");
      *
-     * // Remote Redis servers
-     * JRedis<Data> remote = new JRedis<>("redis1.example.com:6379,redis2.example.com:6379");
-     *
      * // Use the cache
      * User user = new User("Alice", "alice@example.com");
      * cache.set("user:123", user, 3600000);                         // returns true on success
@@ -141,9 +119,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * // Negative: blank serverUrl is rejected (checkArgNotBlank)
      * JRedis<User> blank = new JRedis<>("   ");                     // throws IllegalArgumentException
-     *
-     * // Negative: an empty serverUrl is rejected as blank (super(serverUrl) runs checkArgNotBlank first)
-     * JRedis<User> empty = new JRedis<>("");                        // throws IllegalArgumentException
      * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
@@ -170,12 +145,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * JRedis<Data> cache = new JRedis<>("redis1:6379,redis2:6379", 5000);   // timeout in milliseconds
      * String url = cache.serverUrl();                                       // returns "redis1:6379,redis2:6379"
      *
-     * // High-latency network with longer timeout
-     * JRedis<User> remote = new JRedis<>("remote-redis:6379", 10000);       // 10 seconds
-     *
-     * // Low-latency local network with short timeout
-     * JRedis<Session> local = new JRedis<>("localhost:6379", 2000);         // 2 seconds
-     *
      * // Use the cache
      * Data data = new Data("value");
      * cache.set("key", data, 7200000);                                      // Cache for 2 hours; returns true
@@ -183,13 +152,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * // Negative: a non-positive timeout is rejected (checkArgPositive)
      * JRedis<Data> zero = new JRedis<>("localhost:6379", 0);              // throws IllegalArgumentException
-     * JRedis<Data> neg = new JRedis<>("localhost:6379", -1);              // throws IllegalArgumentException
      *
      * // Negative: a timeout above Integer.MAX_VALUE ms cannot fit the int Jedis API
      * JRedis<Data> tooBig = new JRedis<>("localhost:6379", Integer.MAX_VALUE + 1L);   // throws IllegalArgumentException
-     *
-     * // Negative: a blank serverUrl is rejected (super(serverUrl) runs checkArgNotBlank first)
-     * JRedis<Data> blank = new JRedis<>("", 5000);                         // throws IllegalArgumentException
      * }</pre>
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
@@ -220,17 +185,17 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
                 .socketTimeoutMillis(timeoutMillis)
                 .build();
 
-        final List<RedisClient> shardPools = new ArrayList<>(addressList.size());
+        final List<RedisClient> shardClients = new ArrayList<>(addressList.size());
 
         for (final InetSocketAddress addr : addressList) {
             // Use getHostString() (returns the literal host or IP) instead of getHostName(), which
             // performs a reverse DNS lookup. Reverse DNS can block startup, fail if no PTR record
             // exists, and produce shard hash keys that differ between processes whose resolvers
             // disagree — silently breaking sharding consistency.
-            shardPools.add(RedisClient.builder().hostAndPort(new HostAndPort(addr.getHostString(), addr.getPort())).clientConfig(clientConfig).build());
+            shardClients.add(RedisClient.builder().hostAndPort(new HostAndPort(addr.getHostString(), addr.getPort())).clientConfig(clientConfig).build());
         }
 
-        pools = shardPools;
+        clients = shardClients;
     }
 
     /**
@@ -240,609 +205,46 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * mapping (CRC-32 does not depend on JVM identity hashing or locale).
      *
      * @param keyBytes the UTF-8 encoded key bytes; must not be {@code null}
-     * @return the {@link RedisClient} client for the shard that owns the key, never {@code null}
+     * @return the {@link RedisClient} for the shard that owns the key, never {@code null}
      */
-    private RedisClient poolFor(final byte[] keyBytes) {
-        final int shardCount = pools.size();
+    @Override
+    protected RedisClient clientFor(final byte[] keyBytes) {
+        final int shardCount = clients.size();
 
         if (shardCount == 1) {
-            return pools.get(0);
+            return clients.get(0);
         }
 
         final CRC32 crc = new CRC32();
         crc.update(keyBytes);
 
-        return pools.get(Math.floorMod(crc.getValue(), shardCount));
+        return clients.get(Math.floorMod(crc.getValue(), shardCount));
     }
 
     /**
-     * Retrieves a value from the cache by its key.
-     * The value is deserialized from its binary representation using Kryo parser.
-     * The owning Redis shard is automatically determined based on the key's hash.
-     *
-     * <p><b>Redis-specific behavior:</b> This operation uses the Redis GET command. If the key
-     * does not exist or has expired, {@code null} is returned. The operation is O(1) time complexity.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe — the command is dispatched through the shard's internal
-     * connection pool.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Simple get operation
-     * User user = cache.get("user:123");                            // the cached User, or null if absent
-     * if (user != null) {
-     *     System.out.println("Found user: " + user.getName());     // cache hit branch
-     * } else {
-     *     System.out.println("User not found in cache");           // cache miss branch
-     * }
-     *
-     * // Get with fallback to database (cache-aside pattern)
-     * User u = cache.get("user:123");                               // null on a cache miss
-     * if (u == null) {
-     *     u = database.findUser(123);
-     *     if (u != null) {
-     *         cache.set("user:123", u, 3600000);                    // returns true on success
-     *     }
-     * }
-     *
-     * // Edge: a missing or expired key returns null (not an exception)
-     * User missing = cache.get("does:not:exist");                   // returns null
-     *
-     * // Edge: a key whose stored value was null decodes back to null
-     * cache.set("blank", (User) null, 60000);                       // stored as an empty byte array
-     * User blank = cache.get("blank");                              // returns null
-     *
-     * // Negative: a null key is rejected
-     * User bad = cache.get(null);                                   // throws IllegalArgumentException
-     * }</pre>
-     *
-     * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
-     * @return the cached value, or {@code null} if not found, expired, or evicted
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error, timeout, or deserialization error occurs
-     * @see #set(String, Object, long)
-     * @see #delete(String)
-     */
-    @Override
-    public T get(final String key) {
-        final byte[] keyBytes = getKeyBytes(key);
-
-        return decode(poolFor(keyBytes).get(keyBytes));
-    }
-
-    /**
-     * Retrieves multiple values from the cache, returning a map of only the keys that were found.
-     * Keys that are absent, expired, or decode to {@code null} are omitted from the result.
-     *
-     * <p><b>Redis-specific behavior:</b> Because this client shards keys across multiple standalone
-     * Redis instances, a single cross-shard {@code MGET} is not possible. This method therefore issues
-     * one {@code GET} per key (each routed to its owning shard) and assembles the results. The keys are
-     * validated up-front, before any network call is made.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe — see the class-level Thread Safety note.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Typical: fetch several keys at once; only the keys present in Redis appear in the result.
-     * // Here "user:1" exists, "user:2" is missing.
-     * Map<String, User> found = cache.getBulk("user:1", "user:2");   // size == 1; contains only "user:1"
-     * User u1 = found.get("user:1");                                 // the cached User
-     * boolean hasU2 = found.containsKey("user:2");                   // false (missing keys are omitted)
-     *
-     * // Typical: iterate over the returned entries
-     * Map<String, Session> sessions = cache.getBulk("s:a", "s:b", "s:c");
-     * sessions.forEach((k, v) -> process(k, v));                     // only found sessions are visited
-     *
-     * // Edge: no arguments -> empty (never null) map; no GET is issued
-     * Map<String, User> none = cache.getBulk();                      // returns an empty map
-     * boolean empty = none.isEmpty();                                // true
-     *
-     * // Edge: a key stored as null decodes to null and is omitted from the result
-     * cache.set("blank", (User) null, 60000);                        // stored as empty byte array
-     * Map<String, User> r = cache.getBulk("blank");                  // returns an empty map (blank omitted)
-     *
-     * // Negative: a null array throws (validated before any network call)
-     * cache.getBulk((String[]) null);                               // throws IllegalArgumentException
-     *
-     * // Negative: a null element throws; no GET is issued for any key
-     * cache.getBulk("user:1", null, "user:3");                      // throws IllegalArgumentException
-     * }</pre>
-     *
-     * @param keys the cache keys to retrieve; must not be {@code null} or contain {@code null} elements
-     * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
-     * @throws RuntimeException if a network error, timeout, or deserialization error occurs
-     * @see #get(String)
-     * @see #getBulk(Collection)
-     */
-    @Override
-    public Map<String, T> getBulk(final String... keys) {
-        checkBulkKeys(keys);
-
-        return fetchBulk(Arrays.asList(keys));
-    }
-
-    /**
-     * Retrieves multiple values from the cache, returning a map of only the keys that were found.
-     * Collection-based counterpart of {@link #getBulk(String...)}; see that method for the
-     * Redis-specific sharding behavior.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Typical: fetch a dynamic list of keys; only present keys appear in the result
-     * List<String> ids = List.of("user:1", "user:2", "user:3");
-     * Map<String, User> users = cache.getBulk(ids);                  // contains only the keys that exist
-     * for (Map.Entry<String, User> e : users.entrySet()) {
-     *     handle(e.getKey(), e.getValue());                         // missing keys are simply absent
-     * }
-     *
-     * // Typical: a Set of keys works too (any Collection is accepted)
-     * Set<String> keys = Set.of("a", "b");
-     * Map<String, User> found = cache.getBulk(keys);                 // never null; empty if none found
-     *
-     * // Edge: empty collection -> empty (never null) map; no GET is issued
-     * Map<String, User> none = cache.getBulk(List.of());            // returns an empty map
-     * boolean empty = none.isEmpty();                                // true
-     *
-     * // Edge: keys whose stored value is null/empty decode to null and are omitted
-     * Map<String, User> r = cache.getBulk(List.of("blank"));        // "blank" omitted if it decodes to null
-     *
-     * // Negative: a null collection throws (validated before any network call)
-     * cache.getBulk((Collection<String>) null);                     // throws IllegalArgumentException
-     *
-     * // Negative: a null element throws; no GET is issued for any key
-     * cache.getBulk(Arrays.asList("a", null));                      // throws IllegalArgumentException
-     * }</pre>
-     *
-     * @param keys the collection of cache keys to retrieve; must not be {@code null} or contain {@code null} elements
-     * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
-     * @throws RuntimeException if a network error, timeout, or deserialization error occurs
-     * @see #get(String)
-     * @see #getBulk(String...)
-     */
-    @Override
-    public Map<String, T> getBulk(final Collection<String> keys) {
-        checkBulkKeys(keys);
-
-        return fetchBulk(keys);
-    }
-
-    private Map<String, T> fetchBulk(final Collection<String> keys) {
-        final Map<String, T> result = new HashMap<>(Math.max(16, keys.size() * 2));
-
-        for (final String key : keys) {
-            final byte[] keyBytes = getKeyBytes(key);
-
-            final T value = decode(poolFor(keyBytes).get(keyBytes));
-
-            if (value != null) {
-                result.put(key, value);
-            }
-        }
-
-        return result;
-    }
-
-    /**
-     * Stores a key-value pair in the cache with a specified time-to-live.
-     * The value is serialized using Kryo parser before storage. If the key already exists,
-     * its value and TTL will be replaced. The owning Redis shard is automatically
-     * determined based on the key's hash.
-     *
-     * <p><b>Redis-specific behavior:</b> When {@code liveTime} is positive, this operation uses the
-     * Redis SET command with the {@code EX} option, which atomically sets both the value and
-     * expiration time. When {@code liveTime} is 0 or negative, a plain SET command is used without
-     * expiration, meaning the key will persist until explicitly deleted. The operation is O(1) time
-     * complexity. If the key already exists, the previous value and TTL are completely replaced.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe. The Redis SET command is atomic on the server side, and
-     * when multiple clients set the same key concurrently the last write wins.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Cache with 1 hour TTL (3600000 ms -> SET ... EX 3600)
-     * User user = new User("John", "john@example.com");
-     * boolean success = cache.set("user:123", user, 3600000);       // returns true when Redis replies "OK"
-     * if (success) {
-     *     System.out.println("User cached successfully");          // reached only when set returned true
-     * }
-     *
-     * // Cache session data with 30 minute TTL (1800000 ms -> SET ... EX 1800)
-     * Session session = new Session("abc123", user);
-     * cache.set("session:" + session.getId(), session, 1800000);   // returns true on success
-     *
-     * // Edge: sub-second / fractional TTL rounds UP to whole seconds
-     * cache.set("k1", user, 1);                                     // 1 ms -> EX 1 second
-     * cache.set("k2", user, 1500);                                  // 1500 ms -> EX 2 seconds (rounds up)
-     *
-     * // Edge: liveTime <= 0 means NO expiration -> plain SET (no EX)
-     * cache.set("forever", user, 0);                                // uses SET; key never auto-expires
-     * cache.set("forever2", user, -1);                              // also SET; negative TTL treated as 0
-     *
-     * // Edge: a null value is allowed; it is stored as an empty byte array
-     * cache.set("empty:key", (User) null, 3600000);                // SET ... EX with an empty byte[] payload; returns true
-     * User back = cache.get("empty:key");                          // returns null (empty bytes decode to null)
-     *
-     * // Edge: if Redis does not reply "OK", set returns false
-     * boolean ok = cache.set("k", user, 60000);                    // false if the server reply was not "OK"
-     *
-     * // Negative: a null key is rejected
-     * cache.set(null, user, 60000);                                // throws IllegalArgumentException
-     * }</pre>
-     *
-     * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
-     * @param value the value to cache. May be {@code null} (stored as empty byte array).
-     * @param liveTime the time-to-live in milliseconds. Positive values set expiration via SET ... EX (converted to seconds). 0 or negative means no expiration (plain SET).
-     * @return {@code true} if the operation was successful (Redis responds with "OK"), {@code false} otherwise
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error, timeout, or serialization error occurs
-     * @see #get(String)
-     * @see #delete(String)
-     */
-    @Override
-    public boolean set(final String key, final T value, final long liveTime) {
-        final byte[] keyBytes = getKeyBytes(key);
-        final byte[] valueBytes = encode(value);
-        final RedisClient jedis = poolFor(keyBytes);
-
-        if (liveTime <= 0) {
-            // liveTime <= 0 means no expiration, use a plain SET.
-            return "OK".equals(jedis.set(keyBytes, valueBytes));
-        }
-
-        // SET ... EX atomically sets the value and an expiration in seconds (replaces deprecated SETEX).
-        return "OK".equals(jedis.set(keyBytes, valueBytes, SetParams.setParams().ex(toSeconds(liveTime))));
-    }
-
-    /**
-     * Removes the mapping for a key from the cache if it is present.
-     * The owning Redis shard is automatically determined based on the key's hash.
-     *
-     * <p><b>Redis-specific behavior:</b> This method uses the Redis DEL command to remove the key.
-     * The operation is O(1) time complexity. The return value reflects Redis's DEL semantics (which
-     * returns the number of keys removed): {@code true} when the key existed and was removed,
-     * {@code false} when the key did not exist at the time the command was issued.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe. The Redis DEL command is idempotent and atomic on the
-     * server side, so when multiple clients delete the same key concurrently all will succeed.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Typical: delete an existing key
-     * cache.set("user:123", user, 60000);                          // key now present
-     * boolean removed = cache.delete("user:123");                  // returns true (DEL count == 1)
-     *
-     * // Typical: cache invalidation after a write (write-through)
-     * database.save(user);                                         // persist the new state first
-     * cache.delete("user:" + user.getId());                        // returns true if the entry existed
-     *
-     * // Edge: deleting a key that does not exist returns false (DEL count == 0)
-     * boolean wasThere = cache.delete("never:set");                // returns false
-     *
-     * // Edge: delete is effectively idempotent; a second delete just reports false
-     * cache.delete("user:123");                                    // first call -> true
-     * boolean again = cache.delete("user:123");                    // second call -> false (already gone)
-     *
-     * // Negative: a null key is rejected
-     * cache.delete(null);                                          // throws IllegalArgumentException
-     * }</pre>
-     *
-     * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
-     * @return {@code true} if Redis reported at least one key was actually removed; {@code false}
-     *         if the key did not exist at the time the {@code DEL} command was issued. This matches
-     *         Redis's DEL semantics (returns the number of keys removed) and gives callers a way to
-     *         distinguish a real delete from an idempotent no-op.
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error or timeout occurs
-     * @see #get(String)
-     * @see #set(String, Object, long)
-     */
-    @Override
-    public boolean delete(final String key) {
-        final byte[] keyBytes = getKeyBytes(key);
-
-        return poolFor(keyBytes).del(keyBytes) > 0L;
-    }
-
-    /**
-     * Atomically increments a numeric value by 1.
-     * The owning Redis shard is automatically determined based on the key's hash.
-     *
-     * <p><b>Redis-specific behavior:</b> This operation uses the Redis INCR command. If the key doesn't exist,
-     * it will be automatically created with value 1 (Redis initializes to 0, then increments by 1).
-     * This differs from Memcached which returns -1 for non-existent keys. The operation is O(1) time complexity.
-     * If the key contains a value that cannot be represented as an integer, an error will occur.
-     *
-     * <p><b>Important:</b> The key should contain a string representation of an integer. If the key
-     * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
-     * will fail. Increment operations are meant for counters, not for general objects.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe. The Redis INCR command is atomic on the server side, so
-     * concurrent increments — whether from separate client instances or from multiple threads sharing
-     * this pooled client — are serialized correctly by Redis and no increments are lost, making it
-     * suitable for distributed counters and rate limiting.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Simple counter on a fresh key (auto-initializes to 0, then +1)
-     * long pageViews = cache.incr("page:views");                   // returns 1 the first time
-     * long again = cache.incr("page:views");                       // returns 2 the second time
-     *
-     * // Rate limiting
-     * String key = "rate:limit:" + userId;
-     * long attempts = cache.incr(key);                             // value after increment
-     * if (attempts > MAX_ATTEMPTS) {
-     *     throw new RateLimitException("Too many requests");
-     * }
-     *
-     * // Distributed ID generator (caution: not persistent across Redis restarts)
-     * long uniqueId = cache.incr("id:generator");                  // a monotonically increasing value
-     *
-     * // Negative: a null key is rejected
-     * cache.incr(null);                                           // throws IllegalArgumentException
-     *
-     * // Negative: incrementing a key whose value is not an integer fails on the server
-     * cache.set("name", "Alice", 0);                              // stored as a non-numeric value
-     * cache.incr("name");                                        // throws RuntimeException (Redis "not an integer" error)
-     * }</pre>
-     *
-     * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @return the value after increment (will be 1 if the key did not exist before)
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
-     * @see #incr(String, int)
-     * @see #decr(String)
-     * @see #decr(String, int)
-     */
-    @Override
-    public long incr(final String key) {
-        final byte[] keyBytes = getKeyBytes(key);
-
-        return poolFor(keyBytes).incr(keyBytes);
-    }
-
-    /**
-     * Atomically increments a numeric value by a specified amount.
-     * The owning Redis shard is automatically determined based on the key's hash.
-     *
-     * <p><b>Redis-specific behavior:</b> This operation uses the Redis INCRBY command. If the key doesn't exist,
-     * it will be automatically created with the delta value (Redis initializes to 0, then increments by delta).
-     * This differs from Memcached which returns -1 for non-existent keys. The operation is O(1) time complexity.
-     * If the key contains a value that cannot be represented as an integer, an error will occur.
-     *
-     * <p><b>Important:</b> The key should contain a string representation of an integer. If the key
-     * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
-     * will fail. Increment operations are meant for counters, not for general objects.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe. The Redis INCRBY command is atomic on the server side, so
-     * concurrent increments — whether from separate client instances or from multiple threads sharing
-     * this pooled client — are serialized correctly by Redis and no increments are lost.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Game score increment on a fresh key (auto-initializes to 0, then +delta)
-     * long score = cache.incr("player:score:123", 10);            // returns 10 the first time
-     *
-     * // Batch processing counter
-     * long processed = cache.incr("batch:processed", 100);        // returns the running total after +100
-     *
-     * // Dynamic points system
-     * int points = calculatePoints(action);
-     * long totalPoints = cache.incr("user:points:" + userId, points);   // value after adding 'points'
-     *
-     * // Edge: a delta of 0 is allowed and returns the current value unchanged
-     * long current = cache.incr("user:points:" + userId, 0);      // returns the current counter value
-     *
-     * // Negative: a negative delta is rejected by this wrapper (for cross-backend portability)
-     * cache.incr("counter", -1);                                 // throws IllegalArgumentException
-     *
-     * // Negative: a null key is rejected
-     * cache.incr(null, 1);                                       // throws IllegalArgumentException
-     * }</pre>
-     *
-     * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @param delta the increment amount; must be non-negative. Although the Redis INCRBY command itself
-     *              supports negative deltas, this implementation rejects them with an
-     *              {@link IllegalArgumentException} for portability across cache backends (e.g.
-     *              SpyMemcached, which also rejects negative deltas).
-     * @return the value after increment (will be equal to delta if the key did not exist before)
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
-     * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
-     * @see #incr(String)
-     * @see #decr(String)
-     * @see #decr(String, int)
-     */
-    @Override
-    public long incr(final String key, final int delta) {
-        N.checkArgNotNegative(delta, "delta");
-
-        final byte[] keyBytes = getKeyBytes(key);
-
-        return poolFor(keyBytes).incrBy(keyBytes, delta);
-    }
-
-    /**
-     * Atomically decrements a numeric value by 1.
-     * The owning Redis shard is automatically determined based on the key's hash.
-     *
-     * <p><b>Redis-specific behavior:</b> This operation uses the Redis DECR command. If the key doesn't exist,
-     * it will be automatically created with value -1 (Redis initializes to 0, then decrements by 1).
-     * Unlike Memcached where values cannot go below 0, Redis allows negative values. The operation is
-     * O(1) time complexity. If the key contains a value that cannot be represented as an integer, an error will occur.
-     *
-     * <p><b>Important:</b> The key should contain a string representation of an integer. If the key
-     * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
-     * will fail. Decrement operations are meant for counters, not for general objects. Unlike Memcached,
-     * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe. The Redis DECR command is atomic on the server side, so
-     * concurrent decrements — whether from separate client instances or from multiple threads sharing
-     * this pooled client — are serialized correctly by Redis and no decrements are lost.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Inventory management with rollback
-     * long stock = cache.decr("product:stock:123");                // value after decrement
-     * if (stock < 0) {
-     *     cache.incr("product:stock:123");                         // rollback the decrement
-     *     throw new OutOfStockException("Product out of stock");
-     * }
-     * processOrder();                                             // reached only when stock stayed >= 0
-     *
-     * // Countdown timer
-     * long countdown = cache.decr("event:countdown");              // value after decrement
-     * if (countdown == 0) {
-     *     triggerEvent();                                          // fires when the counter reaches 0
-     * }
-     *
-     * // Edge: a fresh key auto-initializes to 0 then -1 (unlike Memcached, Redis allows negatives)
-     * long first = cache.decr("brand:new:counter");               // returns -1 the first time
-     *
-     * // Negative: a null key is rejected
-     * cache.decr(null);                                          // throws IllegalArgumentException
-     *
-     * // Negative: decrementing a non-integer value fails on the server
-     * cache.set("name", "Alice", 0);                             // stored as a non-numeric value
-     * cache.decr("name");                                       // throws RuntimeException (Redis "not an integer" error)
-     * }</pre>
-     *
-     * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
-     * @see #decr(String, int)
-     * @see #incr(String)
-     * @see #incr(String, int)
-     */
-    @Override
-    public long decr(final String key) {
-        final byte[] keyBytes = getKeyBytes(key);
-
-        return poolFor(keyBytes).decr(keyBytes);
-    }
-
-    /**
-     * Atomically decrements a numeric value by a specified amount.
-     * The owning Redis shard is automatically determined based on the key's hash.
-     *
-     * <p><b>Redis-specific behavior:</b> This operation uses the Redis DECRBY command. If the key doesn't exist,
-     * it will be automatically created with the negative delta value (Redis initializes to 0, then decrements by delta).
-     * Unlike Memcached where values cannot go below 0, Redis allows negative values. The operation is
-     * O(1) time complexity. If the key contains a value that cannot be represented as an integer, an error will occur.
-     *
-     * <p><b>Important:</b> The key should contain a string representation of an integer. If the key
-     * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
-     * will fail. Decrement operations are meant for counters, not for general objects. Unlike Memcached,
-     * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe. The Redis DECRBY command is atomic on the server side, so
-     * concurrent decrements — whether from separate client instances or from multiple threads sharing
-     * this pooled client — are serialized correctly by Redis and no decrements are lost.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Bulk inventory decrement
-     * int quantity = 5;
-     * long inventory = cache.decr("product:stock:456", quantity);  // value after subtracting 'quantity'
-     * if (inventory < 0) {
-     *     cache.incr("product:stock:456", quantity);               // rollback
-     *     throw new InsufficientStockException();
-     * }
-     *
-     * // API quota management with variable costs
-     * int requestCost = calculateCost(request);
-     * long quotaRemaining = cache.decr("quota:" + apiKey, requestCost);   // value after the deduction
-     * if (quotaRemaining < 0) {
-     *     cache.incr("quota:" + apiKey, requestCost);              // restore quota
-     *     throw new QuotaExceededException("Insufficient quota");
-     * }
-     *
-     * // Edge: a fresh key auto-initializes to 0 then subtracts delta (negatives allowed)
-     * long first = cache.decr("brand:new:counter", 5);            // returns -5 the first time
-     *
-     * // Edge: a delta of 0 returns the current value unchanged
-     * long current = cache.decr("quota:" + apiKey, 0);            // returns the current counter value
-     *
-     * // Negative: a negative delta is rejected by this wrapper
-     * cache.decr("counter", -1);                                 // throws IllegalArgumentException
-     *
-     * // Negative: a null key is rejected
-     * cache.decr(null, 1);                                       // throws IllegalArgumentException
-     * }</pre>
-     *
-     * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @param delta the decrement amount; must be non-negative. Although the Redis DECRBY command itself
-     *              supports negative deltas, this implementation rejects them with an
-     *              {@link IllegalArgumentException} for portability across cache backends (e.g.
-     *              SpyMemcached, which also rejects negative deltas).
-     * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
-     *         if the key did not exist before)
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
-     * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
-     * @see #decr(String)
-     * @see #incr(String)
-     * @see #incr(String, int)
-     */
-    @Override
-    public long decr(final String key, final int delta) {
-        N.checkArgNotNegative(delta, "delta");
-
-        final byte[] keyBytes = getKeyBytes(key);
-
-        return poolFor(keyBytes).decrBy(keyBytes, delta);
-    }
-
-    /**
-     * Removes all keys from all connected Redis instances.
+     * Removes all keys from all connected standalone Redis instances.
      * This is a destructive operation that affects all data across all shards and all databases
      * within each Redis instance. Use with extreme caution in production environments.
      *
-     * <p><b>Redis-specific behavior:</b> This operation issues the Redis FLUSHALL command on each shard.
-     * It removes all keys from all databases (not just the currently selected database). The operation
-     * is synchronous and blocks until all keys are removed from all shards. The time complexity is
-     * O(N) where N is the total number of keys across all databases on all shards. If a FLUSHALL on
-     * one shard fails, the remaining shards are still attempted (each failure is logged at WARN level)
-     * and the <em>first</em> encountered exception is rethrown after all shards have been processed.
+     * <p><b>Redis-specific behavior:</b> This operation issues the Redis FLUSHALL command on each
+     * shard. It removes all keys from all databases (not just the currently selected database). If a
+     * FLUSHALL on one shard fails, the remaining shards are still attempted (each failure is logged at
+     * WARN level) and the <em>first</em> encountered exception is rethrown after all shards have been
+     * processed.
      *
-     * <p><b>Warning:</b> This operation affects ALL databases on each Redis instance (DB 0 through DB 15
-     * by default), not just the one being used by this client. If other applications share the same
-     * Redis instances, their data will also be deleted.
-     *
-     * <p><b>Thread Safety:</b> Thread-safe. The Redis FLUSHALL command is atomic on each server. Once
-     * executed, all cached data on the affected servers is permanently lost and visible immediately to
-     * all other clients connected to those servers.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // WARNING: This removes ALL data from ALL Redis instances!
-     * cache.flushAll();                                           // issues FLUSHALL on every shard; returns void
-     * User gone = cache.get("user:123");                          // returns null afterwards (all keys cleared)
-     *
-     * // Integration test cleanup
-     * @BeforeEach
-     * public void setUp() {
-     *     cache.flushAll();                                        // clean slate for each test
-     * }
-     *
-     * // Edge/Negative: if one shard fails, the others are still flushed and the FIRST error is rethrown
-     * try {
-     *     cache.flushAll();                                       // attempts every shard even if one throws
-     * } catch (RuntimeException e) {
-     *     logger.error("Flush failed on a shard (remaining shards were still flushed)", e);   // rethrows the first failure
-     * }
-     * }</pre>
+     * <p><b>Warning:</b> This operation affects ALL databases on each Redis instance, not just the one
+     * being used by this client. If other applications share the same Redis instances, their data will
+     * also be deleted.
      *
      * @throws RuntimeException the first exception encountered while flushing any shard (all remaining
-     *         shards are still attempted before the exception is rethrown). Typically a network error
-     *         or timeout from the underlying Jedis client.
+     *         shards are still attempted before the exception is rethrown)
      * @see #disconnect()
      */
     @Override
     public void flushAll() {
         RuntimeException firstException = null;
 
-        for (final RedisClient jedis : pools) {
+        for (final RedisClient jedis : clients) {
             try {
                 jedis.flushAll();
             } catch (final RuntimeException e) {
@@ -865,163 +267,20 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Disconnects from all Redis instances and releases resources.
-     * After calling this method, the client cannot be used anymore and any subsequent
-     * operations will fail or throw exceptions.
-     *
-     * <p><b>Redis-specific behavior:</b> This method closes every shard's {@link RedisClient} client,
-     * which shuts down the underlying connection pool and releases all idle connections, network
-     * sockets, and internal buffers. This operation does not remove any data from Redis; it only
-     * closes the client-side connections.
-     *
-     * <p><b>Important:</b> This method should be called when the client is no longer needed to ensure
-     * proper cleanup of network connections and other resources. It is safe to call this method
-     * multiple times; subsequent calls will have no effect. After calling disconnect(), attempting
-     * to use the cache client will result in exceptions. If closing one shard fails, the remaining
-     * shards are still closed and each failure is logged at WARN level.
-     *
-     * <p><b>Thread Safety:</b> This method is thread-safe, but once called, no other operations should be
-     * attempted on this client instance from any thread.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * // Try-finally pattern (recommended)
-     * JRedis<User> cache = new JRedis<>("localhost:6379");
-     * try {
-     *     cache.set("user:123", user, 3600000);                    // returns true on success
-     *     User cached = cache.get("user:123");                     // the cached User, or null
-     *     processUser(cached);                                     // application logic on the cached value
-     * } finally {
-     *     cache.disconnect();                                      // closes all shard clients
-     * }
-     *
-     * // Try-with-resources pattern (requires wrapper)
-     * try (AutoCloseable closeable = cache::disconnect) {
-     *     cache.set("key", value, 3600000);                        // returns true on success
-     *     // disconnect() is invoked automatically when the block exits
-     * }
-     *
-     * // Edge: disconnect() is idempotent and safe to call more than once
-     * cache.disconnect();                                          // closes the underlying clients
-     * cache.disconnect();                                          // no-op; the second call does nothing
-     *
-     * // Spring Bean destruction callback
-     * @PreDestroy
-     * public void cleanup() {
-     *     if (cache != null) {
-     *         cache.disconnect();                                  // releases network/socket resources
-     *     }
-     * }
-     * }</pre>
-     *
-     * @see #flushAll()
+     * Closes every shard's {@link RedisClient}, shutting down its connection pool. Best-effort: a
+     * failure closing one shard is logged at WARN level and does not prevent the remaining shards from
+     * being closed. Invoked once by the idempotent {@link #disconnect()} template.
      */
     @Override
-    public synchronized void disconnect() {
-        // Guard with isShutdown so repeated calls are safe (the Javadoc above promises
-        // "It is safe to call this method multiple times").
-        if (isShutdown) {
-            return;
-        }
-
-        try {
-            for (final RedisClient jedis : pools) {
-                try {
-                    jedis.close();
-                } catch (final RuntimeException e) {
-                    // Best-effort cleanup: keep closing the remaining shards even if one fails.
-                    if (logger.isWarnEnabled()) {
-                        logger.warn("Failed to close a Redis shard client during disconnect(); continuing with remaining shards", e);
-                    }
+    protected void closeClients() {
+        for (final RedisClient jedis : clients) {
+            try {
+                jedis.close();
+            } catch (final RuntimeException e) {
+                if (logger.isWarnEnabled()) {
+                    logger.warn("Failed to close a Redis shard client during disconnect(); continuing with remaining shards", e);
                 }
             }
-        } finally {
-            isShutdown = true;
         }
-    }
-
-    /**
-     * Converts a string key to UTF-8 encoded bytes for Redis operations.
-     * All Redis operations use binary-safe keys, so strings must be converted to bytes.
-     * This method is used internally by all cache operations to ensure consistent
-     * key encoding across the system.
-     *
-     * <p><b>Implementation Note:</b> Redis keys are binary-safe, meaning they can contain any
-     * byte sequence. This method uses UTF-8 encoding which is the standard for most string-based
-     * keys. UTF-8 ensures compatibility across different systems and handles international characters
-     * correctly.
-     *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * String.getBytes() creates a new byte array on each call, so there are no shared mutable state issues.
-     *
-     * @param key the cache key to convert. Must not be {@code null}.
-     * @return the UTF-8 encoded byte array representation of the key, never {@code null}
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @see #encode(Object)
-     * @see #decode(byte[])
-     */
-    protected byte[] getKeyBytes(final String key) {
-        N.checkArgNotNull(key, "key");
-
-        return key.getBytes(Charsets.UTF_8);
-    }
-
-    /**
-     * Serializes an object to bytes using Kryo for storage in Redis.
-     * Kryo provides efficient serialization with compact binary representation.
-     * Null objects are encoded as empty byte arrays. This method is used internally
-     * by the {@link #set(String, Object, long)} method.
-     *
-     * <p><b>Serialization Details:</b> Kryo is a fast and efficient binary object graph serialization
-     * framework for Java. It provides better performance and smaller serialized size compared to
-     * standard Java serialization. Kryo handles object graphs, circular references, and complex
-     * data structures automatically.
-     *
-     * <p><b>Important:</b> The objects being serialized should be compatible with Kryo serialization.
-     * Most Java objects work out of the box, but objects with special serialization requirements may
-     * need custom serializers. Classes should have proper constructors or be registered with Kryo.
-     *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.
-     *
-     * @param value the value to encode. May be {@code null}.
-     * @return the serialized byte array representation of the value, or empty array if value is {@code null}. Never {@code null}.
-     * @throws RuntimeException if serialization fails due to incompatible object types or serialization errors
-     * @see #decode(byte[])
-     * @see #getKeyBytes(String)
-     */
-    protected byte[] encode(final Object value) {
-        return value == null ? N.EMPTY_BYTE_ARRAY : kryoParser.encode(value);
-    }
-
-    /**
-     * Deserializes bytes to an object using Kryo.
-     * This method reverses the serialization performed by {@link #encode(Object)}.
-     * Empty or null byte arrays are decoded as {@code null}. This method is used internally
-     * by the {@link #get(String)} method.
-     *
-     * <p><b>Deserialization Details:</b> Kryo is a fast and efficient binary object graph serialization
-     * framework for Java. It provides better performance compared to standard Java serialization.
-     * The deserialized object is reconstructed with the same state as when it was serialized,
-     * including all fields and nested objects.
-     *
-     * <p><b>Important:</b> The class of the serialized object must be available on the classpath
-     * at deserialization time. If the class structure has changed since serialization, deserialization
-     * may fail or produce unexpected results. Ensure class compatibility when upgrading applications.
-     *
-     * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
-     * The KryoParser instance is shared and designed to be thread-safe through proper synchronization.
-     *
-     * @param bytes the byte array to decode. May be {@code null} or empty.
-     * @return the deserialized object, or {@code null} if the byte array is {@code null} or empty
-     * @throws RuntimeException if deserialization fails due to missing classes, incompatible class versions, or corrupted data
-     * @see #encode(Object)
-     * @see #getKeyBytes(String)
-     */
-    protected T decode(final byte[] bytes) {
-        if (bytes == null || bytes.length == 0) {
-            return null;
-        }
-        return kryoParser.decode(bytes);
     }
 }

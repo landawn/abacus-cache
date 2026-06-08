@@ -350,9 +350,12 @@ public final class CacheFactory {
      * <li>{@code Memcached(serverUrl)} - Creates SpyMemcached client with default timeout (1000ms)</li>
      * <li>{@code Memcached(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code Memcached(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
-     * <li>{@code Redis(serverUrl)} - Creates JRedis client with default timeout (1000ms)</li>
+     * <li>{@code Redis(serverUrl)} - Creates JRedis client (standalone, client-side sharding) with default timeout (1000ms)</li>
      * <li>{@code Redis(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code Redis(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
+     * <li>{@code RedisCluster(serverUrl)} - Creates JRedisCluster client (Redis Cluster, server-side sharding) with default timeout (1000ms); serverUrl is a comma-separated list of cluster seed nodes</li>
+     * <li>{@code RedisCluster(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
+     * <li>{@code RedisCluster(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
      * <li>{@code com.example.CustomCache(params...)} - Custom implementation with fully qualified class name</li>
      * </ul>
      *
@@ -465,6 +468,16 @@ public final class CacheFactory {
                 return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
             } else if (parameters.length == 3) {
                 return new DistributedCache<>(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
+            } else {
+                throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+            }
+        } else if (DistributedCacheClient.REDIS_CLUSTER.equalsIgnoreCase(className)) {
+            if (parameters.length == 1) {
+                return new DistributedCache<>(new JRedisCluster<>(url, DEFAULT_TIMEOUT));
+            } else if (parameters.length == 2) {
+                return new DistributedCache<>(new JRedisCluster<>(url, DEFAULT_TIMEOUT), parameters[1]);
+            } else if (parameters.length == 3) {
+                return new DistributedCache<>(new JRedisCluster<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
             } else {
                 throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
             }

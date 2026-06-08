@@ -427,8 +427,9 @@ public class JRedisTest {
 
     @Test
     public void test_getKeyBytes_EdgeCase_NullKey() throws Exception {
-        // Reach the protected getKeyBytes via reflection so we can verify the contract.
-        final java.lang.reflect.Method m = JRedis.class.getDeclaredMethod("getKeyBytes", String.class);
+        // Reach the protected getKeyBytes via reflection so we can verify the contract. It is declared
+        // on the abstract base class (AbstractJedisCacheClient), so look it up on the superclass.
+        final java.lang.reflect.Method m = JRedis.class.getSuperclass().getDeclaredMethod("getKeyBytes", String.class);
         m.setAccessible(true);
         try {
             m.invoke(cache, (Object) null);

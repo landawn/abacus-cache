@@ -26,6 +26,8 @@ import com.landawn.abacus.util.Suppliers;
 
 import net.spy.memcached.MemcachedClient;
 import redis.clients.jedis.RedisClient;
+import redis.clients.jedis.RedisClusterClient;
+import redis.clients.jedis.providers.ClusterConnectionProvider;
 
 @Tag("2025")
 public class CacheFactoryTest extends TestBase {
@@ -216,6 +218,66 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_Redis_EdgeCase_TooManyParameters() {
         try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
             assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Redis(a,b,1000,extra)"));
+        }
+    }
+
+    // Redis Cluster
+    //
+    // RedisClusterClient eagerly discovers the cluster topology while it is being built (inside the
+    // ClusterConnectionProvider constructor), so the happy-path tests must intercept BOTH the provider
+    // construction (to suppress the network call) and the client construction (to return a mock).
+    @Test
+    public void testCreateCache_RedisCluster() {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+                MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000)")) {
+                assertNotNull(cache);
+                assertTrue(cache instanceof DistributedCache);
+            }
+        }
+    }
+
+    @Test
+    public void testCreateCache_RedisClusterWithPrefix() {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+                MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,prefix:)")) {
+                assertNotNull(cache);
+            }
+        }
+    }
+
+    @Test
+    public void testCreateCache_RedisClusterWithTimeout() {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+                MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,prefix:,5000)")) {
+                assertNotNull(cache);
+            }
+        }
+    }
+
+    @Test
+    public void testCreateCache_RedisCluster_EdgeCase_NonPositiveTimeout() {
+        // Validation throws before the cluster client is built; the provider mock is a safety net.
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class)) {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,0)"));
+        }
+    }
+
+    @Test
+    public void testCreateCache_RedisCluster_EdgeCase_NonNumericTimeout() {
+        // "Invalid timeout parameter" is thrown by the RedisCluster branch (not the class-loading
+        // fallback), which proves the keyword routed to JRedisCluster.
+        final IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,xyz)"));
+        assertTrue(e.getMessage().contains("Invalid timeout parameter"));
+    }
+
+    @Test
+    public void testCreateCache_RedisCluster_EdgeCase_TooManyParameters() {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class)) {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("RedisCluster(a,b,1000,extra)"));
         }
     }
 

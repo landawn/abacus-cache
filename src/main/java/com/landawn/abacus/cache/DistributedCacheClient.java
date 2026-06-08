@@ -63,6 +63,11 @@ public interface DistributedCacheClient<T> {
     String REDIS = "Redis";
 
     /**
+     * Constant identifier for Redis Cluster client type.
+     */
+    String REDIS_CLUSTER = "RedisCluster";
+
+    /**
      * Returns the server URL(s) this client is connected to.
      * For multiple servers, the format is implementation-specific
      * (e.g., comma-separated for some implementations).
