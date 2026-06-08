@@ -430,8 +430,7 @@ public class OffHeapCache25Test {
     public void test_boundary_sizes_roundtrip_exact() {
         final OffHeapCache25<String, byte[]> c = OffHeapCache25.<String, byte[]> builder().capacityInMB(64).evictDelay(0).build();
         try {
-            final int[] sizes = { 0, 1, 63, 64, 65, 127, 128, 129, 8191, 8192, 8193, 16383, 16384, 16385, 24583, 1048575, 1048576,
-                    1048577, 2097152, 3158073 };
+            final int[] sizes = { 0, 1, 63, 64, 65, 127, 128, 129, 8191, 8192, 8193, 16383, 16384, 16385, 24583, 1048575, 1048576, 1048577, 2097152, 3158073 };
             for (final int size : sizes) {
                 final byte[] v = new byte[size];
                 for (int i = 0; i < size; i++) {

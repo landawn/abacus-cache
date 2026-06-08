@@ -11,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -19,8 +18,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -36,35 +35,46 @@ import com.landawn.abacus.cache.JRedis;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 
-import redis.clients.jedis.BinaryShardedJedis;
-import redis.clients.jedis.Jedis;
+import redis.clients.jedis.RedisClient;
+import redis.clients.jedis.params.SetParams;
 
 /**
  * Mock-based unit tests for {@link JRedis}.
  *
  * <p>The previous version of this test required a real Redis server and was skipped
  * whenever the server was unreachable, which meant it never ran in CI. This rewrite
- * intercepts the construction of {@link BinaryShardedJedis} (which would otherwise
- * open a real socket) and substitutes a Mockito mock, so the JRedis dispatch logic
- * (key encoding, value encoding/decoding, TTL handling, null reply handling) can be
- * exercised without network I/O.
+ * intercepts the construction of {@link RedisClient} (which would otherwise open a real
+ * socket on first use) and substitutes a Mockito mock, so the JRedis dispatch logic (key
+ * encoding, value encoding/decoding, TTL handling, shard routing) can be exercised without
+ * any network I/O.
+ *
+ * <p>After the Jedis 3.x → 7.x migration, {@code JRedis} no longer wraps the removed
+ * {@code BinaryShardedJedis}; instead it holds one {@link RedisClient} per shard and invokes
+ * commands directly on it ({@code RedisClient} pools connections internally). Each constructed
+ * client is captured (in construction order) in {@link #shards} so individual shards can be
+ * stubbed and verified.
  */
 @Tag("2025")
 public class JRedisTest {
 
     private static final KryoParser KRYO = ParserFactory.createKryoParser();
 
-    private MockedConstruction<BinaryShardedJedis> ctorIntercept;
+    private MockedConstruction<RedisClient> ctorIntercept;
+    /** One mocked RedisClient per constructed shard, in construction order. */
+    private List<RedisClient> shards;
     private JRedis<Object> cache;
-    private BinaryShardedJedis mockJedis;
+    /** The single shard's client for the default single-node {@link #cache}. */
+    private RedisClient mockJedis;
 
     @BeforeEach
-    public void setUp() throws Exception {
-        // mockConstruction intercepts `new BinaryShardedJedis(...)` and returns a mock
-        // instead of opening a real socket connection.
-        ctorIntercept = Mockito.mockConstruction(BinaryShardedJedis.class);
+    public void setUp() {
+        shards = new ArrayList<>();
+        // mockConstruction intercepts `new RedisClient(...)` so no real socket is ever opened.
+        // Commands are invoked directly on the (mocked) pooled client.
+        ctorIntercept = Mockito.mockConstruction(RedisClient.class, (poolMock, context) -> shards.add(poolMock));
         cache = new JRedis<>("localhost:6379");
-        mockJedis = (BinaryShardedJedis) readField(cache, "jedis");
+        assertEquals(1, shards.size(), "single-node URL should build exactly one shard");
+        mockJedis = shards.get(0);
         assertNotNull(mockJedis, "mocked jedis client should have been injected");
     }
 
@@ -109,8 +119,8 @@ public class JRedisTest {
     public void test_getBulk_varargs_returns_only_found_keys() {
         Account a1 = createAccount();
         when(mockJedis.get(utf8("user:1"))).thenReturn(KRYO.encode(a1));
-        when(mockJedis.get(utf8("user:2"))).thenReturn(null);          // missing key
-        when(mockJedis.get(utf8("user:3"))).thenReturn(new byte[0]);    // empty -> decoded as null
+        when(mockJedis.get(utf8("user:2"))).thenReturn(null); // missing key
+        when(mockJedis.get(utf8("user:3"))).thenReturn(new byte[0]); // empty -> decoded as null
 
         Map<String, Object> result = cache.getBulk("user:1", "user:2", "user:3");
 
@@ -154,43 +164,43 @@ public class JRedisTest {
     }
 
     @Test
-    public void test_set_with_ttl_uses_setex() {
-        when(mockJedis.setex(any(byte[].class), anyInt(), any(byte[].class))).thenReturn("OK");
+    public void test_set_with_ttl_uses_set_with_expiry() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
         Account account = createAccount();
         boolean ok = cache.set("user:1", account, 60_000); // 60 seconds
 
         assertTrue(ok);
-        // 60_000 ms should be 60 seconds
-        verify(mockJedis).setex(eq(utf8("user:1")), eq(60), any(byte[].class));
+        // 60_000 ms should be SET ... EX 60 (SetParams.equals compares the param content)
+        verify(mockJedis).set(eq(utf8("user:1")), any(byte[].class), eq(SetParams.setParams().ex(60L)));
         verify(mockJedis, never()).set(any(byte[].class), any(byte[].class));
     }
 
     @Test
-    public void test_set_without_ttl_uses_set() {
+    public void test_set_without_ttl_uses_plain_set() {
         when(mockJedis.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
 
         boolean ok = cache.set("forever", "value", 0);
 
         assertTrue(ok);
         verify(mockJedis).set(eq(utf8("forever")), any(byte[].class));
-        verify(mockJedis, never()).setex(any(byte[].class), anyInt(), any(byte[].class));
+        verify(mockJedis, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
     }
 
     @Test
     public void test_set_returns_false_when_server_does_not_say_OK() {
-        when(mockJedis.setex(any(byte[].class), anyInt(), any(byte[].class))).thenReturn("NOT_OK");
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("NOT_OK");
 
         assertFalse(cache.set("k", "v", 60_000));
     }
 
     @Test
     public void test_set_null_value_encodes_as_empty_byte_array() {
-        when(mockJedis.setex(any(byte[].class), anyInt(), any(byte[].class))).thenReturn("OK");
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
         cache.set("k", null, 60_000);
 
-        verify(mockJedis).setex(eq(utf8("k")), anyInt(), eq(new byte[0]));
+        verify(mockJedis).set(eq(utf8("k")), eq(new byte[0]), any(SetParams.class));
     }
 
     @Test
@@ -216,25 +226,11 @@ public class JRedisTest {
     }
 
     @Test
-    public void test_delete_returns_false_on_null_reply() {
-        when(mockJedis.del(any(byte[].class))).thenReturn(null);
-
-        assertFalse(cache.delete("k"));
-    }
-
-    @Test
     public void test_delete_returns_true_when_multiple_removed() {
         // A single-key DEL would report 1; just verify any positive count maps to true.
         when(mockJedis.del(any(byte[].class))).thenReturn(2L);
 
         assertTrue(cache.delete("k"));
-    }
-
-    @Test
-    public void test_incr_returns_zero_for_null_reply() {
-        when(mockJedis.incr(any(byte[].class))).thenReturn(null);
-
-        assertEquals(0L, cache.incr("counter"));
     }
 
     @Test
@@ -259,13 +255,6 @@ public class JRedisTest {
     }
 
     @Test
-    public void test_decr_returns_zero_for_null_reply() {
-        when(mockJedis.decr(any(byte[].class))).thenReturn(null);
-
-        assertEquals(0L, cache.decr("counter"));
-    }
-
-    @Test
     public void test_decr_returns_negative_when_redis_does() {
         when(mockJedis.decr(utf8("counter"))).thenReturn(-1L);
 
@@ -287,47 +276,71 @@ public class JRedisTest {
     }
 
     @Test
-    public void test_flushAll_iterates_all_shards() {
-        Jedis shard1 = mock(Jedis.class);
-        Jedis shard2 = mock(Jedis.class);
-        when(mockJedis.getAllShards()).thenReturn(Arrays.asList(shard1, shard2));
+    public void test_flushAll_single_shard_calls_flushAll() {
+        when(mockJedis.flushAll()).thenReturn("OK");
 
         cache.flushAll();
 
-        verify(shard1).flushAll();
-        verify(shard2).flushAll();
+        verify(mockJedis).flushAll();
+    }
+
+    @Test
+    public void test_flushAll_iterates_all_shards() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        assertEquals(2, shards.size());
+        when(shards.get(0).flushAll()).thenReturn("OK");
+        when(shards.get(1).flushAll()).thenReturn("OK");
+
+        sharded.flushAll();
+
+        verify(shards.get(0)).flushAll();
+        verify(shards.get(1)).flushAll();
     }
 
     @Test
     public void test_flushAll_continues_when_one_shard_throws() {
-        Jedis shard1 = mock(Jedis.class);
-        Jedis shard2 = mock(Jedis.class);
-        when(mockJedis.getAllShards()).thenReturn(Arrays.asList(shard1, shard2));
-        when(shard1.flushAll()).thenThrow(new RuntimeException("shard 1 down"));
-        when(shard2.flushAll()).thenReturn("OK");
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        when(shards.get(0).flushAll()).thenThrow(new RuntimeException("shard 1 down"));
+        when(shards.get(1).flushAll()).thenReturn("OK");
 
-        RuntimeException thrown = assertThrows(RuntimeException.class, () -> cache.flushAll());
+        RuntimeException thrown = assertThrows(RuntimeException.class, sharded::flushAll);
         assertEquals("shard 1 down", thrown.getMessage());
-        // shard2 must still have been called even though shard1 threw
-        verify(shard2).flushAll();
+        // shard2 must still have been flushed even though shard1 threw
+        verify(shards.get(1)).flushAll();
+    }
+
+    // ---- shard routing ----
+
+    @Test
+    public void test_routing_same_key_is_consistent_across_calls() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        when(shards.get(0).get(any(byte[].class))).thenReturn(null);
+        when(shards.get(1).get(any(byte[].class))).thenReturn(null);
+
+        sharded.get("same-key");
+        sharded.get("same-key");
+
+        int hits0 = invocationCount(shards.get(0), "get");
+        int hits1 = invocationCount(shards.get(1), "get");
+
+        // Both reads of the same key must land on exactly one shard (deterministic routing).
+        assertEquals(2, hits0 + hits1);
+        assertTrue(hits0 == 0 || hits1 == 0, "the same key must always route to the same shard");
     }
 
     @Test
-    public void test_flushAll_tolerates_null_shards_collection() {
-        when(mockJedis.getAllShards()).thenReturn(null);
+    public void test_routing_distributes_keys_across_shards() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        when(shards.get(0).get(any(byte[].class))).thenReturn(null);
+        when(shards.get(1).get(any(byte[].class))).thenReturn(null);
 
-        cache.flushAll();
-        // no exception
-    }
+        for (int i = 0; i < 100; i++) {
+            sharded.get("key-" + i);
+        }
 
-    @Test
-    public void test_flushAll_tolerates_null_shard_element() {
-        Jedis shard = mock(Jedis.class);
-        when(mockJedis.getAllShards()).thenReturn(Arrays.asList(null, shard));
-
-        cache.flushAll();
-
-        verify(shard).flushAll();
+        // CRC-32 over 100 distinct keys must exercise both shards.
+        assertTrue(invocationCount(shards.get(0), "get") > 0);
+        assertTrue(invocationCount(shards.get(1), "get") > 0);
     }
 
     @Test
@@ -335,8 +348,8 @@ public class JRedisTest {
         cache.disconnect();
         cache.disconnect(); // safe to call again
 
-        // The underlying client should only be disconnected once.
-        verify(mockJedis, times(1)).disconnect();
+        // The underlying shard client should only be closed once.
+        verify(mockJedis, times(1)).close();
     }
 
     @Test
@@ -350,13 +363,13 @@ public class JRedisTest {
     public void test_set_round_trip_uses_kryo_encoding() {
         // Confirm the byte payload SET sends is what Kryo would produce, so callers reading
         // the same key from a real Redis would get an equal Account back.
-        when(mockJedis.setex(any(byte[].class), anyInt(), any(byte[].class))).thenReturn("OK");
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
         Account account = createAccount();
         cache.set("k", account, 30_000);
 
         org.mockito.ArgumentCaptor<byte[]> payload = org.mockito.ArgumentCaptor.forClass(byte[].class);
-        verify(mockJedis).setex(eq(utf8("k")), eq(30), payload.capture());
+        verify(mockJedis).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().ex(30L)));
 
         Object roundTripped = KRYO.decode(payload.getValue());
         assertTrue(roundTripped instanceof Account);
@@ -364,10 +377,19 @@ public class JRedisTest {
         assertEquals(account.getLastName(), ((Account) roundTripped).getLastName());
     }
 
-    private static Object readField(Object target, String fieldName) throws Exception {
-        Field f = target.getClass().getDeclaredField(fieldName);
-        f.setAccessible(true);
-        return f.get(target);
+    /**
+     * Builds a multi-node {@link JRedis} and resets {@link #shards} first so that
+     * {@code shards.get(0)} / {@code shards.get(1)} line up with the new cache's shard order.
+     */
+    private JRedis<Object> newShardedCache(final String serverUrl) {
+        shards.clear();
+        final JRedis<Object> sharded = new JRedis<>(serverUrl);
+        assertEquals(serverUrl.split(",").length, shards.size());
+        return sharded;
+    }
+
+    private static int invocationCount(final Object mock, final String methodName) {
+        return (int) Mockito.mockingDetails(mock).getInvocations().stream().filter(i -> i.getMethod().getName().equals(methodName)).count();
     }
 
     private static byte[] utf8(String s) {

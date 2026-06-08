@@ -21,6 +21,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.CRC32;
 
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
@@ -30,44 +31,52 @@ import com.landawn.abacus.util.AddrUtil;
 import com.landawn.abacus.util.Charsets;
 import com.landawn.abacus.util.N;
 
-import redis.clients.jedis.BinaryShardedJedis;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisShardInfo;
+import redis.clients.jedis.DefaultJedisClientConfig;
+import redis.clients.jedis.HostAndPort;
+import redis.clients.jedis.JedisClientConfig;
+import redis.clients.jedis.RedisClient;
+import redis.clients.jedis.params.SetParams;
 
 /**
- * A Redis-based distributed cache client implementation using Jedis with sharding support.
- * This class provides a distributed caching solution that connects to multiple Redis instances
- * for horizontal scaling and data distribution. Objects are serialized using Kryo for efficient
- * storage and retrieval.
+ * A Redis-based distributed cache client implementation using Jedis with client-side sharding.
+ * This class provides a distributed caching solution that connects to one or more standalone Redis
+ * instances for horizontal scaling and data distribution. Objects are serialized using Kryo for
+ * efficient storage and retrieval.
  *
  * <p><b>Key Features:</b>
  * <ul>
- *   <li>Automatic sharding across multiple Redis instances for horizontal scaling</li>
+ *   <li>Client-side sharding across multiple standalone Redis instances for horizontal scaling</li>
+ *   <li>A thread-safe, internally pooled connection ({@link RedisClient}) per shard</li>
  *   <li>Efficient object serialization using Kryo parser</li>
  *   <li>Atomic operations for counters (incr/decr)</li>
  *   <li>TTL (time-to-live) support for automatic expiration</li>
  * </ul>
  *
+ * <p><b>Sharding:</b> Each configured {@code host:port} becomes an independent shard backed by its
+ * own {@link RedisClient} client. A key is routed to a shard by hashing its UTF-8 bytes with CRC-32
+ * modulo the number of shards, so a given key always maps to the same shard within a fixed topology.
+ * The mapping is purely client-side: the standalone Redis servers do not coordinate with each other.
+ * Changing the number of servers changes the mapping for many keys — acceptable for a cache, where a
+ * miss simply triggers a reload. With a single server there is exactly one shard and no hashing is
+ * performed.
+ *
  * <p><b>Redis-Specific Behaviors:</b>
  * <ul>
- *   <li>Keys are automatically distributed across shards using consistent hashing</li>
  *   <li>Increment/decrement operations auto-initialize non-existent keys to 0</li>
  *   <li>Decrement operations can result in negative values (unlike Memcached)</li>
  *   <li>All string keys are encoded using UTF-8</li>
  * </ul>
  *
- * <p><b>Thread Safety (IMPORTANT):</b> This class wraps a single {@link BinaryShardedJedis} instance,
- * and each underlying {@link Jedis} shard is itself <b>not</b> thread-safe. Concurrent calls into the
- * same {@code JRedis} instance can interleave on the wire and corrupt protocol framing, returning
- * wrong values or causing "unexpected reply" / "ERR Protocol error" disconnects. There is no
- * connection pooling here. Callers must either:
- * <ul>
- *   <li>serialize all access externally (e.g., a single dedicated thread),</li>
- *   <li>or wrap each method call in their own synchronization, or</li>
- *   <li>or replace this implementation with one backed by a {@code ShardedJedisPool}.</li>
- * </ul>
- * The atomicity advertised for counter operations is the <em>server-side</em> atomicity of Redis
- * commands, not concurrency safety of this client wrapper.
+ * <p><b>Thread Safety:</b> This client is thread-safe. Each shard is backed by a {@link RedisClient}
+ * client, which maintains its own internal connection pool and transparently borrows and returns a
+ * connection for each command, so the client may be freely shared across threads. The atomicity
+ * advertised for counter operations is the server-side atomicity of the underlying Redis commands;
+ * combined with pooling, concurrent counter updates from many threads are safe and lossless.
+ *
+ * <p><b>Connection pooling:</b> Each shard's {@link RedisClient} uses the default connection pool
+ * configuration (Apache Commons Pool). The pool is created lazily — constructing a {@code JRedis}
+ * does not open a socket; connections are established on first use. If a Redis server is unreachable,
+ * the failure surfaces on the first operation routed to that shard, not at construction time.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
@@ -88,28 +97,28 @@ import redis.clients.jedis.JedisShardInfo;
  *
  * @param <T> the type of objects to be cached
  * @see AbstractDistributedCacheClient
- * @see BinaryShardedJedis
+ * @see RedisClient
  */
-@SuppressWarnings("deprecation")
 public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     private static final Logger logger = LoggerFactory.getLogger(JRedis.class);
 
     private static final KryoParser kryoParser = ParserFactory.createKryoParser();
 
-    private final BinaryShardedJedis jedis;
+    /** One internally-pooled client per shard, in the order the addresses were supplied. Never empty. */
+    private final List<RedisClient> pools;
 
     private volatile boolean isShutdown = false;
 
     /**
      * Creates a new JRedis instance with the default timeout.
-     * The server URL should contain comma-separated host:port pairs for multiple Redis instances.
-     * Data is automatically sharded across all specified Redis instances using consistent hashing
-     * for horizontal scaling and improved performance.
+     * The server URL should contain comma-separated host:port pairs for one or more Redis instances.
+     * Data is distributed across all specified Redis instances using client-side sharding for
+     * horizontal scaling.
      *
-     * <p>Each Redis instance becomes a shard in the distributed cache. When storing or retrieving
-     * data, the appropriate shard is determined by hashing the key. This ensures even distribution
-     * of data across all servers.
+     * <p>Each Redis instance becomes a shard backed by its own connection pool. When storing or
+     * retrieving data, the owning shard is determined by hashing the key (see the class
+     * documentation), ensuring a stable distribution of keys across all servers.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -147,9 +156,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
 
     /**
      * Creates a new JRedis instance with a specified timeout.
-     * The server URL should contain comma-separated host:port pairs for multiple Redis instances.
-     * The timeout applies to both connection establishment and socket read/write operations.
-     * Data is automatically sharded across all specified Redis instances using consistent hashing.
+     * The server URL should contain comma-separated host:port pairs for one or more Redis instances.
+     * The timeout applies to both connection establishment and socket read/write operations on every
+     * shard. Data is distributed across all specified Redis instances using client-side sharding.
      *
      * <p>The timeout value affects network operations with Redis servers. If a Redis operation
      * takes longer than the specified timeout, a timeout exception will be thrown. Choose an
@@ -204,30 +213,58 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
             throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
         }
 
-        final List<JedisShardInfo> jedisClusterNodes = new ArrayList<>();
+        final int timeoutMillis = (int) timeout;
+
+        final JedisClientConfig clientConfig = DefaultJedisClientConfig.builder()
+                .connectionTimeoutMillis(timeoutMillis)
+                .socketTimeoutMillis(timeoutMillis)
+                .build();
+
+        final List<RedisClient> shardPools = new ArrayList<>(addressList.size());
 
         for (final InetSocketAddress addr : addressList) {
             // Use getHostString() (returns the literal host or IP) instead of getHostName(), which
             // performs a reverse DNS lookup. Reverse DNS can block startup, fail if no PTR record
             // exists, and produce shard hash keys that differ between processes whose resolvers
             // disagree — silently breaking sharding consistency.
-            jedisClusterNodes.add(new JedisShardInfo(addr.getHostString(), addr.getPort(), (int) timeout));
+            shardPools.add(RedisClient.builder().hostAndPort(new HostAndPort(addr.getHostString(), addr.getPort())).clientConfig(clientConfig).build());
         }
 
-        jedis = new BinaryShardedJedis(jedisClusterNodes);
+        pools = shardPools;
+    }
+
+    /**
+     * Selects the pooled client for the shard that owns the given key.
+     * With a single shard this is always the sole client (no hashing). With multiple shards the key's
+     * UTF-8 bytes are hashed with CRC-32 modulo the shard count, giving a deterministic, process-stable
+     * mapping (CRC-32 does not depend on JVM identity hashing or locale).
+     *
+     * @param keyBytes the UTF-8 encoded key bytes; must not be {@code null}
+     * @return the {@link RedisClient} client for the shard that owns the key, never {@code null}
+     */
+    private RedisClient poolFor(final byte[] keyBytes) {
+        final int shardCount = pools.size();
+
+        if (shardCount == 1) {
+            return pools.get(0);
+        }
+
+        final CRC32 crc = new CRC32();
+        crc.update(keyBytes);
+
+        return pools.get(Math.floorMod(crc.getValue(), shardCount));
     }
 
     /**
      * Retrieves a value from the cache by its key.
      * The value is deserialized from its binary representation using Kryo parser.
-     * The appropriate Redis shard is automatically determined based on the key's hash.
+     * The owning Redis shard is automatically determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis GET command. If the key
      * does not exist or has expired, {@code null} is returned. The operation is O(1) time complexity.
      *
-     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
-     * note. Concurrent invocations against the same {@code JRedis} instance can corrupt protocol
-     * framing on the underlying {@link Jedis} shards. Serialize access externally if needed.
+     * <p><b>Thread Safety:</b> Thread-safe — the command is dispatched through the shard's internal
+     * connection pool.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -268,20 +305,21 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public T get(final String key) {
-        return decode(jedis.get(getKeyBytes(key)));
+        final byte[] keyBytes = getKeyBytes(key);
+
+        return decode(poolFor(keyBytes).get(keyBytes));
     }
 
     /**
      * Retrieves multiple values from the cache, returning a map of only the keys that were found.
      * Keys that are absent, expired, or decode to {@code null} are omitted from the result.
      *
-     * <p><b>Redis-specific behavior:</b> Because this client shards keys across multiple Redis
-     * instances using consistent hashing, a single cross-shard {@code MGET} is not possible.
-     * This method therefore issues one {@code GET} per key (each routed to its owning shard) and
-     * assembles the results. The keys are validated up-front, before any network call is made.
+     * <p><b>Redis-specific behavior:</b> Because this client shards keys across multiple standalone
+     * Redis instances, a single cross-shard {@code MGET} is not possible. This method therefore issues
+     * one {@code GET} per key (each routed to its owning shard) and assembles the results. The keys are
+     * validated up-front, before any network call is made.
      *
-     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread
-     * Safety note. Serialize access externally if needed.
+     * <p><b>Thread Safety:</b> Thread-safe — see the class-level Thread Safety note.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -374,7 +412,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
         final Map<String, T> result = new HashMap<>(Math.max(16, keys.size() * 2));
 
         for (final String key : keys) {
-            final T value = decode(jedis.get(getKeyBytes(key)));
+            final byte[] keyBytes = getKeyBytes(key);
+
+            final T value = decode(poolFor(keyBytes).get(keyBytes));
 
             if (value != null) {
                 result.put(key, value);
@@ -387,44 +427,41 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     /**
      * Stores a key-value pair in the cache with a specified time-to-live.
      * The value is serialized using Kryo parser before storage. If the key already exists,
-     * its value and TTL will be replaced. The appropriate Redis shard is automatically
+     * its value and TTL will be replaced. The owning Redis shard is automatically
      * determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> When {@code liveTime} is positive, this operation uses the
-     * Redis SETEX command which atomically sets both the value and expiration time. When
-     * {@code liveTime} is 0 or negative, the Redis SET command is used without expiration, meaning
-     * the key will persist until explicitly deleted. The operation is O(1) time complexity. If the
-     * key already exists, the previous value and TTL are completely replaced.
+     * Redis SET command with the {@code EX} option, which atomically sets both the value and
+     * expiration time. When {@code liveTime} is 0 or negative, a plain SET command is used without
+     * expiration, meaning the key will persist until explicitly deleted. The operation is O(1) time
+     * complexity. If the key already exists, the previous value and TTL are completely replaced.
      *
-     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
-     * note. The Redis SET/SETEX commands themselves are atomic on the server side, and when multiple
-     * <em>separate</em> clients set the same key concurrently the last write wins. However, calls into
-     * the same {@code JRedis} instance from multiple threads can corrupt protocol framing on the
-     * underlying {@link Jedis} shards; serialize access externally if needed.
+     * <p><b>Thread Safety:</b> Thread-safe. The Redis SET command is atomic on the server side, and
+     * when multiple clients set the same key concurrently the last write wins.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Cache with 1 hour TTL (3600000 ms -> SETEX 3600 seconds)
+     * // Cache with 1 hour TTL (3600000 ms -> SET ... EX 3600)
      * User user = new User("John", "john@example.com");
      * boolean success = cache.set("user:123", user, 3600000);       // returns true when Redis replies "OK"
      * if (success) {
      *     System.out.println("User cached successfully");          // reached only when set returned true
      * }
      *
-     * // Cache session data with 30 minute TTL (1800000 ms -> SETEX 1800 seconds)
+     * // Cache session data with 30 minute TTL (1800000 ms -> SET ... EX 1800)
      * Session session = new Session("abc123", user);
      * cache.set("session:" + session.getId(), session, 1800000);   // returns true on success
      *
      * // Edge: sub-second / fractional TTL rounds UP to whole seconds
-     * cache.set("k1", user, 1);                                     // 1 ms -> SETEX 1 second
-     * cache.set("k2", user, 1500);                                  // 1500 ms -> SETEX 2 seconds (rounds up)
+     * cache.set("k1", user, 1);                                     // 1 ms -> EX 1 second
+     * cache.set("k2", user, 1500);                                  // 1500 ms -> EX 2 seconds (rounds up)
      *
-     * // Edge: liveTime <= 0 means NO expiration -> plain SET (not SETEX 0)
+     * // Edge: liveTime <= 0 means NO expiration -> plain SET (no EX)
      * cache.set("forever", user, 0);                                // uses SET; key never auto-expires
      * cache.set("forever2", user, -1);                              // also SET; negative TTL treated as 0
      *
      * // Edge: a null value is allowed; it is stored as an empty byte array
-     * cache.set("empty:key", (User) null, 3600000);                // SETEX with an empty byte[] payload; returns true
+     * cache.set("empty:key", (User) null, 3600000);                // SET ... EX with an empty byte[] payload; returns true
      * User back = cache.get("empty:key");                          // returns null (empty bytes decode to null)
      *
      * // Edge: if Redis does not reply "OK", set returns false
@@ -436,7 +473,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param value the value to cache. May be {@code null} (stored as empty byte array).
-     * @param liveTime the time-to-live in milliseconds. Positive values set expiration via SETEX (converted to seconds). 0 or negative means no expiration (uses SET without TTL).
+     * @param liveTime the time-to-live in milliseconds. Positive values set expiration via SET ... EX (converted to seconds). 0 or negative means no expiration (plain SET).
      * @return {@code true} if the operation was successful (Redis responds with "OK"), {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or serialization error occurs
@@ -447,29 +484,28 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public boolean set(final String key, final T value, final long liveTime) {
         final byte[] keyBytes = getKeyBytes(key);
         final byte[] valueBytes = encode(value);
+        final RedisClient jedis = poolFor(keyBytes);
 
         if (liveTime <= 0) {
-            // liveTime <= 0 means no expiration, use SET instead of SETEX
+            // liveTime <= 0 means no expiration, use a plain SET.
             return "OK".equals(jedis.set(keyBytes, valueBytes));
         }
 
-        return "OK".equals(jedis.setex(keyBytes, toSeconds(liveTime), valueBytes));
+        // SET ... EX atomically sets the value and an expiration in seconds (replaces deprecated SETEX).
+        return "OK".equals(jedis.set(keyBytes, valueBytes, SetParams.setParams().ex(toSeconds(liveTime))));
     }
 
     /**
      * Removes the mapping for a key from the cache if it is present.
-     * The appropriate Redis shard is automatically determined based on the key's hash.
+     * The owning Redis shard is automatically determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> This method uses the Redis DEL command to remove the key.
      * The operation is O(1) time complexity. The return value reflects Redis's DEL semantics (which
      * returns the number of keys removed): {@code true} when the key existed and was removed,
      * {@code false} when the key did not exist at the time the command was issued.
      *
-     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
-     * note. The Redis DEL command itself is idempotent and atomic on the server side, so when multiple
-     * <em>separate</em> clients delete the same key concurrently all will succeed. Concurrent calls into
-     * the same {@code JRedis} instance from multiple threads, however, can corrupt protocol framing on
-     * the underlying {@link Jedis} shards; serialize access externally if needed.
+     * <p><b>Thread Safety:</b> Thread-safe. The Redis DEL command is idempotent and atomic on the
+     * server side, so when multiple clients delete the same key concurrently all will succeed.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -504,14 +540,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public boolean delete(final String key) {
-        final Long removed = jedis.del(getKeyBytes(key));
+        final byte[] keyBytes = getKeyBytes(key);
 
-        return removed != null && removed > 0L;
+        return poolFor(keyBytes).del(keyBytes) > 0L;
     }
 
     /**
      * Atomically increments a numeric value by 1.
-     * The appropriate Redis shard is automatically determined based on the key's hash.
+     * The owning Redis shard is automatically determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis INCR command. If the key doesn't exist,
      * it will be automatically created with value 1 (Redis initializes to 0, then increments by 1).
@@ -522,12 +558,10 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
      * will fail. Increment operations are meant for counters, not for general objects.
      *
-     * <p><b>Thread Safety:</b> The Redis INCR command is atomic on the server side, so concurrent
-     * increments issued by <em>separate</em> client instances are guaranteed to be serialized correctly
-     * by Redis and no increments are lost — making it suitable for distributed counters and rate
-     * limiting. <b>However, this wrapper itself is not thread-safe</b> — see the class-level Thread
-     * Safety note. Concurrent calls into the same {@code JRedis} instance can corrupt protocol framing
-     * on the underlying {@link Jedis} shards.
+     * <p><b>Thread Safety:</b> Thread-safe. The Redis INCR command is atomic on the server side, so
+     * concurrent increments — whether from separate client instances or from multiple threads sharing
+     * this pooled client — are serialized correctly by Redis and no increments are lost, making it
+     * suitable for distributed counters and rate limiting.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -545,9 +579,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Distributed ID generator (caution: not persistent across Redis restarts)
      * long uniqueId = cache.incr("id:generator");                  // a monotonically increasing value
      *
-     * // Edge: a nil reply from the shard is coalesced to 0 (no NullPointerException)
-     * long safe = cache.incr("transient:counter");                 // returns 0 if the shard replied nil
-     *
      * // Negative: a null key is rejected
      * cache.incr(null);                                           // throws IllegalArgumentException
      *
@@ -557,9 +588,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
-     * @return the value after increment (will be 1 if the key did not exist before). Returns {@code 0}
-     *         if the underlying client returns a {@code null}/nil reply, rather than
-     *         throwing a {@link NullPointerException}.
+     * @return the value after increment (will be 1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #incr(String, int)
@@ -568,12 +597,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long incr(final String key) {
-        return nullToZero(jedis.incr(getKeyBytes(key)));
+        final byte[] keyBytes = getKeyBytes(key);
+
+        return poolFor(keyBytes).incr(keyBytes);
     }
 
     /**
      * Atomically increments a numeric value by a specified amount.
-     * The appropriate Redis shard is automatically determined based on the key's hash.
+     * The owning Redis shard is automatically determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis INCRBY command. If the key doesn't exist,
      * it will be automatically created with the delta value (Redis initializes to 0, then increments by delta).
@@ -584,12 +615,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * was previously set with a non-numeric value (using {@link #set(String, Object, long)}), this operation
      * will fail. Increment operations are meant for counters, not for general objects.
      *
-     * <p><b>Thread Safety:</b> The Redis INCRBY command is atomic on the server side, so concurrent
-     * increments issued by <em>separate</em> client instances are guaranteed to be serialized correctly
-     * by Redis and no increments are lost — making it suitable for distributed counters and batch
-     * operations. <b>However, this wrapper itself is not thread-safe</b> — see the class-level Thread
-     * Safety note. Concurrent calls into the same {@code JRedis} instance can corrupt protocol framing
-     * on the underlying {@link Jedis} shards.
+     * <p><b>Thread Safety:</b> Thread-safe. The Redis INCRBY command is atomic on the server side, so
+     * concurrent increments — whether from separate client instances or from multiple threads sharing
+     * this pooled client — are serialized correctly by Redis and no increments are lost.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -606,9 +634,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Edge: a delta of 0 is allowed and returns the current value unchanged
      * long current = cache.incr("user:points:" + userId, 0);      // returns the current counter value
      *
-     * // Edge: a nil reply from the shard is coalesced to 0 (no NullPointerException)
-     * long safe = cache.incr("transient:counter", 5);             // returns 0 if the shard replied nil
-     *
      * // Negative: a negative delta is rejected by this wrapper (for cross-backend portability)
      * cache.incr("counter", -1);                                 // throws IllegalArgumentException
      *
@@ -621,9 +646,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *              supports negative deltas, this implementation rejects them with an
      *              {@link IllegalArgumentException} for portability across cache backends (e.g.
      *              SpyMemcached, which also rejects negative deltas).
-     * @return the value after increment (will be equal to delta if the key did not exist before).
-     *         Returns {@code 0} if the underlying client returns a {@code null}/nil reply, rather than throwing
-     *         a {@link NullPointerException}.
+     * @return the value after increment (will be equal to delta if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #incr(String)
@@ -634,12 +657,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public long incr(final String key, final int delta) {
         N.checkArgNotNegative(delta, "delta");
 
-        return nullToZero(jedis.incrBy(getKeyBytes(key), delta));
+        final byte[] keyBytes = getKeyBytes(key);
+
+        return poolFor(keyBytes).incrBy(keyBytes, delta);
     }
 
     /**
      * Atomically decrements a numeric value by 1.
-     * The appropriate Redis shard is automatically determined based on the key's hash.
+     * The owning Redis shard is automatically determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis DECR command. If the key doesn't exist,
      * it will be automatically created with value -1 (Redis initializes to 0, then decrements by 1).
@@ -651,12 +676,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * will fail. Decrement operations are meant for counters, not for general objects. Unlike Memcached,
      * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.
      *
-     * <p><b>Thread Safety:</b> The Redis DECR command is atomic on the server side, so concurrent
-     * decrements issued by <em>separate</em> client instances are guaranteed to be serialized correctly
-     * by Redis and no decrements are lost — making it suitable for resource quotas and inventory
-     * management. <b>However, this wrapper itself is not thread-safe</b> — see the class-level Thread
-     * Safety note. Concurrent calls into the same {@code JRedis} instance can corrupt protocol framing
-     * on the underlying {@link Jedis} shards.
+     * <p><b>Thread Safety:</b> Thread-safe. The Redis DECR command is atomic on the server side, so
+     * concurrent decrements — whether from separate client instances or from multiple threads sharing
+     * this pooled client — are serialized correctly by Redis and no decrements are lost.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -677,9 +699,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Edge: a fresh key auto-initializes to 0 then -1 (unlike Memcached, Redis allows negatives)
      * long first = cache.decr("brand:new:counter");               // returns -1 the first time
      *
-     * // Edge: a nil reply from the shard is coalesced to 0 (no NullPointerException)
-     * long safe = cache.decr("transient:counter");                // returns 0 if the shard replied nil
-     *
      * // Negative: a null key is rejected
      * cache.decr(null);                                          // throws IllegalArgumentException
      *
@@ -689,9 +708,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
-     * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist
-     *         before). Returns {@code 0} if the underlying client returns a {@code null}/nil reply, rather than
-     *         throwing a {@link NullPointerException}.
+     * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #decr(String, int)
@@ -700,12 +717,14 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public long decr(final String key) {
-        return nullToZero(jedis.decr(getKeyBytes(key)));
+        final byte[] keyBytes = getKeyBytes(key);
+
+        return poolFor(keyBytes).decr(keyBytes);
     }
 
     /**
      * Atomically decrements a numeric value by a specified amount.
-     * The appropriate Redis shard is automatically determined based on the key's hash.
+     * The owning Redis shard is automatically determined based on the key's hash.
      *
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis DECRBY command. If the key doesn't exist,
      * it will be automatically created with the negative delta value (Redis initializes to 0, then decrements by delta).
@@ -717,12 +736,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * will fail. Decrement operations are meant for counters, not for general objects. Unlike Memcached,
      * Redis allows decrementing below zero, so you must implement your own boundary checks if needed.
      *
-     * <p><b>Thread Safety:</b> The Redis DECRBY command is atomic on the server side, so concurrent
-     * decrements issued by <em>separate</em> client instances are guaranteed to be serialized correctly
-     * by Redis and no decrements are lost — making it suitable for bulk resource management and quota
-     * systems. <b>However, this wrapper itself is not thread-safe</b> — see the class-level Thread
-     * Safety note. Concurrent calls into the same {@code JRedis} instance can corrupt protocol framing
-     * on the underlying {@link Jedis} shards.
+     * <p><b>Thread Safety:</b> Thread-safe. The Redis DECRBY command is atomic on the server side, so
+     * concurrent decrements — whether from separate client instances or from multiple threads sharing
+     * this pooled client — are serialized correctly by Redis and no decrements are lost.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -748,9 +764,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * // Edge: a delta of 0 returns the current value unchanged
      * long current = cache.decr("quota:" + apiKey, 0);            // returns the current counter value
      *
-     * // Edge: a nil reply from the shard is coalesced to 0 (no NullPointerException)
-     * long safe = cache.decr("transient:counter", 3);             // returns 0 if the shard replied nil
-     *
      * // Negative: a negative delta is rejected by this wrapper
      * cache.decr("counter", -1);                                 // throws IllegalArgumentException
      *
@@ -764,8 +777,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *              {@link IllegalArgumentException} for portability across cache backends (e.g.
      *              SpyMemcached, which also rejects negative deltas).
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
-     *         if the key did not exist before). Returns {@code 0} if the underlying client returns a
-     *         {@code null}/nil reply, rather than throwing a {@link NullPointerException}.
+     *         if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #decr(String)
@@ -776,7 +788,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     public long decr(final String key, final int delta) {
         N.checkArgNotNegative(delta, "delta");
 
-        return nullToZero(jedis.decrBy(getKeyBytes(key), delta));
+        final byte[] keyBytes = getKeyBytes(key);
+
+        return poolFor(keyBytes).decrBy(keyBytes, delta);
     }
 
     /**
@@ -795,11 +809,9 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * by default), not just the one being used by this client. If other applications share the same
      * Redis instances, their data will also be deleted.
      *
-     * <p><b>Thread Safety:</b> This wrapper is <b>not</b> thread-safe — see the class-level Thread Safety
-     * note. The Redis FLUSHALL command itself is atomic on each server, but concurrent invocations
-     * against the same {@code JRedis} instance can corrupt protocol framing on the underlying
-     * {@link Jedis} shards. Once executed, all cached data on the affected servers is permanently
-     * lost and visible immediately to all other clients connected to those servers.
+     * <p><b>Thread Safety:</b> Thread-safe. The Redis FLUSHALL command is atomic on each server. Once
+     * executed, all cached data on the affected servers is permanently lost and visible immediately to
+     * all other clients connected to those servers.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -812,9 +824,6 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * public void setUp() {
      *     cache.flushAll();                                        // clean slate for each test
      * }
-     *
-     * // Edge: if there are no shards (empty or null collection), flushAll() is a no-op
-     * cache.flushAll();                                           // no-op safe when there are no shards
      *
      * // Edge/Negative: if one shard fails, the others are still flushed and the FIRST error is rethrown
      * try {
@@ -831,33 +840,27 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      */
     @Override
     public void flushAll() {
-        final Collection<Jedis> allShards = jedis.getAllShards();
+        RuntimeException firstException = null;
 
-        if (allShards != null) {
-            RuntimeException firstException = null;
+        for (final RedisClient jedis : pools) {
+            try {
+                jedis.flushAll();
+            } catch (final RuntimeException e) {
+                // Continue flushing the remaining shards; the first failure is rethrown
+                // after the loop. Log every shard failure so errors on later shards
+                // (which are otherwise swallowed) remain visible.
+                if (logger.isWarnEnabled()) {
+                    logger.warn("Failed to flush a Redis shard during flushAll(); continuing with remaining shards", e);
+                }
 
-            for (final Jedis j : allShards) {
-                if (j != null) {
-                    try {
-                        j.flushAll();
-                    } catch (final RuntimeException e) {
-                        // Continue flushing the remaining shards; the first failure is rethrown
-                        // after the loop. Log every shard failure so errors on later shards
-                        // (which are otherwise swallowed) remain visible.
-                        if (logger.isWarnEnabled()) {
-                            logger.warn("Failed to flush a Redis shard during flushAll(); continuing with remaining shards", e);
-                        }
-
-                        if (firstException == null) {
-                            firstException = e;
-                        }
-                    }
+                if (firstException == null) {
+                    firstException = e;
                 }
             }
+        }
 
-            if (firstException != null) {
-                throw firstException;
-            }
+        if (firstException != null) {
+            throw firstException;
         }
     }
 
@@ -866,15 +869,16 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * After calling this method, the client cannot be used anymore and any subsequent
      * operations will fail or throw exceptions.
      *
-     * <p><b>Redis-specific behavior:</b> This method closes all connections to all Redis shards.
-     * It releases network connections, socket resources, and any internal buffers. The underlying
-     * Jedis client resources are cleaned up. This operation does not remove any data from Redis;
-     * it only closes the client-side connections.
+     * <p><b>Redis-specific behavior:</b> This method closes every shard's {@link RedisClient} client,
+     * which shuts down the underlying connection pool and releases all idle connections, network
+     * sockets, and internal buffers. This operation does not remove any data from Redis; it only
+     * closes the client-side connections.
      *
      * <p><b>Important:</b> This method should be called when the client is no longer needed to ensure
      * proper cleanup of network connections and other resources. It is safe to call this method
      * multiple times; subsequent calls will have no effect. After calling disconnect(), attempting
-     * to use the cache client will result in exceptions.
+     * to use the cache client will result in exceptions. If closing one shard fails, the remaining
+     * shards are still closed and each failure is logged at WARN level.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe, but once called, no other operations should be
      * attempted on this client instance from any thread.
@@ -888,7 +892,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      *     User cached = cache.get("user:123");                     // the cached User, or null
      *     processUser(cached);                                     // application logic on the cached value
      * } finally {
-     *     cache.disconnect();                                      // closes all shard connections
+     *     cache.disconnect();                                      // closes all shard clients
      * }
      *
      * // Try-with-resources pattern (requires wrapper)
@@ -898,7 +902,7 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
      * }
      *
      * // Edge: disconnect() is idempotent and safe to call more than once
-     * cache.disconnect();                                          // closes the underlying client
+     * cache.disconnect();                                          // closes the underlying clients
      * cache.disconnect();                                          // no-op; the second call does nothing
      *
      * // Spring Bean destruction callback
@@ -915,15 +919,22 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public synchronized void disconnect() {
         // Guard with isShutdown so repeated calls are safe (the Javadoc above promises
-        // "It is safe to call this method multiple times"). Without the guard, calling
-        // jedis.disconnect() after the underlying sockets have already been closed can
-        // throw obscure low-level exceptions on some shards.
+        // "It is safe to call this method multiple times").
         if (isShutdown) {
             return;
         }
 
         try {
-            jedis.disconnect();
+            for (final RedisClient jedis : pools) {
+                try {
+                    jedis.close();
+                } catch (final RuntimeException e) {
+                    // Best-effort cleanup: keep closing the remaining shards even if one fails.
+                    if (logger.isWarnEnabled()) {
+                        logger.warn("Failed to close a Redis shard client during disconnect(); continuing with remaining shards", e);
+                    }
+                }
+            }
         } finally {
             isShutdown = true;
         }
@@ -1012,19 +1023,5 @@ public class JRedis<T> extends AbstractDistributedCacheClient<T> {
             return null;
         }
         return kryoParser.decode(bytes);
-    }
-
-    /**
-     * Coalesces a possibly-{@code null} reply from a Redis counter command (incr/decr) to {@code 0}.
-     *
-     * <p>{@link BinaryShardedJedis} returns a boxed {@link Long}; auto-unboxing a {@code null}/nil reply
-     * (which can occur on a transient shard error) would throw a {@link NullPointerException} rather than
-     * surfacing a meaningful value. Treat {@code null} as "no value" / {@code 0}.
-     *
-     * @param value the boxed reply from an incr/decr command, possibly {@code null}
-     * @return {@code value} unboxed, or {@code 0} when {@code value} is {@code null}
-     */
-    private static long nullToZero(final Long value) {
-        return value == null ? 0L : value.longValue();
     }
 }

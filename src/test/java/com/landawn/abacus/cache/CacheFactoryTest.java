@@ -25,7 +25,7 @@ import com.landawn.abacus.util.IntFunctions;
 import com.landawn.abacus.util.Suppliers;
 
 import net.spy.memcached.MemcachedClient;
-import redis.clients.jedis.BinaryShardedJedis;
+import redis.clients.jedis.RedisClient;
 
 @Tag("2025")
 public class CacheFactoryTest extends TestBase {
@@ -172,7 +172,7 @@ public class CacheFactoryTest extends TestBase {
     // Redis
     @Test
     public void testCreateCache_Redis() {
-        try (MockedConstruction<BinaryShardedJedis> ctorIntercept = Mockito.mockConstruction(BinaryShardedJedis.class)) {
+        try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
             try (Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379)")) {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);
@@ -182,7 +182,7 @@ public class CacheFactoryTest extends TestBase {
 
     @Test
     public void testCreateCache_RedisWithPrefix() {
-        try (MockedConstruction<BinaryShardedJedis> ctorIntercept = Mockito.mockConstruction(BinaryShardedJedis.class)) {
+        try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
             try (Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,prefix:)")) {
                 assertNotNull(cache);
             }
@@ -191,7 +191,7 @@ public class CacheFactoryTest extends TestBase {
 
     @Test
     public void testCreateCache_RedisWithTimeout() {
-        try (MockedConstruction<BinaryShardedJedis> ctorIntercept = Mockito.mockConstruction(BinaryShardedJedis.class)) {
+        try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
             try (Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,prefix:,5000)")) {
                 assertNotNull(cache);
             }
@@ -200,21 +200,21 @@ public class CacheFactoryTest extends TestBase {
 
     @Test
     public void testCreateCache_Redis_EdgeCase_NonPositiveTimeout() {
-        try (MockedConstruction<BinaryShardedJedis> ctorIntercept = Mockito.mockConstruction(BinaryShardedJedis.class)) {
+        try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
             assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Redis(localhost:6379,p:,0)"));
         }
     }
 
     @Test
     public void testCreateCache_Redis_EdgeCase_NonNumericTimeout() {
-        try (MockedConstruction<BinaryShardedJedis> ctorIntercept = Mockito.mockConstruction(BinaryShardedJedis.class)) {
+        try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
             assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Redis(localhost:6379,p:,xyz)"));
         }
     }
 
     @Test
     public void testCreateCache_Redis_EdgeCase_TooManyParameters() {
-        try (MockedConstruction<BinaryShardedJedis> ctorIntercept = Mockito.mockConstruction(BinaryShardedJedis.class)) {
+        try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
             assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Redis(a,b,1000,extra)"));
         }
     }

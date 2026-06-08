@@ -246,18 +246,13 @@ public class OffHeapCacheTest {
      */
     @Test
     public void test_put_serializerThrows_propagates_and_cacheStaysUsable() {
-        final OffHeapCache<String, String> c = OffHeapCache.<String, String> builder()
-                .capacityInMB(8)
-                .evictDelay(0)
-                .serializer((v, os) -> {
-                    if (v.startsWith("BOOM")) {
-                        throw new IllegalStateException("serialization failed for: " + v);
-                    }
-                    final byte[] b = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                    os.write(b, 0, b.length);
-                })
-                .deserializer((bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8))
-                .build();
+        final OffHeapCache<String, String> c = OffHeapCache.<String, String> builder().capacityInMB(8).evictDelay(0).serializer((v, os) -> {
+            if (v.startsWith("BOOM")) {
+                throw new IllegalStateException("serialization failed for: " + v);
+            }
+            final byte[] b = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            os.write(b, 0, b.length);
+        }).deserializer((bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8)).build();
 
         try {
             for (int i = 0; i < 300; i++) {
@@ -352,8 +347,7 @@ public class OffHeapCacheTest {
     public void test_boundary_sizes_roundtrip_exact() {
         final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(64).evictDelay(0).build();
         try {
-            final int[] sizes = { 0, 1, 63, 64, 65, 127, 128, 129, 8191, 8192, 8193, 16383, 16384, 16385, 24583, 1048575, 1048576,
-                    1048577, 2097152, 3158073 };
+            final int[] sizes = { 0, 1, 63, 64, 65, 127, 128, 129, 8191, 8192, 8193, 16383, 16384, 16385, 24583, 1048575, 1048576, 1048577, 2097152, 3158073 };
             for (final int size : sizes) {
                 final byte[] v = new byte[size];
                 for (int i = 0; i < size; i++) {
@@ -516,11 +510,7 @@ public class OffHeapCacheTest {
 
     @Test
     public void test_clear_reclaims_empty_segments_for_different_slot_sizes() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
-                .capacityInMB(1)
-                .maxBlockSizeInBytes(1024 * 1024)
-                .evictDelay(0)
-                .build();
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).maxBlockSizeInBytes(1024 * 1024).evictDelay(0).build();
 
         try {
             assertTrue(c.put("small", new byte[64]));

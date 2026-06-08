@@ -135,10 +135,7 @@ public class AbstractOffHeapCacheTest {
      */
     @Test
     public void testStatsClampsNegativeDiskTimingObservations() {
-        try (OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
-                .capacityInMB(16)
-                .evictDelay(0)
-                .build()) {
+        try (OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder().capacityInMB(16).evictDelay(0).build()) {
             cache.totalReadFromDiskTimeStats.accept(-5L);
             cache.totalWriteToDiskTimeStats.accept(-7L);
 
