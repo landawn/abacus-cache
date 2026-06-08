@@ -2,7 +2,7 @@
  * Copyright (c) 2015, Haiyang Li. All rights reserved.
  */
 
-package com.landawn.abacus.util;
+package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -12,7 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -31,9 +30,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedConstruction;
 import org.mockito.Mockito;
 
-import com.landawn.abacus.cache.JRedis;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
+import com.landawn.abacus.util.Dates;
+import com.landawn.abacus.util.Strings;
 
 import redis.clients.jedis.RedisClient;
 import redis.clients.jedis.params.SetParams;

@@ -2,7 +2,7 @@
  * Copyright (c) 2015, Haiyang Li. All rights reserved.
  */
 
-package com.landawn.abacus.util;
+package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -21,6 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedConstruction;
 import org.mockito.Mockito;
+
+import com.landawn.abacus.util.MemcachedLock;
 
 import net.spy.memcached.MemcachedClient;
 import net.spy.memcached.internal.OperationFuture;
