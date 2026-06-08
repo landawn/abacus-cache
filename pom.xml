@@ -81,8 +81,17 @@
 		<dependency>
 			<groupId>org.ehcache</groupId>
 			<artifactId>ehcache</artifactId>
-			<version>3.9.11</version>
+			<version>3.12.0</version>
 			<scope>provided</scope>
+			<exclusions>
+				<!-- Only needed for Ehcache's XML config parsing, which this
+				project does not use (caches are built programmatically). The
+				3.x JAXB-RI it resolves to lives on dead java.net HTTP repos. -->
+				<exclusion>
+					<groupId>org.glassfish.jaxb</groupId>
+					<artifactId>jaxb-runtime</artifactId>
+				</exclusion>
+			</exclusions>
 		</dependency>
 
 		<dependency>
@@ -247,7 +256,7 @@
 			<plugin>
 				<groupId>org.jacoco</groupId>
 				<artifactId>jacoco-maven-plugin</artifactId>
-				<version>0.8.14</version>
+				<version>0.8.15</version>
 				<executions>
 					<!-- Prepare agent in all modules via inheritance -->
 					<execution>
