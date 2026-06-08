@@ -84,8 +84,8 @@ public class JRedisClusterTest {
     @Test
     public void test_getBulk_returns_only_found_keys() {
         when(mockCluster.get(utf8("k1"))).thenReturn(KRYO.encode("v1"));
-        when(mockCluster.get(utf8("k2"))).thenReturn(null);          // missing
-        when(mockCluster.get(utf8("k3"))).thenReturn(new byte[0]);    // empty -> null
+        when(mockCluster.get(utf8("k2"))).thenReturn(null); // missing
+        when(mockCluster.get(utf8("k3"))).thenReturn(new byte[0]); // empty -> null
 
         Map<String, Object> result = cache.getBulk("k1", "k2", "k3");
 

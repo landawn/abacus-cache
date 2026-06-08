@@ -10,83 +10,67 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
-import java.io.IOException;
-import java.lang.reflect.Field;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeoutException;
 
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.mockito.MockedConstruction;
-import org.mockito.Mockito;
-
-import com.landawn.abacus.cache.SpyMemcached;
-
-import net.spy.memcached.MemcachedClient;
-import net.spy.memcached.internal.OperationFuture;
 
 /**
- * Mock-based unit tests for {@link SpyMemcached}.
+ * Integration tests for {@link SpyMemcached} that run against a real Memcached server reachable at
+ * {@code localhost:11211} (e.g. {@code docker run --name memcached -p 11211:11211 -d memcached:latest}).
  *
- * <p>The previous version of this test required a real Memcached server (localhost:11211)
- * and was skipped whenever the server was unreachable. This rewrite intercepts the
- * construction of {@link MemcachedClient} and substitutes a Mockito mock so the
- * SpyMemcached dispatch logic (key validation, TTL ms→s conversion, future blocking,
- * exception conversion) can be exercised without network I/O.
+ * <p>These tests deliberately use no mock client and no in-memory fake: every operation is exercised
+ * end-to-end against the live server. A single client is shared across the class and the server is
+ * flushed before each test for isolation.
+ *
+ * <p><b>Memcached + Kryo note:</b> this client serializes values with a Kryo transcoder, so a stored
+ * value is NOT an ASCII-decimal string. Memcached's native {@code incr}/{@code decr} therefore only
+ * operate correctly on counters created through the increment-with-default seeding path, and only for
+ * the initial seed — attempting to increment a Kryo-encoded value yields a server-side
+ * "cannot increment or decrement non-numeric value" error. The counter tests below stay within the
+ * behavior the real server actually supports (missing-key sentinel and first-seed).
  */
 @Tag("2025")
 public class SpyMemcachedTest {
 
-    private MockedConstruction<MemcachedClient> ctorIntercept;
-    private SpyMemcached<Object> cache;
-    private MemcachedClient mockMc;
+    private static final String SERVER_URL = "localhost:11211";
 
-    @BeforeEach
-    public void setUp() throws Exception {
-        ctorIntercept = Mockito.mockConstruction(MemcachedClient.class);
-        cache = new SpyMemcached<>("localhost:11211");
-        mockMc = (MemcachedClient) readField(cache, "mc");
-        assertNotNull(mockMc, "mocked memcached client should have been injected");
+    private static SpyMemcached<Object> cache;
+
+    @BeforeAll
+    static void connect() {
+        cache = new SpyMemcached<>(SERVER_URL);
     }
 
-    @AfterEach
-    public void tearDown() {
-        if (ctorIntercept != null) {
-            ctorIntercept.close();
+    @AfterAll
+    static void disconnect() {
+        if (cache != null) {
+            cache.disconnect();
         }
     }
 
+    @BeforeEach
+    void flush() {
+        // Isolate each test on the shared server.
+        cache.flushAll();
+    }
+
+    // --- get -----------------------------------------------------------------------------------
+
     @Test
     public void test_get_returns_value() {
-        when(mockMc.get("user:1")).thenReturn("hello");
-
-        Object result = cache.get("user:1");
-
-        assertEquals("hello", result);
-        verify(mockMc).get("user:1");
+        cache.set("user:1", "hello", 60_000);
+        assertEquals("hello", cache.get("user:1"));
     }
 
     @Test
     public void test_get_returns_null_for_missing_key() {
-        when(mockMc.get("missing")).thenReturn(null);
-
         assertNull(cache.get("missing"));
     }
 
@@ -95,52 +79,26 @@ public class SpyMemcachedTest {
         assertThrows(IllegalArgumentException.class, () -> cache.get(null));
     }
 
+    // --- set -----------------------------------------------------------------------------------
+
     @Test
-    public void test_set_converts_millis_to_seconds_and_returns_true() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(ok);
-
-        boolean result = cache.set("k", "value", 60_000); // 60 seconds
-
-        assertTrue(result);
-        verify(mockMc).set("k", 60, "value");
+    public void test_set_stores_and_returns_true() {
+        assertTrue(cache.set("k", "value", 60_000));
+        assertEquals("value", cache.get("k"));
     }
 
     @Test
-    public void test_set_rounds_up_partial_seconds() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(ok);
-
-        cache.set("k", "value", 1_500); // 1.5s -> rounds up to 2s
-
-        verify(mockMc).set("k", 2, "value");
+    public void test_set_overwrites_existing_value() {
+        cache.set("k", "v1", 60_000);
+        assertTrue(cache.set("k", "v2", 60_000));
+        assertEquals("v2", cache.get("k"));
     }
 
     @Test
-    public void test_set_long_ttl_uses_memcached_absolute_expiration() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(ok);
-
-        final long liveTime = 31L * 24 * 60 * 60 * 1000;
-        final long expectedEarliest = System.currentTimeMillis() / 1000L + (liveTime / 1000);
-
-        assertTrue(cache.set("k", "value", liveTime));
-
-        final long expectedLatest = System.currentTimeMillis() / 1000L + (liveTime / 1000);
-        final ArgumentCaptor<Integer> expirationCaptor = ArgumentCaptor.forClass(Integer.class);
-        verify(mockMc).set(eq("k"), expirationCaptor.capture(), eq("value"));
-
-        assertTrue(expirationCaptor.getValue() > 30 * 24 * 60 * 60);
-        assertTrue(expirationCaptor.getValue() >= expectedEarliest);
-        assertTrue(expirationCaptor.getValue() <= expectedLatest);
-    }
-
-    @Test
-    public void test_set_returns_false_when_server_says_no() {
-        OperationFuture<Boolean> no = immediateBooleanFuture(false);
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(no);
-
-        assertFalse(cache.set("k", "value", 60_000));
+    public void test_set_null_value_is_stored_and_reads_back_null() {
+        // A null value is accepted (memcached stores the empty Kryo payload); get maps it back to null.
+        assertTrue(cache.set("maybe-null", null, 60_000));
+        assertNull(cache.get("maybe-null"));
     }
 
     @Test
@@ -149,30 +107,117 @@ public class SpyMemcachedTest {
     }
 
     @Test
-    public void test_add_forwards_to_underlying_client() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.add(eq("k"), anyInt(), any())).thenReturn(ok);
-
-        assertTrue(cache.add("k", "v", 60_000));
-        verify(mockMc).add("k", 60, "v");
+    public void test_set_long_ttl_is_stored_and_retrievable() {
+        // A TTL beyond 30 days is converted to an absolute Unix expiration timestamp. The value must be
+        // immediately retrievable (i.e. NOT stored already-expired, which is what a botched conversion
+        // would produce).
+        final long liveTime = 31L * 24 * 60 * 60 * 1000; // 31 days
+        assertTrue(cache.set("k", "value", liveTime));
+        assertEquals("value", cache.get("k"));
     }
 
     @Test
-    public void test_replace_forwards_to_underlying_client() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.replace(eq("k"), anyInt(), any())).thenReturn(ok);
+    public void test_set_short_ttl_expires() throws Exception {
+        // 1_000 ms -> 1 s. The value is present immediately and gone shortly after the TTL elapses,
+        // confirming the ms->s conversion is honored end-to-end by the real server.
+        cache.set("ttl", "v", 1_000);
+        assertEquals("v", cache.get("ttl"));
 
-        assertTrue(cache.replace("k", "v", 60_000));
-        verify(mockMc).replace("k", 60, "v");
+        Thread.sleep(2_500);
+        assertNull(cache.get("ttl"));
+    }
+
+    /**
+     * A liveTime so large that the derived absolute Unix expiration second overflows {@code int}
+     * (while the relative seconds still fit) is rejected before any network call.
+     */
+    @Test
+    public void test_set_expiration_overflow_throws() {
+        assertThrows(IllegalArgumentException.class, () -> cache.set("k", "v", 2_000_000_000_000L));
     }
 
     @Test
-    public void test_delete_forwards_and_returns_result() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.delete("k")).thenReturn(ok);
+    public void test_asyncSet_then_asyncGet() throws Exception {
+        assertTrue(cache.asyncSet("k", "v", 60_000).get());
+        assertEquals("v", cache.asyncGet("k").get());
+    }
 
+    @Test
+    public void test_asyncSet_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncSet(null, "v", 60_000));
+    }
+
+    @Test
+    public void test_asyncGet_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncGet(null));
+    }
+
+    // --- add -----------------------------------------------------------------------------------
+
+    @Test
+    public void test_add_succeeds_when_absent_and_fails_when_present() {
+        assertTrue(cache.add("k", "v1", 60_000));
+        assertFalse(cache.add("k", "v2", 60_000));
+        // The original value is preserved (the second add was rejected).
+        assertEquals("v1", cache.get("k"));
+    }
+
+    @Test
+    public void test_add_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.add(null, "v", 60_000));
+    }
+
+    @Test
+    public void test_asyncAdd_forwards() throws Exception {
+        assertTrue(cache.asyncAdd("k", "v", 60_000).get());
+        assertFalse(cache.asyncAdd("k", "v2", 60_000).get());
+    }
+
+    @Test
+    public void test_asyncAdd_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncAdd(null, "v", 60_000));
+    }
+
+    // --- replace -------------------------------------------------------------------------------
+
+    @Test
+    public void test_replace_fails_when_absent_and_succeeds_when_present() {
+        assertFalse(cache.replace("missing", "v", 60_000));
+
+        cache.set("k", "v1", 60_000);
+        assertTrue(cache.replace("k", "v2", 60_000));
+        assertEquals("v2", cache.get("k"));
+    }
+
+    @Test
+    public void test_replace_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.replace(null, "v", 60_000));
+    }
+
+    @Test
+    public void test_asyncReplace_forwards() throws Exception {
+        cache.set("k", "v1", 60_000);
+        assertTrue(cache.asyncReplace("k", "v2", 60_000).get());
+        assertEquals("v2", cache.get("k"));
+    }
+
+    @Test
+    public void test_asyncReplace_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncReplace(null, "v", 60_000));
+    }
+
+    // --- delete --------------------------------------------------------------------------------
+
+    @Test
+    public void test_delete_existing_returns_true_and_removes() {
+        cache.set("k", "v", 60_000);
         assertTrue(cache.delete("k"));
-        verify(mockMc).delete("k");
+        assertNull(cache.get("k"));
+    }
+
+    @Test
+    public void test_delete_missing_returns_false() {
+        assertFalse(cache.delete("never-existed"));
     }
 
     @Test
@@ -181,19 +226,29 @@ public class SpyMemcachedTest {
     }
 
     @Test
-    public void test_incr_delegates_to_mc_incr() {
-        when(mockMc.incr("counter", 1)).thenReturn(42L);
-
-        assertEquals(42L, cache.incr("counter"));
-        verify(mockMc).incr("counter", 1);
+    public void test_asyncDelete_forwards() throws Exception {
+        cache.set("k", "v", 60_000);
+        assertTrue(cache.asyncDelete("k").get());
+        assertNull(cache.get("k"));
     }
 
     @Test
-    public void test_incr_with_delta_delegates() {
-        when(mockMc.incr("counter", 5)).thenReturn(50L);
+    public void test_asyncDelete_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncDelete(null));
+    }
 
-        assertEquals(50L, cache.incr("counter", 5));
-        verify(mockMc).incr("counter", 5);
+    // --- incr ----------------------------------------------------------------------------------
+
+    @Test
+    public void test_incr_missing_key_returns_minus_one() {
+        // Memcached returns -1 for a non-existent counter (no auto-initialization).
+        assertEquals(-1L, cache.incr("no-such-counter"));
+    }
+
+    @Test
+    public void test_incr_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
     }
 
     @Test
@@ -202,31 +257,35 @@ public class SpyMemcachedTest {
     }
 
     @Test
-    public void test_incr_with_default_value() {
-        // Regression: the no-TTL default-value overload must seed an absent key with expiration 0
-        // ("no expiration"), NOT -1. spymemcached seeds a missing key via `add <key> .. <exp> <def>`
-        // using this exp, and memcached treats a negative exp as an absolute time in the past — so a
-        // -1 seed is stored already-expired and the counter never advances past defaultValue.
-        when(mockMc.incr("counter", 1, 0L, 0)).thenReturn(1L);
-
-        assertEquals(1L, cache.incr("counter", 1, 0L));
-        verify(mockMc).incr("counter", 1, 0L, 0);
+    public void test_incr_with_default_value_seeds_absent_key() {
+        // On a missing key the default is stored verbatim and returned (delta is NOT applied on insert).
+        assertEquals(0L, cache.incr("counter", 1, 0L));
     }
 
     @Test
-    public void test_decr_delegates_to_mc_decr() {
-        when(mockMc.decr("counter", 1)).thenReturn(0L);
-
-        assertEquals(0L, cache.decr("counter"));
-        verify(mockMc).decr("counter", 1);
+    public void test_incr_with_default_value_and_liveTime_seeds_absent_key() {
+        assertEquals(7L, cache.incr("counter", 5, 7L, 60_000L));
     }
 
     @Test
-    public void test_decr_with_delta_delegates() {
-        when(mockMc.decr("counter", 3)).thenReturn(7L);
+    public void test_incr_with_default_value_validation() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L, 1000L));
+    }
 
-        assertEquals(7L, cache.decr("counter", 3));
-        verify(mockMc).decr("counter", 3);
+    // --- decr ----------------------------------------------------------------------------------
+
+    @Test
+    public void test_decr_missing_key_returns_minus_one() {
+        assertEquals(-1L, cache.decr("no-such-counter"));
+    }
+
+    @Test
+    public void test_decr_rejects_null_key() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
     }
 
     @Test
@@ -235,27 +294,52 @@ public class SpyMemcachedTest {
     }
 
     @Test
-    public void test_getBulk_with_varargs() {
-        Map<String, Object> expected = new HashMap<>();
-        expected.put("a", 1);
-        expected.put("b", 2);
-        when(mockMc.getBulk(any(String[].class))).thenReturn((Map) expected);
-
-        Map<String, Object> got = cache.getBulk("a", "b");
-
-        assertEquals(expected, got);
+    public void test_decr_with_default_value_seeds_absent_key() {
+        assertEquals(100L, cache.decr("counter", 1, 100L));
     }
 
     @Test
-    public void test_getBulk_with_collection() {
-        Map<String, Object> expected = new HashMap<>();
-        expected.put("a", 1);
-        when(mockMc.getBulk(any(java.util.Collection.class))).thenReturn((Map) expected);
+    public void test_decr_with_default_value_and_liveTime_seeds_absent_key() {
+        assertEquals(100L, cache.decr("counter", 1, 100L, 60_000L));
+    }
 
-        List<String> keys = Arrays.asList("a");
-        Map<String, Object> got = cache.getBulk(keys);
+    @Test
+    public void test_decr_with_default_value_validation() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L, 1000L));
+    }
 
-        assertEquals(expected, got);
+    // --- getBulk -------------------------------------------------------------------------------
+
+    @Test
+    public void test_getBulk_varargs_returns_only_found_keys() {
+        cache.set("a", 1, 60_000);
+        cache.set("b", 2, 60_000);
+
+        final Map<String, Object> got = cache.getBulk("a", "b", "missing");
+
+        assertEquals(2, got.size());
+        assertEquals(1, got.get("a"));
+        assertEquals(2, got.get("b"));
+        assertFalse(got.containsKey("missing"));
+    }
+
+    @Test
+    public void test_getBulk_collection_returns_only_found_keys() {
+        cache.set("a", 1, 60_000);
+
+        final List<String> keys = Arrays.asList("a", "b");
+        final Map<String, Object> got = cache.getBulk(keys);
+
+        assertEquals(1, got.size());
+        assertEquals(1, got.get("a"));
+    }
+
+    @Test
+    public void test_getBulk_none_found_returns_empty_map() {
+        assertTrue(cache.getBulk("zzz1", "zzz2").isEmpty());
     }
 
     @Test
@@ -265,386 +349,122 @@ public class SpyMemcachedTest {
     }
 
     @Test
-    public void test_asyncGet_returns_future() {
-        @SuppressWarnings("unchecked")
-        Future<Object> mockFuture = mock(Future.class);
-        when(mockMc.asyncGet("k")).thenReturn((net.spy.memcached.internal.GetFuture) null);
-        // Use the underlying method directly: spymemcached returns GetFuture, we wrap to Future<T>.
-        // Easier: just verify the call happens.
-        try {
-            cache.asyncGet("k");
-        } catch (NullPointerException ignore) {
-            // OK: returning null from the mock is fine; we only care it dispatched correctly.
-        }
-        verify(mockMc).asyncGet("k");
-    }
-
-    @Test
-    public void test_asyncGet_rejects_null_key() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncGet(null));
-    }
-
-    @Test
-    public void test_flushAll_delegates() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.flush()).thenReturn(ok);
-
-        cache.flushAll();
-
-        verify(mockMc).flush();
-    }
-
-    @Test
-    public void test_flushAll_throws_when_server_returns_false() {
-        OperationFuture<Boolean> no = immediateBooleanFuture(false);
-        when(mockMc.flush()).thenReturn(no);
-
-        assertThrows(IllegalStateException.class, cache::flushAll);
-    }
-
-    @Test
-    public void test_disconnect_calls_shutdown_once() {
-        cache.disconnect();
-        cache.disconnect(); // should be idempotent
-
-        verify(mockMc, times(1)).shutdown();
-    }
-
-    @Test
-    public void test_constructor_rejects_invalid_timeout() {
-        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>("localhost:11211", 0L));
-        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>("localhost:11211", -1L));
-    }
-
-    @Test
-    public void test_resultOf_rejects_null_future() {
-        // Use a small subclass test by triggering the path indirectly: set() with a mock returning null.
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(null);
-        assertThrows(IllegalArgumentException.class, () -> cache.set("k", "v", 60_000));
-    }
-
-    @Test
-    public void test_serverUrl_returns_constructor_value() {
-        assertEquals("localhost:11211", cache.serverUrl());
-    }
-
-    @Test
-    public void test_asyncSet_forwards() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(ok);
-        assertNotNull(cache.asyncSet("k", "v", 60_000));
-        verify(mockMc).set("k", 60, "v");
-    }
-
-    @Test
-    public void test_asyncSet_EdgeCase_NullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncSet(null, "v", 60_000));
-    }
-
-    @Test
-    public void test_add_EdgeCase_NullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.add(null, "v", 60_000));
-    }
-
-    @Test
-    public void test_asyncAdd_forwards() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.add(eq("k"), anyInt(), any())).thenReturn(ok);
-        assertNotNull(cache.asyncAdd("k", "v", 60_000));
-        verify(mockMc).add("k", 60, "v");
-    }
-
-    @Test
-    public void test_asyncAdd_EdgeCase_NullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncAdd(null, "v", 60_000));
-    }
-
-    @Test
-    public void test_replace_EdgeCase_NullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.replace(null, "v", 60_000));
-    }
-
-    @Test
-    public void test_asyncReplace_forwards() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.replace(eq("k"), anyInt(), any())).thenReturn(ok);
-        assertNotNull(cache.asyncReplace("k", "v", 60_000));
-        verify(mockMc).replace("k", 60, "v");
-    }
-
-    @Test
-    public void test_asyncReplace_EdgeCase_NullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncReplace(null, "v", 60_000));
-    }
-
-    @Test
-    public void test_asyncDelete_forwards() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.delete("k")).thenReturn(ok);
-        assertNotNull(cache.asyncDelete("k"));
-        verify(mockMc).delete("k");
-    }
-
-    @Test
-    public void test_asyncDelete_EdgeCase_NullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncDelete(null));
-    }
-
-    @Test
-    public void test_incr_EdgeCase_NullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
-    }
-
-    @Test
-    public void test_incr_with_default_value_and_liveTime() {
-        when(mockMc.incr("counter", 1, 0L, 60)).thenReturn(1L);
-        assertEquals(1L, cache.incr("counter", 1, 0L, 60_000L));
-        verify(mockMc).incr("counter", 1, 0L, 60);
-    }
-
-    @Test
-    public void test_incr_with_default_value_EdgeCase_NullKeyAndNegativeDelta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L, 1000L));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L, 1000L));
-    }
-
-    @Test
-    public void test_decr_EdgeCase_NullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
-    }
-
-    @Test
-    public void test_decr_with_default_value() {
-        // Regression: see test_incr_with_default_value — the no-TTL default-value overload must seed
-        // with expiration 0 ("no expiration"), not -1 (which memcached stores as already-expired).
-        when(mockMc.decr("counter", 1, 100L, 0)).thenReturn(99L);
-        assertEquals(99L, cache.decr("counter", 1, 100L));
-        verify(mockMc).decr("counter", 1, 100L, 0);
-    }
-
-    @Test
-    public void test_decr_with_default_value_and_liveTime() {
-        when(mockMc.decr("counter", 1, 100L, 60)).thenReturn(99L);
-        assertEquals(99L, cache.decr("counter", 1, 100L, 60_000L));
-        verify(mockMc).decr("counter", 1, 100L, 60);
-    }
-
-    @Test
-    public void test_decr_with_default_value_EdgeCase_NullKeyAndNegativeDelta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L, 1000L));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L, 1000L));
-    }
-
-    @Test
-    public void test_getBulk_collection_EdgeCase_NullKeys() {
+    public void test_getBulk_collection_rejects_null_keys() {
         assertThrows(IllegalArgumentException.class, () -> cache.getBulk((java.util.Collection<String>) null));
         assertThrows(IllegalArgumentException.class, () -> cache.getBulk(Arrays.asList("a", null)));
     }
 
     @Test
-    public void test_asyncGetBulk_varargs_forwards() {
-        when(mockMc.asyncGetBulk(any(String[].class))).thenReturn((net.spy.memcached.internal.BulkFuture) null);
-        try {
-            cache.asyncGetBulk("a", "b");
-        } catch (NullPointerException ignore) {
-            // The mock returns null; we only care the dispatch happens.
-        }
-        verify(mockMc).asyncGetBulk(any(String[].class));
+    public void test_asyncGetBulk_varargs_forwards() throws Exception {
+        cache.set("a", 1, 60_000);
+        cache.set("b", 2, 60_000);
+
+        final Map<String, Object> got = cache.asyncGetBulk("a", "b").get();
+
+        assertEquals(2, got.size());
+        assertEquals(1, got.get("a"));
     }
 
     @Test
-    public void test_asyncGetBulk_collection_forwards() {
-        when(mockMc.asyncGetBulk(any(java.util.Collection.class))).thenReturn((net.spy.memcached.internal.BulkFuture) null);
-        try {
-            cache.asyncGetBulk(Arrays.asList("a"));
-        } catch (NullPointerException ignore) {
-            // ok
-        }
-        verify(mockMc).asyncGetBulk(any(java.util.Collection.class));
+    public void test_asyncGetBulk_collection_forwards() throws Exception {
+        cache.set("a", 1, 60_000);
+
+        final Map<String, Object> got = cache.asyncGetBulk(Arrays.asList("a")).get();
+
+        assertEquals(1, got.size());
+        assertEquals(1, got.get("a"));
+    }
+
+    // --- flushAll ------------------------------------------------------------------------------
+
+    @Test
+    public void test_flushAll_clears_all_keys() {
+        cache.set("a", 1, 60_000);
+        cache.set("b", 2, 60_000);
+
+        cache.flushAll();
+
+        assertNull(cache.get("a"));
+        assertNull(cache.get("b"));
     }
 
     @Test
-    public void test_flushAll_with_delay() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.flush(anyInt())).thenReturn(ok);
-        assertTrue(cache.flushAll(5_000));
-        verify(mockMc).flush(5);
+    public void test_flushAll_with_immediate_delay_clears() {
+        cache.set("a", 1, 60_000);
+
+        assertTrue(cache.flushAll(0));
+
+        assertNull(cache.get("a"));
     }
 
     @Test
-    public void test_asyncFlushAll_forwards() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.flush()).thenReturn(ok);
-        assertNotNull(cache.asyncFlushAll());
-        verify(mockMc).flush();
+    public void test_flushAll_large_delay_is_scheduled_not_immediate() {
+        // memcached's `flush_all <delay>` interprets its argument as a RELATIVE number of seconds and
+        // never as an absolute timestamp (the >30-day rewrite that applies to set/add/replace must NOT
+        // apply here). A 40-day delay therefore schedules a far-future flush, so the value is still
+        // present right after the call.
+        cache.set("a", 1, 60_000);
+
+        assertTrue(cache.flushAll(3_456_000_000L)); // 40 days
+
+        assertEquals(1, cache.get("a"));
     }
 
     @Test
-    public void test_asyncFlushAll_with_delay_forwards() {
-        OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        when(mockMc.flush(anyInt())).thenReturn(ok);
-        assertNotNull(cache.asyncFlushAll(10_000));
-        verify(mockMc).flush(10);
+    public void test_asyncFlushAll_forwards() throws Exception {
+        cache.set("a", 1, 60_000);
+
+        assertTrue(cache.asyncFlushAll().get());
+
+        assertNull(cache.get("a"));
     }
 
     @Test
-    public void test_flushAll_large_delay_uses_relative_seconds() {
-        // Regression: the memcached `flush_all <delay>` command ALWAYS interprets its argument as a
-        // relative number of seconds. A delay greater than 30 days must NOT be rewritten into an
-        // absolute Unix timestamp (the rule that only applies to set/add/replace). 40 days =
-        // 3_456_000 s, which is well past the 30-day / 2_592_000 s memcached boundary.
-        final OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        final ArgumentCaptor<Integer> delayCaptor = ArgumentCaptor.forClass(Integer.class);
-        when(mockMc.flush(anyInt())).thenReturn(ok);
+    public void test_asyncFlushAll_with_delay_forwards() throws Exception {
+        assertTrue(cache.asyncFlushAll(0).get());
+    }
 
-        assertTrue(cache.flushAll(3_456_000_000L));
+    // --- lifecycle / construction --------------------------------------------------------------
 
-        verify(mockMc).flush(delayCaptor.capture());
-        // Before the fix this was now/1000 + 3_456_000 (a ~1.75e9 absolute epoch second).
-        assertEquals(3_456_000, delayCaptor.getValue().intValue());
+    @Test
+    public void test_serverUrl_returns_constructor_value() {
+        assertEquals(SERVER_URL, cache.serverUrl());
     }
 
     @Test
-    public void test_asyncFlushAll_large_delay_uses_relative_seconds() {
-        final OperationFuture<Boolean> ok = immediateBooleanFuture(true);
-        final ArgumentCaptor<Integer> delayCaptor = ArgumentCaptor.forClass(Integer.class);
-        when(mockMc.flush(anyInt())).thenReturn(ok);
+    public void test_constructor_rejects_invalid_timeout() {
+        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>(SERVER_URL, 0L));
+        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>(SERVER_URL, -1L));
+    }
 
-        assertNotNull(cache.asyncFlushAll(3_456_000_000L));
+    @Test
+    public void test_constructor_rejects_blank_server_url() {
+        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>((String) null));
+        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>(""));
+        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>("   "));
+    }
 
-        verify(mockMc).flush(delayCaptor.capture());
-        assertEquals(3_456_000, delayCaptor.getValue().intValue());
+    @Test
+    public void test_disconnect_is_idempotent() {
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
+        local.disconnect();
+        local.disconnect(); // safe to call again
+
+        // After shutdown the client is unusable: a further operation fails fast.
+        assertThrows(IllegalStateException.class, () -> local.get("k"));
     }
 
     @Test
     public void test_disconnect_with_timeout() {
-        cache.disconnect(5000);
-        verify(mockMc).shutdown(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
+        local.disconnect(5_000);
+        assertThrows(IllegalStateException.class, () -> local.get("k"));
     }
 
     @Test
-    public void test_disconnect_with_timeout_EdgeCase_Negative() {
+    public void test_disconnect_with_timeout_rejects_negative() {
         assertThrows(IllegalArgumentException.class, () -> cache.disconnect(-1));
-    }
-
-    // --- Expiration overflow ------------------------------------------------------------------
-
-    /**
-     * A liveTime so large that the derived absolute Unix expiration second overflows {@code int}
-     * (but the relative seconds still fit in {@code int}) is rejected by {@code toMemcachedExpiration}.
-     */
-    @Test
-    public void test_set_expiration_overflow_throws() {
-        // 2e9 seconds is < Integer.MAX_VALUE (so toSeconds() itself does not throw) but
-        // now/1000 + 2e9 exceeds Integer.MAX_VALUE, tripping the absolute-expiration overflow guard.
-        assertThrows(IllegalArgumentException.class, () -> cache.set("k", "v", 2_000_000_000_000L));
-    }
-
-    // --- resultOf(...) exception conversion ----------------------------------------------------
-    // resultOf() is exercised indirectly through set(): the mocked client returns a future whose
-    // get(...) throws, and the cache must convert each checked failure into a RuntimeException.
-
-    /** {@code ExecutionException} with a cause is unwrapped to a RuntimeException. */
-    @SuppressWarnings("unchecked")
-    @Test
-    public void test_resultOf_executionException_withCause_isConverted() throws Exception {
-        final OperationFuture<Boolean> failing = mock(OperationFuture.class);
-        when(failing.get(anyLong(), any())).thenThrow(new ExecutionException(new IllegalStateException("boom")));
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(failing);
-
-        assertThrows(RuntimeException.class, () -> cache.set("k", "v", 60_000));
-    }
-
-    /** {@code ExecutionException} with a null cause falls back to wrapping the ExecutionException itself. */
-    @SuppressWarnings("unchecked")
-    @Test
-    public void test_resultOf_executionException_nullCause_isConverted() throws Exception {
-        final OperationFuture<Boolean> failing = mock(OperationFuture.class);
-        when(failing.get(anyLong(), any())).thenThrow(new ExecutionException("no cause", null));
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(failing);
-
-        assertThrows(RuntimeException.class, () -> cache.set("k", "v", 60_000));
-    }
-
-    /** A {@code TimeoutException} from the future is converted to a RuntimeException and the future cancelled. */
-    @SuppressWarnings("unchecked")
-    @Test
-    public void test_resultOf_timeout_isConverted() throws Exception {
-        final OperationFuture<Boolean> failing = mock(OperationFuture.class);
-        when(failing.get(anyLong(), any())).thenThrow(new TimeoutException("slow"));
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(failing);
-
-        assertThrows(RuntimeException.class, () -> cache.set("k", "v", 60_000));
-        verify(failing).cancel(true);
-    }
-
-    /** An {@code InterruptedException} is converted to a RuntimeException and the interrupt status restored. */
-    @SuppressWarnings("unchecked")
-    @Test
-    public void test_resultOf_interrupted_restoresInterruptStatusAndConverts() throws Exception {
-        final OperationFuture<Boolean> failing = mock(OperationFuture.class);
-        when(failing.get(anyLong(), any())).thenThrow(new InterruptedException("interrupted"));
-        when(mockMc.set(eq("k"), anyInt(), any())).thenReturn(failing);
-
-        assertThrows(RuntimeException.class, () -> cache.set("k", "v", 60_000));
-        // resultOf() must re-assert the thread's interrupt status; consume (and assert) it so the
-        // flag does not leak into later tests.
-        assertTrue(Thread.interrupted(), "interrupt status must be restored after InterruptedException");
-        verify(failing).cancel(true);
-    }
-
-    // --- Constructor failure (client creation throws IOException) -------------------------------
-
-    /**
-     * When constructing the underlying {@link MemcachedClient} fails with an {@link IOException},
-     * the failure is wrapped (UncheckedIOException) and surfaced as a RuntimeException from the
-     * SpyMemcached constructor.
-     */
-    @Test
-    public void test_constructor_wrapsClientCreationIOException() {
-        // Replace the BeforeEach interceptor (which constructs a plain mock) with one that fails
-        // construction; null the field so tearDown does not double-close it.
-        ctorIntercept.close();
-        ctorIntercept = null;
-
-        try (MockedConstruction<MemcachedClient> failing = Mockito.mockConstruction(MemcachedClient.class, (mock, ctx) -> {
-            throw new IOException("simulated connect failure");
-        })) {
-            assertThrows(RuntimeException.class, () -> new SpyMemcached<>("localhost:11211", 1000L));
-        }
-    }
-
-    // TODO: SpyMemcached constructor line "No valid server addresses found" is unreachable —
-    // AddrUtil.getAddressList(...) always throws IllegalArgumentException for invalid input and never
-    // returns an empty list. Likewise the super.getDefaultTranscoder() fallback only runs when the
-    // Kryo parser is absent from the classpath, which cannot be simulated in this build.
-
-    private static Object readField(Object target, String fieldName) throws Exception {
-        Field f = target.getClass().getDeclaredField(fieldName);
-        f.setAccessible(true);
-        return f.get(target);
-    }
-
-    /**
-     * Returns an immediately-complete {@link OperationFuture}-style future yielding the
-     * supplied value. For test purposes we use a simple in-memory {@link Future} via a
-     * mock so resultOf() returns the value without blocking.
-     */
-    @SuppressWarnings("unchecked")
-    private static <T> OperationFuture<T> immediateBooleanFuture(T value) {
-        OperationFuture<T> f = mock(OperationFuture.class);
-        try {
-            when(f.get(anyLong(), any())).thenReturn(value);
-            when(f.get()).thenReturn(value);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-        return f;
+        // The shared client must remain usable (the negative timeout was rejected before shutdown).
+        assertNotNull(cache.serverUrl());
     }
 }

@@ -6,118 +6,74 @@ package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.config.Configurator;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.TestBase;
 
+/**
+ * Integration tests for {@link DistributedCache} backed by a real {@link SpyMemcached} client talking
+ * to a Memcached server reachable at {@code localhost:11211}
+ * (e.g. {@code docker run --name memcached -p 11211:11211 -d memcached:latest}).
+ *
+ * <p>No mock client and no in-memory fake is used. Storage, lifecycle and key-handling are exercised
+ * end-to-end against the live server. The circuit-breaker tests still need <em>failures</em> from the
+ * backend; rather than fake them, they drive a <b>real</b> client that has been shut down — its
+ * {@code get} then throws an {@link IllegalStateException} instantly and deterministically — and/or
+ * set the breaker's internal counters by reflection while reading a genuinely-present value back from
+ * the server.
+ */
 @Tag("2025")
 public class DistributedCacheTest extends TestBase {
 
-    /**
-     * In-memory backing for the DistributedCacheClient interface so DistributedCache can be
-     * exercised without a real server. The "fail" toggle lets tests verify circuit-breaker behavior.
-     */
-    private static final class InMemoryClient implements DistributedCacheClient<String> {
-        final Map<String, String> store = new ConcurrentHashMap<>();
-        final AtomicInteger getCalls = new AtomicInteger();
-        final AtomicInteger flushCalls = new AtomicInteger();
-        final AtomicInteger disconnectCalls = new AtomicInteger();
-        volatile boolean failGet = false;
-        volatile boolean failDisconnect = false;
+    private static final String SERVER_URL = "localhost:11211";
+    private static final String DISTRIBUTED_CACHE_LOGGER = "com.landawn.abacus.cache.DistributedCache";
 
-        @Override
-        public String serverUrl() {
-            return "in-memory";
-        }
+    /** Long-lived client used only to flush the server between tests and to host constructor-validation. */
+    private static SpyMemcached<String> flushClient;
 
-        @Override
-        public String get(final String key) {
-            getCalls.incrementAndGet();
-            if (failGet) {
-                throw new RuntimeException("simulated failure");
-            }
-            return store.get(key);
-        }
+    @BeforeAll
+    static void connect() {
+        flushClient = new SpyMemcached<>(SERVER_URL);
+    }
 
-        @Override
-        public Map<String, String> getBulk(final String... keys) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Map<String, String> getBulk(final Collection<String> keys) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public boolean set(final String key, final String value, final long liveTime) {
-            store.put(key, value);
-            return true;
-        }
-
-        @Override
-        public boolean delete(final String key) {
-            store.remove(key);
-            return true;
-        }
-
-        @Override
-        public long incr(final String key) {
-            return 0;
-        }
-
-        @Override
-        public long incr(final String key, final int delta) {
-            return 0;
-        }
-
-        @Override
-        public long decr(final String key) {
-            return 0;
-        }
-
-        @Override
-        public long decr(final String key, final int delta) {
-            return 0;
-        }
-
-        @Override
-        public void flushAll() {
-            flushCalls.incrementAndGet();
-            store.clear();
-        }
-
-        @Override
-        public void disconnect() {
-            disconnectCalls.incrementAndGet();
-            if (failDisconnect) {
-                throw new RuntimeException("simulated disconnect failure");
-            }
+    @AfterAll
+    static void disconnect() {
+        if (flushClient != null) {
+            flushClient.disconnect();
         }
     }
 
-    private static final String DISTRIBUTED_CACHE_LOGGER = "com.landawn.abacus.cache.DistributedCache";
+    @BeforeEach
+    void flush() {
+        flushClient.flushAll();
+    }
+
+    private static SpyMemcached<String> newClient() {
+        return new SpyMemcached<>(SERVER_URL);
+    }
+
+    // --- construction validation (no live operation) -------------------------------------------
 
     @Test
     public void testConstructor_EdgeCase_NullClient() {
@@ -126,41 +82,43 @@ public class DistributedCacheTest extends TestBase {
 
     @Test
     public void testConstructor_EdgeCase_NegativeMaxFailed() {
-        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<>(new InMemoryClient(), "p:", -1, 1000));
+        // The client is a real one but is never used: the argument check fails first.
+        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<>(flushClient, "p:", -1, 1000));
     }
 
     @Test
     public void testConstructor_EdgeCase_NegativeRetryDelay() {
-        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<>(new InMemoryClient(), "p:", 100, -1));
+        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<>(flushClient, "p:", 100, -1));
     }
+
+    // --- basic operations against the real server ----------------------------------------------
 
     @Test
     public void testPutAndGetOrNull() {
-        final InMemoryClient client = new InMemoryClient();
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client)) {
-            assertTrue(cache.put("k1", "v1", 1000, 0));
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
+            assertTrue(cache.put("k1", "v1", 60_000, 0));
             assertEquals("v1", cache.getOrNull("k1"));
         }
     }
 
     @Test
     public void testPut_WithKeyPrefix() {
-        final InMemoryClient client = new InMemoryClient();
+        final SpyMemcached<String> client = newClient();
         try (DistributedCache<String, String> cache = new DistributedCache<>(client, "myapp:")) {
-            assertTrue(cache.put("k1", "v1", 1000, 0));
-            // Verify it round-trips
+            assertTrue(cache.put("k1", "v1", 60_000, 0));
+            // Round-trips through the cache...
             assertEquals("v1", cache.getOrNull("k1"));
-            // And confirm the prefix is applied to the stored key.
-            assertEquals(1, client.store.size());
-            assertTrue(client.store.keySet().iterator().next().startsWith("myapp:"));
+            // ...and the prefix is actually applied to the key stored on the server.
+            final String storedKey = cache.generateKey("k1");
+            assertTrue(storedKey.startsWith("myapp:"));
+            assertEquals("v1", client.get(storedKey));
         }
     }
 
     @Test
     public void testRemove() {
-        final InMemoryClient client = new InMemoryClient();
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client)) {
-            cache.put("k", "v", 1000, 0);
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
+            cache.put("k", "v", 60_000, 0);
             cache.remove("k");
             assertNull(cache.getOrNull("k"));
         }
@@ -168,9 +126,8 @@ public class DistributedCacheTest extends TestBase {
 
     @Test
     public void testContainsKey() {
-        final InMemoryClient client = new InMemoryClient();
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client)) {
-            cache.put("k", "v", 1000, 0);
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
+            cache.put("k", "v", 60_000, 0);
             assertTrue(cache.containsKey("k"));
             assertFalse(cache.containsKey("missing"));
         }
@@ -178,45 +135,38 @@ public class DistributedCacheTest extends TestBase {
 
     @Test
     public void testClear() {
-        final InMemoryClient client = new InMemoryClient();
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client)) {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
             cache.put("k", "v", 0, 0);
             cache.clear();
-            assertEquals(1, client.flushCalls.get());
             assertNull(cache.getOrNull("k"));
         }
     }
 
     @Test
     public void testKeySet_Unsupported() {
-        final InMemoryClient client = new InMemoryClient();
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client)) {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
             assertThrows(UnsupportedOperationException.class, cache::keySet);
         }
     }
 
     @Test
     public void testSize_Unsupported() {
-        final InMemoryClient client = new InMemoryClient();
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client)) {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
             assertThrows(UnsupportedOperationException.class, cache::size);
         }
     }
 
     @Test
     public void testClose_IsIdempotent() {
-        final InMemoryClient client = new InMemoryClient();
-        final DistributedCache<String, String> cache = new DistributedCache<>(client);
+        final DistributedCache<String, String> cache = new DistributedCache<>(newClient());
         cache.close();
-        cache.close();
+        cache.close(); // idempotent
         assertTrue(cache.isClosed());
-        assertEquals(1, client.disconnectCalls.get(), "disconnect should run exactly once");
     }
 
     @Test
     public void testOperations_AfterClose_Throw() {
-        final InMemoryClient client = new InMemoryClient();
-        final DistributedCache<String, String> cache = new DistributedCache<>(client);
+        final DistributedCache<String, String> cache = new DistributedCache<>(newClient());
         cache.close();
         assertThrows(IllegalStateException.class, () -> cache.getOrNull("k"));
         assertThrows(IllegalStateException.class, () -> cache.put("k", "v", 0, 0));
@@ -226,93 +176,88 @@ public class DistributedCacheTest extends TestBase {
 
     @Test
     public void testGenerateKey_EdgeCase_NullKey() {
-        final InMemoryClient client = new InMemoryClient();
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client)) {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
             assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
         }
     }
 
     /**
-     * After maxFailed consecutive failures within the retry window, getOrNull short-circuits
-     * to null without touching the client.
+     * {@code generateKey} rejects a non-null key whose string representation is null. An empty
+     * {@link Optional} is non-null yet {@code N.stringOf(Optional.empty())} returns {@code null}.
+     * (Uses {@link #flushClient}; {@code generateKey} is a pure transformation and performs no I/O.)
      */
     @Test
-    public void testCircuitBreaker_OpensAfterMaxFailures() {
-        final InMemoryClient client = new InMemoryClient();
-        client.failGet = true;
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 10_000)) {
+    public void testGenerateKey_EdgeCase_NullStringRepresentation() {
+        final DistributedCache<Optional<Object>, String> cache = new DistributedCache<>(flushClient);
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> cache.generateKey(Optional.empty()));
+        assertTrue(ex.getMessage() != null && ex.getMessage().contains("Key string representation cannot be null"),
+                "expected the null-string-representation message but was: " + ex.getMessage());
+    }
+
+    // --- circuit breaker -----------------------------------------------------------------------
+
+    /**
+     * A read failure from the backend is swallowed and surfaced as a cache miss (null). The failure is
+     * real: the underlying client is shut down, so {@code get} throws instantly.
+     */
+    @Test
+    public void testGetOrNull_failingBackendIsSwallowedAsNull() {
+        final SpyMemcached<String> client = newClient();
+        // High threshold + long retry window so the breaker stays closed and the failing get actually
+        // reaches the (shut-down) client.
+        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 5, 10_000)) {
+            client.disconnect(); // every subsequent get() now throws IllegalStateException
             assertNull(cache.getOrNull("k"));
-            assertNull(cache.getOrNull("k"));
-            final int callsBefore = client.getCalls.get();
-            // Circuit should now be open — next call must not reach the client.
-            assertNull(cache.getOrNull("k"));
-            assertEquals(callsBefore, client.getCalls.get());
         }
     }
 
     /**
-     * The documented contract of {@link DistributedCache#getOrNull(Object)} is
-     * "{@code @throws IllegalArgumentException if the key is null}", with no carve-out for the
-     * circuit-breaker-open state. Before the fix, a null key was only rejected inside
-     * generateKey(...), which runs AFTER the circuit-breaker fast path — so once the circuit was
-     * open, getOrNull(null) silently returned null instead of throwing. This verifies the null key
-     * is rejected even when the circuit is open.
+     * With a genuinely-present value on the server, forcing the breaker into the open state (via its
+     * internal counters) makes {@code getOrNull} short-circuit to {@code null} despite the value being
+     * available; once the retry window elapses the read succeeds again and the counter resets.
      */
     @Test
-    public void testGetOrNull_NullKey_ThrowsEvenWhenCircuitOpen() {
-        final InMemoryClient client = new InMemoryClient();
-        client.failGet = true;
-        // maxFailed=1, long retry window so the circuit stays open after the first failure.
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 1, 60_000)) {
-            // Drive one failure to open the circuit.
-            assertNull(cache.getOrNull("k"));
-            // Circuit is now open; a null key must still throw rather than short-circuit to null.
+    public void testCircuitBreaker_opensThenRecovers() throws Exception {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient(), "", 1, 60_000)) {
+            assertTrue(cache.put("k", "v", 60_000, 0));
+            assertEquals("v", cache.getOrNull("k"));
+
+            // Open the circuit: counter at threshold, last failure just now.
+            setBreakerState(cache, 1, System.currentTimeMillis());
+            assertNull(cache.getOrNull("k"), "an open circuit must short-circuit to null even though the value is present");
+
+            // Let the retry window elapse: the read reaches the server again and the breaker closes.
+            setBreakerState(cache, 1, 0L);
+            assertEquals("v", cache.getOrNull("k"));
+            assertEquals(0, failedCounter(cache), "a successful read must reset the failure counter");
+        }
+    }
+
+    /**
+     * The documented contract of {@link DistributedCache#getOrNull(Object)} rejects a null key with
+     * {@link IllegalArgumentException} even when the circuit breaker is open (the null check runs before
+     * the breaker short-circuit).
+     */
+    @Test
+    public void testGetOrNull_NullKey_ThrowsEvenWhenCircuitOpen() throws Exception {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient(), "", 1, 60_000)) {
+            setBreakerState(cache, 1, System.currentTimeMillis()); // force the circuit open
             assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
         }
     }
 
     /**
-     * Guards the circuit-breaker failure counter against unbounded growth. With {@code retryDelay == 0}
-     * the breaker never fast-fails (the time window is always elapsed), so every failing get reaches the
-     * client and flows through the failure-increment path. Driving many failures past the threshold
-     * exercises the clamp that stops incrementing once {@code failedCounter >= maxFailedNumForRetry};
-     * without that clamp the counter would eventually overflow to a negative value and silently disable
-     * the breaker. The breaker must still recover cleanly once the backend comes back.
-     */
-    @Test
-    public void testCircuitBreaker_FailureCounterDoesNotGrowUnbounded() {
-        final InMemoryClient client = new InMemoryClient();
-        client.failGet = true;
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0)) {
-            // Every call reaches the client (retryDelay==0 means the circuit never short-circuits),
-            // so each failure passes through the (clamped) increment branch — well past the threshold.
-            for (int i = 0; i < 50; i++) {
-                assertNull(cache.getOrNull("k"));
-            }
-            assertEquals(50, client.getCalls.get(), "every failing get should reach the client when retryDelay==0");
-
-            // Recovery still works: counter resets to 0 on the next success.
-            client.failGet = false;
-            client.store.put(cache.generateKey("k"), "ok");
-            assertEquals("ok", cache.getOrNull("k"));
-        }
-    }
-
-    /**
-     * The circuit-breaker failure counter must never exceed {@code maxFailedNumForRetry}, even under
-     * concurrent failing reads. The increment uses an atomic compare-and-cap ({@code getAndUpdate})
-     * rather than a separate {@code get()}-then-{@code incrementAndGet()}; the latter is a
-     * check-then-act race in which many threads can all observe {@code (cap - 1)}, all pass the guard,
-     * and overshoot the cap. With {@code retryDelay == 0} the breaker never short-circuits, so every
-     * concurrent get flows through the capped increment path.
+     * The failure counter must never exceed {@code maxFailedNumForRetry}, even under concurrent failing
+     * reads. With {@code retryDelay == 0} the breaker never short-circuits, so every concurrent get
+     * flows through the capped increment path. Failures are real (shut-down client) and instant.
      */
     @Test
     public void testCircuitBreaker_FailureCounterNeverExceedsCapUnderConcurrency() throws Exception {
-        final InMemoryClient client = new InMemoryClient();
-        client.failGet = true;
         final int cap = 5;
-
+        final SpyMemcached<String> client = newClient();
         try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", cap, 0)) {
+            client.disconnect(); // all reads now fail instantly
+
             final int threadCount = 16;
             final ExecutorService pool = Executors.newFixedThreadPool(threadCount);
             final CountDownLatch start = new CountDownLatch(1);
@@ -329,37 +274,30 @@ public class DistributedCacheTest extends TestBase {
             }
 
             start.countDown();
-
             for (final Future<?> f : futures) {
                 f.get();
             }
-
             pool.shutdown();
 
-            final Field field = DistributedCache.class.getDeclaredField("failedCounter");
-            field.setAccessible(true);
-            final AtomicInteger counter = (AtomicInteger) field.get(cache);
-
-            assertEquals(cap, counter.get(), "failure counter must be capped at maxFailedNumForRetry under concurrency");
+            assertEquals(cap, failedCounter(cache), "failure counter must be capped at maxFailedNumForRetry under concurrency");
         }
     }
 
+    /**
+     * Guards the failure counter against unbounded growth: with {@code retryDelay == 0} the breaker
+     * never fast-fails, so each failing get passes through the (clamped) increment branch. Driving many
+     * failures past the threshold must leave the counter pinned at the cap rather than overflowing.
+     */
     @Test
-    public void testCircuitBreaker_ClosesOnSuccess() {
-        final InMemoryClient client = new InMemoryClient();
-        client.failGet = true;
-        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 1, 100)) {
-            assertNull(cache.getOrNull("k"));
-            // Recover and store a value.
-            client.failGet = false;
-            client.store.put(cache.generateKey("k"), "ok");
-            // Wait long enough so the retry window has elapsed.
-            try {
-                Thread.sleep(150);
-            } catch (final InterruptedException e) {
-                Thread.currentThread().interrupt();
+    public void testCircuitBreaker_FailureCounterDoesNotGrowUnbounded() throws Exception {
+        final int cap = 2;
+        final SpyMemcached<String> client = newClient();
+        try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", cap, 0)) {
+            client.disconnect();
+            for (int i = 0; i < 50; i++) {
+                assertNull(cache.getOrNull("k"));
             }
-            assertEquals("ok", cache.getOrNull("k"));
+            assertEquals(cap, failedCounter(cache), "counter must stay clamped at the cap, never overflow");
         }
     }
 
@@ -371,53 +309,33 @@ public class DistributedCacheTest extends TestBase {
     public void testGetOrNull_readFailureLoggedAtDebug() {
         Configurator.setLevel(DISTRIBUTED_CACHE_LOGGER, Level.DEBUG);
         try {
-            final InMemoryClient client = new InMemoryClient();
-            client.failGet = true;
-            // High threshold + long retry window so the breaker stays closed and the failing get
-            // actually reaches the client (and the debug-logging branch).
+            final SpyMemcached<String> client = newClient();
+            // High threshold + long retry window so the breaker stays closed and the failing get reaches
+            // the (shut-down) client and the debug-logging branch.
             try (DistributedCache<String, String> cache = new DistributedCache<>(client, "", 5, 10_000)) {
+                client.disconnect();
                 assertNull(cache.getOrNull("k"));
-                assertEquals(1, client.getCalls.get());
             }
         } finally {
             Configurator.setLevel(DISTRIBUTED_CACHE_LOGGER, Level.ERROR);
         }
     }
 
-    /**
-     * {@code close()} must stay idempotent and not propagate even if the underlying client's
-     * {@code disconnect()} throws. Raising the logger level to WARN exercises the warn-logging line
-     * inside the disconnect-failure catch block.
-     */
-    @Test
-    public void testClose_disconnectFailureIsSwallowedAndLogged() {
-        Configurator.setLevel(DISTRIBUTED_CACHE_LOGGER, Level.WARN);
-        try {
-            final InMemoryClient client = new InMemoryClient();
-            client.failDisconnect = true;
-            final DistributedCache<String, String> cache = new DistributedCache<>(client);
+    // --- reflection helpers for the circuit-breaker internal state -----------------------------
 
-            cache.close(); // disconnect throws; close() must swallow it and remain closed.
+    private static void setBreakerState(final DistributedCache<?, ?> cache, final int failedCount, final long lastFailedTime) throws Exception {
+        final Field fc = DistributedCache.class.getDeclaredField("failedCounter");
+        fc.setAccessible(true);
+        ((AtomicInteger) fc.get(cache)).set(failedCount);
 
-            assertTrue(cache.isClosed());
-            assertEquals(1, client.disconnectCalls.get());
-        } finally {
-            Configurator.setLevel(DISTRIBUTED_CACHE_LOGGER, Level.ERROR);
-        }
+        final Field lt = DistributedCache.class.getDeclaredField("lastFailedTime");
+        lt.setAccessible(true);
+        ((AtomicLong) lt.get(cache)).set(lastFailedTime);
     }
 
-    /**
-     * {@code generateKey} rejects a non-null key whose string representation is null. An empty
-     * {@link Optional} is non-null yet {@code N.stringOf(Optional.empty())} returns {@code null},
-     * so it trips the "Key string representation cannot be null" guard.
-     */
-    @Test
-    public void testGenerateKey_EdgeCase_NullStringRepresentation() {
-        final InMemoryClient client = new InMemoryClient();
-        try (DistributedCache<Optional<Object>, String> cache = new DistributedCache<>(client)) {
-            final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> cache.generateKey(Optional.empty()));
-            assertTrue(ex.getMessage() != null && ex.getMessage().contains("Key string representation cannot be null"),
-                    "expected the null-string-representation message but was: " + ex.getMessage());
-        }
+    private static int failedCounter(final DistributedCache<?, ?> cache) throws Exception {
+        final Field fc = DistributedCache.class.getDeclaredField("failedCounter");
+        fc.setAccessible(true);
+        return ((AtomicInteger) fc.get(cache)).get();
     }
 }
