@@ -180,7 +180,8 @@ public interface Cache<K, V> extends Closeable {
      *
      * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
-     * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full, closed, or write failure)
+     * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full or write failure;
+     *         calling this method on a closed cache is implementation-defined and typically throws {@link IllegalStateException})
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
@@ -222,7 +223,8 @@ public interface Cache<K, V> extends Closeable {
      * @param liveTime the time-to-live in milliseconds from insertion; handling of {@code <= 0} is implementation-defined
      * @param maxIdleTime the maximum idle time in milliseconds since last access; handling of {@code <= 0} is
      *                    implementation-defined and the parameter may be ignored entirely by distributed caches
-     * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full, closed, or write failure)
+     * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full or write failure;
+     *         calling this method on a closed cache is implementation-defined and typically throws {@link IllegalStateException})
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */

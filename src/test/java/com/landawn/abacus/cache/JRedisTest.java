@@ -171,9 +171,24 @@ public class JRedisTest {
         boolean ok = cache.set("user:1", account, 60_000); // 60 seconds
 
         assertTrue(ok);
-        // 60_000 ms should be SET ... EX 60 (SetParams.equals compares the param content)
-        verify(mockJedis).set(eq(utf8("user:1")), any(byte[].class), eq(SetParams.setParams().ex(60L)));
+        // 60_000 ms should be SET ... PX 60000 (SetParams.equals compares the param content)
+        verify(mockJedis).set(eq(utf8("user:1")), any(byte[].class), eq(SetParams.setParams().px(60_000L)));
         verify(mockJedis, never()).set(any(byte[].class), any(byte[].class));
+    }
+
+    /**
+     * Regression test for the TTL-coarsening bug: {@code liveTime} was previously converted to whole
+     * seconds ({@code SET ... EX}, rounding up), so a 300 ms TTL silently became a full second —
+     * over 3x longer than requested for sub-second entries. The TTL is now passed through with
+     * millisecond precision ({@code SET ... PX}).
+     */
+    @Test
+    public void test_set_subSecondTtl_honoredWithMillisecondPrecision() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+
+        assertTrue(cache.set("short-lived", "v", 300));
+
+        verify(mockJedis).set(eq(utf8("short-lived")), any(byte[].class), eq(SetParams.setParams().px(300L)));
     }
 
     @Test
@@ -369,7 +384,7 @@ public class JRedisTest {
         cache.set("k", account, 30_000);
 
         org.mockito.ArgumentCaptor<byte[]> payload = org.mockito.ArgumentCaptor.forClass(byte[].class);
-        verify(mockJedis).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().ex(30L)));
+        verify(mockJedis).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().px(30_000L)));
 
         Object roundTripped = KRYO.decode(payload.getValue());
         assertTrue(roundTripped instanceof Account);

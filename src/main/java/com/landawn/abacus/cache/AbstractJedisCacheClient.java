@@ -52,6 +52,11 @@ import redis.clients.jedis.params.SetParams;
  *   <li>Increment/decrement operations auto-initialize non-existent keys to 0</li>
  *   <li>Decrement operations can result in negative values (unlike Memcached)</li>
  *   <li>All string keys are encoded using UTF-8</li>
+ *   <li>Counter keys and object keys are disjoint worlds: {@code incr}/{@code decr} store raw
+ *       ASCII digits that {@code get} cannot deserialize (Kryo decode fails), and {@code incr}/
+ *       {@code decr} on a {@code set}-stored value always fails because its Kryo bytes are not a
+ *       Redis integer — even when the logical value is a number. Read counters back with
+ *       {@code incr(key, 0)} or {@code decr(key, 0)}, never with {@code get}</li>
  * </ul>
  *
  * <p><b>Thread Safety:</b> Thread-safe. Each command is dispatched through a {@link UnifiedJedis}
@@ -98,6 +103,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis GET command. If the key
      * does not exist or has expired, {@code null} is returned. The operation is O(1) time complexity.
      *
+     * <p><b>Counter keys cannot be read with this method:</b> keys created by {@code incr}/{@code decr}
+     * hold raw ASCII digits, not Kryo-serialized bytes, so deserialization fails. Read counters back
+     * with {@code incr(key, 0)} (or {@code decr(key, 0)}) instead.
+     *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * User user = cache.get("user:123");                            // the cached User, or null if absent
@@ -107,6 +116,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * // Negative: a null key is rejected
      * User bad = cache.get(null);                                   // throws IllegalArgumentException
+     *
+     * // Negative: a counter key created by incr()/decr() cannot be deserialized by get()
+     * cache.incr("page:views");
+     * cache.get("page:views");                                      // throws RuntimeException (Kryo decode)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
@@ -209,17 +222,18 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * its value and TTL will be replaced.
      *
      * <p><b>Redis-specific behavior:</b> When {@code liveTime} is positive, this operation uses the
-     * Redis SET command with the {@code EX} option, which atomically sets both the value and
-     * expiration time. When {@code liveTime} is 0 or negative, a plain SET command is used without
-     * expiration, meaning the key will persist until explicitly deleted. If the key already exists,
-     * the previous value and TTL are completely replaced.
+     * Redis SET command with the {@code PX} option, which atomically sets both the value and a
+     * millisecond-precision expiration time — the requested {@code liveTime} is honored exactly,
+     * with no rounding to seconds. When {@code liveTime} is 0 or negative, a plain SET command is
+     * used without expiration, meaning the key will persist until explicitly deleted. If the key
+     * already exists, the previous value and TTL are completely replaced.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Cache with 1 hour TTL (3600000 ms -> SET ... EX 3600)
+     * // Cache with 1 hour TTL (3600000 ms -> SET ... PX 3600000)
      * boolean success = cache.set("user:123", user, 3600000);       // returns true when Redis replies "OK"
      *
-     * // Edge: liveTime <= 0 means NO expiration -> plain SET (no EX)
+     * // Edge: liveTime <= 0 means NO expiration -> plain SET (no PX)
      * cache.set("forever", user, 0);                                // uses SET; key never auto-expires
      *
      * // Edge: a null value is allowed; it is stored as an empty byte array
@@ -231,7 +245,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param value the value to cache. May be {@code null} (stored as empty byte array).
-     * @param liveTime the time-to-live in milliseconds. Positive values set expiration via SET ... EX (converted to seconds). 0 or negative means no expiration (plain SET).
+     * @param liveTime the time-to-live in milliseconds. Positive values set a millisecond-precision expiration via SET ... PX. 0 or negative means no expiration (plain SET).
      * @return {@code true} if the operation was successful (Redis responds with "OK"), {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or serialization error occurs
@@ -249,8 +263,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
             return "OK".equals(jedis.set(keyBytes, valueBytes));
         }
 
-        // SET ... EX atomically sets the value and an expiration in seconds (replaces deprecated SETEX).
-        return "OK".equals(jedis.set(keyBytes, valueBytes, SetParams.setParams().ex(toSeconds(liveTime))));
+        // SET ... PX atomically sets the value and a millisecond-precision expiration, honoring the
+        // requested liveTime exactly. The previous SET ... EX (seconds) silently rounded sub-second
+        // TTLs up to a full second - 10x or more longer than requested for short-lived entries.
+        return "OK".equals(jedis.set(keyBytes, valueBytes, SetParams.setParams().px(liveTime)));
     }
 
     /**

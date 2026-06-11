@@ -236,6 +236,45 @@ public class EhcacheTest {
         }
     }
 
+    /**
+     * Regression test for the bulk-operation null-element validation gap.
+     *
+     * <p>Before the fix, a non-null key set containing a {@code null} element passed the wrapper's
+     * validation and surfaced as Ehcache's internal {@code NullPointerException} — an undocumented
+     * exception type inconsistent with the wrapper's IllegalArgumentException-based validation
+     * everywhere else. The fix validates elements up front.
+     */
+    @Test
+    public void testGetAll_EdgeCase_NullElementThrowsIAE() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            final Set<String> keys = new HashSet<>();
+            keys.add("a");
+            keys.add(null);
+            assertThrows(IllegalArgumentException.class, () -> wrapper.getAll(keys));
+        } finally {
+            cm.close();
+        }
+    }
+
+    @Test
+    public void testRemoveAll_EdgeCase_NullElementThrowsIAE() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            wrapper.put("a", "1", 0, 0);
+            final Set<String> keys = new HashSet<>();
+            keys.add("a");
+            keys.add(null);
+            assertThrows(IllegalArgumentException.class, () -> wrapper.removeAll(keys));
+            // Validation happens up front: nothing was removed.
+            assertEquals("1", wrapper.getOrNull("a"));
+        } finally {
+            cm.close();
+        }
+    }
+
     @Test
     public void testPutAll() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);

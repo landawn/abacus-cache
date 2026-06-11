@@ -221,6 +221,24 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final LongSummaryStatistics totalWriteToDiskTimeStats = new LongSummaryStatistics();
     final LongSummaryStatistics totalReadFromDiskTimeStats = new LongSummaryStatistics();
 
+    // The offHeapStore is keyed by the cache key alone, so concurrent same-key disk spills
+    // share one store entry. This map records which StoreWrapper currently owns the bytes in
+    // the store for a key; a replaced wrapper's destroy() must not delete bytes that belong
+    // to a newer wrapper. Store writes and ownership claims are serialized per key via
+    // storeKeyLocks so the (write bytes, claim ownership) pair is atomic.
+    final ConcurrentHashMap<K, StoreWrapper> storeOwners = new ConcurrentHashMap<>();
+    private final Object[] storeKeyLocks = new Object[64];
+
+    {
+        for (int i = 0; i < storeKeyLocks.length; i++) {
+            storeKeyLocks[i] = new Object();
+        }
+    }
+
+    private Object storeKeyLockFor(final K key) {
+        return storeKeyLocks[(key.hashCode() & Integer.MAX_VALUE) & (storeKeyLocks.length - 1)];
+    }
+
     /**
      * Constructs an {@code AbstractOffHeapCache} with the specified configuration.
      * Initializes the memory segments, object pool, and eviction scheduling.
@@ -329,43 +347,65 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // ByteBuffer.allocateDirect((int) capacity);
         _startPtr = allocate(_capacityInBytes);
 
-        _segments = new Segment[(int) (_capacityInBytes / SEGMENT_SIZE)];
+        // From this point on, a failing initialization step would leak the native allocation
+        // (it is released only by close()/the shutdown hook, neither of which is reachable for
+        // a half-constructed instance). Deallocate before rethrowing.
+        try {
+            _segments = new Segment[(int) (_capacityInBytes / SEGMENT_SIZE)];
 
-        for (int i = 0, len = _segments.length; i < len; i++) {
-            _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE, i);
-        }
+            for (int i = 0, len = _segments.length; i < len; i++) {
+                _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE, i);
+            }
 
-        // Pool capacity is the maximum number of MIN_BLOCK_SIZE slots that fit in the cache. For
-        // very large caches (capacityInMB >= ~131_072 i.e. 128 GB) the slot count can exceed
-        // Integer.MAX_VALUE; cap at Integer.MAX_VALUE so the int cast does not wrap to a
-        // negative or near-zero value and make every put fail with "pool full".
-        final long maxSlots = _capacityInBytes / MIN_BLOCK_SIZE;
-        final int poolCapacity = maxSlots > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) maxSlots;
-        _pool = PoolFactory.createKeyedObjectPool(poolCapacity, evictDelay, EvictionPolicy.LAST_ACCESS_TIME, true,
-                vacatingFactor == 0f ? DEFAULT_VACATING_FACTOR : vacatingFactor);
+            // Pool capacity is the maximum number of MIN_BLOCK_SIZE slots that fit in the cache. For
+            // very large caches (capacityInMB >= ~131_072 i.e. 128 GB) the slot count can exceed
+            // Integer.MAX_VALUE; cap at Integer.MAX_VALUE so the int cast does not wrap to a
+            // negative or near-zero value and make every put fail with "pool full".
+            final long maxSlots = _capacityInBytes / MIN_BLOCK_SIZE;
+            final int poolCapacity = maxSlots > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) maxSlots;
+            // The documented contract is "0 or negative disables automatic eviction", but the
+            // underlying pool rejects a negative evictDelay with IllegalArgumentException - so
+            // clamp before handing it over.
+            _pool = PoolFactory.createKeyedObjectPool(poolCapacity, N.max(0L, evictDelay), EvictionPolicy.LAST_ACCESS_TIME, true,
+                    vacatingFactor == 0f ? DEFAULT_VACATING_FACTOR : vacatingFactor);
 
-        this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
-        this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
-        this.offHeapStore = offHeapStore;
-        this.statsTimeOnDisk = statsTimeOnDisk;
-        this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
-        this.storeSelector = storeSelector;
+            this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
+            this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
+            this.offHeapStore = offHeapStore;
+            this.statsTimeOnDisk = statsTimeOnDisk;
+            this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
+            this.storeSelector = storeSelector;
 
-        if (evictDelay > 0) {
-            final Runnable evictTask = () -> {
-                // Evict from the pool
-                try {
-                    evict();
-                } catch (final Exception e) {
-                    // Swallowed so the scheduled task keeps running; eviction retries on the next cycle.
-                    // Pass the exception (not just its message) so the stack trace is preserved.
-                    if (logger.isWarnEnabled()) {
-                        logger.warn("Error during background cache eviction; will retry on next scheduled run", e);
+            if (evictDelay > 0) {
+                final Runnable evictTask = () -> {
+                    // Evict from the pool
+                    try {
+                        evict();
+                    } catch (final Exception e) {
+                        // Swallowed so the scheduled task keeps running; eviction retries on the next cycle.
+                        // Pass the exception (not just its message) so the stack trace is preserved.
+                        if (logger.isWarnEnabled()) {
+                            logger.warn("Error during background cache eviction; will retry on next scheduled run", e);
+                        }
                     }
-                }
-            };
+                };
 
-            scheduleFuture = scheduledExecutor.scheduleWithFixedDelay(evictTask, evictDelay, evictDelay, TimeUnit.MILLISECONDS);
+                scheduleFuture = scheduledExecutor.scheduleWithFixedDelay(evictTask, evictDelay, evictDelay, TimeUnit.MILLISECONDS);
+            }
+        } catch (final RuntimeException | Error initFailure) {
+            try {
+                if (scheduleFuture != null) {
+                    scheduleFuture.cancel(true);
+                }
+            } finally {
+                try {
+                    deallocate();
+                } catch (final RuntimeException deallocateFailure) {
+                    initFailure.addSuppressed(deallocateFailure);
+                }
+            }
+
+            throw initFailure;
         }
 
         shutdownHook = new Thread(() -> {
@@ -604,6 +644,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                                     occupiedMemory += slot.segment.sizeOfSlot;
                                     slots.add(slot);
+                                    // The slot now belongs to the list; null the loop variable so the
+                                    // cleanup below can never release the same slot twice (once via
+                                    // `slot`, once via `slots`) if a later step throws.
+                                    slot = null;
                                 }
 
                                 if (copiedSize == size) {
@@ -625,6 +669,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         }
 
                         if (slotWrapper != null) {
+                            // Account for the promoted in-memory copy up front: every wrapper
+                            // destroy() unconditionally subtracts these amounts, so they must be
+                            // added on every path that may destroy the wrapper - including the
+                            // concurrent-replacement branch below, which previously subtracted
+                            // without a matching add and permanently skewed the accounting
+                            // (eventually driving the sums negative and making stats() throw).
+                            totalOccupiedMemorySize.add(occupiedMemory);
+                            totalDataSize.add(size);
+
                             // Only promote when the disk-backed entry we read is still the current
                             // mapping. A concurrent put()/remove() may have replaced it between the
                             // _pool.get(key) at the top of this method and now; an unconditional
@@ -642,10 +695,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                                 boolean result = false;
 
                                 try {
-                                    totalOccupiedMemorySize.add(occupiedMemory);
-
-                                    totalDataSize.add(size);
-
                                     result = _pool.put(key, slotWrapper);
                                 } finally {
                                     if (!result) {
@@ -742,7 +791,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final long effectiveMaxIdleTime = maxIdleTime > 0 ? maxIdleTime : Long.MAX_VALUE;
 
         final Type<V> type = N.typeOf(value.getClass());
-        final boolean replacingExisting = _pool.peek(key) != null;
         Wrapper<V> w = null;
 
         // final byte[] bytes = parser.serialize(value).getBytes();
@@ -778,14 +826,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
-        final int storeSelection = storeSelector == null ? 0 : storeSelector.apply(key, value, size);
-        final boolean canBeStoredInMemory = storeSelection < 2;
-        final boolean canBeStoredToDisk = storeSelection != 1;
-
         Slot slot = null;
         List<Slot> slots = null;
 
         try {
+            // Inside the try so a throwing storeSelector still reaches the finally below,
+            // which recycles the pooled serialization buffer.
+            final int storeSelection = storeSelector == null ? 0 : storeSelector.apply(key, value, size);
+            final boolean canBeStoredInMemory = storeSelection < 2;
+            final boolean canBeStoredToDisk = storeSelection != 1;
+
             if (size <= _maxBlockSize) {
                 slot = canBeStoredInMemory ? getAvailableSlot(size) : null;
 
@@ -824,6 +874,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                         occupiedMemory += slot.segment.sizeOfSlot;
                         slots.add(slot);
+                        // The slot now belongs to the list; null the loop variable so the finally
+                        // below can never release the same slot twice (once via `slot`, once via
+                        // `slots`) if a later step throws.
+                        slot = null;
                     }
                 }
 
@@ -856,10 +910,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // thrown by a custom offHeapStore.put) — the classic "return in finally swallows the exception"
         // trap. The finally above still releases any allocated slots on every exit, including the
         // exceptional one, so cleanup is unchanged; only the silent swallowing is removed.
+        // Schedule a vacate on every storage failure (the documented contract), including failed
+        // replacements of an existing key - those fail for the same reason (memory pressure) and
+        // benefit equally from reclamation. vacate() itself is debounced, so this cannot storm.
         if (w == null) {
-            if (!replacingExisting) {
-                vacate();
-            }
+            vacate();
 
             return false;
         }
@@ -944,10 +999,28 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // silently delete the existing cache entry.
         final Wrapper<V> prior = _pool.remove(k);
 
-        final boolean stored;
+        final StoreWrapper storeWrapper;
 
         try {
-            stored = offHeapStore.put(k, bytes.length == size ? bytes : N.copyOfRange(bytes, 0, size));
+            // Always hand the store a private copy: `bytes` may alias a pooled serialization
+            // buffer that is recycled (and reused by other threads) right after this put, or the
+            // caller's own byte[]/ByteBuffer contents. The OffHeapStore contract leaves defensive
+            // copying implementation-specific, so a store that retains the array would otherwise
+            // see its contents silently change later.
+            final byte[] bytesToStore = N.copyOfRange(bytes, 0, size);
+
+            // The store is keyed by the cache key alone, so the byte write and the ownership
+            // claim must be atomic per key: otherwise two concurrent spills of the same key can
+            // interleave such that the surviving wrapper points at bytes that the other thread's
+            // (later-destroyed) wrapper deletes, silently losing the entry.
+            synchronized (storeKeyLockFor(k)) {
+                if (offHeapStore.put(k, bytesToStore)) {
+                    storeWrapper = new StoreWrapper(type, liveTime, maxIdleTime, size, k);
+                    storeOwners.put(k, storeWrapper);
+                } else {
+                    storeWrapper = null;
+                }
+            }
         } catch (final RuntimeException | Error e) {
             try {
                 restorePriorAfterDiskWriteFailure(k, prior);
@@ -958,7 +1031,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             throw e;
         }
 
-        if (stored) {
+        if (storeWrapper != null) {
             if (prior != null) {
                 if (prior.kind == Wrapper.KIND_STORE) {
                     ((StoreWrapper) prior).discardReplacedStoreMetadata();
@@ -967,7 +1040,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             }
 
-            return new StoreWrapper(type, liveTime, maxIdleTime, size, k);
+            return storeWrapper;
         }
 
         restorePriorAfterDiskWriteFailure(k, prior);
@@ -1303,10 +1376,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         final MinMaxAvg readFromDiskTimeStats = new MinMaxAvg(readMin, readMax, readAvg);
 
-        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), sizeOnDisk.sum(), poolStats.putCount(), writeCountToDisk.sum(),
+        // Clamp the LongAdder sums to >= 0 for the same reason as the timing stats above:
+        // LongAdder.sum() is not an atomic snapshot, so while cells are being summed a
+        // concurrent destroy's decrement can be observed without its matching (earlier,
+        // different-cell) increment, yielding a transiently negative value that the
+        // OffHeapCacheStats constructor would reject - turning a monitoring call into a failure.
+        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), N.max(0L, sizeOnDisk.sum()), poolStats.putCount(), writeCountToDisk.sum(),
                 poolStats.getCount(), poolStats.hitCount(), readCountFromDisk.sum(), poolStats.missCount(), poolStats.evictionCount(),
-                evictionCountFromDisk.sum(), _capacityInBytes, totalOccupiedMemorySize.sum(), totalDataSize.sum(), dataSizeOnDisk.sum(), writeToDiskTimeStats,
-                readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
+                evictionCountFromDisk.sum(), _capacityInBytes, N.max(0L, totalOccupiedMemorySize.sum()), N.max(0L, totalDataSize.sum()),
+                N.max(0L, dataSizeOnDisk.sum()), writeToDiskTimeStats, readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
     }
 
     /**
@@ -1891,6 +1969,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     return null; // Already destroyed by concurrent eviction
                 }
 
+                // A newer wrapper for the same key may have replaced the bytes in the store (the
+                // store is keyed by the cache key alone). When this wrapper is no longer the
+                // registered owner, its recorded metadata no longer describes what the store
+                // holds: treat the entry as stale (a miss) instead of misreading the new bytes
+                // or throwing a spurious "data corruption" error on the size mismatch.
+                if (storeOwners.get(permanentKey) != this) {
+                    return null;
+                }
+
                 final byte[] bytes = offHeapStore.get(permanentKey);
 
                 if (bytes == null) {
@@ -1956,8 +2043,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                     totalDataSize.add(-size);
 
-                    offHeapStore.remove(permanentKey);
+                    final K k = permanentKey;
                     permanentKey = null;
+
+                    // Delete the disk bytes only while this wrapper still owns them: a wrapper
+                    // replaced by a concurrent same-key spill must not delete bytes that now
+                    // belong to the replacing wrapper. The per-key lock keeps the owner check
+                    // and the removal atomic with respect to a concurrent write+claim.
+                    synchronized (storeKeyLockFor(k)) {
+                        if (storeOwners.remove(k, this)) {
+                            offHeapStore.remove(k);
+                        }
+                    }
                 }
             }
         }

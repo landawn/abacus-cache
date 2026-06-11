@@ -187,12 +187,27 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
 
         final List<RedisClient> shardClients = new ArrayList<>(addressList.size());
 
-        for (final InetSocketAddress addr : addressList) {
-            // Use getHostString() (returns the literal host or IP) instead of getHostName(), which
-            // performs a reverse DNS lookup. Reverse DNS can block startup, fail if no PTR record
-            // exists, and produce shard hash keys that differ between processes whose resolvers
-            // disagree — silently breaking sharding consistency.
-            shardClients.add(RedisClient.builder().hostAndPort(new HostAndPort(addr.getHostString(), addr.getPort())).clientConfig(clientConfig).build());
+        try {
+            for (final InetSocketAddress addr : addressList) {
+                // Use getHostString() (returns the literal host or IP) instead of getHostName(), which
+                // performs a reverse DNS lookup. Reverse DNS can block startup, fail if no PTR record
+                // exists, and produce shard hash keys that differ between processes whose resolvers
+                // disagree — silently breaking sharding consistency.
+                shardClients.add(RedisClient.builder().hostAndPort(new HostAndPort(addr.getHostString(), addr.getPort())).clientConfig(clientConfig).build());
+            }
+        } catch (final RuntimeException | Error e) {
+            // If a later shard's construction fails, close the already-built ones: each owns a
+            // connection pool with a scheduled evictor task that would otherwise survive until JVM
+            // exit with no reference left to close it.
+            for (final RedisClient built : shardClients) {
+                try {
+                    built.close();
+                } catch (final RuntimeException suppressed) {
+                    e.addSuppressed(suppressed);
+                }
+            }
+
+            throw e;
         }
 
         clients = shardClients;

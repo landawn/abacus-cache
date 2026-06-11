@@ -14,11 +14,15 @@
 
 package com.landawn.abacus.cache;
 
+import java.util.Collections;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ContinuableFuture;
 import com.landawn.abacus.util.IOUtil;
+import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Properties;
 import com.landawn.abacus.util.u.Optional;
@@ -82,19 +86,39 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Shared async executor used by all cache implementations.
      * Configured with a thread pool sized based on CPU cores to efficiently
      * handle asynchronous cache operations without overwhelming the system.
-     * Core pool size is {@code max(64, CPU_CORES * 8)}, maximum pool size is
-     * {@code max(128, CPU_CORES * 16)}, and threads are kept alive for 180 seconds.
+     * Core pool size is {@code max(64, CPU_CORES * 8)}; the work queue is unbounded,
+     * so the pool does not grow beyond the core size. Idle threads are reclaimed
+     * after 180 seconds. Worker threads are daemon threads and the pool is shut down
+     * by a JVM exit hook, so an application that only used async cache operations can
+     * still exit normally.
      */
-    protected static final AsyncExecutor asyncExecutor = new AsyncExecutor(//
-            N.max(64, IOUtil.CPU_CORES * 8), // coreThreadPoolSize
-            N.max(128, IOUtil.CPU_CORES * 16), // maxThreadPoolSize
-            180L, TimeUnit.SECONDS);
+    protected static final AsyncExecutor asyncExecutor = createAsyncExecutor();
+
+    private static AsyncExecutor createAsyncExecutor() {
+        final ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(//
+                N.max(64, IOUtil.CPU_CORES * 8), // coreThreadPoolSize
+                N.max(128, IOUtil.CPU_CORES * 16), // maxThreadPoolSize
+                180L, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
+
+        threadPoolExecutor.allowCoreThreadTimeOut(true);
+
+        // Daemon threads + delayed-shutdown JVM exit hook: idle pool threads must not
+        // prevent the JVM from exiting after the application finishes.
+        return new AsyncExecutor(MoreExecutors.getExitingExecutorService(threadPoolExecutor));
+    }
 
     /**
      * Property bag for storing custom configuration and metadata.
      * Can be used by cache implementations and users to store arbitrary properties.
+     * Backed by a synchronized map so concurrent property access through this cache
+     * (or the live view returned by {@link #getProperties()}) is safe; iteration over
+     * the view still requires external synchronization, as usual for synchronized maps.
      */
-    protected final Properties<String, Object> properties = new Properties<>();
+    protected final Properties<String, Object> properties = new Properties<>() {
+        {
+            values = Collections.synchronizedMap(values);
+        }
+    };
 
     /**
      * Default time-to-live for cache entries, in milliseconds.

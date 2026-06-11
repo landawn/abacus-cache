@@ -4,15 +4,21 @@
 
 package com.landawn.abacus.cache;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.cache.LocalCache;
+import com.landawn.abacus.pool.KeyedObjectPool;
+import com.landawn.abacus.pool.PoolStats;
+import com.landawn.abacus.pool.PoolableAdapter;
 
 @Tag("2025")
 public class LocalCacheTest {
@@ -211,6 +217,29 @@ public class LocalCacheTest {
         try (LocalCache<String, String> cache = new LocalCache<>(60_000L, 30_000L, pool)) {
             assertTrue(cache.put("k", "v"));
             assertEquals("v", cache.getOrNull("k"));
+        }
+    }
+
+    /**
+     * Regression test for the stats() crash on drifted memory accounting.
+     *
+     * <p>A custom pool with a time-varying memory measure can let its data-size accounting drift
+     * below zero (PoolStats performs no validation). Before the fix, {@code LocalCache.stats()}
+     * forwarded the raw negative values into {@code CacheStats}, whose compact constructor threw
+     * {@code IllegalArgumentException} — so a pure monitoring call crashed. The fix clamps
+     * {@code maxMemory}/{@code dataSize} to the {@code -1} "not tracked" sentinel.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testStats_NegativePoolMemoryAccounting_ClampedInsteadOfThrowing() {
+        final KeyedObjectPool<String, PoolableAdapter<String>> pool = mock(KeyedObjectPool.class);
+        when(pool.stats()).thenReturn(new PoolStats(100, 1, 2, 3, 2, 1, 0, -7, -5));
+
+        try (LocalCache<String, String> cache = new LocalCache<>(60_000L, 30_000L, pool)) {
+            final CacheStats stats = assertDoesNotThrow(cache::stats);
+            assertEquals(100, stats.capacity());
+            assertEquals(-1, stats.maxMemory());
+            assertEquals(-1, stats.dataSize());
         }
     }
 }

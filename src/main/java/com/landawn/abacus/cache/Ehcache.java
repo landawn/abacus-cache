@@ -240,10 +240,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested (must not be {@code null})
-     * @return {@code true} if the cache currently has a mapping for the specified key; {@code false}
-     *         otherwise. Note that Ehcache's {@code containsKey} does NOT actively evaluate expiration:
-     *         an expired entry that has not yet been removed by Ehcache's housekeeping may still report
-     *         {@code true} here while {@link #getOrNull(Object)} returns {@code null} for the same key.
+     * @return {@code true} if the cache currently has a live (non-expired) mapping for the specified
+     *         key; {@code false} otherwise. Ehcache evaluates expiration during this check (an expired
+     *         entry reports {@code false} and is eagerly expired), but the check does not count as an
+     *         access for time-to-idle purposes, so it does not extend the entry's lifetime.
      * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      */
@@ -341,7 +341,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @return a map keyed by the requested keys, with each value being the cached value or
      *         {@code null} if the key is not present in the cache (subject to the cache-loader
      *         semantics described above)
-     * @throws IllegalArgumentException if keys is null
+     * @throws IllegalArgumentException if keys is null or contains a null element
      * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheLoadingException if the bulk cache loader fails
      */
@@ -349,6 +349,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
         assertNotClosed();
 
         N.checkArgNotNull(keys, "keys");
+        N.checkElementNotNull(keys, "keys");
 
         return cacheImpl.getAll(keys);
     }
@@ -421,7 +422,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param keys the set of cache keys to remove
-     * @throws IllegalArgumentException if keys is null
+     * @throws IllegalArgumentException if keys is null or contains a null element
      * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
@@ -429,6 +430,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
         assertNotClosed();
 
         N.checkArgNotNull(keys, "keys");
+        N.checkElementNotNull(keys, "keys");
 
         cacheImpl.removeAll(keys);
     }
@@ -443,7 +445,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Why Not Supported:</b>
      * <ul>
-     * <li>Ehcache 3.x API does not expose a keySet() or iterator() method</li>
+     * <li>Ehcache 3.x only offers entry iteration ({@code Iterable<Cache.Entry>}), which would
+     *     require a full O(n) scan of all storage tiers to materialize a key set</li>
      * <li>Multi-tier storage makes key enumeration prohibitively expensive</li>
      * <li>Memory overhead of materializing all keys could exceed available heap</li>
      * <li>For disk/distributed tiers, full scans would severely impact performance</li>
@@ -465,14 +468,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @return this method never returns normally; it always throws
-     * @throws UnsupportedOperationException always thrown, because the underlying Ehcache 3.x API does not provide key iteration
+     * @throws UnsupportedOperationException always thrown, because materializing a key set would require a full scan of all Ehcache storage tiers
      * @deprecated Unsupported operation. Ehcache does not provide efficient key iteration.
      *             Track keys externally or use a cache implementation that supports key enumeration instead.
      */
     @Deprecated
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
-        throw new UnsupportedOperationException("keySet() is not supported by Ehcache - key iteration is not provided by the underlying Ehcache 3.x API");
+        throw new UnsupportedOperationException(
+                "keySet() is not supported by Ehcache - materializing a key set would require a full scan of all storage tiers");
     }
 
     /**
@@ -486,7 +490,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <ul>
      * <li>Ehcache 3.x API does not provide a size(), count(), or estimatedSize() method</li>
      * <li>Multi-tier storage (on-heap, off-heap, disk) makes accurate counting complex</li>
-     * <li>Would require full iteration of all storage tiers, which is not exposed by the API</li>
+     * <li>The only alternative is the entry iterator ({@code Iterable<Cache.Entry>}), and a full
+     *     iteration of all storage tiers would be prohibitively expensive</li>
      * <li>For disk-backed or distributed caches, counting could require extensive I/O operations</li>
      * <li>Result would be stale immediately in highly concurrent scenarios</li>
      * </ul>

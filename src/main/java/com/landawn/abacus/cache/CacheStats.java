@@ -110,9 +110,9 @@ package com.landawn.abacus.cache;
  * @param evictionCount the total number of entries that have been evicted from the cache due to
  *                      capacity constraints or expiration policies (TTL or idle timeout).
  *                      Must be non-negative.
- * @param maxMemory the maximum memory in bytes allocated for the cache. A value of 0 indicates
- *                  unlimited memory (no memory-based eviction); a value of {@code -1} indicates that
- *                  the underlying cache does not track memory usage. Must be {@code -1} or non-negative.
+ * @param maxMemory the maximum memory in bytes allocated for the cache. A value of {@code -1} indicates
+ *                  that no memory limit is configured or that the underlying cache does not track memory
+ *                  usage. Must be {@code -1} or non-negative.
  * @param dataSize the total size in bytes of all data currently stored in the cache at the time
  *                 of this snapshot. Should not exceed {@code maxMemory} if memory limits are
  *                 enforced; a value of {@code -1} indicates that the underlying cache does not

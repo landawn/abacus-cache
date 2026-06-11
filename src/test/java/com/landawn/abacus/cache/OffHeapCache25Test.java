@@ -426,6 +426,26 @@ public class OffHeapCache25Test {
     }
 
     /**
+     * Regression test for the negative-evictDelay contract violation (FFM variant).
+     *
+     * <p>The builder javadoc documents "0 or negative disables automatic eviction", but a negative
+     * value was passed straight to the underlying pool, whose constructor throws
+     * {@code IllegalArgumentException} — leaking the already-allocated shared {@code Arena}
+     * (which, unlike {@code Arena.ofAuto()}, is never cleaner-released). The fix clamps the value
+     * before pool creation and releases the allocation if any later init step fails.
+     */
+    @Test
+    public void test_builder_negativeEvictDelay_disablesEvictionInsteadOfThrowing() {
+        final OffHeapCache25<String, byte[]> c = OffHeapCache25.<String, byte[]> builder().capacityInMB(1).evictDelay(-1).build();
+        try {
+            assertTrue(c.put("k", new byte[] { 1, 2, 3 }));
+            assertArrayEquals(new byte[] { 1, 2, 3 }, c.getOrNull("k"));
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
      * Durable boundary round-trip coverage for the MemorySegment (java.lang.foreign) off-heap
      * arithmetic — the counterpart to OffHeapCacheTest#test_boundary_sizes_roundtrip_exact for the
      * Unsafe-based impl. Sweeps single-slot, multi-slot (> maxBlockSize) and multi-segment-spanning

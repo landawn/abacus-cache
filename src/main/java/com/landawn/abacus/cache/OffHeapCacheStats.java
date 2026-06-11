@@ -83,7 +83,10 @@ import com.landawn.abacus.util.N;
  *                 because it is already part of {@code hitCount}.
  * @param hitCount the number of successful get operations, including those that ultimately served the value
  *                 from disk. To compute the number of hits served purely from off-heap memory, subtract
- *                 {@code hitCountByDisk} from {@code hitCount}.
+ *                 {@code hitCountByDisk} from {@code hitCount}. Note that this counter is maintained at the
+ *                 pool-lookup level: a disk-backed entry whose bytes turn out to be missing from the
+ *                 {@link OffHeapStore} (the degraded path where {@code get} returns {@code null}) is still
+ *                 counted as a hit, so a flaky store can slightly inflate the hit rate.
  * @param hitCountByDisk the number of successful get operations where the entry was read from disk via the
  *                       configured {@link OffHeapStore}. Always {@code &le; hitCount}; the disk read happens
  *                       after the pool lookup hit, which is the reason the pool's {@code hitCount} already
@@ -109,12 +112,14 @@ import com.landawn.abacus.util.N;
  * @param dataSizeOnDisk the total size of serialized data currently stored on disk in bytes. This is a
  *                       subset of {@code dataSize} and counts only entries that have been persisted to
  *                       disk storage.
- * @param writeToDiskTimeStats statistics for disk write operations, tracking the minimum, maximum, and
- *                             average time in milliseconds for writing entries to disk. This helps monitor
- *                             disk write performance and identify potential I/O bottlenecks.
+ * @param writeToDiskTimeStats statistics for disk-spilled put operations, tracking the minimum, maximum, and
+ *                             average time in milliseconds. The measured window is the end-to-end put latency
+ *                             for entries that ended up on disk (serialization, the failed in-memory slot
+ *                             search, the store write, and the pool insert) - not just the raw store write -
+ *                             so these values are not directly comparable to {@code readFromDiskTimeStats}.
  * @param readFromDiskTimeStats statistics for disk read operations, tracking the minimum, maximum, and
- *                              average time in milliseconds for reading entries from disk. This helps
- *                              monitor disk read performance and cache hit efficiency.
+ *                              average time in milliseconds for reading entry bytes from the store. This
+ *                              helps monitor disk read performance and cache hit efficiency.
  * @param segmentSize the size of each memory segment in bytes. The off-heap memory is organized into
  *                    fixed-size segments (typically 1MB = 1048576 bytes) to manage memory allocation
  *                    and reduce fragmentation.

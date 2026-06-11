@@ -10,15 +10,20 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A minimal in-memory {@link Cache} used purely as a custom-provider fixture for
- * {@code CacheFactory.createCache("<fully-qualified-name>(<url>)")}. It exposes a single
- * {@code (String)} constructor so {@code TypeAttrParser.newInstance} can instantiate it from a
- * provider specification, exercising the custom-class branch of {@code createCache}.
+ * {@code CacheFactory.createCache("<fully-qualified-name>(<url>)")}. It exposes a {@code (String)}
+ * constructor and a no-arg constructor so {@code TypeAttrParser.newInstance} can instantiate it
+ * from both parameterized and parameterless provider specifications, exercising the custom-class
+ * branch of {@code createCache}.
  */
 public class DummyProviderCache<K, V> extends AbstractCache<K, V> {
 
     private final String serverUrl;
     private final Map<K, V> store = new ConcurrentHashMap<>();
     private volatile boolean closed = false;
+
+    public DummyProviderCache() {
+        this("");
+    }
 
     public DummyProviderCache(final String serverUrl) {
         this.serverUrl = serverUrl;

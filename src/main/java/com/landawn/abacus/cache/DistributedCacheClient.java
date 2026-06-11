@@ -146,6 +146,8 @@ public interface DistributedCacheClient<T> {
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
      * @throws RuntimeException if a network error or timeout occurs
+     * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
+     *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
      */
     Map<String, T> getBulk(String... keys);
 
@@ -179,6 +181,8 @@ public interface DistributedCacheClient<T> {
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
      * @throws RuntimeException if a network error or timeout occurs
+     * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
+     *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
      */
     Map<String, T> getBulk(Collection<String> keys);
 
@@ -496,6 +500,8 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @throws RuntimeException if a network error or timeout occurs
+     * @throws UnsupportedOperationException if the implementation does not support flushing all entries
+     *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
      */
     void flushAll();
 

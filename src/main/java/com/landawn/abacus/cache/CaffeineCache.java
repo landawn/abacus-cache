@@ -28,9 +28,10 @@ import com.landawn.abacus.util.N;
  * allowing Caffeine to be used seamlessly within the Abacus caching framework.
  *
  * <p>
- * <b>Important Note:</b> Caffeine configures expiration policies at the cache level during
- * cache creation, not per-entry. Therefore, the {@code liveTime} and {@code maxIdleTime}
- * parameters in the {@link #put(Object, Object, long, long)} method are ignored.
+ * <b>Important Note:</b> This wrapper does not use Caffeine's per-entry expiration API
+ * ({@code Policy.expireVariably()}, available when the cache is built with
+ * {@code expireAfter(Expiry)}). The {@code liveTime} and {@code maxIdleTime} parameters
+ * in the {@link #put(Object, Object, long, long)} method are therefore ignored.
  * Configure expiration settings when building the Caffeine cache instance instead.
  *
  * <p>
@@ -145,10 +146,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Stores a key-value pair in the cache.
      * If the key already exists, its value will be replaced atomically.
      *
-     * <p><b>Important:</b> Caffeine's expiration policy is configured at cache creation time
-     * using the Caffeine builder, not per-entry. Therefore, the {@code liveTime} and
-     * {@code maxIdleTime} parameters are ignored by this implementation. All entries use
-     * the cache-wide expiration settings configured when building the Caffeine instance.
+     * <p><b>Important:</b> This wrapper does not use Caffeine's per-entry expiration API
+     * ({@code Policy.expireVariably()}), so the {@code liveTime} and {@code maxIdleTime}
+     * parameters are ignored by this implementation. All entries use the cache-wide
+     * expiration settings configured when building the Caffeine instance.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads. The underlying Caffeine cache handles synchronization.
@@ -233,11 +234,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * record a read access or update Caffeine's frequency sketch, so it does not
      * influence access-based eviction or pollute hit/miss statistics.
      *
-     * <p>Note that {@code asMap().containsKey()} does not actively run Caffeine's
-     * housekeeping. An entry that has logically expired but has not yet been removed by
-     * the maintenance task can still report {@code true} here, while
-     * {@link #getOrNull(Object)} returns {@code null} for the same key. Treat the result
-     * as a hint, not a strict freshness guarantee.
+     * <p>Note that {@code asMap().containsKey()} does evaluate expiration against the
+     * cache's ticker (a logically expired entry reports {@code false}), but it does not
+     * record an access, update statistics, or trigger Caffeine's housekeeping/maintenance
+     * task. Writes still buffered but not yet drained may make the result lag slightly
+     * behind a concurrent {@code put}.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads.
@@ -257,9 +258,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose presence in the cache is to be tested (must not be {@code null})
-     * @return {@code true} if the underlying {@code asMap()} view still holds a mapping for the key
-     *         (which may include entries that have expired but not yet been removed by housekeeping);
-     *         {@code false} otherwise
+     * @return {@code true} if the underlying {@code asMap()} view holds a live (non-expired)
+     *         mapping for the key; {@code false} otherwise
      * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      */
@@ -274,9 +274,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Unsupported by this implementation; always throws {@link UnsupportedOperationException}.
-     * Caffeine prioritizes performance and thread-safety over providing a snapshot key-set
-     * view, so this wrapper does not expose one. If key iteration is required, use a different
-     * cache implementation (e.g., {@link LocalCache}).
+     * Caffeine does expose key iteration via {@code asMap().keySet()}, but this wrapper
+     * deliberately does not surface it. If key iteration is required, use the underlying
+     * Caffeine instance directly or a different cache implementation (e.g., {@link LocalCache}).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

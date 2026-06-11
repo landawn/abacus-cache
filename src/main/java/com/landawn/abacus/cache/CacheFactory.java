@@ -49,9 +49,10 @@ import com.landawn.abacus.util.TypeAttrParser;
  *     1800000   // default idle time (30 minutes)
  * );
  *
- * // Create distributed cache with Memcached
+ * // Create distributed cache with Memcached. Multiple servers are SPACE-separated:
+ * // a comma would make the second address be parsed as the key-prefix parameter.
  * Cache<String, User> memcached = CacheFactory.createCache(
- *     "Memcached(localhost:11211,localhost:11212)"
+ *     "Memcached(localhost:11211 localhost:11212)"
  * );
  *
  * // Create distributed cache with Redis and key prefix
@@ -288,8 +289,9 @@ public final class CacheFactory {
      * <ul>
      * <li>When consecutive failures reach {@code maxFailedNumForRetry}, the circuit opens
      *     and read operations return {@code null} immediately without attempting cache access</li>
-     * <li>After {@code retryDelay} milliseconds since the last failure, the circuit enters
-     *     a half-open state and allows one read attempt to test if the cache has recovered</li>
+     * <li>After {@code retryDelay} milliseconds since the last failure, ALL subsequent reads
+     *     attempt the cache again (there is no half-open single-probe gate; size the delay
+     *     accordingly if the backend is sensitive to retry bursts)</li>
      * <li>Successful operations reset the failure counter and close the circuit</li>
      * </ul>
      *
@@ -385,7 +387,7 @@ public final class CacheFactory {
      * // Edge cases (all throw IllegalArgumentException):
      * CacheFactory.createCache(null);                              // "Provider specification cannot be null or empty"
      * CacheFactory.createCache("");                                // "Provider specification cannot be null or empty"
-     * CacheFactory.createCache("Memcached()");                     // "server URL cannot be empty"
+     * CacheFactory.createCache("Memcached()");                     // "missing parameters" (the parser yields an empty parameter list)
      * CacheFactory.createCache("Memcached(localhost,p:,0)");       // non-positive timeout rejected
      * CacheFactory.createCache("Memcached(localhost,p:,abc)");     // "Invalid timeout parameter: abc"
      * CacheFactory.createCache("Memcached(a,b,1000,extra)");       // "Unsupported parameters" (more than 3)
@@ -398,10 +400,13 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param provider the cache provider specification string in format "ClassName(param1,param2,...)" (must not be null or empty)
      * @return a new Cache instance configured according to the specification
-     * @throws IllegalArgumentException if the provider string is null or empty, cannot be parsed, has no
-     *         parameters, has an empty server URL, has an empty class name, specifies an unsupported number
-     *         of parameters (more than 3 for Memcached/Redis), specifies a non-numeric or non-positive timeout,
-     *         or names a class that cannot be found
+     * @throws IllegalArgumentException if the provider string is null or empty, cannot be parsed, or has an
+     *         empty class name; for the built-in providers (Memcached/Redis/RedisCluster), also if it has no
+     *         parameters, has an empty server URL, specifies an unsupported number of parameters (more than 3),
+     *         or specifies a non-numeric or non-positive timeout; for custom classes, also if the class cannot
+     *         be found (checked against this library's classloader, then the thread context classloader) or
+     *         does not implement {@link Cache}. A custom cache class with a no-arg constructor may be specified
+     *         without parameters, e.g. {@code "com.example.MyCache()"}
      * @throws RuntimeException if a custom class is found but cannot be instantiated (constructor invocation
      *         fails, security restrictions, etc.)
      * @see #createDistributedCache(DistributedCacheClient)
@@ -431,68 +436,85 @@ public final class CacheFactory {
             throw new IllegalArgumentException("Failed to parse provider specification: " + provider);
         }
 
-        final String[] parameters = attrResult.getParameters();
-
-        if (N.isEmpty(parameters)) {
-            throw new IllegalArgumentException("Invalid provider specification: missing parameters");
-        }
-
-        final String url = parameters[0];
-
-        if (Strings.isEmpty(url)) {
-            throw new IllegalArgumentException("Invalid provider specification: server URL cannot be empty");
-        }
-
         final String className = attrResult.getClassName();
 
         if (Strings.isEmpty(className)) {
             throw new IllegalArgumentException("Invalid provider specification: class name cannot be empty");
         }
 
-        Class<?> cls = null;
+        final String[] parameters = attrResult.getParameters();
 
-        if (DistributedCacheClient.MEMCACHED.equalsIgnoreCase(className)) {
-            if (parameters.length == 1) {
-                return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT));
-            } else if (parameters.length == 2) {
-                return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
-            } else if (parameters.length == 3) {
-                return new DistributedCache<>(new SpyMemcached<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
-            } else {
-                throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+        final boolean isBuiltInProvider = DistributedCacheClient.MEMCACHED.equalsIgnoreCase(className)
+                || DistributedCacheClient.REDIS.equalsIgnoreCase(className) || DistributedCacheClient.REDIS_CLUSTER.equalsIgnoreCase(className);
+
+        if (isBuiltInProvider) {
+            // These validations apply only to the built-in providers; a custom Cache class may
+            // legitimately take no parameters at all (or a first parameter that is not a URL).
+            if (N.isEmpty(parameters)) {
+                throw new IllegalArgumentException("Invalid provider specification: missing parameters");
             }
-        } else if (DistributedCacheClient.REDIS.equalsIgnoreCase(className)) {
-            if (parameters.length == 1) {
-                return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT));
-            } else if (parameters.length == 2) {
-                return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
-            } else if (parameters.length == 3) {
-                return new DistributedCache<>(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
-            } else {
-                throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+
+            final String url = parameters[0];
+
+            if (Strings.isEmpty(url)) {
+                throw new IllegalArgumentException("Invalid provider specification: server URL cannot be empty");
             }
-        } else if (DistributedCacheClient.REDIS_CLUSTER.equalsIgnoreCase(className)) {
-            if (parameters.length == 1) {
-                return new DistributedCache<>(new JRedisCluster<>(url, DEFAULT_TIMEOUT));
-            } else if (parameters.length == 2) {
-                return new DistributedCache<>(new JRedisCluster<>(url, DEFAULT_TIMEOUT), parameters[1]);
-            } else if (parameters.length == 3) {
-                return new DistributedCache<>(new JRedisCluster<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
+
+            if (DistributedCacheClient.MEMCACHED.equalsIgnoreCase(className)) {
+                if (parameters.length == 1) {
+                    return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT));
+                } else if (parameters.length == 2) {
+                    return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
+                } else if (parameters.length == 3) {
+                    return new DistributedCache<>(new SpyMemcached<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
+                } else {
+                    throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+                }
+            } else if (DistributedCacheClient.REDIS.equalsIgnoreCase(className)) {
+                if (parameters.length == 1) {
+                    return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT));
+                } else if (parameters.length == 2) {
+                    return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
+                } else if (parameters.length == 3) {
+                    return new DistributedCache<>(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
+                } else {
+                    throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+                }
             } else {
-                throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+                if (parameters.length == 1) {
+                    return new DistributedCache<>(new JRedisCluster<>(url, DEFAULT_TIMEOUT));
+                } else if (parameters.length == 2) {
+                    return new DistributedCache<>(new JRedisCluster<>(url, DEFAULT_TIMEOUT), parameters[1]);
+                } else if (parameters.length == 3) {
+                    return new DistributedCache<>(new JRedisCluster<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
+                } else {
+                    throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+                }
             }
         } else {
+            Class<?> cls;
+
             try {
                 cls = ClassUtil.forName(className);
-            } catch (final IllegalArgumentException e) {
-                // ClassUtil.forName throws IllegalArgumentException (not null) when the class cannot
-                // be found; rethrow with this method's documented "Cannot find class" message so the
-                // null-check below is not relied upon as dead code.
-                throw new IllegalArgumentException("Cannot find class: " + className, e);
-            }
+            } catch (final IllegalArgumentException primaryFailure) {
+                // ClassUtil.forName resolves against this library's defining classloader only. In
+                // layered-classloader deployments (servlet containers, OSGi, some Spring Boot
+                // setups), the user's custom cache class is often visible only to the application's
+                // context classloader, so fall back to it before giving up.
+                cls = null;
+                final ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
 
-            if (cls == null) {
-                throw new IllegalArgumentException("Cannot find class: " + className);
+                if (contextClassLoader != null) {
+                    try {
+                        cls = Class.forName(className, true, contextClassLoader);
+                    } catch (final ClassNotFoundException contextFailure) {
+                        primaryFailure.addSuppressed(contextFailure);
+                    }
+                }
+
+                if (cls == null) {
+                    throw new IllegalArgumentException("Cannot find class: " + className, primaryFailure);
+                }
             }
 
             if (!Cache.class.isAssignableFrom(cls)) {

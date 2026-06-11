@@ -267,12 +267,56 @@ public class SpyMemcachedTest {
         assertEquals(7L, cache.incr("counter", 5, 7L, 60_000L));
     }
 
+    /**
+     * Regression test for the Kryo-transcoder counter-poisoning bug.
+     *
+     * <p>spymemcached's incr-with-default ({@code mutateWithDefault}) seeds an absent key through the
+     * client's DEFAULT transcoder. With {@link KryoTranscoder} installed (the default here), the seed
+     * was stored as a Kryo-encoded blob that memcached's native incr cannot mutate: the first call
+     * returned the default, but every subsequent call failed with {@code CLIENT_ERROR ... non-numeric
+     * value}, returned {@code -1}, and tore down the connection. The seed is now written as raw ASCII
+     * decimal via an atomic {@code add}, so the counter genuinely advances across calls.
+     */
+    @Test
+    public void test_incr_with_default_value_advances_on_subsequent_calls() {
+        assertEquals(10L, cache.incr("adv-counter", 5, 10L)); // absent: seeded with 10, delta not applied
+        assertEquals(15L, cache.incr("adv-counter", 5, 10L)); // existing: 10 + 5
+        assertEquals(16L, cache.incr("adv-counter", 1)); // plain incr also works on the seeded key
+
+        // The connection must remain healthy after the counter operations.
+        assertTrue(cache.set("health-check", "ok", 60_000));
+        assertEquals("ok", cache.get("health-check"));
+    }
+
+    @Test
+    public void test_incr_with_default_value_and_liveTime_advances_on_subsequent_calls() {
+        assertEquals(7L, cache.incr("adv-ttl-counter", 5, 7L, 60_000L));
+        assertEquals(12L, cache.incr("adv-ttl-counter", 5, 7L, 60_000L));
+    }
+
     @Test
     public void test_incr_with_default_value_validation() {
         assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L));
         assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L));
         assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L, 1000L));
         assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L, 1000L));
+    }
+
+    /**
+     * Regression test for the negative-defaultValue counter-poisoning hole: memcached counters are
+     * unsigned 64-bit decimals, so seeding an absent key with e.g. "-5" appears to succeed but makes
+     * every subsequent incr/decr fail with CLIENT_ERROR (and tear down the connection). A negative
+     * seed is now rejected up front in all four seeding overloads.
+     */
+    @Test
+    public void test_incr_decr_with_negative_default_value_rejected() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", 1, -5L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", 1, -5L, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", 1, -5L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", 1, -5L, 1000L));
+
+        // The key was never seeded: a plain incr still reports it absent.
+        assertEquals(-1L, cache.incr("k"));
     }
 
     // --- decr ----------------------------------------------------------------------------------
@@ -301,6 +345,18 @@ public class SpyMemcachedTest {
     @Test
     public void test_decr_with_default_value_and_liveTime_seeds_absent_key() {
         assertEquals(100L, cache.decr("counter", 1, 100L, 60_000L));
+    }
+
+    /**
+     * Decr counterpart of the Kryo counter-poisoning regression: the seeded counter must keep
+     * decrementing on subsequent calls (previously the second call returned {@code -1} because the
+     * Kryo-encoded seed was not a memcached-mutable ASCII number).
+     */
+    @Test
+    public void test_decr_with_default_value_advances_on_subsequent_calls() {
+        assertEquals(100L, cache.decr("adv-down-counter", 10, 100L)); // absent: seeded with 100
+        assertEquals(90L, cache.decr("adv-down-counter", 10, 100L)); // existing: 100 - 10
+        assertEquals(89L, cache.decr("adv-down-counter", 1)); // plain decr also works on the seeded key
     }
 
     @Test
@@ -399,10 +455,12 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_flushAll_large_delay_is_scheduled_not_immediate() {
-        // memcached's `flush_all <delay>` interprets its argument as a RELATIVE number of seconds and
-        // never as an absolute timestamp (the >30-day rewrite that applies to set/add/replace must NOT
-        // apply here). A 40-day delay therefore schedules a far-future flush, so the value is still
-        // present right after the call.
+        // memcached's `flush_all <delay>` argument goes through the server's realtime() conversion
+        // just like storage expirations: raw values above 30 days are read as ABSOLUTE epoch
+        // timestamps. A raw 40-day delay (3456000s) would be an epoch time in Feb 1970 - not a
+        // deferred flush. The client therefore converts >30-day delays to absolute now+delay
+        // timestamps (same rule as set/add/replace), so the flush is genuinely scheduled 40 days
+        // out and the value is still present right after the call.
         cache.set("a", 1, 60_000);
 
         assertTrue(cache.flushAll(3_456_000_000L)); // 40 days
@@ -466,5 +524,26 @@ public class SpyMemcachedTest {
         assertThrows(IllegalArgumentException.class, () -> cache.disconnect(-1));
         // The shared client must remain usable (the negative timeout was rejected before shutdown).
         assertNotNull(cache.serverUrl());
+    }
+
+    /**
+     * Regression test for huge-timeout overflow.
+     *
+     * <p>A huge configured operation timeout (e.g. {@code Long.MAX_VALUE} as a "no timeout"
+     * sentinel) previously made every synchronous operation fail instantly: the wrapper's own
+     * {@code resultOf()} wait bound ({@code timeout * 4}) wrapped negative, and — independently —
+     * spymemcached's internal millisecond-to-nanosecond conversion overflowed so every in-flight
+     * operation appeared timed out. The timeout is now clamped to a ~146-year safety cap and the
+     * wait bound saturates, so operations work.
+     */
+    @Test
+    public void test_constructor_with_huge_timeout_operationsStillWork() {
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL, Long.MAX_VALUE);
+        try {
+            assertTrue(local.set("huge-timeout-key", "v", 60_000));
+            assertEquals("v", local.get("huge-timeout-key"));
+        } finally {
+            local.disconnect();
+        }
     }
 }

@@ -15,6 +15,7 @@
 package com.landawn.abacus.cache;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -30,6 +31,7 @@ import com.landawn.abacus.util.AddrUtil;
 import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.N;
 
+import net.spy.memcached.CachedData;
 import net.spy.memcached.ConnectionFactory;
 import net.spy.memcached.DefaultConnectionFactory;
 import net.spy.memcached.MemcachedClient;
@@ -79,6 +81,45 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     static final Logger logger = LoggerFactory.getLogger(SpyMemcached.class);
     private static final int MEMCACHED_MAX_RELATIVE_EXPIRATION_SECONDS = 30 * 24 * 60 * 60;
+
+    /**
+     * Upper bound for the effective operation timeout. spymemcached converts the configured
+     * operation timeout to nanoseconds (roughly {@code creationTime + MILLISECONDS.toNanos(timeout)})
+     * when checking whether an in-flight operation has timed out; a huge configured timeout (e.g.
+     * {@code Long.MAX_VALUE} as a "no timeout" sentinel) overflows that arithmetic and makes every
+     * operation appear instantly timed out. Clamping to ~146 years is "effectively no timeout"
+     * without the overflow.
+     */
+    private static final long MAX_SAFE_OPERATION_TIMEOUT_MILLIS = Long.MAX_VALUE / 2_000_000L;
+
+    /**
+     * Stores counter seeds as raw ASCII decimal bytes (flags 0) — the only representation
+     * memcached's native incr/decr can mutate. The client's default transcoder (Kryo when
+     * available) must never be used for counter seeds: a Kryo-encoded seed makes every
+     * subsequent native incr/decr fail with {@code CLIENT_ERROR cannot increment or decrement
+     * non-numeric value}, which also tears down and re-establishes the connection.
+     */
+    private static final Transcoder<Object> ASCII_COUNTER_TRANSCODER = new Transcoder<>() {
+        @Override
+        public boolean asyncDecode(final CachedData d) {
+            return false;
+        }
+
+        @Override
+        public CachedData encode(final Object o) {
+            return new CachedData(0, String.valueOf(o).getBytes(StandardCharsets.US_ASCII), getMaxSize());
+        }
+
+        @Override
+        public Object decode(final CachedData d) {
+            return new String(d.getData(), StandardCharsets.US_ASCII);
+        }
+
+        @Override
+        public int getMaxSize() {
+            return CachedData.MAX_SIZE;
+        }
+    };
 
     private final MemcachedClient mc;
     private final long operationTimeout;
@@ -130,7 +171,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param serverUrl the Memcached server URL(s) in the format
      *                  {@code "host1:port1,host2:port2,..."}; must not be {@code null}, empty, or blank
-     * @param timeout the operation timeout in milliseconds; must be positive. Applies to all cache operations.
+     * @param timeout the operation timeout in milliseconds; must be positive. Applies to all cache
+     *                operations. Extremely large values (beyond a ~146-year safety cap) are clamped,
+     *                because spymemcached's internal nanosecond arithmetic would otherwise overflow
+     *                and fail every operation instantly.
      * @throws IllegalArgumentException if {@code timeout} is not positive, or if {@code serverUrl}
      *         is {@code null}, empty, blank, or contains no valid server addresses
      * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the
@@ -145,7 +189,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
         }
 
-        this.operationTimeout = timeout;
+        // Clamp to the spymemcached-safe maximum: see MAX_SAFE_OPERATION_TIMEOUT_MILLIS.
+        final long effectiveTimeout = Math.min(timeout, MAX_SAFE_OPERATION_TIMEOUT_MILLIS);
+
+        this.operationTimeout = effectiveTimeout;
 
         MemcachedClient tempMc = null;
         try {
@@ -154,7 +201,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             final ConnectionFactory connFactory = new DefaultConnectionFactory() {
                 @Override
                 public long getOperationTimeout() {
-                    return timeout;
+                    return effectiveTimeout;
                 }
 
                 @Override
@@ -218,7 +265,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public T get(final String key) {
         N.checkArgNotNull(key, "key");
-        return (T) mc.get(key);
+        // Route through resultOf (rather than the client's synchronous get) so an interrupt
+        // restores the thread's interrupt flag: spymemcached's sync methods wrap
+        // InterruptedException in a RuntimeException WITHOUT restoring the flag, silently
+        // defeating cooperative cancellation in thread pools.
+        return (T) resultOf(mc.asyncGet(key));
     }
 
     /**
@@ -301,7 +352,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public final Map<String, T> getBulk(final String... keys) {
         checkBulkKeys(keys);
-        return (Map<String, T>) mc.getBulk(keys);
+        // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
+        return (Map<String, T>) resultOf(mc.asyncGetBulk(keys));
     }
 
     /**
@@ -387,7 +439,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public Map<String, T> getBulk(final Collection<String> keys) {
         checkBulkKeys(keys);
-        return (Map<String, T>) mc.getBulk(keys);
+        // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
+        return (Map<String, T>) resultOf(mc.asyncGetBulk(keys));
     }
 
     /**
@@ -456,7 +509,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Config config = loadConfig();
      * cache.set("app:config", config, 0);   // liveTime 0 -> 0s ("no expiration"); returns true on success
      *
-     * // A null value is accepted (memcached stores it); only a null key is rejected.
+     * // A null value is accepted when the Kryo transcoder is active (Kryo on the classpath, the
+     * // default for this wrapper); the stock SerializingTranscoder rejects null with a
+     * // NullPointerException. Only a null key is always rejected.
      * cache.set("maybe-null", null, 60000); // returns true on success; stores a null value
      *
      * // Updating existing value
@@ -468,10 +523,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
-     * @param value the value to cache; may be {@code null}
+     * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
+     *              (the default with Kryo on the classpath). With the stock spymemcached
+     *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
+     *              {@code NullPointerException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
-     *                 days are stored as an absolute expiration timestamp.
+     *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
+     *                 expiration would exceed epoch second 2^31-1 (January 2038) is rejected with
+     *                 {@code IllegalArgumentException} (memcached expirations are 32-bit).
      * @return {@code true} if the operation succeeded; {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
@@ -513,10 +573,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
-     * @param value the value to cache; may be {@code null}
+     * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
+     *              (the default with Kryo on the classpath). With the stock spymemcached
+     *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
+     *              {@code NullPointerException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
-     *                 days are stored as an absolute expiration timestamp.
+     *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
+     *                 expiration would exceed epoch second 2^31-1 (January 2038) is rejected with
+     *                 {@code IllegalArgumentException} (memcached expirations are 32-bit).
      * @return a {@link Future} that will yield {@code true} on success or {@code false} on failure
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
@@ -563,10 +628,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
-     * @param value the value to cache; may be {@code null}
+     * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
+     *              (the default with Kryo on the classpath). With the stock spymemcached
+     *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
+     *              {@code NullPointerException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
-     *                 days are stored as an absolute expiration timestamp.
+     *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
+     *                 expiration would exceed epoch second 2^31-1 (January 2038) is rejected with
+     *                 {@code IllegalArgumentException} (memcached expirations are 32-bit).
      * @return {@code true} if the object was added; {@code false} if the key already exists
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
@@ -609,10 +679,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
-     * @param value the value to cache; may be {@code null}
+     * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
+     *              (the default with Kryo on the classpath). With the stock spymemcached
+     *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
+     *              {@code NullPointerException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
-     *                 days are stored as an absolute expiration timestamp.
+     *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
+     *                 expiration would exceed epoch second 2^31-1 (January 2038) is rejected with
+     *                 {@code IllegalArgumentException} (memcached expirations are 32-bit).
      * @return a {@link Future} that will yield {@code true} if the add succeeded, or {@code false}
      *         if the key already exists
      * @throws IllegalArgumentException if {@code key} is {@code null}
@@ -656,10 +731,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
-     * @param value the value to cache; may be {@code null}
+     * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
+     *              (the default with Kryo on the classpath). With the stock spymemcached
+     *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
+     *              {@code NullPointerException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
-     *                 days are stored as an absolute expiration timestamp.
+     *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
+     *                 expiration would exceed epoch second 2^31-1 (January 2038) is rejected with
+     *                 {@code IllegalArgumentException} (memcached expirations are 32-bit).
      * @return {@code true} if the object was replaced; {@code false} if the key does not exist
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
@@ -701,10 +781,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated; must not be {@code null}
-     * @param value the value to cache; may be {@code null}
+     * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
+     *              (the default with Kryo on the classpath). With the stock spymemcached
+     *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
+     *              {@code NullPointerException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
-     *                 days are stored as an absolute expiration timestamp.
+     *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
+     *                 expiration would exceed epoch second 2^31-1 (January 2038) is rejected with
+     *                 {@code IllegalArgumentException} (memcached expirations are 32-bit).
      * @return a {@link Future} that will yield {@code true} if the replacement succeeded, or
      *         {@code false} if the key does not exist
      * @throws IllegalArgumentException if {@code key} is {@code null}
@@ -818,18 +903,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * if (pageViews != -1) {
      *     System.out.println("Page views: " + pageViews); // printed when the key existed
      * } else {
-     *     // Initialize counter if it doesn't exist
-     *     cache.set("page:views", "1", 0); // seed the counter with no expiration; returns true on success
+     *     // Initialize the counter via the auto-seeding overload. Do NOT seed counters with
+     *     // set(key, "1", ...): set() serializes through the configured transcoder (Kryo when
+     *     // available), producing bytes that memcached's native incr/decr cannot mutate.
+     *     pageViews = cache.incr("page:views", 1, 1); // seeds absent key with 1; returns 1
      * }
      *
-     * // Rate limiting
+     * // Rate limiting (auto-seeding overload handles the absent-key case atomically)
      * String key = "rate:limit:" + userId;
-     * long attempts = cache.incr(key); // returns value+1, or -1 if the key is absent
-     * if (attempts == -1) {
-     *     // Key doesn't exist, initialize it
-     *     cache.set(key, "1", 60000); // seed with 60s TTL; returns true on success
-     *     attempts = 1;
-     * }
+     * long attempts = cache.incr(key, 1, 1, 60000); // seeds absent key with 1 (60s TTL); else returns value+1
      * if (attempts > MAX_ATTEMPTS) {
      *     throw new RateLimitException("Too many requests");
      * }
@@ -846,7 +928,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public long incr(final String key) {
         N.checkArgNotNull(key, "key");
-        return mc.incr(key, 1);
+        // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
+        // It also surfaces errored/cancelled operations as RuntimeException instead of the
+        // ambiguous -1 the sync client returns for ANY failure, so -1 reliably means "absent".
+        return resultOf(mc.asyncIncr(key, 1));
     }
 
     /**
@@ -867,8 +952,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * if (score != -1) {
      *     System.out.println("New score: " + score); // printed when the key existed
      * } else {
-     *     // Initialize if doesn't exist
-     *     cache.set("player:score", "10", 0); // seed with no expiration; returns true on success
+     *     // Initialize via the auto-seeding overload. Do NOT seed counters with set(): it
+     *     // serializes through the configured transcoder (Kryo when available), producing
+     *     // bytes that memcached's native incr/decr cannot mutate.
+     *     score = cache.incr("player:score", 10, 10); // seeds absent key with 10; returns 10
      * }
      *
      * // Batch processing counter
@@ -899,7 +986,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public long incr(final String key, final int delta) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
-        return mc.incr(key, delta);
+        // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
+        return resultOf(mc.asyncIncr(key, delta));
     }
 
     /**
@@ -940,18 +1028,20 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param defaultValue the initial value to set if the key does not exist; on first-write this
      *                     value is stored verbatim ({@code delta} is NOT added on insert)
      * @return the value after the operation: {@code defaultValue} if the key did not exist (no
-     *         delta applied on insert), otherwise the previously stored value plus {@code delta}
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     *         delta applied on insert), otherwise the previously stored value plus {@code delta};
+     *         {@code -1} if the key could neither be found nor seeded (e.g., deleted concurrently
+     *         between the seeding attempt and the retry)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative,
+     *         or {@code defaultValue} is negative (memcached counters are unsigned 64-bit decimals;
+     *         a negative seed would be unmutatable by native incr/decr)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final int delta, final long defaultValue) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
-        // Memcached's "no expiration" sentinel is 0, NOT -1. When the key is absent, spymemcached
-        // seeds it with `add <key> <flags> <exp> <defaultValue>` using THIS exp; memcached treats a
-        // negative exp as an absolute time in the past, so a -1 seed is stored already-expired and the
-        // counter is re-seeded to defaultValue on every call (never advancing). Pass 0 to truly persist.
-        return mc.incr(key, delta, defaultValue, 0);
+        // Memcached's "no expiration" sentinel is 0, NOT -1: memcached treats a negative seed
+        // expiration as an absolute time in the past, so the counter would be re-seeded on every call.
+        return mutateWithAsciiSeed(true, key, delta, defaultValue, 0);
     }
 
     /**
@@ -996,16 +1086,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *                     value is stored verbatim ({@code delta} is NOT added on insert)
      * @param liveTime the time-to-live in milliseconds for the key ({@code 0} or negative means no
      *                 expiration); a positive value is converted to seconds, rounded up if not exact;
-     *                 values over 30 days are stored as an absolute expiration timestamp.
+     *                 values over 30 days are stored as an absolute expiration timestamp. A TTL whose
+     *                 absolute expiration would exceed epoch second 2^31-1 (January 2038) is rejected
+     *                 with {@code IllegalArgumentException} (memcached expirations are 32-bit).
      * @return the value after the operation: {@code defaultValue} if the key did not exist (no
-     *         delta applied on insert), otherwise the previously stored value plus {@code delta}
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     *         delta applied on insert), otherwise the previously stored value plus {@code delta};
+     *         {@code -1} if the key could neither be found nor seeded (e.g., deleted concurrently
+     *         between the seeding attempt and the retry)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative,
+     *         or {@code defaultValue} is negative (memcached counters are unsigned 64-bit decimals;
+     *         a negative seed would be unmutatable by native incr/decr)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
-        return mc.incr(key, delta, defaultValue, toMemcachedExpiration(liveTime));
+        return mutateWithAsciiSeed(true, key, delta, defaultValue, toMemcachedExpiration(liveTime));
     }
 
     /**
@@ -1022,13 +1118,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Token bucket rate limiting
-     * long remainingTokens = cache.decr("api:tokens:" + userId); // returns value-1 (clamped at 0), or -1 if absent
-     * if (remainingTokens == -1) {
-     *     // Key doesn't exist, initialize it
-     *     cache.set("api:tokens:" + userId, "100", 60000); // seed with 60s TTL; returns true on success
-     *     remainingTokens = 100;
-     * }
+     * // Token bucket rate limiting (the auto-seeding overload initializes absent keys; never
+     * // seed counters with set() - it stores transcoder-encoded bytes that incr/decr cannot mutate)
+     * long remainingTokens = cache.decr("api:tokens:" + userId, 1, 100, 60000); // seeds absent key with 100 (60s TTL)
      * if (remainingTokens == 0) {
      *     throw new RateLimitException("Rate limit exceeded");
      * }
@@ -1055,7 +1147,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public long decr(final String key) {
         N.checkArgNotNull(key, "key");
-        return mc.decr(key, 1);
+        // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
+        return resultOf(mc.asyncDecr(key, 1));
     }
 
     /**
@@ -1121,7 +1214,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public long decr(final String key, final int delta) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
-        return mc.decr(key, delta);
+        // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
+        return resultOf(mc.asyncDecr(key, delta));
     }
 
     /**
@@ -1166,8 +1260,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *                     value is stored verbatim ({@code delta} is NOT subtracted on insert)
      * @return the value after the operation: {@code defaultValue} if the key did not exist (no
      *         delta applied on insert), otherwise the previously stored value minus {@code delta},
-     *         clamped at {@code 0}
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     *         clamped at {@code 0}; {@code -1} if the key could neither be found nor seeded
+     *         (e.g., deleted concurrently between the seeding attempt and the retry)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative,
+     *         or {@code defaultValue} is negative (memcached counters are unsigned 64-bit decimals;
+     *         a negative seed would be unmutatable by native incr/decr)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final int delta, final long defaultValue) {
@@ -1175,7 +1272,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         N.checkArgNotNegative(delta, "delta");
         // See incr(String, int, long): Memcached's "no expiration" sentinel is 0, not -1. A -1 seed
         // expiration would store the auto-initialized value already-expired, re-seeding every call.
-        return mc.decr(key, delta, defaultValue, 0);
+        return mutateWithAsciiSeed(false, key, delta, defaultValue, 0);
     }
 
     /**
@@ -1221,17 +1318,68 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *                     value is stored verbatim ({@code delta} is NOT subtracted on insert)
      * @param liveTime the time-to-live in milliseconds for the key ({@code 0} or negative means no
      *                 expiration); a positive value is converted to seconds, rounded up if not exact;
-     *                 values over 30 days are stored as an absolute expiration timestamp.
+     *                 values over 30 days are stored as an absolute expiration timestamp. A TTL whose
+     *                 absolute expiration would exceed epoch second 2^31-1 (January 2038) is rejected
+     *                 with {@code IllegalArgumentException} (memcached expirations are 32-bit).
      * @return the value after the operation: {@code defaultValue} if the key did not exist (no
      *         delta applied on insert), otherwise the previously stored value minus {@code delta},
-     *         clamped at {@code 0}
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     *         clamped at {@code 0}; {@code -1} if the key could neither be found nor seeded
+     *         (e.g., deleted concurrently between the seeding attempt and the retry)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, {@code delta} is negative,
+     *         or {@code defaultValue} is negative (memcached counters are unsigned 64-bit decimals;
+     *         a negative seed would be unmutatable by native incr/decr)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
-        return mc.decr(key, delta, defaultValue, toMemcachedExpiration(liveTime));
+        return mutateWithAsciiSeed(false, key, delta, defaultValue, toMemcachedExpiration(liveTime));
+    }
+
+    /**
+     * Implements incr/decr-with-default on the ASCII protocol without going through spymemcached's
+     * {@code mutateWithDefault}, which seeds an absent key via the client's <em>default</em>
+     * transcoder. With the {@link KryoTranscoder} installed (the default when Kryo is on the
+     * classpath), that seed is stored as a Kryo-encoded blob that memcached's native incr/decr
+     * cannot mutate — every subsequent call then fails with {@code CLIENT_ERROR cannot increment
+     * or decrement non-numeric value} and tears down the connection. Instead, the seed is written
+     * here with an atomic {@code add} using {@link #ASCII_COUNTER_TRANSCODER} (raw ASCII decimal),
+     * the only representation native incr/decr can operate on.
+     *
+     * <p>Semantics mirror memcached's incr-with-default: when the key is absent, the stored value
+     * is {@code defaultValue} and that same value is returned — the delta is NOT applied on the
+     * initial insert.
+     *
+     * @param isIncrement {@code true} for incr, {@code false} for decr
+     * @param key the counter key
+     * @param delta the mutation amount applied when the key already exists
+     * @param defaultValue the seed stored when the key is absent
+     * @param expiration the memcached expiration for the seed (already converted via
+     *                   {@link #toMemcachedExpiration(long)}; {@code 0} = no expiration)
+     * @return the post-operation value, or {@code -1} if the key could not be found nor seeded
+     *         (e.g., deleted concurrently between the seeding attempt and the retry)
+     */
+    private long mutateWithAsciiSeed(final boolean isIncrement, final String key, final int delta, final long defaultValue, final int expiration) {
+        // Memcached counters are unsigned 64-bit decimals; a negative seed would be stored as
+        // e.g. "-5", which native incr/decr cannot mutate - the same counter-poisoning (plus
+        // connection-teardown-per-call) failure mode this ASCII seeding exists to prevent.
+        N.checkArgNotNegative(defaultValue, "defaultValue");
+
+        // The async variants + resultOf preserve the interrupt flag and surface errored or
+        // cancelled operations as RuntimeException, so -1 here reliably means "key absent".
+        long result = resultOf(isIncrement ? mc.asyncIncr(key, delta) : mc.asyncDecr(key, delta));
+
+        if (result == -1) {
+            // Key absent: seed it atomically (add succeeds only if still absent).
+            if (Boolean.TRUE.equals(resultOf(mc.add(key, expiration, String.valueOf(defaultValue), ASCII_COUNTER_TRANSCODER)))) {
+                return defaultValue;
+            }
+
+            // Another thread seeded the key concurrently; apply the mutation to the existing value.
+            result = resultOf(isIncrement ? mc.asyncIncr(key, delta) : mc.asyncDecr(key, delta));
+        }
+
+        return result;
     }
 
     /**
@@ -1269,8 +1417,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @throws IllegalStateException if one or more servers do not acknowledge the flush (the underlying
-     *         flush operation does not report success)
+     * @throws IllegalStateException if the flush is not reported successful. Note that with multiple
+     *         servers, spymemcached aggregates the per-server outcomes into a single last-writer-wins
+     *         flag, so one server's failure can be masked by a later server's success; the exception is
+     *         therefore guaranteed only for single-server configurations
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
@@ -1333,9 +1483,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *     System.out.println("Flush scheduled for 5 seconds from now"); // printed when scheduling succeeded
      * }
      *
-     * // The delay is ALWAYS a relative number of seconds; large values are NOT converted to an
-     * // absolute timestamp (unlike set/add/replace expirations).
-     * cache.flushAll(3_456_000_000L); // 40 days -> relative delay of 3_456_000s (not an epoch timestamp)
+     * // Like set/add/replace expirations, delays over 30 days are sent as an absolute
+     * // now+delay Unix timestamp (memcached's protocol rule for all expiration values).
+     * cache.flushAll(3_456_000_000L); // 40 days -> absolute timestamp 40 days from now
      *
      * // Delayed flush for maintenance window
      * long delayUntilMaintenance = calculateDelayToMaintenance();
@@ -1352,10 +1502,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean flushAll(final long delay) {
-        // The memcached `flush_all <delay>` command always interprets its argument as a RELATIVE
-        // delay in seconds; unlike storage commands it never treats large values as an absolute
-        // Unix timestamp. So convert with toSeconds(), not toMemcachedExpiration().
-        return resultOf(mc.flush(toSeconds(delay)));
+        // The memcached `flush_all <delay>` argument goes through the server's realtime()
+        // conversion just like storage expirations: values above 30 days are interpreted as
+        // ABSOLUTE Unix timestamps, not relative seconds. Sending a raw 40-day delay (3456000s)
+        // would be read as an epoch time in Feb 1970 - i.e., flush (nearly) immediately instead
+        // of in 40 days. toMemcachedExpiration() converts >30-day delays to now+delay timestamps.
+        return resultOf(mc.flush(toMemcachedExpiration(delay)));
     }
 
     /**
@@ -1374,9 +1526,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Future<Boolean> future = cache.asyncFlushAll(10000); // 10000ms -> relative delay of 10s; returns immediately
      * boolean scheduled = future.get();                    // blocks; yields true on success
      *
-     * // The delay is ALWAYS a relative number of seconds; large values are NOT converted to an
-     * // absolute timestamp (unlike set/add/replace expirations).
-     * cache.asyncFlushAll(3_456_000_000L); // 40 days -> relative delay of 3_456_000s (not an epoch timestamp)
+     * // Like set/add/replace expirations, delays over 30 days are sent as an absolute
+     * // now+delay Unix timestamp (memcached's protocol rule for all expiration values).
+     * cache.asyncFlushAll(3_456_000_000L); // 40 days -> absolute timestamp 40 days from now
      *
      * // Async delayed flush with timeout (requires: import java.util.concurrent.TimeoutException;)
      * Future<Boolean> future = cache.asyncFlushAll(30000); // 30000ms -> relative delay of 30s
@@ -1395,8 +1547,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *         successfully, or {@code false} on failure
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
-        // See flushAll(long): flush_all's delay is always relative seconds, so use toSeconds().
-        return mc.flush(toSeconds(delay));
+        // See flushAll(long): flush_all's delay is subject to the server's 30-day absolute-vs-
+        // relative rule, so it must be converted exactly like storage expirations.
+        return mc.flush(toMemcachedExpiration(delay));
     }
 
     /**
@@ -1550,8 +1703,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             // calling thread indefinitely. spymemcached enforces its own per-operation
             // timeout internally; this outer bound is intentionally generous (a multiple
             // of the configured operation timeout) so legitimately slower bulk operations
-            // are not failed prematurely.
-            return future.get(Math.max(operationTimeout * 4, operationTimeout + 5_000L), TimeUnit.MILLISECONDS);
+            // are not failed prematurely. Saturate instead of overflowing: a huge configured
+            // timeout (e.g. Long.MAX_VALUE as a "no timeout" sentinel) would otherwise make
+            // both candidate bounds wrap negative and fail every operation instantly.
+            final long waitBound = operationTimeout > (Long.MAX_VALUE - 5_000L) / 4 //
+                    ? Long.MAX_VALUE
+                    : Math.max(operationTimeout * 4, operationTimeout + 5_000L);
+
+            return future.get(waitBound, TimeUnit.MILLISECONDS);
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt(); // Restore interrupt status
 

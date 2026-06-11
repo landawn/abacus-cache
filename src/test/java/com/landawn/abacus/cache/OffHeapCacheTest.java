@@ -236,6 +236,131 @@ public class OffHeapCacheTest {
     }
 
     /**
+     * Regression test for the negative-evictDelay contract violation.
+     *
+     * <p>Every constructor/builder javadoc documents "0 or negative disables automatic eviction",
+     * but a negative value was passed straight to the underlying pool, whose constructor throws
+     * {@code IllegalArgumentException} — and because the off-heap memory had already been allocated
+     * before pool creation, the whole native allocation leaked with it. The fix clamps the value
+     * before handing it to the pool (and releases the allocation should any later init step fail).
+     */
+    @Test
+    public void test_builder_negativeEvictDelay_disablesEvictionInsteadOfThrowing() {
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(-1).build();
+        try {
+            assertTrue(c.put("k", new byte[] { 1, 2, 3 }));
+            assertArrayEquals(new byte[] { 1, 2, 3 }, c.getOrNull("k"));
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
+     * Regression test for the array-retention hazard on the disk-spill path.
+     *
+     * <p>When the serialized size exactly matched the buffer length (always true for {@code byte[]}
+     * values), {@code putToDisk()} handed the CALLER'S OWN array to {@code OffHeapStore.put}. The
+     * OffHeapStore contract leaves defensive copying implementation-specific, so a store that
+     * retains the array (like this in-memory one) saw its cached bytes silently change when the
+     * caller later mutated the array. The fix always passes a private copy.
+     */
+    @Test
+    public void test_putToDisk_handsStoreAPrivateCopy() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+        final OffHeapStore<String> retainingStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value); // retains the array reference - allowed by the contract
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                memStore.remove(key);
+                return true;
+            }
+        };
+
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(retainingStore)
+                .storeSelector((k, v, size) -> 2) // disk only
+                .build();
+        try {
+            final byte[] value = { 10, 20, 30, 40 };
+            assertTrue(c.put("k", value));
+
+            // The caller mutates its own array after the put...
+            value[0] = 99;
+
+            // ...and the cached entry must be unaffected.
+            assertArrayEquals(new byte[] { 10, 20, 30, 40 }, c.getOrNull("k"));
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
+     * Regression test for disk-byte ownership across same-key replacements.
+     *
+     * <p>The offHeapStore is keyed by the cache key alone, so when a put replaces an existing
+     * disk-spilled entry, the replaced wrapper must not delete the store bytes that now belong to
+     * the replacing wrapper. Ownership is now tracked per key: replacement transfers it, reads of
+     * the current entry succeed, and removing the entry deletes the store bytes exactly once.
+     */
+    @Test
+    public void test_putToDisk_replacement_keepsCurrentBytes_and_removeDeletesThem() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                memStore.remove(key);
+                return true;
+            }
+        };
+
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2) // disk only
+                .build();
+        try {
+            assertTrue(c.put("k", new byte[] { 1, 1, 1 }));
+            assertTrue(c.put("k", new byte[] { 2, 2, 2 })); // replaces the disk entry under the same key
+            assertEquals(1, memStore.size());
+            assertArrayEquals(new byte[] { 2, 2, 2 }, c.getOrNull("k"));
+
+            c.remove("k");
+            assertNull(c.getOrNull("k"));
+            assertTrue(memStore.isEmpty());
+
+            final OffHeapCacheStats stats = c.stats();
+            assertEquals(0L, stats.sizeOnDisk());
+            assertEquals(0L, stats.dataSizeOnDisk());
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
      * Regression coverage for the pooled-buffer handling on the serialization-failure path in
      * {@code AbstractOffHeapCache.put()}. The pooled {@code ByteArrayOutputStream} is obtained
      * before the main try/finally that recycles it, so a serializer that throws used to skip

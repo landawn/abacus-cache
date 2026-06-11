@@ -11,9 +11,16 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -178,6 +185,58 @@ public class AbstractCacheTest extends TestBase {
             assertEquals("this-is-a-property", cache.getProperty("a"));
             assertDoesNotThrow(() -> cache.removeProperty("a"));
             assertEquals("1", cache.getOrNull("a"));
+        }
+    }
+
+    // --- Fix: shared async executor must use daemon threads -------------------------------------
+    // Regression test: the shared executor previously created non-daemon core threads that never
+    // timed out, so a JVM that had used any async cache operation could not exit normally.
+
+    @Test
+    public void testAsyncOperations_RunOnDaemonThreads() throws Exception {
+        final Boolean daemon = AbstractCache.asyncExecutor.execute(() -> Thread.currentThread().isDaemon()).get();
+        assertTrue(daemon, "async cache tasks must run on daemon threads");
+    }
+
+    // --- Fix: property bag must be safe for concurrent mutation ---------------------------------
+    // Regression test: the property bag was previously backed by an unsynchronized LinkedHashMap,
+    // so concurrent setProperty calls could lose updates or corrupt the map.
+
+    @Test
+    public void testProperties_ConcurrentMutation_IsThreadSafe() throws Exception {
+        try (LocalCache<String, String> cache = newCache()) {
+            final int threads = 8;
+            final int perThread = 250;
+            final ExecutorService pool = Executors.newFixedThreadPool(threads);
+            try {
+                final CountDownLatch start = new CountDownLatch(1);
+                final List<Future<?>> futures = new ArrayList<>();
+                for (int t = 0; t < threads; t++) {
+                    final int id = t;
+                    futures.add(pool.submit(() -> {
+                        start.await();
+                        for (int i = 0; i < perThread; i++) {
+                            cache.setProperty("p-" + id + "-" + i, id * perThread + i);
+                        }
+                        return null;
+                    }));
+                }
+                start.countDown();
+                for (final Future<?> f : futures) {
+                    f.get(30, TimeUnit.SECONDS);
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+
+            assertEquals(threads * perThread, cache.getProperties().size());
+            for (int t = 0; t < threads; t++) {
+                for (int i = 0; i < perThread; i++) {
+                    final Integer value = cache.getProperty("p-" + t + "-" + i);
+                    assertNotNull(value);
+                    assertEquals(t * perThread + i, value.intValue());
+                }
+            }
         }
     }
 

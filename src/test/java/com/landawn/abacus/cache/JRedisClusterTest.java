@@ -112,8 +112,8 @@ public class JRedisClusterTest {
     public void test_set_with_ttl_uses_set_with_expiry() {
         when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
-        assertTrue(cache.set("k", "v", 60_000)); // 60 seconds
-        verify(mockCluster).set(eq(utf8("k")), any(byte[].class), eq(SetParams.setParams().ex(60L)));
+        assertTrue(cache.set("k", "v", 60_000)); // 60 seconds, sent with millisecond precision (PX)
+        verify(mockCluster).set(eq(utf8("k")), any(byte[].class), eq(SetParams.setParams().px(60_000L)));
         verify(mockCluster, never()).set(any(byte[].class), any(byte[].class));
     }
 
@@ -149,7 +149,7 @@ public class JRedisClusterTest {
         cache.set("k", "hello", 30_000);
 
         ArgumentCaptor<byte[]> payload = ArgumentCaptor.forClass(byte[].class);
-        verify(mockCluster).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().ex(30L)));
+        verify(mockCluster).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().px(30_000L)));
         assertEquals("hello", KRYO.decode(payload.getValue()));
     }
 

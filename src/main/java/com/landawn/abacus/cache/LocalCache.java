@@ -194,7 +194,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * This operation updates the last access time for idle timeout calculation,
      * resetting the idle timer for the entry. If the entry has expired (TTL exceeded
      * or idle timeout reached) or been evicted, {@code null} will be returned; an expired
-     * entry that has not yet been reclaimed is removed during the next eviction cycle.
+     * entry is reclaimed immediately when accessed by this method, or otherwise during
+     * the next background eviction cycle (if {@code evictDelay > 0}).
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
@@ -272,7 +273,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param value the cache value to be associated with the specified key (can be null)
      * @param liveTime the time-to-live in milliseconds from entry creation (0 or negative for no TTL expiration)
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout)
-     * @return {@code true} if the entry was successfully stored; {@code false} if the cache is full and unable to evict entries, or if the underlying pool rejected the entry
+     * @return {@code true} if the entry was successfully stored; {@code false} if the cache is full and unable to evict entries, or if the underlying pool
+     *         rejected the entry. Note that on failure any previous entry under the key has already been removed by the underlying pool (reachable only with
+     *         a custom pool whose {@code put} can fail, e.g. auto-balancing disabled or a memory limit configured)
      * @throws IllegalArgumentException if key is null
      */
     @Override
@@ -552,8 +555,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     public CacheStats stats() {
         final PoolStats poolStats = pool.stats();
 
+        // A custom pool with a time-varying memory measure can let its data-size accounting
+        // drift below zero; clamp to the -1 "not tracked" sentinel so a monitoring call
+        // never fails CacheStats validation.
         return new CacheStats(poolStats.capacity(), poolStats.size(), poolStats.putCount(), poolStats.getCount(), poolStats.hitCount(), poolStats.missCount(),
-                poolStats.evictionCount(), poolStats.maxMemory(), poolStats.dataSize());
+                poolStats.evictionCount(), N.max(-1L, poolStats.maxMemory()), N.max(-1L, poolStats.dataSize()));
     }
 
     /**

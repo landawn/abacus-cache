@@ -15,6 +15,7 @@
 package com.landawn.abacus.cache;
 
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -104,10 +105,21 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     private final long retryDelay;
 
+    // Sentinel for "no failure recorded" in lastFailedTime. System.nanoTime() values are
+    // arbitrary (and may be negative), so a real timestamp can't double as the sentinel.
+    private static final long NEVER_FAILED = Long.MIN_VALUE;
+
+    // Precomputed from retryDelay; TimeUnit.toNanos saturates at Long.MAX_VALUE for huge delays.
+    private final long retryDelayNanos;
+
     // ...
     private final AtomicInteger failedCounter = new AtomicInteger();
 
-    private final AtomicLong lastFailedTime = new AtomicLong(0);
+    // Monotonic (System.nanoTime()) timestamp of the most recent failure, or NEVER_FAILED when
+    // none is recorded. A monotonic clock is used instead of the wall clock so a backward
+    // NTP/manual clock adjustment cannot extend the fail-fast window: with the wall clock, a
+    // jump of -10 minutes kept the open circuit returning null for those extra 10 minutes.
+    private final AtomicLong lastFailedTime = new AtomicLong(NEVER_FAILED);
 
     private volatile boolean isClosed = false;
 
@@ -199,11 +211,19 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param dcc the distributed cache client to wrap (must not be {@code null})
-     * @param keyPrefix the key prefix to prepend to all keys (may be empty string or {@code null} for no prefix)
-     * @param maxFailedNumForRetry maximum consecutive failures before opening circuit breaker (must be non-negative)
+     * @param keyPrefix the key prefix to prepend to all keys (may be empty string or {@code null} for no prefix).
+     *        The prefix is prepended verbatim (only the key part is Base64-encoded), so it must consist of
+     *        printable ASCII characters without spaces or control characters. Including at least one character
+     *        outside the Base64 alphabet (such as {@code ':'}) is recommended: it guarantees prefixed and
+     *        unprefixed namespaces can never collide
+     * @param maxFailedNumForRetry maximum consecutive failures before opening circuit breaker (must be non-negative).
+     *        A value of {@code 0} is a degenerate configuration in which the circuit opens on every failure for
+     *        {@code retryDelay} ms; in that mode the failure counter stays at 0 and the closed-to-open WARN
+     *        transition log is not emitted
      * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative)
      * @throws IllegalArgumentException if {@code dcc} is {@code null}, {@code maxFailedNumForRetry} is negative,
-     *         or {@code retryDelay} is negative
+     *         {@code retryDelay} is negative, or {@code keyPrefix} contains a non-printable-ASCII character,
+     *         a space, or a control character
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
         N.checkArgNotNull(dcc, "dcc");
@@ -211,10 +231,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         N.checkArgNotNegative(retryDelay, "retryDelay");
 
         this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
+
+        // The prefix is prepended verbatim to generated keys (only the key part is Base64-encoded),
+        // so it must itself be key-safe for the backing store: printable ASCII without spaces or
+        // control characters. Anything else would make every generated key invalid at the server -
+        // every write would throw and every read would silently feed the circuit breaker.
+        for (int i = 0, len = this.keyPrefix.length(); i < len; i++) {
+            final char ch = this.keyPrefix.charAt(i);
+
+            if (ch <= ' ' || ch >= 127) {
+                throw new IllegalArgumentException("keyPrefix must contain only printable ASCII characters without spaces or control characters; found char "
+                        + (int) ch + " at index " + i);
+            }
+        }
         this.hasKeyPrefix = Strings.isNotEmpty(this.keyPrefix);
         this.dcc = dcc;
         this.maxFailedNumForRetry = maxFailedNumForRetry;
         this.retryDelay = retryDelay;
+        this.retryDelayNanos = TimeUnit.MILLISECONDS.toNanos(retryDelay);
     }
 
     /**
@@ -237,9 +271,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>State Transitions:</b>
      * <ul>
-     * <li>Successful operation: Resets {@code failedCounter} to 0 and {@code lastFailedTime} to 0 (closes circuit)</li>
-     * <li>Failed operation: Increments {@code failedCounter} and updates {@code lastFailedTime} to current time</li>
-     * <li>All exceptions from underlying cache client are caught and treated as failures</li>
+     * <li>Successful operation: Resets {@code failedCounter} to 0 and clears the last-failure timestamp (closes circuit)</li>
+     * <li>Failed operation: Increments {@code failedCounter} (capped at the threshold) and records the failure
+     *     time using a monotonic clock ({@code System.nanoTime()}), so wall-clock adjustments cannot affect the window</li>
+     * <li>All exceptions from the underlying cache client are caught and treated as failures, except
+     *     {@link IllegalArgumentException} (a deterministic client-side validation error, e.g. an over-long
+     *     generated key), which is rethrown without touching the breaker state; the closed-to-open
+     *     transition is logged once at WARN level</li>
      * </ul>
      *
      * <p><b>Thread Safety:</b>
@@ -285,7 +323,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return the cached value, or {@code null} if not found, expired, evicted, circuit breaker is open, or on error
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null (validated up-front, before the circuit breaker
-     *         check and before {@link #generateKey(Object)})
+     *         check and before {@link #generateKey(Object)}), or if the underlying client rejects the
+     *         generated cache key (e.g. it exceeds memcached's 250-character key limit after prefixing
+     *         and Base64 expansion); such validation errors are rethrown and do not affect the circuit
+     *         breaker state
      * @see #generateKey(Object)
      * @see DistributedCacheClient#get(String)
      */
@@ -298,25 +339,39 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         // short-circuit to null before generateKey(key) is reached.
         N.checkArgNotNull(key, "key");
 
-        // Read circuit breaker state atomically to avoid race conditions
+        // Read the breaker state: two independent volatile reads, not an atomic pair snapshot.
+        // Every interleaving with a concurrent reset/failure fails safe (worst case one extra
+        // cache attempt or one extra fast-fail), so no pairing synchronization is needed.
+        // Elapsed time is measured with System.nanoTime(): the wall clock previously used here
+        // let a backward NTP/manual clock jump extend the fail-fast window by the jump size.
         final int currentFailedCount = failedCounter.get();
         final long currentLastFailedTime = lastFailedTime.get();
-        final long currentTime = System.currentTimeMillis();
 
-        // Check circuit breaker state with atomic snapshot to prevent time-based race conditions
-        if ((currentFailedCount >= maxFailedNumForRetry) && ((currentTime - currentLastFailedTime) < retryDelay)) {
+        if ((currentFailedCount >= maxFailedNumForRetry) && (currentLastFailedTime != NEVER_FAILED)
+                && ((System.nanoTime() - currentLastFailedTime) < retryDelayNanos)) {
             return null;
         }
 
         final String cacheKey = generateKey(key);
 
         V result = null;
-        boolean isOK = false;
+        // TRUE = success, FALSE = availability failure, null = client-side validation error
+        // (rethrown; must neither reset nor advance the breaker).
+        Boolean isOK = null;
 
         try {
             result = dcc.get(cacheKey);
-            isOK = true;
+            isOK = Boolean.TRUE;
+        } catch (final IllegalArgumentException e) {
+            // A deterministic client-side validation error (e.g. the generated key exceeding
+            // memcached's 250-character limit after prefixing and Base64 expansion) indicates a
+            // bad key, not an unavailable cache. Rethrow instead of counting it toward the
+            // availability breaker: a hot invalid key would otherwise open the circuit and blank
+            // reads for ALL keys, with only debug-level evidence.
+            throw e;
         } catch (final Exception e) {
+            isOK = Boolean.FALSE;
+
             // Swallowed by design: the circuit breaker (updated in the finally block) handles
             // recovery, so callers see a cache miss rather than an exception. Logged at debug
             // to aid diagnosis without flooding logs while the circuit is open.
@@ -327,20 +382,22 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 logger.debug("Distributed cache read failed (treated as cache miss); consecutive failure count is ~" + failedCounter.get(), e);
             }
         } finally {
-            if (isOK) {
+            if (isOK == null) {
+                // Validation error: leave the breaker state untouched.
+            } else if (isOK) {
                 // Steady-state fast path: when there have been no recent failures the counter
                 // is already 0, so skip the two contended atomic writes and only pay a volatile
                 // read. Reset order (counter first, then time) is preserved for the rare
                 // recovery case to avoid the counter=0 / stale-timestamp race.
                 if (failedCounter.get() != 0) {
                     failedCounter.set(0);
-                    lastFailedTime.set(0);
+                    lastFailedTime.set(NEVER_FAILED);
                 }
             } else {
                 // Update timestamp BEFORE incrementing counter to prevent race conditions
                 // This ensures that when another thread sees the incremented counter,
                 // it will also see the corresponding timestamp
-                lastFailedTime.set(System.currentTimeMillis());
+                lastFailedTime.set(System.nanoTime());
 
                 // Stop incrementing once the threshold is reached: the circuit-open condition
                 // (failedCounter >= maxFailedNumForRetry) is already satisfied, and letting the
@@ -349,7 +406,16 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 // Use an atomic compare-and-cap (getAndUpdate) instead of a separate get()/
                 // incrementAndGet(): the latter is a check-then-act race in which N concurrent
                 // failing reads can all observe (cap - 1), all pass the guard, and overshoot the cap.
-                failedCounter.getAndUpdate(current -> current < maxFailedNumForRetry ? current + 1 : current);
+                final int previousFailedCount = failedCounter.getAndUpdate(current -> current < maxFailedNumForRetry ? current + 1 : current);
+
+                // Surface the closed->open transition once at WARN: while the circuit is open
+                // every read returns null with only debug-level logging, so without this the
+                // cache can be silently disabled in production.
+                if (previousFailedCount == maxFailedNumForRetry - 1 && logger.isWarnEnabled()) {
+                    logger.warn("Distributed cache circuit breaker opened after " + maxFailedNumForRetry
+                            + " consecutive read failures; reads will fail fast (returning null) until " + retryDelay
+                            + " ms have elapsed since the most recent failure");
+                }
             }
         }
 
@@ -419,7 +485,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return {@code true} if the operation was successful, {@code false} otherwise (as reported
      *         by the underlying cache client)
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null
+     * @throws IllegalArgumentException if the key is null, if the underlying client rejects the generated
+     *         cache key (e.g. it exceeds memcached's 250-character key limit after prefixing and Base64
+     *         expansion), or if {@code liveTime} exceeds {@link Integer#MAX_VALUE} seconds (~68 years,
+     *         rejected by the bundled clients' millisecond-to-second conversion)
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #generateKey(Object)
      * @see DistributedCacheClient#set(String, Object, long)
@@ -699,6 +768,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
+     * @throws UnsupportedOperationException if the underlying client does not support {@code flushAll}
+     *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see DistributedCacheClient#flushAll()
      * @see #remove(Object)
@@ -731,8 +802,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Subsequent calls return immediately without additional work.
      *
      * <p><b>Post-Close Behavior:</b>
-     * After closing, all operations except {@link #isClosed()} and {@link #close()} will throw
-     * {@link IllegalStateException} via {@link #assertNotClosed()}.
+     * Operations <em>started</em> after closing (except {@link #isClosed()} and {@link #close()}) throw
+     * {@link IllegalStateException} via {@link #assertNotClosed()}. An operation already in flight when
+     * {@code close()} runs is not excluded: it may complete normally, or surface the underlying client's
+     * own exception (e.g., a "shutting down" error) instead of {@code IllegalStateException}. For the
+     * asynchronous wrappers ({@code asyncGet}, {@code asyncPut}, ...), the closed-check runs inside the
+     * submitted task, so the call site receives a normally-returned future that <em>completes
+     * exceptionally</em> with the {@code IllegalStateException} rather than throwing directly.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -872,12 +948,23 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Rationale for Base64 Encoding:</b>
      * <ul>
-     * <li>Ensures keys are ASCII-safe for Memcached (which restricts key characters)</li>
+     * <li>Ensures the encoded key part is ASCII-safe for Memcached (which restricts key characters);
+     *     the prefix is prepended verbatim and is validated at construction time to be printable ASCII</li>
      * <li>Handles Unicode characters in keys safely</li>
      * <li>Avoids issues with special characters (spaces, newlines, control characters, etc.)</li>
      * <li>Provides consistent key format across different cache systems</li>
      * <li>Eliminates risk of key injection or parsing issues in cache protocols</li>
      * </ul>
+     *
+     * <p><b>Length Expansion:</b> Base64 expands the key by a factor of 4/3 (plus the prefix length).
+     * Memcached's client-side key limit is 250 characters, so an original key longer than roughly 186
+     * characters (less when a prefix is configured) produces a generated key the underlying client
+     * rejects with {@link IllegalArgumentException} on every operation. Redis has no comparable limit.
+     *
+     * <p><b>Namespace Isolation:</b> a prefix containing at least one character outside the Base64
+     * alphabet (such as {@code ':'}) guarantees prefixed and unprefixed key spaces can never collide;
+     * a prefix made purely of Base64-alphabet characters with a length divisible by 4 could in theory
+     * collide with the Base64 encoding of a different unprefixed key.
      *
      * <p><b>Thread Safety:</b>
      * This method is thread-safe and stateless. Multiple threads can call this method

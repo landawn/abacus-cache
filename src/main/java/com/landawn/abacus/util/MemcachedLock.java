@@ -155,8 +155,16 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *                 exception to the lenient TTL handling used by the cache {@code put} APIs. Converted
      *                 to whole seconds for Memcached, with fractional seconds rounded up.
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
-     * @throws IllegalArgumentException if target is null or liveTime is not positive
-     * @throws RuntimeException if a communication error occurs with Memcached
+     * @throws IllegalArgumentException if target is null or liveTime is not positive, or if the key
+     *         derived from {@code target} (via {@code toKey}) is rejected by the memcached client —
+     *         empty, longer than 250 bytes, or containing spaces/control characters. The default
+     *         {@code toKey} uses the target's string form verbatim, so composite targets whose string
+     *         representation is JSON-like (maps, beans) typically need a sanitizing {@code toKey} override
+     * @throws RuntimeException if a communication error occurs with Memcached. The lock state is then
+     *         indeterminate: the {@code add} command may have reached the server even though its
+     *         response was lost or timed out, in which case the lock IS held server-side (under this
+     *         client's marker) until the TTL expires and no caller will ever {@code unlock} it.
+     *         Prefer short TTLs where this matters for availability.
      * @see #lock(Object, Object, long)
      * @see #unlock(Object)
      */
@@ -228,8 +236,16 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive;
      *                 converted to whole seconds for Memcached, with fractional seconds rounded up)
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
-     * @throws IllegalArgumentException if target is null or liveTime is not positive
-     * @throws RuntimeException if a communication error occurs with Memcached
+     * @throws IllegalArgumentException if target is null or liveTime is not positive, or if the key
+     *         derived from {@code target} (via {@code toKey}) is rejected by the memcached client —
+     *         empty, longer than 250 bytes, or containing spaces/control characters. The default
+     *         {@code toKey} uses the target's string form verbatim, so composite targets whose string
+     *         representation is JSON-like (maps, beans) typically need a sanitizing {@code toKey} override
+     * @throws RuntimeException if a communication error occurs with Memcached. The lock state is then
+     *         indeterminate: the {@code add} command may have reached the server even though its
+     *         response was lost or timed out, in which case the lock IS held server-side (under this
+     *         client's value) until the TTL expires and no caller will ever {@code unlock} it.
+     *         Prefer short TTLs where this matters for availability.
      * @see #lock(Object, long)
      * @see #get(Object)
      * @see #unlock(Object)
@@ -310,7 +326,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * @param target the target resource whose lock status is to be checked (must not be null)
      * @return {@code true} if the lock is currently held, {@code false} otherwise
-     * @throws IllegalArgumentException if target is null
+     * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
+     *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
+     *         or containing spaces/control characters)
      * @throws RuntimeException if a communication error occurs with Memcached
      * @see #lock(Object, long)
      * @see #lock(Object, Object, long)
@@ -460,7 +478,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @return {@code true} if an entry was deleted from Memcached for this target (regardless of
      *         which client originally acquired the lock), {@code false} if no entry existed
      *         (e.g., the lock had already expired or was never acquired)
-     * @throws IllegalArgumentException if target is null
+     * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
+     *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
+     *         or containing spaces/control characters)
      * @throws RuntimeException if a communication error occurs with Memcached
      * @see #lock(Object, long)
      * @see #lock(Object, Object, long)

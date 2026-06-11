@@ -373,6 +373,25 @@ public class CacheFactoryTest extends TestBase {
         }
     }
 
+    /**
+     * Regression test for the custom-class validation gating bug.
+     *
+     * <p>Before the fix, the "missing parameters" / "server URL cannot be empty" validations (which
+     * only make sense for the built-in Memcached/Redis providers) ran before the class-name dispatch,
+     * so a perfectly valid custom {@link Cache} with a no-arg constructor — e.g.
+     * {@code "com.example.MyCache()"} — was rejected with "missing parameters". The validations now
+     * apply only to the built-in providers.
+     */
+    @Test
+    public void testCreateCache_CustomClassWithNoArgConstructor() {
+        try (Cache<String, Object> cache = CacheFactory.createCache(DummyProviderCache.class.getName() + "()")) {
+            assertNotNull(cache);
+            assertTrue(cache instanceof DummyProviderCache);
+            assertTrue(cache.put("k", "v"));
+            assertEquals("v", cache.getOrNull("k"));
+        }
+    }
+
     // TODO: createCache's "attrResult == null" and "Cannot find class (cls == null)" guards are
     // unreachable — TypeAttrParser.parse never returns null and ClassUtil.forName throws (rather than
     // returning null) for a missing class. The "catch (IllegalArgumentException) -> rethrow" guard is

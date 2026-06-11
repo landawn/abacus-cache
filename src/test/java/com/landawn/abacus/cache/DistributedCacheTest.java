@@ -18,6 +18,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -222,14 +223,82 @@ public class DistributedCacheTest extends TestBase {
             assertTrue(cache.put("k", "v", 60_000, 0));
             assertEquals("v", cache.getOrNull("k"));
 
-            // Open the circuit: counter at threshold, last failure just now.
-            setBreakerState(cache, 1, System.currentTimeMillis());
+            // Open the circuit: counter at threshold, last failure just now. The breaker measures
+            // elapsed time with System.nanoTime() (monotonic), not the wall clock.
+            setBreakerState(cache, 1, System.nanoTime());
             assertNull(cache.getOrNull("k"), "an open circuit must short-circuit to null even though the value is present");
 
-            // Let the retry window elapse: the read reaches the server again and the breaker closes.
-            setBreakerState(cache, 1, 0L);
+            // Let the retry window elapse: backdate the last failure past the 60s window so the
+            // read reaches the server again and the breaker closes.
+            setBreakerState(cache, 1, System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(60_001));
             assertEquals("v", cache.getOrNull("k"));
             assertEquals(0, failedCounter(cache), "a successful read must reset the failure counter");
+        }
+    }
+
+    /**
+     * Regression test for the monotonic-clock circuit breaker: the fail-fast window must close by
+     * genuinely elapsed time. (Previously the window was measured with {@code System.currentTimeMillis()},
+     * so a backward wall-clock adjustment extended the read blackout by the size of the jump; the breaker
+     * now uses {@code System.nanoTime()}, which cannot move backwards.)
+     */
+    @Test
+    public void testCircuitBreaker_recoversAfterRealElapsedDelay() throws Exception {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient(), "", 1, 100)) {
+            assertTrue(cache.put("k", "v", 60_000, 0));
+
+            setBreakerState(cache, 1, System.nanoTime()); // open: last failure "just now", 100ms window
+            assertNull(cache.getOrNull("k"), "circuit must be open immediately after the failure");
+
+            Thread.sleep(150); // let the 100ms retry window genuinely elapse
+
+            assertEquals("v", cache.getOrNull("k"), "circuit must close once the retry delay has elapsed");
+            assertEquals(0, failedCounter(cache));
+        }
+    }
+
+    /**
+     * Regression test for breaker poisoning by deterministic validation errors.
+     *
+     * <p>Base64 encoding expands keys by 4/3, so a long natural key produces a generated key over
+     * memcached's 250-character limit, which the client rejects with {@link IllegalArgumentException}
+     * on every call. Previously that IAE was swallowed as a cache miss AND counted toward the
+     * availability breaker — a hot invalid key could open the circuit and blank reads for ALL keys.
+     * The IAE is now rethrown and leaves the breaker state untouched.
+     */
+    @Test
+    public void testGetOrNull_overlongKey_throwsIAEWithoutTouchingBreaker() throws Exception {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient(), "", 5, 60_000)) {
+            final String overlongKey = "k".repeat(300); // Base64-encodes to ~400 chars, over the 250 limit
+
+            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(overlongKey));
+            assertEquals(0, failedCounter(cache), "a client-side validation error must not count as an availability failure");
+
+            // Normal keys keep working and the breaker is still closed.
+            assertTrue(cache.put("ok", "v", 60_000, 0));
+            assertEquals("v", cache.getOrNull("ok"));
+        }
+    }
+
+    /**
+     * Regression test for the unvalidated key prefix: a prefix containing a space (or any
+     * non-printable-ASCII character) would make every generated key invalid at the server — every
+     * write throwing and every read silently feeding the circuit breaker. It is now rejected at
+     * construction time.
+     */
+    @Test
+    public void testConstructor_invalidKeyPrefix_throwsIAE() {
+        final SpyMemcached<String> client = newClient();
+        try {
+            assertThrows(IllegalArgumentException.class, () -> new DistributedCache<>(client, "my app: ", 100, 1000));
+            assertThrows(IllegalArgumentException.class, () -> new DistributedCache<>(client, "café:", 100, 1000));
+            // A printable-ASCII prefix is accepted.
+            try (DistributedCache<String, String> cache = new DistributedCache<>(client, "myapp:", 100, 1000)) {
+                assertTrue(cache.put("k", "v", 60_000, 0));
+                assertEquals("v", cache.getOrNull("k"));
+            }
+        } finally {
+            client.disconnect();
         }
     }
 
@@ -241,7 +310,7 @@ public class DistributedCacheTest extends TestBase {
     @Test
     public void testGetOrNull_NullKey_ThrowsEvenWhenCircuitOpen() throws Exception {
         try (DistributedCache<String, String> cache = new DistributedCache<>(newClient(), "", 1, 60_000)) {
-            setBreakerState(cache, 1, System.currentTimeMillis()); // force the circuit open
+            setBreakerState(cache, 1, System.nanoTime()); // force the circuit open (nanoTime-based window)
             assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
         }
     }
@@ -322,6 +391,7 @@ public class DistributedCacheTest extends TestBase {
     }
 
     // --- reflection helpers for the circuit-breaker internal state -----------------------------
+    // lastFailedTime holds a System.nanoTime() timestamp (or Long.MIN_VALUE for "never failed").
 
     private static void setBreakerState(final DistributedCache<?, ?> cache, final int failedCount, final long lastFailedTime) throws Exception {
         final Field fc = DistributedCache.class.getDeclaredField("failedCounter");
