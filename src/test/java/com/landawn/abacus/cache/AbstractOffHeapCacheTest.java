@@ -9,15 +9,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.N;
@@ -183,6 +186,21 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
+    /**
+     * Regression coverage for the post-close {@code put()} ordering bug. The off-heap cache frees
+     * its native allocation in {@code close()}; a later {@code put()} must fail before any slot
+     * allocation or native-copy hook is reached. Previously the closed pool was only consulted after
+     * {@code copyToMemory(...)}, which made {@code OffHeapCache} write to freed native memory.
+     */
+    @Test
+    public void testPutAfterCloseFailsBeforeNativeCopy() {
+        final GuardedOffHeapCache cache = new GuardedOffHeapCache();
+        cache.close();
+
+        assertThrows(IllegalStateException.class, () -> cache.put("k", new byte[] { 1 }));
+        assertFalse(cache.copiedAfterDeallocate.get(), "put after close must not copy into deallocated memory");
+    }
+
     // ByteBufferType.byteArrayOf() reads bytes [0, position); build a buffer whose written content
     // (position advanced to the end) is exactly the supplied data so it round-trips through the cache.
     private static ByteBuffer bufferOf(final byte[] data) {
@@ -209,6 +227,39 @@ public class AbstractOffHeapCacheTest {
                 return backing.remove(key) != null;
             }
         };
+    }
+
+    private static final class GuardedOffHeapCache extends AbstractOffHeapCache<String, byte[]> {
+        private final AtomicBoolean deallocated = new AtomicBoolean();
+        private final AtomicBoolean copiedAfterDeallocate = new AtomicBoolean();
+
+        GuardedOffHeapCache() {
+            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, null, null, null, false, null, null,
+                    LoggerFactory.getLogger(GuardedOffHeapCache.class));
+        }
+
+        @Override
+        protected long allocate(final long capacityInBytes) {
+            return 0L;
+        }
+
+        @Override
+        protected void deallocate() {
+            deallocated.set(true);
+        }
+
+        @Override
+        protected void copyToMemory(final byte[] bytes, final int srcOffset, final long startPtr, final int len) {
+            if (deallocated.get()) {
+                copiedAfterDeallocate.set(true);
+                throw new AssertionError("copyToMemory called after deallocate");
+            }
+        }
+
+        @Override
+        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     // --- Default DESERIALIZER raw-type branches -------------------------------------------------

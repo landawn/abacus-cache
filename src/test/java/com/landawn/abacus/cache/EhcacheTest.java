@@ -303,6 +303,30 @@ public class EhcacheTest {
     }
 
     @Test
+    public void testPutAll_EdgeCase_NullKeyOrValueThrowsIAE() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+
+            final Map<String, String> nullKeyEntries = new HashMap<>();
+            nullKeyEntries.put("ok", "1");
+            nullKeyEntries.put(null, "2");
+
+            assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(nullKeyEntries));
+            assertNull(wrapper.getOrNull("ok"));
+
+            final Map<String, String> nullValueEntries = new HashMap<>();
+            nullValueEntries.put("ok", "1");
+            nullValueEntries.put("bad", null);
+
+            assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(nullValueEntries));
+            assertNull(wrapper.getOrNull("ok"));
+        } finally {
+            cm.close();
+        }
+    }
+
+    @Test
     public void testRemoveAll() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
         try {

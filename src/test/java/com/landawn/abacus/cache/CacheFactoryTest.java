@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
@@ -31,6 +32,14 @@ import redis.clients.jedis.providers.ClusterConnectionProvider;
 
 @Tag("2025")
 public class CacheFactoryTest extends TestBase {
+
+    @SuppressWarnings("unchecked")
+    private static DistributedCacheClient<?> distributedClient(final Cache<?, ?> cache) throws ReflectiveOperationException {
+        final Field dccField = DistributedCache.class.getDeclaredField("dcc");
+        dccField.setAccessible(true);
+
+        return (DistributedCacheClient<?>) dccField.get(cache);
+    }
 
     // Two-arg createLocalCache
     @Test
@@ -233,6 +242,30 @@ public class CacheFactoryTest extends TestBase {
             try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000)")) {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);
+            }
+        }
+    }
+
+    @Test
+    public void testCreateCache_RedisClusterWithMultipleSeedNodes() throws ReflectiveOperationException {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+             MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,10.0.0.2:7000)")) {
+                assertNotNull(cache);
+                assertTrue(cache instanceof DistributedCache);
+                assertEquals("10.0.0.1:7000,10.0.0.2:7000", distributedClient(cache).serverUrl());
+            }
+        }
+    }
+
+    @Test
+    public void testCreateCache_RedisClusterWithMultipleSeedNodesPrefixAndTimeout() throws ReflectiveOperationException {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+             MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,10.0.0.2:7000,prefix:,5000)")) {
+                assertNotNull(cache);
+                assertTrue(cache instanceof DistributedCache);
+                assertEquals("10.0.0.1:7000,10.0.0.2:7000", distributedClient(cache).serverUrl());
             }
         }
     }

@@ -402,8 +402,8 @@ public final class CacheFactory {
      * @return a new Cache instance configured according to the specification
      * @throws IllegalArgumentException if the provider string is null or empty, cannot be parsed, or has an
      *         empty class name; for the built-in providers (Memcached/Redis/RedisCluster), also if it has no
-     *         parameters, has an empty server URL, specifies an unsupported number of parameters (more than 3),
-     *         or specifies a non-numeric or non-positive timeout; for custom classes, also if the class cannot
+     *         parameters, has an empty server URL, specifies an unsupported parameter layout, or specifies a
+     *         non-numeric or non-positive timeout; for custom classes, also if the class cannot
      *         be found (checked against this library's classloader, then the thread context classloader) or
      *         does not implement {@link Cache}. A custom cache class with a no-arg constructor may be specified
      *         without parameters, e.g. {@code "com.example.MyCache()"}
@@ -481,14 +481,13 @@ public final class CacheFactory {
                     throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
                 }
             } else {
-                if (parameters.length == 1) {
-                    return new DistributedCache<>(new JRedisCluster<>(url, DEFAULT_TIMEOUT));
-                } else if (parameters.length == 2) {
-                    return new DistributedCache<>(new JRedisCluster<>(url, DEFAULT_TIMEOUT), parameters[1]);
-                } else if (parameters.length == 3) {
-                    return new DistributedCache<>(new JRedisCluster<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
+                final RedisClusterParameters redisClusterParameters = parseRedisClusterParameters(parameters);
+
+                if (redisClusterParameters.keyPrefix == null) {
+                    return new DistributedCache<>(new JRedisCluster<>(redisClusterParameters.serverUrl, redisClusterParameters.timeout));
                 } else {
-                    throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+                    return new DistributedCache<>(new JRedisCluster<>(redisClusterParameters.serverUrl, redisClusterParameters.timeout),
+                            redisClusterParameters.keyPrefix);
                 }
             }
         } else {
@@ -522,6 +521,85 @@ public final class CacheFactory {
             }
 
             return TypeAttrParser.newInstance(cls, provider);
+        }
+    }
+
+    /**
+     * RedisCluster serverUrl itself is a comma-separated host:port seed list, so split provider
+     * parameters that still look like Redis nodes belong to serverUrl rather than keyPrefix.
+     */
+    private static RedisClusterParameters parseRedisClusterParameters(final String[] parameters) {
+        int keyPrefixIndex = -1;
+
+        for (int i = 1; i < parameters.length; i++) {
+            if (!isRedisClusterSeedNodeParameter(parameters[i])) {
+                keyPrefixIndex = i;
+                break;
+            }
+        }
+
+        if (keyPrefixIndex < 0) {
+            return new RedisClusterParameters(joinRedisClusterServerUrl(parameters, parameters.length), null, DEFAULT_TIMEOUT);
+        }
+
+        if (keyPrefixIndex < parameters.length - 2) {
+            throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+        }
+
+        final long timeout = keyPrefixIndex == parameters.length - 2 ? parseTimeoutParameter(parameters[keyPrefixIndex + 1]) : DEFAULT_TIMEOUT;
+
+        return new RedisClusterParameters(joinRedisClusterServerUrl(parameters, keyPrefixIndex), parameters[keyPrefixIndex], timeout);
+    }
+
+    private static boolean isRedisClusterSeedNodeParameter(final String parameter) {
+        if (Strings.isEmpty(parameter)) {
+            return false;
+        }
+
+        final int portSeparatorIndex = parameter.lastIndexOf(':');
+
+        if (portSeparatorIndex <= 0 || portSeparatorIndex == parameter.length() - 1) {
+            return false;
+        }
+
+        long port = 0;
+
+        for (int i = portSeparatorIndex + 1; i < parameter.length(); i++) {
+            final char ch = parameter.charAt(i);
+
+            if (ch < '0' || ch > '9') {
+                return false;
+            }
+
+            port = (port * 10) + ch - '0';
+        }
+
+        return port > 0 && port <= 65535;
+    }
+
+    private static String joinRedisClusterServerUrl(final String[] parameters, final int length) {
+        final StringBuilder sb = new StringBuilder();
+
+        for (int i = 0; i < length; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+
+            sb.append(parameters[i]);
+        }
+
+        return sb.toString();
+    }
+
+    private static final class RedisClusterParameters {
+        private final String serverUrl;
+        private final String keyPrefix;
+        private final long timeout;
+
+        RedisClusterParameters(final String serverUrl, final String keyPrefix, final long timeout) {
+            this.serverUrl = serverUrl;
+            this.keyPrefix = keyPrefix;
+            this.timeout = timeout;
         }
     }
 

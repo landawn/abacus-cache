@@ -391,6 +391,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
         N.checkArgNotNull(entries, "entries");
 
+        for (final Map.Entry<? extends K, ? extends V> entry : entries.entrySet()) {
+            if (entry.getKey() == null) {
+                throw new IllegalArgumentException("'entries' can't contain null key");
+            }
+
+            if (entry.getValue() == null) {
+                throw new IllegalArgumentException("'entries' can't contain null value");
+            }
+        }
+
         cacheImpl.putAll(entries);
     }
 
