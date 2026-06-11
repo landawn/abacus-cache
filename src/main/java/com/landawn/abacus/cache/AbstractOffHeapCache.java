@@ -780,9 +780,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
-        if (_pool.isClosed()) {
-            throw new IllegalStateException("This cache has been closed");
-        }
+        //    if (_pool.isClosed()) {
+        //        throw new IllegalStateException("This cache has been closed");
+        //    }
 
         N.checkArgNotNull(key, "key");
         N.checkArgNotNull(value, "value");
