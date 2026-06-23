@@ -81,8 +81,7 @@ public class CacheFactoryTest extends TestBase {
 
     @Test
     public void testCreateLocalCache_WithPool_EdgeCase_NullPool() {
-        assertThrows(IllegalArgumentException.class,
-                () -> CacheFactory.createLocalCache((KeyedObjectPool<String, PoolableAdapter<String>>) null, 0L, 0L));
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createLocalCache((KeyedObjectPool<String, PoolableAdapter<String>>) null, 0L, 0L));
     }
 
     // createDistributedCache one-arg overload

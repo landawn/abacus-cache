@@ -131,9 +131,10 @@ import java.util.Objects;
  * @see ForeignMemoryOffHeapCache
  * @see MinMaxAvg
  */
-public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long putCount, long putCountToDisk, long getCount, long hitCount, long hitCountFromDisk,
-        long missCount, long evictionCount, long evictionCountFromDisk, long allocatedMemory, long occupiedMemory, long dataSize, long dataSizeOnDisk,
-        MinMaxAvg writeToDiskTimeStats, MinMaxAvg readFromDiskTimeStats, int segmentSize, Map<Integer, Map<Integer, Integer>> occupiedSlots) {
+public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long putCount, long putCountToDisk, long getCount, long hitCount,
+        long hitCountFromDisk, long missCount, long evictionCount, long evictionCountFromDisk, long allocatedMemory, long occupiedMemory, long dataSize,
+        long dataSizeOnDisk, MinMaxAvg writeToDiskTimeStats, MinMaxAvg readFromDiskTimeStats, int segmentSize,
+        Map<Integer, Map<Integer, Integer>> occupiedSlots) {
 
     /**
      * Canonical constructor that validates the time-statistics arguments and stores a deeply
