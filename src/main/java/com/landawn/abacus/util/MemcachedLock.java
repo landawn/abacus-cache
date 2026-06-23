@@ -107,7 +107,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
 
     /**
      * Attempts to acquire a lock on the specified target for the given duration.
-     * This method stores an empty byte array (N.EMPTY_BYTE_ARRAY cast to type V) as the lock value.
+     * This method stores a value-less marker (an empty byte array) as the lock value.
      * The lock will be automatically released after the specified live time expires, ensuring that
      * locks don't persist indefinitely if a holder crashes or fails to release them.
      *

@@ -104,7 +104,7 @@ public final class CacheFactory {
      * @return a new LocalCache instance with the specified configuration
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      * @see #createLocalCache(int, long, long, long)
-     * @see #createLocalCache(long, long, KeyedObjectPool)
+     * @see #createLocalCache(KeyedObjectPool, long, long)
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay) {
         return new LocalCache<>(capacity, evictDelay);
@@ -142,7 +142,7 @@ public final class CacheFactory {
      * @return a new LocalCache instance with the specified configuration
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      * @see #createLocalCache(int, long)
-     * @see #createLocalCache(long, long, KeyedObjectPool)
+     * @see #createLocalCache(KeyedObjectPool, long, long)
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime) {
@@ -713,7 +713,9 @@ public final class CacheFactory {
 
         try {
             timeout = Numbers.toLong(timeoutValue);
-        } catch (final NumberFormatException e) {
+        } catch (final NumberFormatException | ArithmeticException e) {
+            // Numbers.toLong throws NumberFormatException for non-numeric tokens and ArithmeticException
+            // for numeric tokens that overflow long; both are surfaced as the documented IllegalArgumentException.
             throw new IllegalArgumentException("Invalid timeout parameter: " + timeoutValue, e);
         }
 

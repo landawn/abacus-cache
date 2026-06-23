@@ -1001,7 +1001,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param key the original key, must not be null
      * @return the prefixed and Base64-encoded cache key suitable for distributed cache systems
      * @throws IllegalArgumentException if key is null, or if its string representation
-     *         (via {@link N#stringOf(Object)}) is null
+     *         (the key itself for a String key, otherwise {@link N#stringOf(Object)}) is null
      * @see Strings#base64Encode(byte[])
      * @see N#stringOf(Object)
      */

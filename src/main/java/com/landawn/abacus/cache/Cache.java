@@ -71,8 +71,8 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Retrieves a value from the cache wrapped in an Optional.
-     * This is the null-safe alternative to {@link #getOrNull(Object)}, which returns the value
-     * directly (or {@code null} when the key is absent or expired).
+     * Unlike {@link #getOrNull(Object)}, which returns the value directly (or {@code null} when the
+     * key is absent or expired), this method wraps the result in an {@link Optional}.
      *
      * <p><b>Behavior:</b>
      * <ul>

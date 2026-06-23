@@ -1165,7 +1165,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Bulk inventory decrement
+     * // Bulk inventory decrement (the auto-seeding overload initializes absent keys; never seed
+     * // counters with set() - it stores transcoder-encoded bytes that incr/decr cannot mutate, and
+     * // counters cannot be read back with get())
      * long inventory = cache.decr("product:stock:456", 5); // returns value-5 (clamped at 0), or -1 if absent
      * if (inventory == -1) {
      *     // Key doesn't exist
@@ -1185,18 +1187,6 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * } else if (quotaRemaining == 0) {
      *     // Quota exhausted or exceeded
      *     throw new QuotaExceededException();
-     * }
-     *
-     * // Reservation system (checking before decrement)
-     * String key = "event:seats:789";
-     * Long currentSeats = cache.get(key); // returns null if not cached
-     * if (currentSeats != null && currentSeats >= numberOfTickets) {
-     *     long availableSeats = cache.decr(key, numberOfTickets); // returns value-numberOfTickets (>=0)
-     *     if (availableSeats >= 0) {
-     *         System.out.println("Reservation successful"); // printed once seats were decremented
-     *     }
-     * } else {
-     *     throw new NotEnoughSeatsException();
      * }
      *
      * cache.decr("counter", -1);    // throws IllegalArgumentException (delta must be non-negative)
@@ -1683,7 +1673,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Internal usage pattern
-     * Future<Boolean> future = mc.set("key", "value", 3600);
+     * Future<Boolean> future = mc.set("key", 3600, "value");
      * Boolean result = resultOf(future);
      * }</pre>
      *

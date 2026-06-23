@@ -1124,8 +1124,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         synchronized (queue) {
             final Iterator<Segment> iterator = queue.iterator();
             final Iterator<Segment> descendingIterator = queue.descendingIterator();
-            // Scan from both ends toward the middle, so the two iterators together cover the whole
-            // queue in at most half its length (the +1 covers the odd/middle element).
+            // Scan from both ends toward the middle: each loop iteration consumes one segment from the
+            // front and one from the back, so the two iterators together cover the whole queue in about
+            // half as many iterations as its length (the slack guarantees the odd/middle element is reached).
             int half = queue.size() / 2 + 1;
             int cnt = 0;
             while (iterator.hasNext() && half-- >= 0) {

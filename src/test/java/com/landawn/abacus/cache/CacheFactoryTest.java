@@ -174,6 +174,16 @@ public class CacheFactoryTest extends TestBase {
     }
 
     @Test
+    public void testCreateCache_Memcached_EdgeCase_OverflowTimeout() {
+        // A numeric token that overflows long makes Numbers.toLong throw ArithmeticException
+        // (not NumberFormatException). The factory must still surface it as the documented
+        // IllegalArgumentException rather than leaking the raw ArithmeticException.
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,prefix:,99999999999999999999)"));
+        }
+    }
+
+    @Test
     public void testCreateCache_Memcached_EdgeCase_TooManyParameters() {
         try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
             assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(a,b,1000,extra)"));
@@ -303,6 +313,16 @@ public class CacheFactoryTest extends TestBase {
         // "Invalid timeout parameter" is thrown by the RedisCluster branch (not the class-loading
         // fallback), which proves the keyword routed to JRedisCluster.
         final IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,xyz)"));
+        assertTrue(e.getMessage().contains("Invalid timeout parameter"));
+    }
+
+    @Test
+    public void testCreateCache_RedisCluster_EdgeCase_OverflowTimeout() {
+        // The RedisCluster branch routes through parseRedisClusterParameters -> parseTimeoutParameter,
+        // so an overflowing numeric timeout must also surface as IllegalArgumentException ("Invalid
+        // timeout parameter") rather than a raw ArithmeticException.
+        final IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,99999999999999999999)"));
         assertTrue(e.getMessage().contains("Invalid timeout parameter"));
     }
 
