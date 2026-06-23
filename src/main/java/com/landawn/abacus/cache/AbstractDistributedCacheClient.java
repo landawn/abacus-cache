@@ -46,8 +46,8 @@ import com.landawn.abacus.util.N;
  * <li>{@link #get(String)} - retrieves a single value from cache</li>
  * <li>{@link #set(String, Object, long)} - stores a value with TTL</li>
  * <li>{@link #delete(String)} - removes a key from cache</li>
- * <li>{@link #incr(String)} and {@link #incr(String, int)} - atomic increment operations</li>
- * <li>{@link #decr(String)} and {@link #decr(String, int)} - atomic decrement operations</li>
+ * <li>{@link #incr(String)} and {@link #incr(String, long)} - atomic increment operations</li>
+ * <li>{@link #decr(String)} and {@link #decr(String, long)} - atomic decrement operations</li>
  * <li>{@link #disconnect()} - releases resources and closes connections</li>
  * </ul>
  *
@@ -91,7 +91,7 @@ import com.landawn.abacus.util.N;
  *     }
  *
  *     @Override
- *     public long incr(String key, int delta) {
+ *     public long incr(String key, long delta) {
  *         return client.increment(key, delta);
  *     }
  *
@@ -101,7 +101,7 @@ import com.landawn.abacus.util.N;
  *     }
  *
  *     @Override
- *     public long decr(String key, int delta) {
+ *     public long decr(String key, long delta) {
  *         return client.decrement(key, delta);
  *     }
  *

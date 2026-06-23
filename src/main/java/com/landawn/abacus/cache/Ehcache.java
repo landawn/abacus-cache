@@ -50,6 +50,13 @@ import com.landawn.abacus.util.N;
  * <li>JSR-107 (JCache) compliance</li>
  * </ul>
  *
+ * <p><b>No {@code stats()} method (by design):</b> unlike {@link LocalCache} and {@link CaffeineCache},
+ * this wrapper does not expose a {@link CacheStats} snapshot. Ehcache 3.x statistics are produced by a
+ * {@code StatisticsService} registered on the {@code CacheManager}, not by the {@code org.ehcache.Cache}
+ * instance this wrapper holds, and the wrapper also cannot report entry count (see {@link #size()}).
+ * A fabricated all-zero snapshot would be misleading, so {@code stats()} is intentionally omitted; obtain
+ * statistics through the Ehcache {@code StatisticsService} on your {@code CacheManager} if required.
+ *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
  * // Create cache using Ehcache 3.x API
@@ -392,16 +399,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
         assertNotClosed();
 
         N.checkArgNotNull(entries, "entries");
-
-        for (final Map.Entry<? extends K, ? extends V> entry : entries.entrySet()) {
-            if (entry.getKey() == null) {
-                throw new IllegalArgumentException("'entries' can't contain null key");
-            }
-
-            if (entry.getValue() == null) {
-                throw new IllegalArgumentException("'entries' can't contain null value");
-            }
-        }
+        N.checkElementNotNull(entries.keySet(), "entries' keys");
+        N.checkElementNotNull(entries.values(), "entries' values");
 
         cacheImpl.putAll(entries);
     }
@@ -481,10 +480,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always thrown, because materializing a key set would require a full scan of all Ehcache storage tiers
-     * @deprecated Unsupported operation. Ehcache does not provide efficient key iteration.
-     *             Track keys externally or use a cache implementation that supports key enumeration instead.
      */
-    @Deprecated
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
         throw new UnsupportedOperationException(
@@ -524,10 +520,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always thrown, because the underlying Ehcache 3.x API does not provide size reporting
-     * @deprecated Unsupported operation. Ehcache does not provide a size-reporting API.
-     *             Track the entry count externally or use a cache implementation that supports size reporting instead.
      */
-    @Deprecated
     @Override
     public int size() throws UnsupportedOperationException {
         throw new UnsupportedOperationException("size() is not supported by Ehcache - the underlying Ehcache 3.x API does not provide size reporting");

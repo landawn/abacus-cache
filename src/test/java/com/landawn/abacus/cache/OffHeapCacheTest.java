@@ -707,7 +707,7 @@ public class OffHeapCacheTest {
             assertNull(diskCache.get(key).orElse(null));
 
             final var stats = diskCache.stats();
-            assertEquals(0L, stats.hitCountByDisk());
+            assertEquals(0L, stats.hitCountFromDisk());
             assertEquals(0L, stats.sizeOnDisk());
             assertEquals(0L, stats.dataSizeOnDisk());
             assertEquals(0L, stats.dataSize());

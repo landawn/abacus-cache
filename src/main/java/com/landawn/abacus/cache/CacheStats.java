@@ -141,4 +141,30 @@ public record CacheStats(int capacity, int size, long putCount, long getCount, l
                     + ", evictionCount=" + evictionCount + ", maxMemory=" + maxMemory + ", dataSize=" + dataSize);
         }
     }
+
+    /**
+     * Returns the cache hit rate as a fraction in {@code [0.0, 1.0]}.
+     * The rate is computed as {@code hitCount / (hitCount + missCount)}.
+     *
+     * @return the ratio of hits to total get requests, or {@code 0.0} when no get requests have been
+     *         recorded (i.e. {@code hitCount + missCount == 0})
+     * @see #missRate()
+     */
+    public double hitRate() {
+        final long requestCount = hitCount + missCount;
+        return requestCount == 0 ? 0.0 : (double) hitCount / requestCount;
+    }
+
+    /**
+     * Returns the cache miss rate as a fraction in {@code [0.0, 1.0]}.
+     * The rate is computed as {@code missCount / (hitCount + missCount)}.
+     *
+     * @return the ratio of misses to total get requests, or {@code 0.0} when no get requests have been
+     *         recorded (i.e. {@code hitCount + missCount == 0})
+     * @see #hitRate()
+     */
+    public double missRate() {
+        final long requestCount = hitCount + missCount;
+        return requestCount == 0 ? 0.0 : (double) missCount / requestCount;
+    }
 }

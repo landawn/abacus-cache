@@ -72,7 +72,7 @@ public class CacheFactoryTest extends TestBase {
         final IntFunction<KeyedObjectPool<String, PoolableAdapter<String>>> poolFactory = cap -> PoolFactory.createKeyedObjectPool(cap, 0);
         final KeyedObjectPool<String, PoolableAdapter<String>> pool = poolFactory.apply(64);
 
-        try (LocalCache<String, String> cache = CacheFactory.createLocalCache(60000L, 30000L, pool)) {
+        try (LocalCache<String, String> cache = CacheFactory.createLocalCache(pool, 60000L, 30000L)) {
             assertNotNull(cache);
             assertTrue(cache.put("x", "y"));
             assertEquals("y", cache.getOrNull("x"));
@@ -81,7 +81,8 @@ public class CacheFactoryTest extends TestBase {
 
     @Test
     public void testCreateLocalCache_WithPool_EdgeCase_NullPool() {
-        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createLocalCache(0L, 0L, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> CacheFactory.createLocalCache((KeyedObjectPool<String, PoolableAdapter<String>>) null, 0L, 0L));
     }
 
     // createDistributedCache one-arg overload

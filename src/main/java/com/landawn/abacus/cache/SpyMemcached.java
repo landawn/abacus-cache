@@ -983,7 +983,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
-    public long incr(final String key, final int delta) {
+    public long incr(final String key, final long delta) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
@@ -995,7 +995,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * doesn't exist. The newly-created entry will not expire (this implementation passes {@code 0}
      * as the expiration to Memcached, which means "no expiration").
      *
-     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)},
+     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, long)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
      * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
      * <b>the increment is NOT applied on the initial insert</b>: when the key is absent the stored
@@ -1036,7 +1036,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *         a negative seed would be unmutatable by native incr/decr)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
-    public long incr(final String key, final int delta, final long defaultValue) {
+    public long incr(final String key, final long delta, final long defaultValue) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         // Memcached's "no expiration" sentinel is 0, NOT -1: memcached treats a negative seed
@@ -1050,7 +1050,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * seconds for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an
      * absolute Unix expiration timestamp rather than a relative offset.
      *
-     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, int)},
+     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, long)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
      * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
      * <b>the increment is NOT applied on the initial insert</b>: when the key is absent the stored
@@ -1098,7 +1098,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *         a negative seed would be unmutatable by native incr/decr)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
-    public long incr(final String key, final int delta, final long defaultValue, final long liveTime) {
+    public long incr(final String key, final long delta, final long defaultValue, final long liveTime) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         return mutateWithAsciiSeed(true, key, delta, defaultValue, toMemcachedExpiration(liveTime));
@@ -1211,7 +1211,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     @Override
-    public long decr(final String key, final int delta) {
+    public long decr(final String key, final long delta) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
@@ -1223,7 +1223,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * doesn't exist. The newly-created entry will not expire (this implementation passes {@code 0}
      * as the expiration to Memcached, which means "no expiration").
      *
-     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, int)},
+     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, long)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
      * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
      * <b>the decrement is NOT applied on the initial insert</b>: when the key is absent the stored
@@ -1267,10 +1267,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *         a negative seed would be unmutatable by native incr/decr)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
-    public long decr(final String key, final int delta, final long defaultValue) {
+    public long decr(final String key, final long delta, final long defaultValue) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
-        // See incr(String, int, long): Memcached's "no expiration" sentinel is 0, not -1. A -1 seed
+        // See incr(String, long, long): Memcached's "no expiration" sentinel is 0, not -1. A -1 seed
         // expiration would store the auto-initialized value already-expired, re-seeding every call.
         return mutateWithAsciiSeed(false, key, delta, defaultValue, 0);
     }
@@ -1281,7 +1281,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * seconds for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an
      * absolute Unix expiration timestamp rather than a relative offset.
      *
-     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, int)},
+     * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, long)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
      * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
      * <b>the decrement is NOT applied on the initial insert</b>: when the key is absent the stored
@@ -1330,7 +1330,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *         a negative seed would be unmutatable by native incr/decr)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
-    public long decr(final String key, final int delta, final long defaultValue, final long liveTime) {
+    public long decr(final String key, final long delta, final long defaultValue, final long liveTime) {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         return mutateWithAsciiSeed(false, key, delta, defaultValue, toMemcachedExpiration(liveTime));
@@ -1359,7 +1359,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @return the post-operation value, or {@code -1} if the key could not be found nor seeded
      *         (e.g., deleted concurrently between the seeding attempt and the retry)
      */
-    private long mutateWithAsciiSeed(final boolean isIncrement, final String key, final int delta, final long defaultValue, final int expiration) {
+    private long mutateWithAsciiSeed(final boolean isIncrement, final String key, final long delta, final long defaultValue, final int expiration) {
         // Memcached counters are unsigned 64-bit decimals; a negative seed would be stored as
         // e.g. "-5", which native incr/decr cannot mutate - the same counter-poisoning (plus
         // connection-teardown-per-call) failure mode this ASCII seeding exists to prevent.

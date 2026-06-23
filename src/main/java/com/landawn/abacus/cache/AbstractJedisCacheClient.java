@@ -332,7 +332,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the value after increment (will be 1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
-     * @see #incr(String, int)
+     * @see #incr(String, long)
      * @see #decr(String)
      */
     @Override
@@ -369,10 +369,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #incr(String)
-     * @see #decr(String, int)
+     * @see #decr(String, long)
      */
     @Override
-    public long incr(final String key, final int delta) {
+    public long incr(final String key, final long delta) {
         N.checkArgNotNegative(delta, "delta");
 
         final byte[] keyBytes = getKeyBytes(key);
@@ -403,7 +403,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
-     * @see #decr(String, int)
+     * @see #decr(String, long)
      * @see #incr(String)
      */
     @Override
@@ -442,10 +442,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
      * @see #decr(String)
-     * @see #incr(String, int)
+     * @see #incr(String, long)
      */
     @Override
-    public long decr(final String key, final int delta) {
+    public long decr(final String key, final long delta) {
         N.checkArgNotNegative(delta, "delta");
 
         final byte[] keyBytes = getKeyBytes(key);

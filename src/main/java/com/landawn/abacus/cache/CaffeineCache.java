@@ -15,9 +15,9 @@
 package com.landawn.abacus.cache;
 
 import java.util.Set;
+import java.util.concurrent.atomic.LongAdder;
 
 import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import com.landawn.abacus.util.N;
 
 /**
@@ -58,14 +58,18 @@ import com.landawn.abacus.util.N;
  * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
  * cache.put("user:123", user, 0, 0);
  *
- * // Get Caffeine-specific statistics
+ * // Framework statistics (consistent type with LocalCache.stats())
  * CacheStats stats = cache.stats();
  * System.out.println("Hit rate: " + stats.hitRate());
+ *
+ * // Caffeine-native statistics (load counts, average load penalty, ...)
+ * var nativeStats = cache.caffeineStats();
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
  * @param <V> the type of values stored in the cache
  * @see AbstractCache
+ * @see CacheStats
  * @see com.github.benmanes.caffeine.cache.Cache
  * @see com.github.benmanes.caffeine.cache.Caffeine
  */
@@ -73,6 +77,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /** The underlying Caffeine cache instance that this wrapper delegates supported operations to. */
     private final Cache<K, V> cacheImpl;
+
+    /**
+     * Counts successful put operations. Caffeine's own statistics do not track puts, so this wrapper
+     * maintains the count itself to populate {@link #stats()}'s {@code putCount}.
+     */
+    private final LongAdder putCount = new LongAdder();
 
     /** Flag indicating whether this cache wrapper has been closed via {@link #close()}. */
     private volatile boolean isClosed = false;
@@ -190,6 +200,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
         N.checkArgNotNull(value, "value");
 
         cacheImpl.put(key, value); // TODO: Support per-entry expiration
+        putCount.increment();
 
         return true;
     }
@@ -291,9 +302,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * @return this method never returns normally; it always throws
      * @throws UnsupportedOperationException always
-     * @deprecated unsupported operation. Consider using {@link LocalCache} if key iteration is required.
      */
-    @Deprecated
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
         throw new UnsupportedOperationException("keySet() is not supported by CaffeineCache");
@@ -442,49 +451,73 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns Caffeine-specific cache statistics.
-     * Statistics are only meaningful if the cache was created with {@code recordStats()} enabled
-     * on the Caffeine builder. The returned snapshot provides detailed metrics about cache
-     * performance, including hit rate, miss rate, load count, eviction count, and average load time.
+     * Returns a snapshot of cache statistics in the framework's {@link CacheStats} form, so the
+     * value is consistent with {@link LocalCache#stats()} and the rest of the cache family.
      *
-     * <p><b>Note:</b> This is a Caffeine-specific method not present in the base
-     * {@link com.landawn.abacus.cache.Cache Cache} interface.
-     * If stats recording was not enabled, this method returns a stats object with all-zero values.
-     * Recording carries a small overhead, so it should only be enabled when monitoring is required.
-     * This method does not check whether the cache has been closed.
+     * <p>Hit/miss/eviction counts come from Caffeine and are only meaningful if the underlying cache
+     * was built with {@code recordStats()} (otherwise they are zero). {@code putCount} is tracked by
+     * this wrapper. {@code capacity} is the Caffeine eviction maximum when a size bound is configured,
+     * otherwise {@code 0} (unbounded / weight-based / unknown). {@code maxMemory} and {@code dataSize}
+     * are reported as {@code -1} ("not tracked") because Caffeine does not expose byte-level usage.
+     * For the full set of Caffeine-native metrics (load counts, average load penalty, etc.), use
+     * {@link #caffeineStats()}.
+     *
+     * <p>This method does not check whether the cache has been closed.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and returns a consistent snapshot
      * of statistics at the time of invocation.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Create cache with stats enabled
-     * Cache<String, User> caffeine = Caffeine.newBuilder()
-     *     .maximumSize(1000)
-     *     .recordStats()      // enable stats recording (otherwise all counters stay 0)
-     *     .build();           // build the configured Caffeine instance
-     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);
-     *
-     * // Perform operations
+     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);   // caffeine built with recordStats()
      * cache.put("user:123", user, 0, 0);              // seed one entry
-     * User retrieved = cache.getOrNull("user:123");   // hit  -> increments hitCount
-     * User missing = cache.getOrNull("user:999");     // miss -> increments missCount
+     * cache.getOrNull("user:123");                    // hit
+     * cache.getOrNull("user:999");                    // miss
      *
-     * // Get statistics
-     * CacheStats stats = cache.stats();                                                  // returns a non-null snapshot (works even after close())
-     * System.out.println("Hit rate: " + stats.hitRate());                                // prints a value in [0.0, 1.0]
-     * System.out.println("Miss rate: " + stats.missRate());                              // prints a value in [0.0, 1.0]
-     * System.out.println("Hit count: " + stats.hitCount());                              // prints >= 1 here
-     * System.out.println("Miss count: " + stats.missCount());                            // prints >= 1 here
-     * System.out.println("Eviction count: " + stats.evictionCount());                    // prints >= 0
-     * System.out.println("Load success count: " + stats.loadSuccessCount());             // prints >= 0
-     * System.out.println("Average load penalty: " + stats.averageLoadPenalty() + " ns"); // prints >= 0.0
+     * CacheStats stats = cache.stats();
+     * System.out.println("Hit rate: " + stats.hitRate());     // [0.0, 1.0]
+     * System.out.println("Hits: " + stats.hitCount());        // >= 1 here
+     * System.out.println("Puts: " + stats.putCount());        // >= 1 here
      * }</pre>
      *
-     * @return a snapshot of the cache statistics at the time of invocation (all zeros if recordStats() was not enabled)
-     * @see com.github.benmanes.caffeine.cache.Cache#stats()
-     * @see com.github.benmanes.caffeine.cache.stats.CacheStats
+     * @return a framework {@link CacheStats} snapshot at the time of invocation; never {@code null}
+     * @see #caffeineStats()
+     * @see LocalCache#stats()
      */
     public CacheStats stats() {
+        final com.github.benmanes.caffeine.cache.stats.CacheStats caffeineStats = cacheImpl.stats();
+
+        final long maximum = cacheImpl.policy().eviction().map(com.github.benmanes.caffeine.cache.Policy.Eviction::getMaximum).orElse(0L);
+        final int capacity = maximum > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) maximum;
+
+        final long estimatedSize = cacheImpl.estimatedSize();
+        final int size = estimatedSize > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) estimatedSize;
+
+        return new CacheStats(capacity, size, putCount.sum(), caffeineStats.requestCount(), caffeineStats.hitCount(), caffeineStats.missCount(),
+                caffeineStats.evictionCount(), -1L, -1L);
+    }
+
+    /**
+     * Returns the underlying Caffeine-native statistics object, exposing metrics that the framework
+     * {@link CacheStats} does not carry (load count, load success/failure, average load penalty, etc.).
+     * Statistics are only meaningful if the underlying cache was built with {@code recordStats()};
+     * otherwise all counters are zero. This method does not check whether the cache has been closed.
+     *
+     * <p><b>Thread Safety:</b> This method is thread-safe and returns a consistent snapshot
+     * of statistics at the time of invocation.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * com.github.benmanes.caffeine.cache.stats.CacheStats native = cache.caffeineStats();
+     * System.out.println("Average load penalty: " + native.averageLoadPenalty() + " ns");
+     * System.out.println("Load success count: " + native.loadSuccessCount());
+     * }</pre>
+     *
+     * @return a snapshot of the Caffeine-native statistics (all zeros if recordStats() was not enabled)
+     * @see #stats()
+     * @see com.github.benmanes.caffeine.cache.Cache#stats()
+     */
+    public com.github.benmanes.caffeine.cache.stats.CacheStats caffeineStats() {
         return cacheImpl.stats();
     }
 

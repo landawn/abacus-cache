@@ -82,7 +82,7 @@ import lombok.experimental.Accessors;
  * @see AbstractOffHeapCache
  * @see OffHeapCacheStats
  * @see OffHeapStore
- * @see OffHeapCache25
+ * @see ForeignMemoryOffHeapCache
  */
 @SuppressFBWarnings({ "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "JLM_JSR166_UTILCONCURRENT_MONITORENTER" })
 public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
@@ -285,7 +285,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *         used for all subsequent memory access operations via copyToMemory and copyFromMemory.
      * @throws OutOfMemoryError if the allocation fails due to insufficient native memory available on the system
      * @see #deallocate()
-     * @see #copyToMemory(byte[], int, long, int)
+     * @see #copyToMemory(long, byte[], int, int)
      * @see #copyFromMemory(long, byte[], int, int)
      */
     @SuppressWarnings("removal")
@@ -338,12 +338,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * object, while the second object parameter (null) indicates the destination is native memory.
      * No bounds checking is performed - invalid parameters will cause a JVM crash.
      *
+     * @param startPtr the destination memory address in off-heap memory. Must be a valid address
+     *                 within the allocated memory region (between _startPtr and _startPtr + capacity).
      * @param srcBytes the source byte array from which to copy data. Must not be null.
      * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
      *                  operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
      *                  to skip past the array header to the actual data. Must be non-negative.
-     * @param startPtr the destination memory address in off-heap memory. Must be a valid address
-     *                 within the allocated memory region (between _startPtr and _startPtr + capacity).
      * @param len the number of bytes to copy. Must be positive and must not exceed the available
      *            space at the destination address or the size of the source array from srcOffset.
      * @see #allocate(long)
@@ -351,7 +351,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      */
     @SuppressWarnings("removal")
     @Override
-    protected void copyToMemory(final byte[] srcBytes, final int srcOffset, final long startPtr, final int len) {
+    protected void copyToMemory(final long startPtr, final byte[] srcBytes, final int srcOffset, final int len) {
         UNSAFE.copyMemory(srcBytes, srcOffset, null, startPtr, len);
     }
 
@@ -381,7 +381,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param len the number of bytes to copy. Must be positive and must not exceed the available
      *            space in the destination array starting from destOffset.
      * @see #allocate(long)
-     * @see #copyToMemory(byte[], int, long, int)
+     * @see #copyToMemory(long, byte[], int, int)
      */
     @SuppressWarnings("removal")
     @Override

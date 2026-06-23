@@ -262,25 +262,25 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * // Permanent entry (no TTL or idle timeout, evicted only when cache is full)
      * cache.put("config:app", configData, 0, 0);     // returns true (both <= 0 means "no expiration")
      *
-     * // A null value is accepted; getOrNull then returns null, indistinguishable from an absent key.
-     * cache.put("nullable", (User) null, 1000, 1000);   // returns true
-     * cache.getOrNull("nullable");                   // returns null
+     * // A null value is rejected, consistent with the other in-memory caches (CaffeineCache, Ehcache, OffHeapCache).
+     * cache.put("nullable", (User) null, 1000, 1000);   // throws IllegalArgumentException (value must not be null)
      *
      * cache.put(null, user, 1000, 1000);             // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
-     * @param value the cache value to be associated with the specified key (can be null)
+     * @param value the cache value to be associated with the specified key (must not be null)
      * @param liveTime the time-to-live in milliseconds from entry creation (0 or negative for no TTL expiration)
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout)
      * @return {@code true} if the entry was successfully stored; {@code false} if the cache is full and unable to evict entries, or if the underlying pool
      *         rejected the entry. Note that on failure any previous entry under the key has already been removed by the underlying pool (reachable only with
      *         a custom pool whose {@code put} can fail, e.g. auto-balancing disabled or a memory limit configured)
-     * @throws IllegalArgumentException if key is null
+     * @throws IllegalArgumentException if key or value is null
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(value, "value");
 
         // A liveTime/maxIdleTime of 0 or negative means "no expiration" per the Cache contract.
         // The underlying ActivityPrint requires strictly positive values, so translate

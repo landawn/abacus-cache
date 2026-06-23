@@ -249,7 +249,7 @@ public class AbstractOffHeapCacheTest {
         }
 
         @Override
-        protected void copyToMemory(final byte[] bytes, final int srcOffset, final long startPtr, final int len) {
+        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
             if (deallocated.get()) {
                 copiedAfterDeallocate.set(true);
                 throw new AssertionError("copyToMemory called after deallocate");

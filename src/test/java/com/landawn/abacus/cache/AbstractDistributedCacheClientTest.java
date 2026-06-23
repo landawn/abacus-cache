@@ -72,7 +72,7 @@ public class AbstractDistributedCacheClientTest extends TestBase {
         }
 
         @Override
-        public long incr(final String key, final int delta) {
+        public long incr(final String key, final long delta) {
             return delegate.incr(key, delta);
         }
 
@@ -82,7 +82,7 @@ public class AbstractDistributedCacheClientTest extends TestBase {
         }
 
         @Override
-        public long decr(final String key, final int delta) {
+        public long decr(final String key, final long delta) {
             return delegate.decr(key, delta);
         }
 

@@ -33,6 +33,8 @@ import com.landawn.abacus.util.TypeAttrParser;
  * <p>Supported cache types:
  * <ul>
  * <li>LocalCache - In-memory cache with eviction support</li>
+ * <li>OffHeapCache - Off-heap (native memory) cache</li>
+ * <li>CaffeineCache / Ehcache - wrappers around a pre-configured Caffeine or Ehcache 3.x instance</li>
  * <li>DistributedCache - Wrapper for distributed cache clients</li>
  * <li>Memcached - Via SpyMemcached client</li>
  * <li>Redis - Via JRedis client</li>
@@ -165,30 +167,123 @@ public final class CacheFactory {
      *
      * // Create cache using the custom pool
      * LocalCache<String, User> cache = CacheFactory.createLocalCache(
+     *     customPool,              // custom pool implementation (leads, so it cannot be confused
+     *                              //   positionally with the capacity-first overloads)
      *     3600000,                 // defaultLiveTime: 1 hour
-     *     1800000,                 // defaultMaxIdleTime: 30 minutes
-     *     customPool               // custom pool implementation
+     *     1800000                  // defaultMaxIdleTime: 30 minutes
      * );                           // returns a non-null LocalCache backed by customPool
      * cache.put("user:123", user); // returns true (entry stored in customPool)
      *
      * // Edge case: a null pool is rejected
-     * CacheFactory.createLocalCache(3600000L, 1800000L, (KeyedObjectPool<String, PoolableAdapter<User>>) null);
+     * CacheFactory.createLocalCache((KeyedObjectPool<String, PoolableAdapter<User>>) null, 3600000L, 1800000L);
      *     // throws IllegalArgumentException (pool must not be null)
      * }</pre>
      *
+     * <p><b>Parameter order:</b> unlike the {@code (capacity, evictDelay, ...)} overloads, this method
+     * leads with the {@code pool} so the two {@code long} timing parameters cannot be mistaken for
+     * {@code capacity}/{@code evictDelay}.
+     *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
+     * @param pool the pre-configured KeyedObjectPool to use for managing cache entries (must not be null)
      * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 for no expiration)
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 for no idle timeout)
-     * @param pool the pre-configured KeyedObjectPool to use for managing cache entries (must not be null)
      * @return a new LocalCache instance configured with the specified pool
      * @throws IllegalArgumentException if pool is null
      * @see #createLocalCache(int, long)
      * @see #createLocalCache(int, long, long, long)
      */
-    public static <K, V> LocalCache<K, V> createLocalCache(final long defaultLiveTime, final long defaultMaxIdleTime,
-            final KeyedObjectPool<K, PoolableAdapter<V>> pool) {
+    public static <K, V> LocalCache<K, V> createLocalCache(final KeyedObjectPool<K, PoolableAdapter<V>> pool, final long defaultLiveTime,
+            final long defaultMaxIdleTime) {
         return new LocalCache<>(defaultLiveTime, defaultMaxIdleTime, pool);
+    }
+
+    /**
+     * Creates a new {@link OffHeapCache} with the specified off-heap capacity, using default
+     * eviction delay and the framework default TTL ({@link Cache#DEFAULT_LIVE_TIME}) and idle time
+     * ({@link Cache#DEFAULT_MAX_IDLE_TIME}). The cache stores values in native (off-heap) memory using
+     * {@code sun.misc.Unsafe}; for the {@code java.lang.foreign} (Foreign Function &amp; Memory) backend,
+     * use {@link ForeignMemoryOffHeapCache#builder()} directly.
+     *
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
+     * @param capacityInMB the total off-heap memory to allocate, in megabytes (must be positive)
+     * @return a new OffHeapCache instance with the specified capacity
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive
+     * @see #createOffHeapCache(int, long)
+     * @see #createOffHeapCache(int, long, long, long)
+     * @see OffHeapCache#builder()
+     */
+    public static <K, V> OffHeapCache<K, V> createOffHeapCache(final int capacityInMB) {
+        return new OffHeapCache<>(capacityInMB);
+    }
+
+    /**
+     * Creates a new {@link OffHeapCache} with the specified off-heap capacity and eviction delay,
+     * using the framework default TTL ({@link Cache#DEFAULT_LIVE_TIME}) and idle time
+     * ({@link Cache#DEFAULT_MAX_IDLE_TIME}).
+     *
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
+     * @param capacityInMB the total off-heap memory to allocate, in megabytes (must be positive)
+     * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
+     * @return a new OffHeapCache instance with the specified configuration
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive or {@code evictDelay} is negative
+     * @see #createOffHeapCache(int)
+     * @see #createOffHeapCache(int, long, long, long)
+     */
+    public static <K, V> OffHeapCache<K, V> createOffHeapCache(final int capacityInMB, final long evictDelay) {
+        return new OffHeapCache<>(capacityInMB, evictDelay);
+    }
+
+    /**
+     * Creates a new {@link OffHeapCache} with fully customized off-heap capacity, eviction delay,
+     * and default expiration behavior.
+     *
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
+     * @param capacityInMB the total off-heap memory to allocate, in megabytes (must be positive)
+     * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 for no expiration)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 for no idle timeout)
+     * @return a new OffHeapCache instance with the specified configuration
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive or {@code evictDelay} is negative
+     * @see #createOffHeapCache(int)
+     * @see #createOffHeapCache(int, long)
+     */
+    public static <K, V> OffHeapCache<K, V> createOffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime,
+            final long defaultMaxIdleTime) {
+        return new OffHeapCache<>(capacityInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime);
+    }
+
+    /**
+     * Wraps a pre-configured Caffeine cache as a framework {@link Cache} via {@link CaffeineCache}.
+     * Configure size limits, expiration, and {@code recordStats()} on the Caffeine instance before
+     * passing it in.
+     *
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
+     * @param caffeineCache the underlying Caffeine cache instance to wrap (must not be null)
+     * @return a new CaffeineCache wrapping the provided Caffeine instance
+     * @throws IllegalArgumentException if {@code caffeineCache} is null
+     */
+    public static <K, V> CaffeineCache<K, V> createCaffeineCache(final com.github.benmanes.caffeine.cache.Cache<K, V> caffeineCache) {
+        return new CaffeineCache<>(caffeineCache);
+    }
+
+    /**
+     * Wraps a pre-configured Ehcache 3.x cache as a framework {@link Cache} via {@link Ehcache}.
+     * Configure tiers, expiration, and loaders/writers on the Ehcache instance (and its
+     * {@code CacheManager}) before passing it in.
+     *
+     * @param <K> the type of keys maintained by the cache
+     * @param <V> the type of cached values
+     * @param ehcache the underlying Ehcache 3.x cache instance to wrap (must not be null)
+     * @return a new Ehcache wrapper around the provided Ehcache instance
+     * @throws IllegalArgumentException if {@code ehcache} is null
+     */
+    public static <K, V> Ehcache<K, V> createEhcache(final org.ehcache.Cache<K, V> ehcache) {
+        return new Ehcache<>(ehcache);
     }
 
     /**

@@ -5,8 +5,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-import com.landawn.abacus.util.N;
-
 /**
  * An immutable snapshot of off-heap cache statistics at a specific point in time.
  * This record provides comprehensive metrics about off-heap cache performance, including
@@ -23,8 +21,8 @@ import com.landawn.abacus.util.N;
  *     subset; the in-memory portion is {@code dataSize - dataSizeOnDisk}. The in-memory portion is
  *     typically smaller than {@code occupiedMemory} because the slot allocator rounds each entry up
  *     to the next multiple of the minimum block size (64 bytes).</li>
- * <li>Hit metrics: {@code hitCount + missCount = getCount}. {@code hitCountByDisk} is the subset of
- *     {@code hitCount} that was served from disk (so {@code hitCountByDisk} &le; {@code hitCount}).</li>
+ * <li>Hit metrics: {@code hitCount + missCount = getCount}. {@code hitCountFromDisk} is the subset of
+ *     {@code hitCount} that was served from disk (so {@code hitCountFromDisk} &le; {@code hitCount}).</li>
  * <li>Put metrics: {@code putCount} counts successful inserts into the pool (both memory- and
  *     disk-resident wrappers go through the same pool). Failed put attempts (e.g., wrapper allocation
  *     failed before reaching the pool) are not included. As an approximate identity,
@@ -79,15 +77,15 @@ import com.landawn.abacus.util.N;
  *                       when off-heap memory is full and the value is stored to disk via the configured
  *                       {@link OffHeapStore}, or when the {@code storeSelector} explicitly routes the value to disk.
  * @param getCount the total number of get operations performed since cache creation. The identity is
- *                 {@code getCount = hitCount + missCount}. {@code hitCountByDisk} is NOT additive here
+ *                 {@code getCount = hitCount + missCount}. {@code hitCountFromDisk} is NOT additive here
  *                 because it is already part of {@code hitCount}.
  * @param hitCount the number of successful get operations, including those that ultimately served the value
  *                 from disk. To compute the number of hits served purely from off-heap memory, subtract
- *                 {@code hitCountByDisk} from {@code hitCount}. Note that this counter is maintained at the
+ *                 {@code hitCountFromDisk} from {@code hitCount}. Note that this counter is maintained at the
  *                 pool-lookup level: a disk-backed entry whose bytes turn out to be missing from the
  *                 {@link OffHeapStore} (the degraded path where {@code get} returns {@code null}) is still
  *                 counted as a hit, so a flaky store can slightly inflate the hit rate.
- * @param hitCountByDisk the number of successful get operations where the entry was read from disk via the
+ * @param hitCountFromDisk the number of successful get operations where the entry was read from disk via the
  *                       configured {@link OffHeapStore}. Always {@code &le; hitCount}; the disk read happens
  *                       after the pool lookup hit, which is the reason the pool's {@code hitCount} already
  *                       includes this case.
@@ -130,10 +128,10 @@ import com.landawn.abacus.util.N;
  *                      and utilization patterns.
  * @see AbstractOffHeapCache#stats()
  * @see OffHeapCache
- * @see OffHeapCache25
+ * @see ForeignMemoryOffHeapCache
  * @see MinMaxAvg
  */
-public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long putCount, long putCountToDisk, long getCount, long hitCount, long hitCountByDisk,
+public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long putCount, long putCountToDisk, long getCount, long hitCount, long hitCountFromDisk,
         long missCount, long evictionCount, long evictionCountFromDisk, long allocatedMemory, long occupiedMemory, long dataSize, long dataSizeOnDisk,
         MinMaxAvg writeToDiskTimeStats, MinMaxAvg readFromDiskTimeStats, int segmentSize, Map<Integer, Map<Integer, Integer>> occupiedSlots) {
 
@@ -165,12 +163,39 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
     public OffHeapCacheStats {
         Objects.requireNonNull(writeToDiskTimeStats, "writeToDiskTimeStats cannot be null");
         Objects.requireNonNull(readFromDiskTimeStats, "readFromDiskTimeStats cannot be null");
-        if (capacity < 0 || size < 0 || sizeOnDisk < 0 || putCount < 0 || putCountToDisk < 0 || getCount < 0 || hitCount < 0 || hitCountByDisk < 0
+        if (capacity < 0 || size < 0 || sizeOnDisk < 0 || putCount < 0 || putCountToDisk < 0 || getCount < 0 || hitCount < 0 || hitCountFromDisk < 0
                 || missCount < 0 || evictionCount < 0 || evictionCountFromDisk < 0 || allocatedMemory < 0 || occupiedMemory < 0 || dataSize < 0
                 || dataSizeOnDisk < 0 || segmentSize < 0) {
             throw new IllegalArgumentException("OffHeapCacheStats numeric components must all be non-negative");
         }
         occupiedSlots = immutableCopyOf(Objects.requireNonNull(occupiedSlots, "occupiedSlots cannot be null"));
+    }
+
+    /**
+     * Returns the cache hit rate as a fraction in {@code [0.0, 1.0]}.
+     * The rate is computed as {@code hitCount / (hitCount + missCount)} and includes hits served
+     * from disk (see {@link #hitCountFromDisk()} for the disk-only subset).
+     *
+     * @return the ratio of hits to total get requests, or {@code 0.0} when no get requests have been
+     *         recorded (i.e. {@code hitCount + missCount == 0})
+     * @see #missRate()
+     */
+    public double hitRate() {
+        final long requestCount = hitCount + missCount;
+        return requestCount == 0 ? 0.0 : (double) hitCount / requestCount;
+    }
+
+    /**
+     * Returns the cache miss rate as a fraction in {@code [0.0, 1.0]}.
+     * The rate is computed as {@code missCount / (hitCount + missCount)}.
+     *
+     * @return the ratio of misses to total get requests, or {@code 0.0} when no get requests have been
+     *         recorded (i.e. {@code hitCount + missCount == 0})
+     * @see #hitRate()
+     */
+    public double missRate() {
+        final long requestCount = hitCount + missCount;
+        return requestCount == 0 ? 0.0 : (double) missCount / requestCount;
     }
 
     /**
@@ -292,46 +317,6 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
         @Override
         public String toString() {
             return "{min: " + min + ", max: " + max + ", avg: " + avg + "}";
-        }
-    }
-
-    /**
-     * Represents the occupation details of a specific slot size in the cache.
-     * This record provides information about how many slots of a particular size are occupied
-     * across different memory segments, which is useful for analyzing memory fragmentation and
-     * understanding how memory is being utilized.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * Map<Integer, Integer> segmentOccupation = new LinkedHashMap<>();
-     * segmentOccupation.put(0, 5);   // Segment 0 has 5 occupied slots
-     * segmentOccupation.put(1, 3);   // Segment 1 has 3 occupied slots
-     * OccupiedSlot slotInfo = new OccupiedSlot(1024, segmentOccupation);
-     * System.out.println("1KB slots: " + slotInfo.occupiedSlots().values().stream()
-     *     .mapToInt(Integer::intValue).sum() + " total");
-     * }</pre>
-     *
-     * @param sizeOfSlot the size of each slot in bytes (e.g., 64, 128, 256, 512, 1024, 2048, 4096, 8192)
-     * @param occupiedSlots a map from segment index to the number of occupied slots in that segment;
-     *                      stored as an unmodifiable defensive copy
-     */
-    public record OccupiedSlot(int sizeOfSlot, Map<Integer, Integer> occupiedSlots) {
-        /**
-         * Canonical constructor that stores an unmodifiable defensive copy of
-         * {@code occupiedSlots}, mirroring the immutability guarantees of the enclosing
-         * {@link OffHeapCacheStats} record.
-         *
-         * <p>Consistent with the enclosing record, a {@code null} map is rejected with
-         * {@link NullPointerException} while a negative {@code sizeOfSlot} is rejected with
-         * {@link IllegalArgumentException}.
-         *
-         * @throws NullPointerException if {@code occupiedSlots} is {@code null}
-         * @throws IllegalArgumentException if {@code sizeOfSlot} is negative
-         */
-        public OccupiedSlot {
-            N.checkArgNotNegative(sizeOfSlot, "sizeOfSlot");
-            Objects.requireNonNull(occupiedSlots, "occupiedSlots cannot be null");
-            occupiedSlots = occupiedSlots.isEmpty() ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(occupiedSlots));
         }
     }
 }

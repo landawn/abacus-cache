@@ -27,10 +27,12 @@ package com.landawn.abacus.cache;
  * @param <K> the key type
  * @param <V> the value type
  *
- * @deprecated this is a compatibility wrapper; a dedicated Chronicle-Map adapter
- *             is not implemented yet
+ * @deprecated this is a compatibility wrapper, not a real Chronicle-Map adapter; its name collides
+ *             with the unrelated OpenHFT {@code net.openhft.chronicle.map.ChronicleMap} and its
+ *             behavior is plain {@link LocalCache}. Use {@link LocalCache} (or
+ *             {@link CacheFactory#createLocalCache(int, long)}) directly instead. Scheduled for removal.
  */
-@Deprecated
+@Deprecated(since = "2.8.1", forRemoval = true)
 public class ChronicleMap<K, V> extends LocalCache<K, V> {
 
     /**
@@ -99,9 +101,8 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * map.put("session", "abc", 10_000L, 5_000L);   // returns true (10s TTL, 5s idle for this entry)
      * map.getOrNull("session");                     // returns "abc"
      *
-     * // A null value is accepted; getOrNull then returns null, indistinguishable from an absent key.
-     * map.put("nullable", (String) null);           // returns true (uses the constructor defaults)
-     * map.getOrNull("nullable");                    // returns null
+     * // A null value is rejected (inherited LocalCache behavior).
+     * map.put("nullable", (String) null);           // throws IllegalArgumentException (value must not be null)
      *
      * // Non-positive default times mean "no expiration" for entries added via put(key, value).
      * Cache<String, String> noExpire = new ChronicleMap<>(16, 0L, 0L, 0L);   // valid

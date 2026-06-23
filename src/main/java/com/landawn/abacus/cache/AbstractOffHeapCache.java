@@ -96,7 +96,7 @@ import com.landawn.abacus.util.stream.Stream;
  * @param <K> the type of keys used to identify cache entries
  * @param <V> the type of values stored in the cache
  * @see OffHeapCache
- * @see OffHeapCache25
+ * @see ForeignMemoryOffHeapCache
  * @see OffHeapCacheStats
  * @see OffHeapStore
  */
@@ -378,9 +378,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             if (evictDelay > 0) {
                 final Runnable evictTask = () -> {
-                    // Evict from the pool
+                    // Reclaim segments that have become empty
                     try {
-                        evict();
+                        reclaimEmptySegments();
                     } catch (final Exception e) {
                         // Swallowed so the scheduled task keeps running; eviction retries on the next cycle.
                         // Pass the exception (not just its message) so the stack trace is preserved.
@@ -492,19 +492,20 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * during put operations. Implementations must ensure that concurrent copies
      * to different memory regions are safe.
      *
-     * @param srcBytes the source byte array containing the data to copy. Must not be {@code null}.
-     * @param srcOffset the offset into the source array, expressed in the convention required by the
-     *                  concrete implementation. The interpretation is <b>implementation-defined</b>: an
-     *                  {@code Unsafe}-based implementation expects an address-style offset that already
-     *                  includes the array base offset ({@code arrayOffset}), whereas a
-     *                  {@code MemorySegment}-based implementation expects a plain zero-based index and
-     *                  applies no array header offset.
+     * <p>The parameter order mirrors {@link #copyFromMemory(long, byte[], int, int)}: the off-heap
+     * pointer comes first, then the byte array, its offset, and the length.
+     *
      * @param startPtr the destination memory address in off-heap memory. Must be a valid
      *                 address within the allocated off-heap memory region.
+     * @param srcBytes the source byte array containing the data to copy. Must not be {@code null}.
+     * @param srcOffset the offset into the source array, expressed in the convention supplied to the
+     *                  base class as {@code arrayOffset}: an {@code Unsafe}-based implementation receives
+     *                  an address-style offset that already includes the array base offset, whereas a
+     *                  {@code MemorySegment}-based implementation receives a plain zero-based index.
      * @param len the number of bytes to copy. Must be positive and must not exceed the
      *            available space at the destination address.
      */
-    protected abstract void copyToMemory(byte[] srcBytes, int srcOffset, long startPtr, int len);
+    protected abstract void copyToMemory(long startPtr, byte[] srcBytes, int srcOffset, int len);
 
     /**
      * Copies data from off-heap memory to a byte array.
@@ -516,16 +517,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * during get operations. Implementations must ensure that concurrent copies
      * from different memory regions are safe.
      *
+     * <p>The parameter order mirrors {@link #copyToMemory(long, byte[], int, int)}: the off-heap
+     * pointer comes first, then the byte array, its offset, and the length.
+     *
      * @param startPtr the source memory address in off-heap memory. Must be a valid
      *                 address within the allocated off-heap memory region.
      * @param bytes the destination byte array to copy data into. Must not be {@code null} and
      *              must have sufficient capacity to hold the copied data.
-     * @param destOffset the offset into the destination array, expressed in the convention required by the
-     *                   concrete implementation. The interpretation is <b>implementation-defined</b>: an
-     *                   {@code Unsafe}-based implementation expects an address-style offset that already
-     *                   includes the array base offset ({@code arrayOffset}), whereas a
-     *                   {@code MemorySegment}-based implementation expects a plain zero-based index and
-     *                   applies no array header offset.
+     * @param destOffset the offset into the destination array, expressed in the convention supplied to the
+     *                   base class as {@code arrayOffset}: an {@code Unsafe}-based implementation receives
+     *                   an address-style offset that already includes the array base offset, whereas a
+     *                   {@code MemorySegment}-based implementation receives a plain zero-based index.
      * @param len the number of bytes to copy. Must be positive and must not exceed the
      *            available space in the destination array starting from {@code destOffset}.
      */
@@ -616,7 +618,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                                 if (slot != null) {
                                     final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
 
-                                    copyToMemory(bytes, _arrayOffset, slotStartPtr, size);
+                                    copyToMemory(slotStartPtr, bytes, _arrayOffset, size);
 
                                     occupiedMemory = slot.segment.sizeOfSlot;
 
@@ -637,7 +639,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                                     final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
 
-                                    copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
+                                    copyToMemory(startPtr, bytes, srcOffset, sizeToCopy);
 
                                     srcOffset += sizeToCopy;
                                     copiedSize += sizeToCopy;
@@ -792,7 +794,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         N.checkArgNotNull(value, "value");
 
         // A non-positive liveTime/maxIdleTime means "no expiration" per the documented contract
-        // (see Cache#put and the OffHeapCache/OffHeapCache25 Builder javadoc). The underlying
+        // (see Cache#put and the OffHeapCache/ForeignMemoryOffHeapCache Builder javadoc). The underlying
         // ActivityPrint rejects values <= 0 with IllegalArgumentException, so translate them to
         // Long.MAX_VALUE here, which is the same value the library uses internally for "no expiration".
         final long effectiveLiveTime = liveTime > 0 ? liveTime : Long.MAX_VALUE;
@@ -850,7 +852,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 if (slot != null) {
                     final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
 
-                    copyToMemory(bytes, _arrayOffset, slotStartPtr, size);
+                    copyToMemory(slotStartPtr, bytes, _arrayOffset, size);
 
                     occupiedMemory = slot.segment.sizeOfSlot;
 
@@ -875,7 +877,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                         final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
 
-                        copyToMemory(bytes, srcOffset, startPtr, sizeToCopy);
+                        copyToMemory(startPtr, bytes, srcOffset, sizeToCopy);
 
                         srcOffset += sizeToCopy;
                         copiedSize += sizeToCopy;
@@ -1197,7 +1199,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <li>Otherwise, schedules an asynchronous task that:
      *     <ul>
      *     <li>Calls {@code _pool.evict()} to evict LRU entries based on the {@code vacatingFactor} threshold.</li>
-     *     <li>Calls {@link #evict()} to release now-empty segments back to the pool.</li>
+     *     <li>Calls {@link #reclaimEmptySegments()} to release now-empty segments back to the pool.</li>
      *     <li>Records its completion time so that the debounce window suppresses immediately
      *         re-triggered vacations (without pinning a pool thread in a sleep).</li>
      *     </ul>
@@ -1231,7 +1233,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 try {
                     _pool.evict();
 
-                    evict();
+                    reclaimEmptySegments();
                 } finally {
                     // Record completion and release the gate immediately. The debounce
                     // window above (not a thread-pinning sleep) prevents an immediate
@@ -1312,7 +1314,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     @Override
     public void clear() {
         _pool.clear();
-        evict();
+        reclaimEmptySegments();
     }
 
     /**
@@ -1430,7 +1432,28 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 try {
                     _pool.close();
                 } finally {
-                    deallocate();
+                    try {
+                        deallocate();
+                    } finally {
+                        closeOffHeapStore();
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Releases the configured {@link OffHeapStore}, if any, when the cache is closed. A failure to
+     * close the store is logged at warn level rather than propagated, so it cannot leave the cache in
+     * a half-closed state (native memory has already been released by {@link #deallocate()}).
+     */
+    private void closeOffHeapStore() {
+        if (offHeapStore != null) {
+            try {
+                offHeapStore.close();
+            } catch (final Exception e) {
+                if (logger.isWarnEnabled()) {
+                    logger.warn("Error while closing the OffHeapStore during cache close()", e);
                 }
             }
         }
@@ -1482,7 +1505,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * {@code _segmentBitSet} and individual segment queues. It can be called concurrently
      * with allocation operations.
      */
-    protected void evict() {
+    private void reclaimEmptySegments() {
         synchronized (_segmentBitSet) {
             for (int i = 0, len = _segments.length; i < len; i++) {
                 if (_segments[i].isEmpty()) {

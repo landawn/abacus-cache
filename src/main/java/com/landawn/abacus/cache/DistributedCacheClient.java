@@ -364,7 +364,7 @@ public interface DistributedCacheClient<T> {
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
      *         not a valid integer counter (e.g. a value previously stored via {@code set})
      */
-    long incr(String key, int delta);
+    long incr(String key, long delta);
 
     /**
      * Atomically decrements a numeric value by 1.
@@ -462,7 +462,7 @@ public interface DistributedCacheClient<T> {
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
      *         not a valid integer counter (e.g. a value previously stored via {@code set})
      */
-    long decr(String key, int delta);
+    long decr(String key, long delta);
 
     /**
      * Removes all keys from all connected cache servers.

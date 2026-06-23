@@ -104,10 +104,10 @@ package com.landawn.abacus.cache;
  *
  * @param <K> the type of keys used to identify and retrieve stored values
  * @see OffHeapCache
- * @see OffHeapCache25
+ * @see ForeignMemoryOffHeapCache
  * @see AbstractOffHeapCache
  */
-public interface OffHeapStore<K> {
+public interface OffHeapStore<K> extends AutoCloseable {
 
     /**
      * Retrieves the byte array associated with the specified key.
@@ -189,5 +189,21 @@ public interface OffHeapStore<K> {
      * @return {@code true} if a value was removed, {@code false} otherwise
      */
     boolean remove(K key);
+
+    /**
+     * Releases any OS resources held by this store (file handles, memory-mapped regions, embedded
+     * database connections, etc.). Called by the owning off-heap cache when the cache itself is
+     * closed; may also be called directly by users (this interface extends {@link AutoCloseable},
+     * so a store can be used in try-with-resources).
+     *
+     * <p>This {@code default} implementation does nothing, which is appropriate for stores that hold
+     * no resources requiring explicit release. Implementations that open files, mmap regions, or
+     * connections should override it. The method is expected to be idempotent (safe to call more
+     * than once) and, like the other store operations, should not throw on ordinary failures.
+     */
+    @Override
+    default void close() {
+        // No-op by default; stores holding OS resources should override.
+    }
 
 }
