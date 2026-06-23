@@ -270,7 +270,8 @@ public final class CacheFactory {
      * @param dcc the distributed cache client to wrap (must not be null)
      * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
      * @return a new DistributedCache instance with key prefixing enabled
-     * @throws IllegalArgumentException if dcc is null
+     * @throws IllegalArgumentException if dcc is null, or if keyPrefix contains a non-printable-ASCII
+     *         character, a space, or a control character
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String, int, long)
      * @see #createCache(String)
@@ -324,7 +325,8 @@ public final class CacheFactory {
      * @param maxFailedNumForRetry the maximum number of consecutive failures before the circuit breaker opens (must be non-negative)
      * @param retryDelay the delay in milliseconds before attempting a retry after the circuit breaker opens (must be non-negative)
      * @return a new DistributedCache instance with custom circuit breaker configuration
-     * @throws IllegalArgumentException if dcc is null, maxFailedNumForRetry is negative, or retryDelay is negative
+     * @throws IllegalArgumentException if dcc is null, maxFailedNumForRetry is negative, retryDelay is
+     *         negative, or keyPrefix contains a non-printable-ASCII character, a space, or a control character
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createCache(String)

@@ -519,7 +519,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * Serializes an object to bytes using Kryo for storage in Redis.
      * Null objects are encoded as empty byte arrays.
      *
-     * <p><b>Thread Safety:</b> Thread-safe; the {@link KryoParser} instance is shared and synchronized.
+     * <p><b>Thread Safety:</b> Thread-safe; the {@link KryoParser} instance is shared and safe for concurrent use.
      *
      * @param value the value to encode. May be {@code null}.
      * @return the serialized byte array, or an empty array if {@code value} is {@code null}. Never {@code null}.
@@ -534,7 +534,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * Deserializes bytes to an object using Kryo.
      * Empty or {@code null} byte arrays are decoded as {@code null}.
      *
-     * <p><b>Thread Safety:</b> Thread-safe; the {@link KryoParser} instance is shared and synchronized.
+     * <p><b>Thread Safety:</b> Thread-safe; the {@link KryoParser} instance is shared and safe for concurrent use.
      *
      * @param bytes the byte array to decode. May be {@code null} or empty.
      * @return the deserialized object, or {@code null} if the byte array is {@code null} or empty

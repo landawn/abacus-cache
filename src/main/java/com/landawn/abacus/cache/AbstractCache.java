@@ -86,8 +86,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Shared async executor used by all cache implementations.
      * Configured with a thread pool sized based on CPU cores to efficiently
      * handle asynchronous cache operations without overwhelming the system.
-     * Core pool size is {@code max(64, CPU_CORES * 8)}; the work queue is unbounded,
-     * so the pool does not grow beyond the core size. Idle threads are reclaimed
+     * Core pool size is {@code max(64, CPU_CORES * 8)} and the configured maximum is
+     * {@code max(128, CPU_CORES * 16)}; because the work queue is unbounded, the pool never
+     * grows beyond the core size (the maximum is effectively unused). Idle threads are reclaimed
      * after 180 seconds. Worker threads are daemon threads and the pool is shut down
      * by a JVM exit hook, so an application that only used async cache operations can
      * still exit normally.

@@ -188,10 +188,11 @@ public interface DistributedCacheClient<T> {
 
     /**
      * Stores a key-value pair in the cache with a specified time-to-live.
-     * If the key already exists, its value will be replaced. Distributed cache backends
-     * (Memcached, Redis) typically express TTL in seconds, so implementations are expected to
-     * convert {@code liveTime} from milliseconds — see {@link AbstractDistributedCacheClient#toSeconds(long)}
-     * for the conversion used by the bundled implementations.
+     * If the key already exists, its value will be replaced. Distributed cache backends express TTL with
+     * differing precision, so the conversion of {@code liveTime} (always supplied in milliseconds) is
+     * implementation-specific: the bundled Memcached client converts it to whole seconds, rounded up
+     * (see {@link AbstractDistributedCacheClient#toSeconds(long)}), while the bundled Redis clients honor
+     * the millisecond {@code liveTime} exactly via the {@code SET ... PX} command.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -266,8 +267,9 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @return implementation-specific success indicator (see method description for per-implementation
-     *         semantics). In general, {@code true} indicates the delete operation completed normally.
+     * @return {@code true} if the key existed and was removed; {@code false} if the key did not exist
+     *         when the command was issued (see the per-implementation notes above for exact semantics).
+     *         A network error or timeout is thrown rather than reported as a {@code false} return.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */
@@ -315,7 +317,8 @@ public interface DistributedCacheClient<T> {
      *         (no auto-initialization); Redis creates the key (effective value after
      *         increment is 1).
      * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
+     *         not a valid integer counter (e.g. a value previously stored via {@code set})
      */
     long incr(String key);
 
@@ -358,7 +361,8 @@ public interface DistributedCacheClient<T> {
      *         (no auto-initialization); Redis creates the key (effective value after
      *         increment is {@code delta}).
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
+     *         not a valid integer counter (e.g. a value previously stored via {@code set})
      */
     long incr(String key, int delta);
 
@@ -403,7 +407,8 @@ public interface DistributedCacheClient<T> {
      *         and returns -1 if the key doesn't exist; Redis allows negative values and
      *         creates non-existent keys (effective value after decrement is -1).
      * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
+     *         not a valid integer counter (e.g. a value previously stored via {@code set})
      */
     long decr(String key);
 
@@ -454,7 +459,8 @@ public interface DistributedCacheClient<T> {
      *         and returns -1 if the key doesn't exist; Redis allows negative values and
      *         creates non-existent keys (effective value after decrement is {@code -delta}).
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
+     *         not a valid integer counter (e.g. a value previously stored via {@code set})
      */
     long decr(String key, int delta);
 

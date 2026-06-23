@@ -256,6 +256,21 @@ public class OffHeapCacheTest {
     }
 
     /**
+     * Regression test for the post-close {@code put()} use-after-free guard on the real
+     * {@code Unsafe}-backed allocator. {@code close()} frees the off-heap allocation, so a
+     * subsequent {@code put()} must fail fast with {@link IllegalStateException} <em>before</em>
+     * reaching the native copy rather than write into freed memory. (The abstract-level test
+     * {@code AbstractOffHeapCacheTest#testPutAfterCloseFailsBeforeNativeCopy} verifies the ordering
+     * with a fake subclass; this exercises the concrete {@link OffHeapCache}.)
+     */
+    @Test
+    public void test_putAfterClose_throwsIllegalStateException() {
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+        c.close();
+        assertThrows(IllegalStateException.class, () -> c.put("k", new byte[] { 1, 2, 3 }));
+    }
+
+    /**
      * Regression test for the array-retention hazard on the disk-spill path.
      *
      * <p>When the serialized size exactly matched the buffer length (always true for {@code byte[]}

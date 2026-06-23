@@ -133,6 +133,21 @@ public class OffHeapCache25Test {
         assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 0, 0));
     }
 
+    /**
+     * Regression test for the post-close {@code put()} use-after-free guard on the real Foreign
+     * Memory API backed allocator. {@code close()} frees the {@link java.lang.foreign.Arena},
+     * so a subsequent {@code put()} must fail fast with {@link IllegalStateException} <em>before</em>
+     * reaching the native copy rather than write into a closed memory segment. (The abstract-level
+     * test {@code AbstractOffHeapCacheTest#testPutAfterCloseFailsBeforeNativeCopy} verifies the
+     * ordering with a fake subclass; this exercises the concrete {@link OffHeapCache25}.)
+     */
+    @Test
+    public void test_putAfterClose_throwsIllegalStateException() {
+        final OffHeapCache25<String, byte[]> c = OffHeapCache25.<String, byte[]> builder().capacityInMB(1).build();
+        c.close();
+        assertThrows(IllegalStateException.class, () -> c.put("k", new byte[] { 1, 2, 3 }));
+    }
+
     @Test
     public void test_ByteBuffer() {
         ByteBuffer bb = ByteBuffer.allocate(1024);

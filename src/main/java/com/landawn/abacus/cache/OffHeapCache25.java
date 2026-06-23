@@ -269,6 +269,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *         {@link MemorySegment#address()}. It is recorded as {@code _startPtr} and serves as the base
      *         from which {@link #copyToMemory} and {@link #copyFromMemory} derive a relative offset into the segment.
      * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
+     * @throws IllegalArgumentException if {@code capacityInBytes} is not positive ({@link Arena#allocate(long)}
+     *         rejects a non-positive size). Unreachable through normal construction because {@code capacityInMB}
+     *         is validated to be positive first.
      */
     @Override
     protected long allocate(final long capacityInBytes) {
@@ -325,6 +328,12 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * efficient. The relative offset within the buffer is computed by subtracting {@code _startPtr}
      * from {@code startPtr} to determine the correct position in the segment.
      *
+     * <p><b>Memory Management:</b> Unlike the {@code sun.misc.Unsafe}-based variant, {@link MemorySegment#copy}
+     * performs bounds checking. An out-of-range offset or length raises {@link IndexOutOfBoundsException},
+     * and accessing the segment after its backing {@link Arena} has been closed (see {@link #deallocate()})
+     * raises {@link IllegalStateException}, instead of risking the undefined behavior / JVM crash of an
+     * unchecked native copy.
+     *
      * @param startPtr the source memory address in off-heap memory from which to copy data. Must be a
      *                 valid address within the allocated memory region (between {@code _startPtr} and
      *                 {@code _startPtr + capacity}).
@@ -334,6 +343,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *                   header offset is applied by this implementation).
      * @param len the number of bytes to copy. Must be positive and must not exceed the available
      *            space in the destination array starting from {@code destOffset}.
+     * @throws IndexOutOfBoundsException if the computed segment offset or {@code len} falls outside the
+     *                                   bounds of the memory segment or the destination array
+     * @throws IllegalStateException if the backing {@link Arena} has already been closed
      */
     @Override
     protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
@@ -349,6 +361,12 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      * efficient. The relative offset within the buffer is computed by subtracting {@code _startPtr}
      * from {@code startPtr} to determine the correct position in the segment.
      *
+     * <p><b>Memory Management:</b> Unlike the {@code sun.misc.Unsafe}-based variant, {@link MemorySegment#copy}
+     * performs bounds checking. An out-of-range offset or length raises {@link IndexOutOfBoundsException},
+     * and accessing the segment after its backing {@link Arena} has been closed (see {@link #deallocate()})
+     * raises {@link IllegalStateException}, instead of risking the undefined behavior / JVM crash of an
+     * unchecked native copy.
+     *
      * @param srcBytes the source byte array from which to copy data. Must not be {@code null}.
      * @param srcOffset the index of the first byte in {@code srcBytes} to read (zero-based; no array
      *                  header offset is applied by this implementation).
@@ -357,6 +375,9 @@ public class OffHeapCache25<K, V> extends AbstractOffHeapCache<K, V> {
      *                 {@code _startPtr + capacity}).
      * @param len the number of bytes to copy. Must be positive and must not exceed the available
      *            space at the destination address or the size of the source array.
+     * @throws IndexOutOfBoundsException if the computed segment offset or {@code len} falls outside the
+     *                                   bounds of the memory segment or the source array
+     * @throws IllegalStateException if the backing {@link Arena} has already been closed
      */
     @Override
     protected void copyToMemory(final byte[] srcBytes, final int srcOffset, final long startPtr, final int len) {

@@ -39,7 +39,9 @@ import com.landawn.abacus.util.N;
  * Configure expiration settings when building the Ehcache instance instead.
  *
  * <p>
- * Ehcache features exposed through this wrapper:
+ * Ehcache features available through the underlying instance (bulk operations and {@code putIfAbsent}
+ * are surfaced directly by this wrapper; the remaining capabilities are configured on the Ehcache
+ * instance you pass in):
  * <ul>
  * <li>Multi-tier storage (on-heap, off-heap, disk)</li>
  * <li>Cache-through and cache-aside patterns with loaders/writers</li>

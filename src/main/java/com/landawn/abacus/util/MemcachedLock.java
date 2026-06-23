@@ -302,7 +302,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
      * // Example 1: Check lock status for monitoring
-     * if (lock.isLocked("resource1")) {                         // true iff the key exists (even a value-less lock counts as held)
+     * if (lock.isLocked("resource1")) {                         // true if the key exists (even a value-less lock counts as held)
      *     System.out.println("Resource is currently locked");   // reached when isLocked() returned true
      * } else {                                                  // false: no key present
      *     System.out.println("Resource is available");          // reached when isLocked() returned false

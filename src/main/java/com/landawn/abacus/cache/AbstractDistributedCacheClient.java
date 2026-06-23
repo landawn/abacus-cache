@@ -218,7 +218,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * @param keys the cache keys to retrieve values for (variable number of String arguments),
      *             must not be {@code null} or contain {@code null} elements
-     * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
+     * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found).
+     *         This describes the contract of overriding implementations; the base-class default never
+     *         returns normally and always throws {@code UnsupportedOperationException}.
      * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements (implementation-specific)
      * @throws RuntimeException if a network error or timeout occurs (implementation-specific)
@@ -276,7 +278,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * @param keys the collection of cache keys to retrieve values for,
      *             must not be {@code null} or contain {@code null} elements
-     * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
+     * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found).
+     *         This describes the contract of overriding implementations; the base-class default never
+     *         returns normally and always throws {@code UnsupportedOperationException}.
      * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements (implementation-specific)
      * @throws RuntimeException if a network error or timeout occurs (implementation-specific)
@@ -395,7 +399,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @param liveTime the time-to-live in milliseconds; zero or negative values are normalized to
      *                 {@code 0} (no expiration) per the {@link DistributedCacheClient#set(String, Object, long)} contract
      * @return the time-to-live in seconds, rounded up if there's a fractional second, or {@code 0} if {@code liveTime <= 0}
-     * @throws IllegalArgumentException if the converted value exceeds Integer.MAX_VALUE seconds (approximately 68 years)
+     * @throws IllegalArgumentException if the rounded-up second value is greater than {@link Integer#MAX_VALUE}
+     *         (approximately 68 years)
      */
     protected int toSeconds(final long liveTime) {
         if (liveTime <= 0) {

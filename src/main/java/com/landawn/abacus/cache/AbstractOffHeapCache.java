@@ -492,7 +492,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * during put operations. Implementations must ensure that concurrent copies
      * to different memory regions are safe.
      *
-     * @param bytes the source byte array containing the data to copy. Must not be {@code null}.
+     * @param srcBytes the source byte array containing the data to copy. Must not be {@code null}.
      * @param srcOffset the offset into the source array, expressed in the convention required by the
      *                  concrete implementation. The interpretation is <b>implementation-defined</b>: an
      *                  {@code Unsafe}-based implementation expects an address-style offset that already
@@ -504,7 +504,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param len the number of bytes to copy. Must be positive and must not exceed the
      *            available space at the destination address.
      */
-    protected abstract void copyToMemory(byte[] bytes, int srcOffset, long startPtr, int len);
+    protected abstract void copyToMemory(byte[] srcBytes, int srcOffset, long startPtr, int len);
 
     /**
      * Copies data from off-heap memory to a byte array.
@@ -777,12 +777,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @return {@code true} if the value was successfully cached (in memory or on disk);
      *         {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
-        //    if (_pool.isClosed()) {
-        //        throw new IllegalStateException("This cache has been closed");
-        //    }
+        // Must be checked before any slot allocation or native copy: close() frees the off-heap
+        // allocation via deallocate(), so a put() that reached copyToMemory(...) on a closed cache
+        // would write into freed native memory. Fail fast instead.
+        if (_pool.isClosed()) {
+            throw new IllegalStateException("This cache has been closed");
+        }
 
         N.checkArgNotNull(key, "key");
         N.checkArgNotNull(value, "value");
@@ -1324,7 +1328,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]>builder().capacityInMB(100).build();
      * cache.put("key1", "value1".getBytes());
      * cache.put("key2", "value2".getBytes());
      *
@@ -1332,7 +1336,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * System.out.println("Entries in memory: " + stats.size());
      * System.out.println("Entries on disk: " + stats.sizeOnDisk());
      * System.out.println("Hits: " + stats.hitCount() + "/" + stats.getCount());
-     * System.out.println("Memory usage: " + stats.dataSize() + "/" + stats.allocatedMemory());
+     * System.out.println("Data size (memory + disk): " + stats.dataSize() + ", allocated memory: " + stats.allocatedMemory());
      * }</pre>
      *
      * @return the statistics snapshot for this cache instance; never {@code null}
@@ -1668,7 +1672,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * Delegates to {@link Segment#releaseSlot(int)} to clear the corresponding bit in
          * the segment's allocation {@link BitSet}.
          *
-         * <p>Thread safety: this method is thread-safe.
+         * <p>Thread safety: this method is thread-safe. However, it must be called at most once per
+         * allocated slot: releasing the same slot twice can free a slot that has since been reallocated
+         * to a different entry. Callers are responsible for ensuring a single release (the cache nulls
+         * out its slot references after releasing to enforce this).
          */
         void release() {
             segment.releaseSlot(indexOfSlot);
@@ -1742,8 +1749,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          *
          * @return the deserialized value, or {@code null} if the value cannot be retrieved
          *         (for example, when the entry was already destroyed by concurrent eviction)
-         * @throws IllegalStateException if the retrieved data size does not match the recorded
-         *                               size (data corruption detected)
+         * @throws IllegalStateException if an implementation detects that the retrieved data size does
+         *                               not match the recorded size (data corruption); single-slot reads
+         *                               perform no such check, while the multi-slot and disk-backed
+         *                               readers do
          */
         abstract T read();
     }
@@ -2034,6 +2043,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         }
 
+        /**
+         * Destroys this disk-backed wrapper, releasing its disk bytes and updating statistics.
+         * Only {@link Caller#EVICT} and {@link Caller#VACATE} callers count toward
+         * {@code evictionCountFromDisk}; other callers (remove/replace/clear/put-failure) do not.
+         * The backing disk bytes are deleted only while this wrapper still owns them, so a wrapper
+         * superseded by a concurrent same-key spill never deletes bytes owned by the replacement.
+         *
+         * @param caller the lifecycle event triggering destruction; {@code EVICT}/{@code VACATE}
+         *               increment the disk-eviction statistic, other callers do not
+         */
         @Override
         public void destroy(final Caller caller) {
             synchronized (this) {

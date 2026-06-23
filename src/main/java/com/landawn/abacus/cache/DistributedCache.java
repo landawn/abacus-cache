@@ -487,8 +487,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null, if the underlying client rejects the generated
      *         cache key (e.g. it exceeds memcached's 250-character key limit after prefixing and Base64
-     *         expansion), or if {@code liveTime} exceeds {@link Integer#MAX_VALUE} seconds (~68 years,
-     *         rejected by the bundled clients' millisecond-to-second conversion)
+     *         expansion), or if {@code liveTime} is too large for the underlying client's expiration
+     *         encoding (the bundled {@code SpyMemcached} client rejects a {@code liveTime} whose absolute
+     *         expiration would exceed epoch second {@code 2^31-1} / January 2038, as well as any
+     *         {@code liveTime} exceeding {@link Integer#MAX_VALUE} seconds / ~68 years; the bundled Redis
+     *         clients accept the millisecond {@code liveTime} directly and impose no such limit)
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #generateKey(Object)
      * @see DistributedCacheClient#set(String, Object, long)

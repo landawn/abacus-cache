@@ -515,6 +515,8 @@ public interface Cache<K, V> extends Closeable {
      * }
      * }</pre>
      *
+     * @throws UnsupportedOperationException if the operation is not supported by this implementation
+     *         (e.g., some distributed cache backends)
      * @see #remove(Object)
      * @see #size()
      */
