@@ -354,7 +354,65 @@ Requirements:
 
 Use multiple agents to execute the same Maven dependencies upgrade tasks for other projects: ../abacus, ../abacus-common, ../abacus-cache, ../abcus-extra, ../abacus-matrix, ../abacus-query, ../abacus-jdbc, ../abacus-da under parent folder: C:\Users\haiyangl\Landawn\
 
+
 ==============================================================================================================================================
+
+
+------
+  GOAL
+  Across <SCOPE — e.g. all of src/main/java>, find every method whose declared type
+  parameter is used only once in its signature and DROP that redundant type parameter,
+  replacing its single use with a wildcard. Apply the change to ALL qualifying methods.
+
+  WHAT QUALIFIES (single-use → no linkage)
+  A method-level type parameter <X> is redundant when, across the WHOLE signature —
+  the bounds of the other type parameters + the return type + every formal parameter +
+  the throws clause — X occurs exactly once (not counting its own declaration). One
+  occurrence links nothing, so it can be replaced by a wildcard.
+  Only the case where the lone use is a type ARGUMENT in a PARAMETER (e.g. Collection<X>,
+  Map<K,X>, Function<? super T, ? extends X>) is in scope. Out of scope (cannot become a
+  wildcard): used only in the return type (can't return `?`), used only in `throws`, or a
+  standalone parameter type `X`/`X[]`/`X...` (would become `Object`, not a wildcard).
+
+  ACTION — drop the type parameter
+  For each qualifying method:
+    - Replace its lone use with a wildcard: bare `?` if unbounded, `? extends Bound` if it
+      had a bound (e.g. Collection<T> → Collection<?>; <T extends Number> Collection<? extends T>
+      → Collection<? extends Number>; Map<K,V> with single-use V → Map<K, ? extends Bound>).
+    - Remove <X> from the declaration; if it was the only type parameter, delete the whole <...>.
+    - Delete the corresponding `@param <X>` javadoc tag.
+    - If the body references X, retype the affected local/loop variable to the wildcard/bound
+      when that is behavior-identical.
+
+  BACKWARD COMPATIBILITY IS NOT A CONCERN
+  Do not preserve source/binary compatibility, explicit type-witness call sites
+  (e.g. `Foo.<String>bar(...)`), or cross-overload type-parameter symmetry. Convert wherever
+  it is valid. The only thing that matters is that the result still compiles and behaves identically.
+
+  THE ONE HARD CONSTRAINT — it must compile
+  "Single-use in the signature" does NOT guarantee the body compiles with a wildcard
+  (the wildcard-capture problem). Known blockers, verify each by compiling:
+    - body writes through the type, e.g. coll.add(x), list.set(i, list.get(j)), addAll into the list;
+    - body threads the type, e.g. builds a Map<X,...> or a Collector<...,X,...> from the parameter;
+    - body invokes a Throwable/Exception-bounded functional interface whose checked exception
+      is no longer named;
+    - the method is abstract/overridden — every override in the family must change in lockstep.
+  For any method where the body genuinely needs the variable, LEAVE THAT METHOD UNCHANGED and
+  record it as skipped with the reason. Do NOT introduce helper methods or otherwise restructure
+  code to force the conversion.
+
+  VERIFY
+  The whole tree (main + tests) must compile, and the test suites for every touched file must
+  pass. All changes are erasure-identical, so runtime behavior is unchanged.
+
+  SUMMARIZE THE CHANGE
+  Produce a summary that lists: total type parameters dropped (grouped by file/family); for each
+  converted method, the before → after signature; and every skipped method with its reason
+  (capture-blocked / override-family / not a parameter position).
+
+==============================================================================================================================================
+
+
 
 
 
