@@ -5,7 +5,7 @@
 
 	<groupId>com.landawn.abacus</groupId>
 	<artifactId>abacus-cache</artifactId>
-	<version>2.8.2</version>
+	<version>2.8.3</version>
 	<packaging>jar</packaging>
 	<name>abacus-cache</name>
 	<description>Abacus Data Access and Analysis</description>
@@ -46,7 +46,7 @@
 		<dependency>
 			<groupId>com.landawn.abacus</groupId>
 			<artifactId>abacus-common</artifactId>
-			<version>7.8.1</version>
+			<version>7.8.2</version>
 			<scope>provided</scope>
 		</dependency>
 

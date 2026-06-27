@@ -241,6 +241,7 @@ Use multiple agents to perform a thorough deep line by line review for all the c
 	    divergence — analogous members should document the same concept with the same wording.
 	  - Verify any code in {@code} examples compiles and produces the stated output before trusting it.
 	  - For abnormal/unexpected behavior, add a note starting with <p><b>&#9888;.
+	  - Add comprehensive Javadoc for all public methods, including public static methods, where Javadoc is missing. Skip methods annotated with @Override.
 
   Workstream 3 — Logging & exception/error messages (LOW risk — note: level/guard edits are code changes)
 	  - Correct level for each message; expensive message construction is guarded or parameterized using the

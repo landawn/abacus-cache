@@ -253,7 +253,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *                      and size, and should return: 0 for default (try memory, fallback to disk), 1 for memory
      *                      only (never store to disk), or 2 for disk only (always store to disk). Use null for
      *                      default behavior (always try memory first).
-     * @throws IllegalArgumentException if capacityInMB is not positive, or if maxBlockSize is outside valid range
+     * @throws IllegalArgumentException if capacityInMB is not positive, if maxBlockSize is outside the valid
+     *                                  range, or if vacatingFactor is outside [0.0, 1.0]
      * @throws OutOfMemoryError if native memory allocation fails
      */
     OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
@@ -692,9 +693,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * }</pre>
          *
          * @return a new {@link OffHeapCache} instance configured with the builder settings
-         * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if
+         * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if
          *                                  {@code maxBlockSizeInBytes} is non-zero and outside
-         *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192)
+         *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192),
+         *                                  or if {@code vacatingFactor} is outside [0.0, 1.0]
          * @throws OutOfMemoryError if native memory allocation fails
          */
         public OffHeapCache<K, V> build() {

@@ -80,8 +80,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Default maximum number of consecutive failures before opening the circuit breaker.
-     * When failures exceed this threshold, the circuit opens and subsequent operations
-     * return immediately without attempting cache access until the retry delay expires.
+     * When the consecutive-failure count reaches this threshold, the circuit opens and subsequent
+     * operations return immediately without attempting cache access until the retry delay expires.
      */
     protected static final int DEFAULT_MAX_FAILED_NUMBER = 100;
 
@@ -167,8 +167,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param dcc the distributed cache client to wrap (must not be {@code null})
-     * @param keyPrefix the key prefix to prepend to all keys (may be empty string or {@code null} for no prefix)
-     * @throws IllegalArgumentException if {@code dcc} is {@code null}
+     * @param keyPrefix the key prefix to prepend to all keys (may be empty string or {@code null} for no prefix).
+     *        A non-empty prefix is prepended verbatim, so it must consist of printable ASCII characters without
+     *        spaces or control characters
+     * @throws IllegalArgumentException if {@code dcc} is {@code null}, or if {@code keyPrefix} contains a
+     *         non-printable-ASCII character, a space, or a control character
      */
     protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
         this(dcc, keyPrefix, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);

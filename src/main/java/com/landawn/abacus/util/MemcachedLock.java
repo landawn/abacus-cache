@@ -168,6 +168,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @see #lock(Object, Object, long)
      * @see #unlock(Object)
      */
+    @SuppressWarnings("unchecked")
     public boolean lock(final K target, final long liveTime) {
         N.checkArgNotNull(target, "target");
         N.checkArgPositive(liveTime, "liveTime");
@@ -399,7 +400,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * @param target the target resource whose associated lock value is to be retrieved (must not be null)
      * @return the value associated with the lock, or {@code null} if not locked or stores an empty byte array
-     * @throws IllegalArgumentException if target is null
+     * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
+     *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
+     *         or containing spaces/control characters)
      * @throws ClassCastException if the stored value is not compatible with {@code V}; because of generic
      *         type erasure this is typically surfaced at the call site rather than inside this method
      * @throws RuntimeException if a communication error occurs with Memcached

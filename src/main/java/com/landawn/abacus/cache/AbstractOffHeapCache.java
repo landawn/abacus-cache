@@ -151,9 +151,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     static final int DEFAULT_MAX_BLOCK_SIZE = 8192; // 8K
 
     /**
-     * When {@link #getAvailableSlot(int)} locates a non-full segment only after scanning past this
-     * many segments from the head of the size-class queue, that segment is moved to the front so
-     * subsequent allocations of the same slot size find it immediately, keeping the common case fast.
+     * When {@link #getAvailableSlot(int)} locates a non-full segment only after more than this many
+     * scan iterations (each iteration probes one segment from each end of the size-class queue), that
+     * segment is moved to the front so subsequent allocations of the same slot size find it immediately,
+     * keeping the common case fast.
      */
     private static final int SEGMENT_REORDER_THRESHOLD = 3;
 
@@ -315,6 +316,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                                  {@code vacatingFactor} is not in the range [0.0, 1.0]
      * @throws OutOfMemoryError if the underlying call to {@link #allocate(long)} fails because the host
      *                          cannot reserve {@code capacityInMB} MB of native memory
+     * @throws IllegalStateException if the JVM is already shutting down when the eviction shutdown hook is
+     *                               registered (the off-heap allocation is released before this propagates)
      */
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
@@ -1085,7 +1088,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <li>Determines the segment queue index based on the rounded slot size.</li>
      * <li>Searches the queue bidirectionally (from both ends toward the middle) for a segment
      *     with an available slot.</li>
-     * <li>If a slot is found after examining more than 3 segments from the front of the queue,
+     * <li>If a slot is found after more than 3 scan iterations (each probing both ends of the queue),
      *     moves that segment to the front for faster future access.</li>
      * <li>If no slot is found in existing segments, allocates a new segment from the pool
      *     (if capacity allows) and adds it to the queue.</li>
@@ -1542,8 +1545,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>This is an internal class used by {@link AbstractOffHeapCache} for memory management.
      * Segments are allocated from the fixed array of segments created during cache initialization.
-     * The {@code sizeOfSlot} field can be reconfigured to different multiples of
-     * {@link #MIN_BLOCK_SIZE} (64, 128, 256, 512, 1024, 2048, 4096, 8192, etc.) when the
+     * The {@code sizeOfSlot} field can be reconfigured to any multiple of
+     * {@link #MIN_BLOCK_SIZE} (64, 128, 192, 256, 320, ..., up to {@code maxBlockSize}) when the
      * segment becomes empty and is reused.
      *
      * <p>Thread safety: the slot allocation and deallocation methods ({@link #allocateSlot()} and
@@ -1556,7 +1559,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         private final BitSet slotBitSet = new BitSet();
         private final long segmentStartPtr;
         private final int index;
-        // It can be reset/reused by set sizeOfSlot to: 64, 128, 256, 512, 1024, 2048, 4096, 8192....
+        // It can be reset/reused by setting sizeOfSlot to any multiple of 64: 64, 128, 192, 256, 320, ... up to maxBlockSize.
         private int sizeOfSlot;
 
         /**

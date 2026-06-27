@@ -244,7 +244,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *                      and size, and should return: {@code 0} for default (try memory, fallback to disk),
      *                      {@code 1} for memory only (never store to disk), or {@code 2} for disk only (always
      *                      store to disk). Use {@code null} for default behavior (always try memory first).
-     * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if {@code maxBlockSize} is outside the valid range
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if {@code maxBlockSize} is
+     *                                  outside the valid range, or if {@code vacatingFactor} is outside [0.0, 1.0]
      * @throws OutOfMemoryError if native memory allocation fails
      */
     ForeignMemoryOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
@@ -271,9 +272,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *         {@link MemorySegment#address()}. It is recorded as {@code _startPtr} and serves as the base
      *         from which {@link #copyToMemory} and {@link #copyFromMemory} derive a relative offset into the segment.
      * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
-     * @throws IllegalArgumentException if {@code capacityInBytes} is not positive ({@link Arena#allocate(long)}
-     *         rejects a non-positive size). Unreachable through normal construction because {@code capacityInMB}
-     *         is validated to be positive first.
+     * @throws IllegalArgumentException if {@code capacityInBytes} is negative ({@link Arena#allocate(long)}
+     *         rejects a negative size; a size of {@code 0} yields a zero-length segment). Unreachable through
+     *         normal construction because {@code capacityInMB} is validated to be positive first.
      */
     @Override
     protected long allocate(final long capacityInBytes) {
@@ -675,9 +676,10 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * }</pre>
          *
          * @return a new {@link ForeignMemoryOffHeapCache} instance configured with the builder settings
-         * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if
+         * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if
          *                                  {@code maxBlockSizeInBytes} is non-zero and outside
-         *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192)
+         *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192),
+         *                                  or if {@code vacatingFactor} is outside [0.0, 1.0]
          * @throws OutOfMemoryError if native memory allocation fails
          */
         public ForeignMemoryOffHeapCache<K, V> build() {

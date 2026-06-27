@@ -456,9 +456,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>Hit/miss/eviction counts come from Caffeine and are only meaningful if the underlying cache
      * was built with {@code recordStats()} (otherwise they are zero). {@code putCount} is tracked by
-     * this wrapper. {@code capacity} is the Caffeine eviction maximum when a size bound is configured,
-     * otherwise {@code 0} (unbounded / weight-based / unknown). {@code maxMemory} and {@code dataSize}
-     * are reported as {@code -1} ("not tracked") because Caffeine does not expose byte-level usage.
+     * this wrapper. {@code capacity} is the Caffeine eviction maximum when an eviction bound is configured
+     * — the maximum entry count for a size-bounded cache, or the maximum total weight for a weight-bounded
+     * cache (a weight, not an entry count) — and {@code 0} only when the cache is unbounded. {@code maxMemory}
+     * and {@code dataSize} are reported as {@code -1} ("not tracked") because Caffeine does not expose
+     * byte-level usage.
      * For the full set of Caffeine-native metrics (load counts, average load penalty, etc.), use
      * {@link #caffeineStats()}.
      *

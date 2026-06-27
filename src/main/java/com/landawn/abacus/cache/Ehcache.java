@@ -390,8 +390,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.putAll(users);            // throws IllegalStateException (cache closed)
      * }</pre>
      *
-     * @param entries the map of key-value pairs to store
-     * @throws IllegalArgumentException if entries is null
+     * @param entries the map of key-value pairs to store; must not be {@code null} and must not contain
+     *                a {@code null} key or {@code null} value
+     * @throws IllegalArgumentException if {@code entries} is null or contains a null key or null value
      * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
