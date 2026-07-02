@@ -470,7 +470,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * operations will fail or throw exceptions.
      *
      * <p>This template method is idempotent: the first call closes the underlying client(s) (via
-     * {@link #closeClients()}) and marks the instance shut down; subsequent calls are no-ops. It does
+     * {@code closeClients()}) and marks the instance shut down; subsequent calls are no-ops. It does
      * not remove any data from Redis; it only closes the client-side connections.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe, but once called, no other operations should be
