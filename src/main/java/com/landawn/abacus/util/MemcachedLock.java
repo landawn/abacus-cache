@@ -439,7 +439,10 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p>Best practices:
      * <ul>
-     * <li>Always call unlock() in a finally block to ensure cleanup</li>
+     * <li>Release the lock in a finally block to ensure cleanup; in a finally block prefer
+     *     {@link #tryUnlockQuietly(Object)}, which logs and returns {@code false} on a communication
+     *     error instead of throwing (a throwing {@code unlock} in finally can mask the exception from
+     *     the guarded code)</li>
      * <li>Consider implementing ownership verification in critical applications</li>
      * <li>Don't assume unlock() always succeeds - check the return value if needed</li>
      * <li>Be aware that locks can expire automatically, so unlock() may return false</li>
@@ -485,6 +488,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
      * @throws RuntimeException if a communication error occurs with Memcached
+     * @see #tryUnlockQuietly(Object)
      * @see #lock(Object, long)
      * @see #lock(Object, Object, long)
      */
@@ -509,6 +513,69 @@ public class MemcachedLock<K, V> implements AutoCloseable {
             }
 
             throw new RuntimeException("Failed to release lock for key: " + key, e);
+        }
+    }
+
+    /**
+     * Releases the lock on the specified target without throwing on a Memcached communication error.
+     * This is the "quiet" counterpart of {@link #unlock(Object)}, intended for use inside a
+     * {@code finally} block: if releasing the lock fails because of a network or protocol error, this
+     * method logs the failure at {@code WARN} level and returns {@code false} instead of throwing, so
+     * it can never mask an exception thrown by the guarded critical section.
+     *
+     * <p>Like {@link #unlock(Object)}, this method deletes the key unconditionally and performs
+     * <b>no ownership verification</b> — see that method for the full discussion of the associated
+     * race. The only behavioral difference is error handling: {@code unlock} propagates a
+     * communication failure as a {@link RuntimeException}, whereas this method swallows it (and any
+     * key-rejection error) and returns {@code false}. A {@code null} target is still rejected, because
+     * that is a deterministic programming error rather than a transient failure.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
+     *
+     * if (lock.lock("resource1", 30000)) {                        // true: acquired
+     *     try {
+     *         performOperation();                                 // may throw; that exception must survive
+     *     } finally {
+     *         // Never throws on a Memcached hiccup, so it cannot suppress an exception from performOperation()
+     *         boolean released = lock.tryUnlockQuietly("resource1");
+     *         if (!released) {
+     *             // either the lock had already expired/been removed, or the release failed and was logged
+     *             System.out.println("Lock was not released cleanly; it will expire on its own");
+     *         }
+     *     }
+     * }
+     * }</pre>
+     *
+     * @param target the target resource whose lock is to be released (must not be null)
+     * @return {@code true} if an entry was deleted from Memcached for this target; {@code false} if no
+     *         entry existed (e.g., the lock had already expired or was never acquired) <i>or</i> if the
+     *         release failed because of a communication or key error (which is logged at {@code WARN})
+     * @throws IllegalArgumentException if {@code target} is null
+     * @see #unlock(Object)
+     * @see #lock(Object, long)
+     */
+    public boolean tryUnlockQuietly(final K target) {
+        N.checkArgNotNull(target, "target");
+
+        final String key = toKey(target);
+
+        try {
+            final boolean released = mc.delete(key);
+
+            if (logger.isDebugEnabled()) {
+                logger.debug(released ? "Released lock for key: " + key : "No lock to release for key: " + key);
+            }
+
+            return released;
+        } catch (final Exception e) {
+            if (logger.isWarnEnabled()) {
+                logger.warn("Failed to quietly release lock for key: " + key
+                        + " (Memcached communication or key error); returning false, the lock may remain held until it expires", e);
+            }
+
+            return false;
         }
     }
 

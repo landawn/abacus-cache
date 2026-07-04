@@ -166,6 +166,34 @@ public class MemcachedLockTest {
         assertThrows(IllegalArgumentException.class, () -> lock.unlock(tooLongKey));
     }
 
+    // --- tryUnlockQuietly ----------------------------------------------------------------------
+
+    @Test
+    public void test_tryUnlockQuietly_deletes_key_and_returns_true() {
+        assertTrue(lock.lock("k", 10_000));
+        assertTrue(lock.tryUnlockQuietly("k"));
+        assertFalse(lock.isLocked("k"));
+        // Quietly releasing an already-released lock reports false (nothing was deleted).
+        assertFalse(lock.tryUnlockQuietly("k"));
+    }
+
+    @Test
+    public void testTryUnlockQuietly_EdgeCase_NullTarget() {
+        // A null target is a deterministic programming error, so it is still rejected (not swallowed).
+        assertThrows(IllegalArgumentException.class, () -> lock.tryUnlockQuietly(null));
+    }
+
+    /**
+     * Unlike {@link MemcachedLock#unlock(Object)} (which rethrows the client's
+     * {@link IllegalArgumentException} for an over-long key), {@code tryUnlockQuietly} swallows the
+     * release failure and returns {@code false} so it is safe to call from a {@code finally} block.
+     */
+    @Test
+    public void testTryUnlockQuietly_swallowsMemcachedError_returnsFalse() {
+        final String tooLongKey = "x".repeat(251);
+        assertFalse(lock.tryUnlockQuietly(tooLongKey));
+    }
+
     // --- construction / lifecycle --------------------------------------------------------------
 
     @Test
