@@ -202,7 +202,9 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
             for (final RedisClient built : shardClients) {
                 try {
                     built.close();
-                } catch (final RuntimeException suppressed) {
+                } catch (final RuntimeException | Error suppressed) {
+                    // Attach any cleanup failure (including an Error) as suppressed so it neither masks
+                    // the original construction failure nor aborts closing the remaining shards.
                     e.addSuppressed(suppressed);
                 }
             }

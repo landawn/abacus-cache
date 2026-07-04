@@ -191,8 +191,12 @@ public interface DistributedCacheClient<T> {
      * If the key already exists, its value will be replaced. Distributed cache backends express TTL with
      * differing precision, so the conversion of {@code liveTime} (always supplied in milliseconds) is
      * implementation-specific: the bundled Memcached client converts it to whole seconds, rounded up
-     * (see {@link AbstractDistributedCacheClient#toSeconds(long)}), while the bundled Redis clients honor
-     * the millisecond {@code liveTime} exactly via the {@code SET ... PX} command.
+     * (see {@link AbstractDistributedCacheClient#toSeconds(long)}). Because Memcached interprets any
+     * expiration beyond 30 days as an absolute Unix timestamp, the Memcached client automatically
+     * converts such longer TTLs to an absolute expiration time, rejecting (with
+     * {@link IllegalArgumentException}) only values large enough to overflow Memcached's 32-bit
+     * expiration field (roughly beyond the year 2038). The bundled Redis clients instead honor the
+     * millisecond {@code liveTime} exactly via the {@code SET ... PX} command.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -297,12 +301,12 @@ public interface DistributedCacheClient<T> {
      * // Request counter with Redis (auto-initializes)
      * long requestCount = client.incr("api:requests");
      *
-     * // Memcached requires initialization
-     * long count = client.incr("counter:visits");
-     * if (count == -1) {
-     *     client.set("counter:visits", 1L, 0);
-     *     count = 1;
-     * }
+     * // Memcached returns -1 for a counter that was never seeded. Do NOT seed it with set(...):
+     * // the bundled SpyMemcached transcoder serializes the value, and native incr/decr cannot
+     * // mutate those bytes. Seed Memcached counters through a path that writes a plain
+     * // ASCII-decimal value (see the SpyMemcached implementation's counter handling). Redis, by
+     * // contrast, auto-initializes the counter on the first incr.
+     * long count = client.incr("counter:visits");   // -1 on Memcached if the counter was never seeded
      *
      * // Rate limiting
      * String key = "rate:limit:" + userId;

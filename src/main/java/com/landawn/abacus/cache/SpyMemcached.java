@@ -1346,7 +1346,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param defaultValue the seed stored when the key is absent
      * @param expiration the memcached expiration for the seed (already converted via
      *                   {@link #toMemcachedExpiration(long)}; {@code 0} = no expiration)
-     * @return the post-operation value, or {@code -1} if the key could not be found nor seeded
+     * @return the post-operation value, or {@code -1} if the key could neither be found nor seeded
      *         (e.g., deleted concurrently between the seeding attempt and the retry)
      */
     private long mutateWithAsciiSeed(final boolean isIncrement, final String key, final long delta, final long defaultValue, final int expiration) {
@@ -1489,6 +1489,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *              is converted to seconds, rounded up if not exact. A value of {@code 0} or negative
      *              flushes immediately.
      * @return {@code true} if the flush was scheduled successfully; {@code false} otherwise
+     * @throws IllegalArgumentException if {@code delay} is large enough that its absolute expiration
+     *              timestamp would exceed memcached's 32-bit expiration limit (roughly beyond the year 2038)
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean flushAll(final long delay) {
@@ -1535,6 +1537,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *              flushes immediately.
      * @return a {@link Future} that will yield {@code true} if the flush was scheduled
      *         successfully, or {@code false} on failure
+     * @throws IllegalArgumentException if {@code delay} is large enough that its absolute expiration
+     *              timestamp would exceed memcached's 32-bit expiration limit (roughly beyond the year 2038)
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
         // See flushAll(long): flush_all's delay is subject to the server's 30-day absolute-vs-

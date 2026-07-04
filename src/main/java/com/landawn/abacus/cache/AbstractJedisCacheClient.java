@@ -246,7 +246,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param value the value to cache. May be {@code null} (stored as empty byte array).
      * @param liveTime the time-to-live in milliseconds. Positive values set a millisecond-precision expiration via SET ... PX. 0 or negative means no expiration (plain SET).
-     * @return {@code true} if the operation was successful (Redis responds with "OK"), {@code false} otherwise
+     * @return {@code true} when Redis acknowledges the write with "OK" (the normal success reply). An
+     *         unconditional {@code SET} either replies "OK" or fails with a {@code JedisException}, so in
+     *         practice this returns {@code true} on success and throws on failure rather than returning {@code false}
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or serialization error occurs
      * @see #get(String)
@@ -373,9 +375,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public long incr(final String key, final long delta) {
-        N.checkArgNotNegative(delta, "delta");
-
         final byte[] keyBytes = getKeyBytes(key);
+
+        N.checkArgNotNegative(delta, "delta");
 
         return clientFor(keyBytes).incrBy(keyBytes, delta);
     }
@@ -446,9 +448,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public long decr(final String key, final long delta) {
-        N.checkArgNotNegative(delta, "delta");
-
         final byte[] keyBytes = getKeyBytes(key);
+
+        N.checkArgNotNegative(delta, "delta");
 
         return clientFor(keyBytes).decrBy(keyBytes, delta);
     }

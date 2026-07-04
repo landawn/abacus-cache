@@ -42,8 +42,8 @@ import java.util.Objects;
  * double memUtilization = (double) stats.occupiedMemory() / stats.allocatedMemory();
  * System.out.println("Memory utilization: " + (memUtilization * 100) + "%");
  *
- * // Hit rate
- * double hitRate = (double) stats.hitCount() / stats.getCount();
+ * // Hit rate (hitRate() is zero-safe: it returns 0.0 when there have been no requests)
+ * double hitRate = stats.hitRate();
  * System.out.println("Hit rate: " + (hitRate * 100) + "%");
  *
  * // Disk performance

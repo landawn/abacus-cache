@@ -35,10 +35,10 @@ public class CacheFactoryTest extends TestBase {
 
     @SuppressWarnings("unchecked")
     private static DistributedCacheClient<?> distributedClient(final Cache<?, ?> cache) throws ReflectiveOperationException {
-        final Field dccField = DistributedCache.class.getDeclaredField("dcc");
-        dccField.setAccessible(true);
+        final Field clientField = DistributedCache.class.getDeclaredField("client");
+        clientField.setAccessible(true);
 
-        return (DistributedCacheClient<?>) dccField.get(cache);
+        return (DistributedCacheClient<?>) clientField.get(cache);
     }
 
     // Two-arg createLocalCache

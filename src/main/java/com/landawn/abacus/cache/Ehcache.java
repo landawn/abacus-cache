@@ -119,7 +119,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     /**
      * Retrieves a value from the cache by its key.
      * This method may trigger a cache loader if configured in the underlying Ehcache.
-     * The operation may update access time depending on the eviction policy.
+     * The operation may update the entry's access time depending on the configured expiry
+     * (time-to-idle) policy.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
      * concurrent access to cache entries.
@@ -250,9 +251,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key whose presence in the cache is to be tested (must not be {@code null})
      * @return {@code true} if the cache currently has a live (non-expired) mapping for the specified
-     *         key; {@code false} otherwise. Ehcache evaluates expiration during this check (an expired
-     *         entry reports {@code false} and is eagerly expired), but the check does not count as an
-     *         access for time-to-idle purposes, so it does not extend the entry's lifetime.
+     *         key; {@code false} otherwise. An entry that has passed its expiry is reported as absent,
+     *         and the check does not count as an access for time-to-idle purposes, so it does not
+     *         extend the entry's lifetime.
      * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
      */

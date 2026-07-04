@@ -313,10 +313,10 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
         // memory, and during normal operation a slot is always fully written before it is ever read,
         // so no stale bytes are exposed. Zeroing here would only add cost.
         //
-        // Guard against a null arena: deallocate() is an overridable cleanup hook that the parent
-        // constructor may invoke on an error path (e.g. shutdown-hook registration failure) before
-        // allocate() has assigned arena, in which case an unguarded arena.close() would mask the
-        // original failure with a NullPointerException.
+        // Guard against a null arena as defensive programming: deallocate() is an overridable cleanup
+        // hook. On the current paths the parent invokes it only after allocate() has assigned arena, but
+        // guarding keeps it safe should it ever run before allocate() completes (e.g. a future path or
+        // subclass), where an unguarded arena.close() would mask the original failure with an NPE.
         if (arena != null) {
             arena.close();
         }

@@ -228,7 +228,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      */
     @Override
     public Map<String, T> getBulk(final String... keys) throws UnsupportedOperationException {
-        throw new UnsupportedOperationException();
+        throw new UnsupportedOperationException("getBulk(String...) is not supported by " + getClass().getName());
     }
 
     /**
@@ -288,7 +288,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      */
     @Override
     public Map<String, T> getBulk(final Collection<String> keys) throws UnsupportedOperationException {
-        throw new UnsupportedOperationException();
+        throw new UnsupportedOperationException("getBulk(Collection) is not supported by " + getClass().getName());
     }
 
     /**
@@ -344,7 +344,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      */
     @Override
     public void flushAll() throws UnsupportedOperationException {
-        throw new UnsupportedOperationException();
+        throw new UnsupportedOperationException("flushAll() is not supported by " + getClass().getName());
     }
 
     /**

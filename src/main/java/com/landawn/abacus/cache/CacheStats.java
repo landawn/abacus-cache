@@ -83,13 +83,12 @@ package com.landawn.abacus.cache;
  *     System.out.println("Consider increasing cache capacity or memory limit");
  * }
  *
- * // Verify cache invariants
- * assert stats.getCount() == stats.hitCount() + stats.missCount() :
- *     "Get count should equal sum of hits and misses";
- * if (stats.maxMemory() > 0) {
- *     assert stats.dataSize() <= stats.maxMemory() :
- *         "Data size should not exceed max memory";
- * }
+ * // Note: getCount() normally equals hitCount() + missCount(), and dataSize() normally does not
+ * // exceed maxMemory(), but these relationships are NOT guaranteed at snapshot time: the underlying
+ * // counters are sampled non-atomically and may be transiently inconsistent under concurrent load,
+ * // so do not assert them.
+ * long derivedRequestCount = stats.hitCount() + stats.missCount();
+ * System.out.println("Requests (derived): " + derivedRequestCount + ", reported: " + stats.getCount());
  * }</pre>
  *
  * @param capacity the maximum number of entries the cache can hold. This value is set during cache creation

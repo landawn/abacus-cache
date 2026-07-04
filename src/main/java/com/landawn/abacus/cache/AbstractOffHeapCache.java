@@ -112,18 +112,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Default parser used for serialization when no custom serializer is configured.
      * Uses Kryo if it is on the classpath, otherwise falls back to JSON.
      */
-    static final Parser<?, ?> parser = ParserFactory.isKryoParserAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJsonParser();
+    static final Parser<?, ?> PARSER = ParserFactory.isKryoParserAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJsonParser();
 
     /**
      * Default serializer used when no custom serializer is configured.
-     * Delegates to {@link #parser}.
+     * Delegates to {@link #PARSER}.
      */
-    static final BiConsumer<Object, ByteArrayOutputStream> SERIALIZER = parser::serialize;
+    static final BiConsumer<Object, ByteArrayOutputStream> SERIALIZER = PARSER::serialize;
 
     /**
      * Default deserializer used when no custom deserializer is configured.
      * Returns the raw bytes for {@code byte[]} types, wraps them in a {@link ByteBuffer}
-     * for {@code ByteBuffer} types, and otherwise delegates to {@link #parser}.
+     * for {@code ByteBuffer} types, and otherwise delegates to {@link #PARSER}.
      */
     static final BiFunction<byte[], Type<?>, Object> DESERIALIZER = (bytes, type) -> {
         if (type.isPrimitiveByteArray()) {
@@ -131,7 +131,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         } else if (type.isByteBuffer()) {
             return ByteBufferType.valueOf(bytes);
         } else {
-            return parser.deserialize(new ByteArrayInputStream(bytes), type.javaType());
+            return PARSER.deserialize(new ByteArrayInputStream(bytes), type.javaType());
         }
     };
 
@@ -162,7 +162,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Shared scheduled executor used for the background eviction task of all
      * off-heap cache instances created from this class.
      */
-    static final ScheduledExecutorService scheduledExecutor;
+    static final ScheduledExecutorService SCHEDULED_EXECUTOR;
 
     static {
         final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(IOUtil.CPU_CORES);
@@ -170,7 +170,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // scheduled run, holding a strong reference to the cache instance and preventing GC after
         // close(). Setting the policy makes cancel() purge the task from the queue immediately.
         executor.setRemoveOnCancelPolicy(true);
-        scheduledExecutor = MoreExecutors.getExitingScheduledExecutorService(executor);
+        SCHEDULED_EXECUTOR = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
 
     // Statistics tracking. LongAdder (rather than AtomicLong) is used because these
@@ -228,7 +228,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     // to a newer wrapper. Store writes and ownership claims are serialized per key via
     // storeKeyLocks so the (write bytes, claim ownership) pair is atomic.
     final ConcurrentHashMap<K, StoreWrapper> storeOwners = new ConcurrentHashMap<>();
-    private final Object[] storeKeyLocks = new Object[64];
+    // Must be a power of two so that (hash & (length - 1)) below is a valid, uniformly distributed index.
+    private static final int STORE_KEY_LOCK_COUNT = 64;
+    private final Object[] storeKeyLocks = new Object[STORE_KEY_LOCK_COUNT];
 
     {
         for (int i = 0; i < storeKeyLocks.length; i++) {
@@ -237,7 +239,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     private Object storeKeyLockFor(final K key) {
-        return storeKeyLocks[(key.hashCode() & Integer.MAX_VALUE) & (storeKeyLocks.length - 1)];
+        // storeKeyLocks.length is a power of two, so masking with (length - 1) already yields a
+        // non-negative index even when key.hashCode() is negative (it keeps only the low bits).
+        return storeKeyLocks[key.hashCode() & (storeKeyLocks.length - 1)];
     }
 
     /**
@@ -313,7 +317,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *               operations. Must not be {@code null}.
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if {@code maxBlockSize}
      *                                  is less than 1024 or greater than {@link #SEGMENT_SIZE} (1048576), or if
-     *                                  {@code vacatingFactor} is not in the range [0.0, 1.0]
+     *                                  {@code vacatingFactor} is not in the range [0.0, 1.0], or if
+     *                                  {@code logger} is {@code null}
      * @throws OutOfMemoryError if the underlying call to {@link #allocate(long)} fails because the host
      *                          cannot reserve {@code capacityInMB} MB of native memory
      * @throws IllegalStateException if the JVM is already shutting down when the eviction shutdown hook is
@@ -393,7 +398,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     }
                 };
 
-                scheduleFuture = scheduledExecutor.scheduleWithFixedDelay(evictTask, evictDelay, evictDelay, TimeUnit.MILLISECONDS);
+                scheduleFuture = SCHEDULED_EXECUTOR.scheduleWithFixedDelay(evictTask, evictDelay, evictDelay, TimeUnit.MILLISECONDS);
             }
         } catch (final RuntimeException | Error initFailure) {
             try {
@@ -769,8 +774,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * {@code maxBlockSize} are stored in a single slot; larger values are split across
      * multiple slots. When memory cannot be allocated (or when directed by the configured
      * {@code storeSelector}), the value may be written to the configured {@link OffHeapStore}
-     * instead. If neither memory nor disk storage succeeds, an asynchronous vacating task is
-     * scheduled and the method returns {@code false}.
+     * instead. If neither memory nor disk storage succeeds, the method returns {@code false}; an
+     * asynchronous vacating task to reclaim space is also scheduled, unless in-memory storage was
+     * disabled for this entry (disk-only mode), in which case no vacating task is scheduled.
      *
      * <p>Non-positive {@code liveTime} or {@code maxIdleTime} values are interpreted as
      * "no expiration" and internally translated to {@code Long.MAX_VALUE}.
@@ -806,7 +812,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final Type<V> type = N.typeOf(value.getClass());
         Wrapper<V> w = null;
 
-        // final byte[] bytes = parser.serialize(value).getBytes();
+        // final byte[] bytes = PARSER.serialize(value).getBytes();
         final long startTime = statsTimeOnDisk ? System.currentTimeMillis() : 0;
         ByteArrayOutputStream os = null;
         byte[] bytes = null;
@@ -1360,7 +1366,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();
 
-        final Map<Integer, Map<Integer, Integer>> occupiedSlots = Stream.of(new ArrayList<>(_segmentQueueMap.values())).distinct().flatmap(queue -> {
+        // Iterate the unique per-size-class queues directly. _segmentQueueMap maps many segment
+        // indices to the same queue instance, so its values contain duplicates; _segmentQueues holds
+        // each queue exactly once (size classes with no allocated segment simply contribute an empty
+        // queue). Reading a queue's contents only under its own monitor avoids the
+        // ConcurrentModificationException/torn read that a content-based distinct() over these
+        // LinkedList queues would risk, because distinct() would hash/compare their elements without
+        // holding the monitor that concurrent puts and reclaimEmptySegments() use to mutate them.
+        final Map<Integer, Map<Integer, Integer>> occupiedSlots = Stream.of(_segmentQueues).flatmap(queue -> {
             synchronized (queue) {
                 return N.map(queue, it -> Tuple.of(it.sizeOfSlot, it.index, it.cardinality()));
             }

@@ -251,8 +251,11 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      */
     @Override
     public CachedData encode(final T o) {
+        // KryoParser.encode never returns null (it always returns the ByteArrayOutputStream's bytes,
+        // writing a Kryo null-marker even for a null input), so a null check here would be dead code -
+        // and CachedData rejects null data anyway, which would contradict this method's "never null" contract.
         final byte[] encoded = kryoParser.encode(o);
-        if (encoded != null && encoded.length > maxSize) {
+        if (encoded.length > maxSize) {
             throw new IllegalArgumentException("Encoded data size (" + encoded.length + " bytes) exceeds maxSize (" + maxSize + " bytes)");
         }
         return new CachedData(0, encoded, maxSize);

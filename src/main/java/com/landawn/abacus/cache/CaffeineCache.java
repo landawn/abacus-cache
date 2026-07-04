@@ -510,9 +510,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * com.github.benmanes.caffeine.cache.stats.CacheStats native = cache.caffeineStats();
-     * System.out.println("Average load penalty: " + native.averageLoadPenalty() + " ns");
-     * System.out.println("Load success count: " + native.loadSuccessCount());
+     * com.github.benmanes.caffeine.cache.stats.CacheStats nativeStats = cache.caffeineStats();
+     * System.out.println("Average load penalty: " + nativeStats.averageLoadPenalty() + " ns");
+     * System.out.println("Load success count: " + nativeStats.loadSuccessCount());
      * }</pre>
      *
      * @return a snapshot of the Caffeine-native statistics (all zeros if recordStats() was not enabled)
