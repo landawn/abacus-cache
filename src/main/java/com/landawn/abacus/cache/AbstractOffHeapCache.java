@@ -842,12 +842,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         Slot slot = null;
         List<Slot> slots = null;
 
+        // Track whether memory allocation was attempted, so the vacate() decision after the
+        // try block can distinguish between memory-pressure failures (where vacating makes
+        // sense) and disk-only failures (where vacating is pointless and would evict the
+        // prior entry that putToDisk just restored).
+        boolean vacateOnNull = true;
+
         try {
             // Inside the try so a throwing storeSelector still reaches the finally below,
             // which recycles the pooled serialization buffer.
             final int storeSelection = storeSelector == null ? 0 : storeSelector.apply(key, value, size);
             final boolean canBeStoredInMemory = storeSelection < 2;
             final boolean canBeStoredToDisk = storeSelection != 1;
+            vacateOnNull = canBeStoredInMemory;
 
             if (size <= _maxBlockSize) {
                 slot = canBeStoredInMemory ? getAvailableSlot(size) : null;
@@ -923,11 +930,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // thrown by a custom offHeapStore.put) — the classic "return in finally swallows the exception"
         // trap. The finally above still releases any allocated slots on every exit, including the
         // exceptional one, so cleanup is unchanged; only the silent swallowing is removed.
-        // Schedule a vacate on every storage failure (the documented contract), including failed
-        // replacements of an existing key - those fail for the same reason (memory pressure) and
-        // benefit equally from reclamation. vacate() itself is debounced, so this cannot storm.
+        // Schedule a vacate only when memory was attempted and not available (i.e. the failure is
+        // due to memory pressure). When the storeSelector forbids in-memory storage (disk-only mode)
+        // and the disk write fails, vacating memory is pointless and would evict the prior entry
+        // that putToDisk just restored, silently losing data on a transient disk error.
         if (w == null) {
-            vacate();
+            if (vacateOnNull) {
+                vacate();
+            }
 
             return false;
         }
