@@ -99,7 +99,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
     private MemorySegment buffer;
 
     /**
-     * Creates an {@code ForeignMemoryOffHeapCache} with the specified capacity in megabytes.
+     * Creates a {@code ForeignMemoryOffHeapCache} with the specified capacity in megabytes.
      * Uses a default eviction delay of 3 seconds (3000 milliseconds) and default expiration times
      * ({@link Cache#DEFAULT_LIVE_TIME 3 hours TTL} and {@link Cache#DEFAULT_MAX_IDLE_TIME 30 minutes idle time}).
      * Memory is allocated at construction time and held until {@link #close()}.
@@ -129,7 +129,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
     }
 
     /**
-     * Creates an {@code ForeignMemoryOffHeapCache} with the specified capacity and eviction delay.
+     * Creates a {@code ForeignMemoryOffHeapCache} with the specified capacity and eviction delay.
      * Uses default {@link Cache#DEFAULT_LIVE_TIME TTL of 3 hours} and
      * {@link Cache#DEFAULT_MAX_IDLE_TIME idle time of 30 minutes}.
      * The eviction delay controls how frequently the cache scans for expired entries and reclaims empty segments.
@@ -161,7 +161,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
     }
 
     /**
-     * Creates an {@code ForeignMemoryOffHeapCache} with fully specified basic parameters.
+     * Creates a {@code ForeignMemoryOffHeapCache} with fully specified basic parameters.
      * Memory is allocated at construction time and held until {@link #close()}.
      * This constructor provides complete control over cache timing behavior.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
@@ -400,7 +400,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *     .evictDelay(60000)             // scan for expired entries every 60s
      *     .defaultLiveTime(3600000)      // default 1h TTL
      *     .defaultMaxIdleTime(1800000)   // default 30min idle timeout
-     *     .build();                      // allocates native memory now; returns an ForeignMemoryOffHeapCache
+     *     .build();                      // allocates native memory now; returns a ForeignMemoryOffHeapCache
      *
      * // Advanced configuration with disk spillover
      * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
@@ -412,7 +412,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *     .vacatingFactor(0.3f)          // evict 30% of the pool (LRU first) when capacity is reached
      *     .offHeapStore(diskStore)       // spill to disk when memory is full
      *     .statsTimeOnDisk(true)         // track disk read/write timing
-     *     .build();                      // returns an ForeignMemoryOffHeapCache with disk spillover enabled
+     *     .build();                      // returns a ForeignMemoryOffHeapCache with disk spillover enabled
      * }</pre>
      *
      * @param <K> the type of keys used to identify cache entries
@@ -498,7 +498,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * builder.capacityInMB(100)                                                  // each fluent setter returns the same builder instance
          *        .evictDelay(60000)
          *        .defaultLiveTime(3600000);                       // mutates builder in place; result is the same builder reference
-         * ForeignMemoryOffHeapCache<String, Data> cache = builder.build();   // allocates native memory; returns an ForeignMemoryOffHeapCache
+         * ForeignMemoryOffHeapCache<String, Data> cache = builder.build();   // allocates native memory; returns a ForeignMemoryOffHeapCache
          * }</pre>
          *
          */
@@ -648,7 +648,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *     .capacityInMB(200)         // 200MB off-heap (required, must be positive)
          *     .evictDelay(60000)         // scan for expired entries every 60s
          *     .vacatingFactor(0.3f)      // evict 30% of the pool (LRU first) when capacity is reached
-         *     .build();                  // allocates native memory now; returns an ForeignMemoryOffHeapCache
+         *     .build();                  // allocates native memory now; returns a ForeignMemoryOffHeapCache
          * try {
          *     cache.put("key", data);                    // serializes + copies the value off-heap; returns true on success
          *     Data retrieved = cache.getOrNull("key");   // returns the cached value, or null if absent/expired
@@ -667,7 +667,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *     .vacatingFactor(0.25f)     // evict 25% of the pool (LRU first) on vacate
          *     .offHeapStore(store)       // spill to disk when memory is full
          *     .statsTimeOnDisk(true)     // track disk read/write timing
-         *     .build();                  // returns an ForeignMemoryOffHeapCache with disk spillover enabled
+         *     .build();                  // returns a ForeignMemoryOffHeapCache with disk spillover enabled
          *
          * // build() validates eagerly:
          * ForeignMemoryOffHeapCache.<String, Data>builder().build();                          // throws IllegalArgumentException (capacityInMB not set / 0)

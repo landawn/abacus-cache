@@ -309,20 +309,20 @@ public final class CacheFactory {
      * User retrieved = cache.getOrNull("user:123"); // returns the value, or null if absent/circuit-open
      *
      * // Edge case: a null client is rejected
-     * CacheFactory.createDistributedCache((DistributedCacheClient<User>) null);   // throws IllegalArgumentException (dcc must not be null)
+     * CacheFactory.createDistributedCache((DistributedCacheClient<User>) null);   // throws IllegalArgumentException (client must not be null)
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param dcc the distributed cache client to wrap (must not be null)
+     * @param client the distributed cache client to wrap (must not be null)
      * @return a new DistributedCache instance wrapping the provided client
-     * @throws IllegalArgumentException if dcc is null
+     * @throws IllegalArgumentException if client is null
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createDistributedCache(DistributedCacheClient, String, int, long)
      * @see #createCache(String)
      */
-    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc) {
-        return new DistributedCache<>(dcc);
+    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client) {
+        return new DistributedCache<>(client);
     }
 
     /**
@@ -357,22 +357,22 @@ public final class CacheFactory {
      * CacheFactory.createDistributedCache(redisClient, (String) null);   // returns a DistributedCache with no key prefix
      *
      * // Edge case: a null client is rejected
-     * CacheFactory.createDistributedCache((DistributedCacheClient<Session>) null, "myapp:");   // throws IllegalArgumentException (dcc must not be null)
+     * CacheFactory.createDistributedCache((DistributedCacheClient<Session>) null, "myapp:");   // throws IllegalArgumentException (client must not be null)
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param dcc the distributed cache client to wrap (must not be null)
+     * @param client the distributed cache client to wrap (must not be null)
      * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
      * @return a new DistributedCache instance with key prefixing enabled
-     * @throws IllegalArgumentException if dcc is null, or if keyPrefix contains a non-printable-ASCII
+     * @throws IllegalArgumentException if client is null, or if keyPrefix contains a non-printable-ASCII
      *         character, a space, or a control character
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String, int, long)
      * @see #createCache(String)
      */
-    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
-        return new DistributedCache<>(dcc, keyPrefix);
+    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client, final String keyPrefix) {
+        return new DistributedCache<>(client, keyPrefix);
     }
 
     /**
@@ -415,20 +415,20 @@ public final class CacheFactory {
      *
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
-     * @param dcc the distributed cache client to wrap (must not be null)
+     * @param client the distributed cache client to wrap (must not be null)
      * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
      * @param maxFailedNumForRetry the maximum number of consecutive failures before the circuit breaker opens (must be non-negative)
      * @param retryDelay the delay in milliseconds before attempting a retry after the circuit breaker opens (must be non-negative)
      * @return a new DistributedCache instance with custom circuit breaker configuration
-     * @throws IllegalArgumentException if dcc is null, maxFailedNumForRetry is negative, retryDelay is
+     * @throws IllegalArgumentException if client is null, maxFailedNumForRetry is negative, retryDelay is
      *         negative, or keyPrefix contains a non-printable-ASCII character, a space, or a control character
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createCache(String)
      */
-    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix,
+    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client, final String keyPrefix,
             final int maxFailedNumForRetry, final long retryDelay) {
-        return new DistributedCache<>(dcc, keyPrefix, maxFailedNumForRetry, retryDelay);
+        return new DistributedCache<>(client, keyPrefix, maxFailedNumForRetry, retryDelay);
     }
 
     /**
@@ -449,7 +449,9 @@ public final class CacheFactory {
      * <li>{@code Memcached(serverUrl)} - Creates SpyMemcached client with default timeout (1000ms)</li>
      * <li>{@code Memcached(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code Memcached(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
-     * <li>{@code Redis(serverUrl)} - Creates JRedis client (standalone, client-side sharding) with default timeout (1000ms)</li>
+     * <li>{@code Redis(serverUrl)} - Creates JRedis client (standalone, client-side sharding) with default timeout (1000ms);
+     *     like Memcached, multiple standalone servers are SPACE-separated within the DSL (a comma would make the
+     *     second address be parsed as the key-prefix parameter)</li>
      * <li>{@code Redis(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code Redis(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
      * <li>{@code RedisCluster(serverUrl)} - Creates JRedisCluster client (Redis Cluster, server-side sharding) with default timeout (1000ms); serverUrl is a comma-separated list of cluster seed nodes</li>

@@ -92,7 +92,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     protected static final long DEFAULT_RETRY_DELAY = 1000;
 
     // ...
-    private final DistributedCacheClient<V> dcc;
+    private final DistributedCacheClient<V> client;
 
     private final String keyPrefix;
 
@@ -141,11 +141,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * User user = cache.getOrNull("key");
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap (must not be {@code null})
-     * @throws IllegalArgumentException if {@code dcc} is {@code null}
+     * @param client the distributed cache client to wrap (must not be {@code null})
+     * @throws IllegalArgumentException if {@code client} is {@code null}
      */
-    protected DistributedCache(final DistributedCacheClient<V> dcc) {
-        this(dcc, Strings.EMPTY, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
+    protected DistributedCache(final DistributedCacheClient<V> client) {
+        this(client, Strings.EMPTY, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
     }
 
     /**
@@ -166,15 +166,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Actual cache key: "myapp:" + Base64("user:123")
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap (must not be {@code null})
+     * @param client the distributed cache client to wrap (must not be {@code null})
      * @param keyPrefix the key prefix to prepend to all keys (may be empty string or {@code null} for no prefix).
      *        A non-empty prefix is prepended verbatim, so it must consist of printable ASCII characters without
      *        spaces or control characters
-     * @throws IllegalArgumentException if {@code dcc} is {@code null}, or if {@code keyPrefix} contains a
+     * @throws IllegalArgumentException if {@code client} is {@code null}, or if {@code keyPrefix} contains a
      *         non-printable-ASCII character, a space, or a control character
      */
-    protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix) {
-        this(dcc, keyPrefix, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
+    protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix) {
+        this(client, keyPrefix, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
     }
 
     /**
@@ -213,7 +213,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * );
      * }</pre>
      *
-     * @param dcc the distributed cache client to wrap (must not be {@code null})
+     * @param client the distributed cache client to wrap (must not be {@code null})
      * @param keyPrefix the key prefix to prepend to all keys (may be empty string or {@code null} for no prefix).
      *        The prefix is prepended verbatim (only the key part is Base64-encoded), so it must consist of
      *        printable ASCII characters without spaces or control characters. Including at least one character
@@ -224,12 +224,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        {@code retryDelay} ms; in that mode the failure counter stays at 0 and the closed-to-open WARN
      *        transition log is not emitted
      * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative)
-     * @throws IllegalArgumentException if {@code dcc} is {@code null}, {@code maxFailedNumForRetry} is negative,
+     * @throws IllegalArgumentException if {@code client} is {@code null}, {@code maxFailedNumForRetry} is negative,
      *         {@code retryDelay} is negative, or {@code keyPrefix} contains a non-printable-ASCII character,
      *         a space, or a control character
      */
-    protected DistributedCache(final DistributedCacheClient<V> dcc, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
-        N.checkArgNotNull(dcc, "dcc");
+    protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
+        N.checkArgNotNull(client, "client");
         N.checkArgNotNegative(maxFailedNumForRetry, "maxFailedNumForRetry");
         N.checkArgNotNegative(retryDelay, "retryDelay");
 
@@ -248,7 +248,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             }
         }
         this.hasKeyPrefix = Strings.isNotEmpty(this.keyPrefix);
-        this.dcc = dcc;
+        this.client = client;
         this.maxFailedNumForRetry = maxFailedNumForRetry;
         this.retryDelay = retryDelay;
         this.retryDelayNanos = TimeUnit.MILLISECONDS.toNanos(retryDelay);
@@ -363,7 +363,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         Boolean isOK = null;
 
         try {
-            result = dcc.get(cacheKey);
+            result = client.get(cacheKey);
             isOK = Boolean.TRUE;
         } catch (final IllegalArgumentException e) {
             // A deterministic client-side validation error (e.g. the generated key exceeding
@@ -505,7 +505,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
         N.checkArgNotNull(key, "key");
 
-        return dcc.set(generateKey(key), value, liveTime);
+        return client.set(generateKey(key), value, liveTime);
     }
 
     /**
@@ -571,7 +571,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
         N.checkArgNotNull(key, "key");
 
-        dcc.delete(generateKey(key));
+        client.delete(generateKey(key));
     }
 
     /**
@@ -784,7 +784,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     public void clear() {
         assertNotClosed();
 
-        dcc.flushAll();
+        client.flushAll();
     }
 
     /**
@@ -866,7 +866,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         isClosed = true;
 
         try {
-            dcc.disconnect();
+            client.disconnect();
         } catch (final Exception e) {
             // Even if disconnect fails, the cache remains closed; not rethrown to keep close() idempotent.
             // Logged at warn because a failed disconnect may leak client-side connections/resources.
