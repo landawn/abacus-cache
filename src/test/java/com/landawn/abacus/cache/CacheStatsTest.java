@@ -67,6 +67,14 @@ public class CacheStatsTest extends TestBase {
     }
 
     @Test
+    public void testRates_EdgeCase_CounterSumDoesNotOverflow() {
+        final CacheStats stats = new CacheStats(0, 0, 0L, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, 0L, 0L, 0L);
+
+        assertEquals(0.5D, stats.hitRate());
+        assertEquals(0.5D, stats.missRate());
+    }
+
+    @Test
     public void testRecord_EdgeCase_NegativeCapacityRejected() {
         assertThrows(IllegalArgumentException.class, () -> new CacheStats(-1, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
     }

@@ -151,8 +151,10 @@ public record CacheStats(int capacity, int size, long putCount, long getCount, l
      * @see #missRate()
      */
     public double hitRate() {
-        final long requestCount = hitCount + missCount;
-        return requestCount == 0 ? 0.0 : (double) hitCount / requestCount;
+        // Convert before adding so two valid, non-negative long counters cannot overflow their
+        // denominator and produce a negative or out-of-range rate.
+        final double requestCount = (double) hitCount + missCount;
+        return requestCount == 0.0D ? 0.0D : hitCount / requestCount;
     }
 
     /**
@@ -164,7 +166,7 @@ public record CacheStats(int capacity, int size, long putCount, long getCount, l
      * @see #hitRate()
      */
     public double missRate() {
-        final long requestCount = hitCount + missCount;
-        return requestCount == 0 ? 0.0 : (double) missCount / requestCount;
+        final double requestCount = (double) hitCount + missCount;
+        return requestCount == 0.0D ? 0.0D : missCount / requestCount;
     }
 }

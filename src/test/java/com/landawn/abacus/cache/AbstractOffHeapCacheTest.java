@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
+import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.N;
 
 @Tag("2025")
@@ -436,6 +438,30 @@ public class AbstractOffHeapCacheTest {
             }
             assertTrue(cache.put("ok", ok));
             assertArrayEquals(ok, cache.getOrNull("ok"));
+        }
+    }
+
+    @Test
+    public void testCloseShutsDownVacationExecutor() throws Exception {
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
+
+        try {
+            // An oversized write activates the otherwise-lazy per-cache vacation executor.
+            assertFalse(cache.put("oversized", new byte[2 * 1024 * 1024]));
+
+            final Field field = AbstractOffHeapCache.class.getDeclaredField("_asyncExecutor");
+            field.setAccessible(true);
+            final AsyncExecutor executor = (AsyncExecutor) field.get(cache);
+
+            cache.close();
+
+            for (int i = 0; i < 100 && !executor.isTerminated(); i++) {
+                Thread.sleep(10L);
+            }
+
+            assertTrue(executor.isTerminated(), "close() must terminate the vacation executor and release its shutdown hook");
+        } finally {
+            cache.close();
         }
     }
 

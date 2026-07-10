@@ -202,6 +202,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private final Map<Integer, Deque<Segment>> _segmentQueueMap = new ConcurrentHashMap<>();
     private final Deque<Segment>[] _segmentQueues;
 
+    // Per-cache executor used only for asynchronous vacation. It is lazy, but once initialized it
+    // owns worker threads and a JVM shutdown hook, so close() must shut it down explicitly.
     private final AsyncExecutor _asyncExecutor = new AsyncExecutor();
     private final AtomicInteger _activeVacationTaskCount = new AtomicInteger();
     // Wall-clock time the most recent vacate task finished. Used to debounce
@@ -1491,8 +1493,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Closes the cache and releases all resources.
-     * Cancels the scheduled eviction task, removes the JVM shutdown hook, closes the
-     * underlying object pool, and deallocates all off-heap memory. This method is
+     * Cancels the scheduled eviction task, shuts down the asynchronous vacation executor,
+     * removes JVM shutdown hooks, closes the underlying object pool, and deallocates all
+     * off-heap memory. This method is
      * idempotent: invoking it on an already-closed cache returns immediately. It is
      * also invoked automatically by the registered shutdown hook during JVM shutdown.
      */
@@ -1514,26 +1517,32 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             } finally {
                 try {
-                    if (shutdownHook != null) {
-                        try {
-                            Runtime.getRuntime().removeShutdownHook(shutdownHook);
-                            shutdownHook = null;
-                        } catch (final IllegalStateException e) {
-                            // Expected when close() is invoked from the shutdown hook itself (JVM already
-                            // shutting down); the hook will run anyway, so this is safe to ignore.
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
-                            }
-                        }
-                    }
+                    // AsyncExecutor installs its own shutdown hook when vacation is first scheduled.
+                    // Shutting it down here releases both that hook and its per-cache worker threads.
+                    _asyncExecutor.shutdown();
                 } finally {
                     try {
-                        _pool.close();
+                        if (shutdownHook != null) {
+                            try {
+                                Runtime.getRuntime().removeShutdownHook(shutdownHook);
+                                shutdownHook = null;
+                            } catch (final IllegalStateException e) {
+                                // Expected when close() is invoked from the shutdown hook itself (JVM already
+                                // shutting down); the hook will run anyway, so this is safe to ignore.
+                                if (logger.isDebugEnabled()) {
+                                    logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
+                                }
+                            }
+                        }
                     } finally {
                         try {
-                            deallocate();
+                            _pool.close();
                         } finally {
-                            closeOffHeapStore();
+                            try {
+                                deallocate();
+                            } finally {
+                                closeOffHeapStore();
+                            }
                         }
                     }
                 }

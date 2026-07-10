@@ -82,4 +82,14 @@ public class OffHeapCacheStatsTest {
         assertEquals(0, stats.segmentSize());
         assertTrue(stats.occupiedSlots().isEmpty());
     }
+
+    @Test
+    public void testRates_EdgeCase_CounterSumDoesNotOverflow() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, Long.MAX_VALUE, Long.MAX_VALUE, 0, Long.MAX_VALUE, 0, 0, 0, 0, 0, 0, z, z, 0,
+                Map.of());
+
+        assertEquals(0.5D, stats.hitRate());
+        assertEquals(0.5D, stats.missRate());
+    }
 }

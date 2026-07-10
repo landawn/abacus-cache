@@ -6,11 +6,18 @@ package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Tag;
@@ -59,6 +66,48 @@ public class CaffeineCacheTest extends TestBase {
     public void testPut_EdgeCase_NullValue() {
         try (CaffeineCache<String, String> cache = newCache()) {
             assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 0, 0));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void testPut_RacingClose_RemovesLateWrite() throws InterruptedException {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final CountDownLatch putStarted = new CountDownLatch(1);
+        final CountDownLatch allowPutToFinish = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            putStarted.countDown();
+            assertTrue(allowPutToFinish.await(5, TimeUnit.SECONDS));
+            return null;
+        }).when(delegate).put("k", "v");
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final AtomicReference<Throwable> putFailure = new AtomicReference<>();
+        final Thread putThread = new Thread(() -> {
+            try {
+                cache.put("k", "v", 0, 0);
+            } catch (final Throwable e) {
+                putFailure.set(e);
+            }
+        });
+
+        try {
+            putThread.start();
+            assertTrue(putStarted.await(5, TimeUnit.SECONDS));
+
+            cache.close();
+            allowPutToFinish.countDown();
+            putThread.join(5_000L);
+
+            assertFalse(putThread.isAlive());
+            assertInstanceOf(IllegalStateException.class, putFailure.get());
+            verify(delegate).invalidateAll();
+            verify(delegate).invalidate("k");
+        } finally {
+            allowPutToFinish.countDown();
+            putThread.join(5_000L);
+            cache.close();
         }
     }
 

@@ -199,7 +199,19 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNull(value, "value");
 
-        cacheImpl.put(key, value); // TODO: Support per-entry expiration
+        // Expiration is configured on the wrapped Caffeine cache; its Cache API has no
+        // per-write TTL/max-idle parameters to which these arguments could be delegated.
+        cacheImpl.put(key, value);
+
+        // close() marks the wrapper closed before invalidating the cache. A put can pass the
+        // initial check, pause, and then write after that invalidation. Recheck the volatile flag
+        // and remove such a late write so a closed wrapper cannot retain an entry. This keeps the
+        // normal path lock-free and avoids serializing concurrent puts on the close() monitor.
+        if (isClosed) {
+            cacheImpl.invalidate(key);
+            throw new IllegalStateException("This cache has been closed");
+        }
+
         putCount.increment();
 
         return true;
