@@ -333,6 +333,28 @@ public class CacheFactoryTest extends TestBase {
         }
     }
 
+    /**
+     * Regression: a key prefix that looks like {@code name:port} (e.g. {@code tenant:1}) must not be
+     * absorbed into the Redis Cluster seed list. Previously any {@code host:digits} token was treated
+     * as a seed node, silently dropping the prefix (and mis-assigning a trailing timeout).
+     */
+    @Test
+    public void testCreateCache_RedisCluster_keyPrefixLookingLikeHostPort_notAbsorbedAsSeed() throws ReflectiveOperationException {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+                MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1,5000)")) {
+                assertNotNull(cache);
+                assertTrue(cache instanceof DistributedCache);
+                assertEquals("10.0.0.1:7000", distributedClient(cache).serverUrl());
+
+                // The prefix must be applied to generated keys.
+                final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
+                prefixField.setAccessible(true);
+                assertEquals("tenant:1", prefixField.get(cache));
+            }
+        }
+    }
+
     // Validation: null/empty provider string
     @Test
     public void testCreateCache_EdgeCase_NullProvider() {

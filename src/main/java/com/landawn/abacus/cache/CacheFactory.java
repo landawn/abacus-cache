@@ -673,7 +673,32 @@ public final class CacheFactory {
             port = (port * 10) + ch - '0';
         }
 
-        return port > 0 && port <= 65535;
+        if (port <= 0 || port > 65535) {
+            return false;
+        }
+
+        // The host part must look like a network endpoint, not a common key-prefix form such as
+        // "tenant:1" or "db:2". Without this filter, those prefixes were absorbed into serverUrl and
+        // silently dropped as key prefixes (and a trailing timeout could be misread as the prefix).
+        final String host = parameter.substring(0, portSeparatorIndex);
+        final String hostLower = host.toLowerCase(java.util.Locale.ROOT);
+
+        if ("localhost".equals(hostLower) || host.indexOf('.') >= 0 || host.startsWith("[")) {
+            // IPv4 / FQDN / localhost / IPv6 literal
+            return true;
+        }
+
+        // Bare hostnames used in clusters often include a digit (redis-0, node1). Short alphabetic
+        // tokens (tenant, app, db, cache) are far more often key prefixes than seed hosts.
+        for (int i = 0; i < host.length(); i++) {
+            final char ch = host.charAt(i);
+
+            if (ch >= '0' && ch <= '9') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static String joinRedisClusterServerUrl(final String[] parameters, final int length) {

@@ -539,7 +539,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public boolean set(final String key, final T value, final long liveTime) {
         N.checkArgNotNull(key, "key");
-        return resultOf(mc.set(key, toMemcachedExpiration(liveTime), value));
+        return Boolean.TRUE.equals(resultOf(mc.set(key, toMemcachedExpiration(liveTime), value)));
     }
 
     /**
@@ -643,7 +643,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     public boolean add(final String key, final T value, final long liveTime) {
         N.checkArgNotNull(key, "key");
-        return resultOf(mc.add(key, toMemcachedExpiration(liveTime), value));
+        return Boolean.TRUE.equals(resultOf(mc.add(key, toMemcachedExpiration(liveTime), value)));
     }
 
     /**
@@ -746,7 +746,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      */
     public boolean replace(final String key, final T value, final long liveTime) {
         N.checkArgNotNull(key, "key");
-        return resultOf(mc.replace(key, toMemcachedExpiration(liveTime), value));
+        return Boolean.TRUE.equals(resultOf(mc.replace(key, toMemcachedExpiration(liveTime), value)));
     }
 
     /**
@@ -842,7 +842,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public boolean delete(final String key) {
         N.checkArgNotNull(key, "key");
-        return resultOf(mc.delete(key));
+        return Boolean.TRUE.equals(resultOf(mc.delete(key)));
     }
 
     /**
@@ -1499,7 +1499,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
         // ABSOLUTE Unix timestamps, not relative seconds. Sending a raw 40-day delay (3456000s)
         // would be read as an epoch time in Feb 1970 - i.e., flush (nearly) immediately instead
         // of in 40 days. toMemcachedExpiration() converts >30-day delays to now+delay timestamps.
-        return resultOf(mc.flush(toMemcachedExpiration(delay)));
+        return Boolean.TRUE.equals(resultOf(mc.flush(toMemcachedExpiration(delay))));
     }
 
     /**
