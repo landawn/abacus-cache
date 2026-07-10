@@ -34,7 +34,6 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
@@ -232,39 +231,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     // Must be a power of two so that (hash & (length - 1)) below is a valid, uniformly distributed index.
     private static final int STORE_KEY_LOCK_COUNT = 64;
     private final Object[] storeKeyLocks = new Object[STORE_KEY_LOCK_COUNT];
-    // Serializes compound per-key pool mutations: write-bytes-then-install in putToDisk, the
-    // remove-then-reinstall sequences in the disk-to-memory promotion and
-    // removeStaleStoreWrapperIfCurrent, remove(), and the memory-wrapper install in doPut.
-    // Without this, two such sequences for the same key can interleave so that a stale or
-    // non-owning wrapper ends up as the pool mapping while the pool destroys the wrapper that
-    // owns the disk bytes, silently losing an acknowledged write.
-    //
-    // Lock order: poolKeyLock -> _pool's internal lock -> storeKeyLock. The pool destroys
-    // replaced/expired/vacated wrappers while holding its internal lock, and
-    // StoreWrapper.destroy() acquires storeKeyLockFor(k) - so a storeKeyLock must NEVER be held
-    // across a _pool call (ABBA deadlock); sequences that span a store write and a pool install
-    // are serialized by poolKeyLock instead.
-    private final Object[] poolKeyLocks = new Object[STORE_KEY_LOCK_COUNT];
 
     {
         for (int i = 0; i < storeKeyLocks.length; i++) {
             storeKeyLocks[i] = new Object();
-            poolKeyLocks[i] = new Object();
         }
     }
-
-    // Ops take the read lock around any path that may touch native memory; close() takes the write
-    // lock so deallocate() cannot race with an in-flight copyToMemory/copyFromMemory (use-after-free).
-    private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
 
     private Object storeKeyLockFor(final K key) {
         // storeKeyLocks.length is a power of two, so masking with (length - 1) already yields a
         // non-negative index even when key.hashCode() is negative (it keeps only the low bits).
         return storeKeyLocks[key.hashCode() & (storeKeyLocks.length - 1)];
-    }
-
-    private Object poolKeyLockFor(final K key) {
-        return poolKeyLocks[key.hashCode() & (poolKeyLocks.length - 1)];
     }
 
     /**
@@ -583,19 +560,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public V getOrNull(final K key) {
         N.checkArgNotNull(key, "key");
 
-        lifecycleLock.readLock().lock();
-        try {
-            if (_pool.isClosed()) {
-                throw new IllegalStateException("This cache has been closed");
-            }
-
-            return doGetOrNull(key);
-        } finally {
-            lifecycleLock.readLock().unlock();
-        }
-    }
-
-    private V doGetOrNull(final K key) {
         final Wrapper<V> w = _pool.get(key);
 
         // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
@@ -730,50 +694,35 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                             // remove(key) here would destroy that newer entry and resurrect the
                             // (older) value we just read from disk - a lost update. This mirrors the
                             // "only if current" pattern in removeStaleStoreWrapperIfCurrent().
-                            //
-                            // The whole remove -> install/restore sequence runs under the per-key
-                            // pool lock so it cannot interleave with a concurrent putToDisk,
-                            // memory-wrapper install, or remove() for the same key: an unlocked
-                            // window here let the promotion replace (and pool-destroy) a wrapper a
-                            // concurrent put had just installed - deleting its freshly written disk
-                            // bytes while resurrecting the stale promoted value.
-                            synchronized (poolKeyLockFor(key)) {
-                                final Wrapper<V> removed = _pool.remove(key);
+                            final Wrapper<V> removed = _pool.remove(key);
 
-                                if (removed == storeWrapper) {
-                                    // Install the memory copy FIRST, then retire the disk wrapper.
-                                    // Destroying the store wrapper before a successful put permanently
-                                    // dropped the entry whenever the memory put then failed.
-                                    boolean result = false;
+                            if (removed == storeWrapper) {
+                                // Current entry is the disk wrapper we promoted from; retire it
+                                // (this removes the now-redundant on-disk bytes) and install the
+                                // in-memory copy.
+                                removed.destroy(Caller.REMOVE_REPLACE_CLEAR);
 
-                                    try {
-                                        result = _pool.put(key, slotWrapper);
-                                    } finally {
-                                        if (result) {
-                                            storeWrapper.destroy(Caller.REMOVE_REPLACE_CLEAR);
-                                        } else {
-                                            final boolean restored = _pool.put(key, storeWrapper);
+                                boolean result = false;
 
-                                            if (!restored) {
-                                                storeWrapper.destroy(Caller.PUT_ADD_FAILURE);
-                                            }
-
-                                            slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
-                                        }
+                                try {
+                                    result = _pool.put(key, slotWrapper);
+                                } finally {
+                                    if (!result) {
+                                        slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
                                     }
-                                } else {
-                                    // The mapping changed concurrently. Restore whatever is now current
-                                    // and discard the promoted slots instead of clobbering the newer entry.
-                                    if (removed != null) {
-                                        final boolean restored = _pool.put(key, removed);
-
-                                        if (!restored) {
-                                            removed.destroy(Caller.PUT_ADD_FAILURE);
-                                        }
-                                    }
-
-                                    slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
                                 }
+                            } else {
+                                // The mapping changed concurrently. Restore whatever is now current
+                                // and discard the promoted slots instead of clobbering the newer entry.
+                                if (removed != null) {
+                                    final boolean restored = _pool.put(key, removed);
+
+                                    if (!restored) {
+                                        removed.destroy(Caller.PUT_ADD_FAILURE);
+                                    }
+                                }
+
+                                slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
                             }
                         }
                     }
@@ -797,29 +746,24 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     private void removeStaleStoreWrapperIfCurrent(final K key, final StoreWrapper storeWrapper) {
-        // Serialized with same-key installs/promotions (see poolKeyLockFor): without this lock,
-        // the remove -> restore window below could replace (and pool-destroy) a wrapper a
-        // concurrent putToDisk just installed, deleting its disk bytes.
-        synchronized (poolKeyLockFor(key)) {
-            final Wrapper<V> removed = _pool.remove(key);
+        final Wrapper<V> removed = _pool.remove(key);
 
-            if (removed == null) {
-                return;
-            }
+        if (removed == null) {
+            return;
+        }
 
-            if (removed == storeWrapper) {
-                removed.destroy(Caller.REMOVE_REPLACE_CLEAR);
-                return;
-            }
+        if (removed == storeWrapper) {
+            removed.destroy(Caller.REMOVE_REPLACE_CLEAR);
+            return;
+        }
 
-            final boolean restored = _pool.put(key, removed);
+        final boolean restored = _pool.put(key, removed);
 
-            if (!restored) {
-                removed.destroy(Caller.PUT_ADD_FAILURE);
+        if (!restored) {
+            removed.destroy(Caller.PUT_ADD_FAILURE);
 
-                if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to restore off-heap cache entry after removing stale disk wrapper for key: " + key);
-                }
+            if (logger.isWarnEnabled()) {
+                logger.warn("Failed to restore off-heap cache entry after removing stale disk wrapper for key: " + key);
             }
         }
     }
@@ -848,26 +792,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+        // Must be checked before any slot allocation or native copy: close() frees the off-heap
+        // allocation via deallocate(), so a put() that reached copyToMemory(...) on a closed cache
+        // would write into freed native memory. Fail fast instead.
+        if (_pool.isClosed()) {
+            throw new IllegalStateException("This cache has been closed");
+        }
+
         N.checkArgNotNull(key, "key");
         N.checkArgNotNull(value, "value");
 
-        lifecycleLock.readLock().lock();
-        try {
-            // Must be checked before any slot allocation or native copy: close() frees the off-heap
-            // allocation via deallocate(), so a put() that reached copyToMemory(...) on a closed cache
-            // would write into freed native memory. Fail fast instead. The lifecycle read lock also
-            // prevents close() from deallocating while this put is mid-copy.
-            if (_pool.isClosed()) {
-                throw new IllegalStateException("This cache has been closed");
-            }
-
-            return doPut(key, value, liveTime, maxIdleTime);
-        } finally {
-            lifecycleLock.readLock().unlock();
-        }
-    }
-
-    private boolean doPut(final K key, final V value, final long liveTime, final long maxIdleTime) {
         // A non-positive liveTime/maxIdleTime means "no expiration" per the documented contract
         // (see Cache#put and the OffHeapCache/ForeignMemoryOffHeapCache Builder javadoc). The underlying
         // ActivityPrint rejects values <= 0 with IllegalArgumentException, so translate them to
@@ -916,7 +850,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         // Track whether memory allocation was attempted, so the vacate() decision after the
         // try block can distinguish between memory-pressure failures (where vacating makes
-        // sense) and disk-only failures (where vacating is pointless).
+        // sense) and disk-only failures (where vacating is pointless and would evict the
+        // prior entry that putToDisk just restored).
         boolean vacateOnNull = true;
 
         try {
@@ -1003,7 +938,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // exceptional one, so cleanup is unchanged; only the silent swallowing is removed.
         // Schedule a vacate only when memory was attempted and not available (i.e. the failure is
         // due to memory pressure). When the storeSelector forbids in-memory storage (disk-only mode)
-        // and the disk write fails, vacating memory is pointless.
+        // and the disk write fails, vacating memory is pointless and would evict the prior entry
+        // that putToDisk just restored, silently losing data on a transient disk error.
         if (w == null) {
             if (vacateOnNull) {
                 vacate();
@@ -1012,41 +948,37 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return false;
         }
 
-        // putToDisk already installed the StoreWrapper into the pool under the per-key store lock
-        // (claim + install are atomic). Do not put it again.
-        if (w.kind == Wrapper.KIND_STORE) {
-            writeCountToDisk.increment();
-
-            if (statsTimeOnDisk) {
-                synchronized (totalWriteToDiskTimeStats) {
-                    // Clamp to >= 0: a backward wall-clock adjustment (NTP/manual) mid-write can
-                    // make the elapsed time negative, which LongSummaryStatistics would carry into
-                    // stats() and make the non-negative MinMaxAvg constructor throw.
-                    totalWriteToDiskTimeStats.accept(Math.max(0L, System.currentTimeMillis() - startTime));
-                }
-            }
-
-            return true;
-        }
-
         boolean result = false;
+        final int wkind = w.kind;
 
         try {
-            totalOccupiedMemorySize.add(occupiedMemory);
+            if (wkind == Wrapper.KIND_SLOT || wkind == Wrapper.KIND_MULTI_SLOTS) {
+                totalOccupiedMemorySize.add(occupiedMemory);
 
-            // StoreWrapper already accounts for totalDataSize in its constructor; only memory
-            // wrappers need it added here (and their destroy() subtracts the matching amount).
-            totalDataSize.add(size);
-
-            // Serialized with same-key disk installs and promotions (see poolKeyLockFor): an
-            // unserialized install here could land inside a promotion's remove -> reinstall
-            // window and be replaced (pool-destroyed) by the stale restored value.
-            synchronized (poolKeyLockFor(key)) {
-                result = _pool.put(key, w);
+                // StoreWrapper already accounts for totalDataSize in its constructor; only memory
+                // wrappers need it added here (and their destroy() subtracts the matching amount).
+                totalDataSize.add(size);
             }
+
+            result = _pool.put(key, w);
         } finally {
             if (!result) {
+                // The pool rejected the wrapper; for a StoreWrapper this also removes the disk bytes
+                // that putToDisk just wrote. Since nothing was retained, do NOT count it toward the
+                // disk write stats — that keeps putCountToDisk consistent with putCount, which by
+                // contract excludes puts that fail before the wrapper is installed in the pool.
                 w.destroy(Caller.PUT_ADD_FAILURE);
+            } else if (wkind == Wrapper.KIND_STORE) {
+                writeCountToDisk.increment();
+
+                if (statsTimeOnDisk) {
+                    synchronized (totalWriteToDiskTimeStats) {
+                        // Clamp to >= 0: a backward wall-clock adjustment (NTP/manual) mid-write can
+                        // make the elapsed time negative, which LongSummaryStatistics would carry into
+                        // stats() and make the non-negative MinMaxAvg constructor throw.
+                        totalWriteToDiskTimeStats.accept(Math.max(0L, System.currentTimeMillis() - startTime));
+                    }
+                }
             }
         }
 
@@ -1060,18 +992,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * stored on disk. Delegates to {@code offHeapStore} for actual disk persistence and
      * creates a {@code StoreWrapper} to track the disk-stored value within the cache.
      *
-     * <p>Write, ownership claim, and pool install are serialized per key (via
-     * {@code poolKeyLockFor}) so concurrent same-key disk puts cannot leave a non-owning wrapper
-     * as the pool mapping while the surviving owner is destroyed (which previously deleted the
-     * survivor's disk bytes). A failed disk write returns before the pool is touched, so it never
-     * clobbers a concurrent successful put for the same key. (If the pool itself rejects the
-     * install - a rare condition such as the entry expiring during the put - the pool has already
-     * removed and destroyed the prior mapping as part of its own put; in that case the entry is
-     * lost and this method returns {@code null}.)
+     * <p>Before writing the new bytes, any existing wrapper at this key is removed from the
+     * pool and destroyed. This is required so that a prior {@code StoreWrapper}'s
+     * {@code destroy()} call invokes {@code offHeapStore.remove(k)} on the OLD bytes rather
+     * than wiping the NEW bytes that are about to be written. For memory-backed prior
+     * wrappers ({@code SlotWrapper} / {@code MultiSlotsWrapper}), this just releases their
+     * slots a moment earlier than the pool's own replace would. The prior wrapper's
+     * bookkeeping ({@code sizeOnDisk} / {@code dataSizeOnDisk} / {@code totalDataSize}) is
+     * decremented as part of the destroy.
      *
-     * <p>When this method returns non-{@code null}, the wrapper is already installed in the pool;
-     * the caller must not put it again. Disk-related statistics are updated in the
-     * {@code StoreWrapper} constructor ({@code sizeOnDisk}, {@code dataSizeOnDisk}, {@code totalDataSize}).
+     * <p>The new {@code StoreWrapper} maintains metadata about the disk-stored value including
+     * its type, size, expiration settings, and the key needed to retrieve it from the
+     * {@code offHeapStore}. Disk-related statistics are automatically updated when the wrapper
+     * is constructed ({@code sizeOnDisk}, {@code dataSizeOnDisk}, {@code totalDataSize}).
      *
      * <p>Thread safety: this method may be called concurrently from multiple threads during put
      * operations. The {@code offHeapStore} implementation must handle concurrent put operations safely.
@@ -1085,53 +1018,76 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *              the actual data size, so only the first {@code size} bytes are stored.
      * @param size the actual size of the serialized data in bytes. Must be positive and
      *             must not exceed the length of the {@code bytes} array.
-     * @return a {@code StoreWrapper} already installed in the pool if storage was successful,
-     *         or {@code null} if the {@code offHeapStore.put()} operation failed or the pool rejected the entry
+     * @return a {@code StoreWrapper} for the disk-stored value if storage was successful,
+     *         or {@code null} if the {@code offHeapStore.put()} operation failed
      */
     Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
-        // Always hand the store a private copy: `bytes` may alias a pooled serialization
-        // buffer that is recycled (and reused by other threads) right after this put, or the
-        // caller's own byte[]/ByteBuffer contents. The OffHeapStore contract leaves defensive
-        // copying implementation-specific, so a store that retains the array would otherwise
-        // see its contents silently change later.
-        final byte[] bytesToStore = N.copyOfRange(bytes, 0, size);
+        // Temporarily remove any prior wrapper at this key before writing disk bytes. On a
+        // successful disk write, the prior wrapper is retired before the new wrapper is installed.
+        // On a failed disk write, the prior wrapper is restored so a failed replacement does not
+        // silently delete the existing cache entry.
+        final Wrapper<V> prior = _pool.remove(k);
 
-        // The store is keyed by the cache key alone, so concurrent same-key spills must install
-        // into the pool in the same order they claim byte ownership; otherwise a non-surviving
-        // wrapper can end up as the pool mapping while the pool destroys the surviving owner,
-        // deleting its bytes and silently losing the entry. poolKeyLock serializes the whole
-        // write + claim + install sequence per key. The inner storeKeyLock guards only the
-        // (byte write, ownership claim) pair against StoreWrapper.destroy() and is released
-        // before the _pool.put: the pool destroys replaced wrappers under its internal lock and
-        // their destroy() re-acquires the storeKeyLock, so holding it across the install would
-        // form an ABBA deadlock with any pool operation that destroys a StoreWrapper.
-        synchronized (poolKeyLockFor(k)) {
-            final StoreWrapper storeWrapper;
+        final StoreWrapper storeWrapper;
 
+        try {
+            // Always hand the store a private copy: `bytes` may alias a pooled serialization
+            // buffer that is recycled (and reused by other threads) right after this put, or the
+            // caller's own byte[]/ByteBuffer contents. The OffHeapStore contract leaves defensive
+            // copying implementation-specific, so a store that retains the array would otherwise
+            // see its contents silently change later.
+            final byte[] bytesToStore = N.copyOfRange(bytes, 0, size);
+
+            // The store is keyed by the cache key alone, so the byte write and the ownership
+            // claim must be atomic per key: otherwise two concurrent spills of the same key can
+            // interleave such that the surviving wrapper points at bytes that the other thread's
+            // (later-destroyed) wrapper deletes, silently losing the entry.
             synchronized (storeKeyLockFor(k)) {
-                if (!offHeapStore.put(k, bytesToStore)) {
-                    return null;
+                if (offHeapStore.put(k, bytesToStore)) {
+                    storeWrapper = new StoreWrapper(type, liveTime, maxIdleTime, size, k);
+                    storeOwners.put(k, storeWrapper);
+                } else {
+                    storeWrapper = null;
                 }
-
-                storeWrapper = new StoreWrapper(type, liveTime, maxIdleTime, size, k);
-                storeOwners.put(k, storeWrapper);
             }
-
-            boolean installed = false;
-
+        } catch (final RuntimeException | Error e) {
             try {
-                // Pool put replaces any prior mapping. A prior StoreWrapper's destroy() will not
-                // delete disk bytes because it is no longer the registered owner (we claimed above).
-                installed = _pool.put(k, storeWrapper);
-            } finally {
-                if (!installed) {
-                    // Not retained in the pool: relinquish ownership and delete the bytes we just
-                    // wrote (destroy only removes while we still own).
-                    storeWrapper.destroy(Caller.PUT_ADD_FAILURE);
+                restorePriorAfterDiskWriteFailure(k, prior);
+            } catch (final RuntimeException | Error restoreFailure) {
+                e.addSuppressed(restoreFailure);
+            }
+
+            throw e;
+        }
+
+        if (storeWrapper != null) {
+            if (prior != null) {
+                if (prior.kind == Wrapper.KIND_STORE) {
+                    ((StoreWrapper) prior).discardReplacedStoreMetadata();
+                } else {
+                    prior.destroy(Caller.REMOVE_REPLACE_CLEAR);
                 }
             }
 
-            return installed ? storeWrapper : null;
+            return storeWrapper;
+        }
+
+        restorePriorAfterDiskWriteFailure(k, prior);
+
+        return null;
+    }
+
+    private void restorePriorAfterDiskWriteFailure(final K k, final Wrapper<V> prior) {
+        if (prior != null) {
+            final boolean restored = _pool.put(k, prior);
+
+            if (!restored) {
+                prior.destroy(Caller.PUT_ADD_FAILURE);
+
+                if (logger.isWarnEnabled()) {
+                    logger.warn("Failed to restore previous off-heap cache entry after disk write failure for key: " + k);
+                }
+            }
         }
     }
 
@@ -1329,19 +1285,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public void remove(final K key) {
         N.checkArgNotNull(key, "key");
 
-        lifecycleLock.readLock().lock();
-        try {
-            // Serialized with same-key installs/promotions (see poolKeyLockFor) so a promotion's
-            // remove -> reinstall window cannot resurrect an entry this remove just deleted.
-            synchronized (poolKeyLockFor(key)) {
-                final Wrapper<V> w = _pool.remove(key);
+        final Wrapper<V> w = _pool.remove(key);
 
-                if (w != null) {
-                    w.destroy(Caller.REMOVE_REPLACE_CLEAR);
-                }
-            }
-        } finally {
-            lifecycleLock.readLock().unlock();
+        if (w != null) {
+            w.destroy(Caller.REMOVE_REPLACE_CLEAR);
         }
     }
 
@@ -1386,13 +1333,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public void clear() {
-        lifecycleLock.readLock().lock();
-        try {
-            _pool.clear();
-            reclaimEmptySegments();
-        } finally {
-            lifecycleLock.readLock().unlock();
-        }
+        _pool.clear();
+        reclaimEmptySegments();
     }
 
     /**
@@ -1490,46 +1432,40 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * also invoked automatically by the registered shutdown hook during JVM shutdown.
      */
     @Override
-    public void close() {
-        // Write lock excludes concurrent put/get/remove that may still be touching native memory.
-        lifecycleLock.writeLock().lock();
-        try {
-            if (_pool.isClosed()) {
-                return;
-            }
+    public synchronized void close() {
+        if (_pool.isClosed()) {
+            return;
+        }
 
+        try {
+            if (scheduleFuture != null) {
+                scheduleFuture.cancel(true);
+            }
+        } finally {
             try {
-                if (scheduleFuture != null) {
-                    scheduleFuture.cancel(true);
+                if (shutdownHook != null) {
+                    try {
+                        Runtime.getRuntime().removeShutdownHook(shutdownHook);
+                        shutdownHook = null;
+                    } catch (final IllegalStateException e) {
+                        // Expected when close() is invoked from the shutdown hook itself (JVM already
+                        // shutting down); the hook will run anyway, so this is safe to ignore.
+                        if (logger.isDebugEnabled()) {
+                            logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
+                        }
+                    }
                 }
             } finally {
                 try {
-                    if (shutdownHook != null) {
-                        try {
-                            Runtime.getRuntime().removeShutdownHook(shutdownHook);
-                            shutdownHook = null;
-                        } catch (final IllegalStateException e) {
-                            // Expected when close() is invoked from the shutdown hook itself (JVM already
-                            // shutting down); the hook will run anyway, so this is safe to ignore.
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
-                            }
-                        }
-                    }
+                    _pool.close();
                 } finally {
                     try {
-                        _pool.close();
+                        deallocate();
                     } finally {
-                        try {
-                            deallocate();
-                        } finally {
-                            closeOffHeapStore();
-                        }
+                        closeOffHeapStore();
                     }
                 }
             }
-        } finally {
-            lifecycleLock.writeLock().unlock();
         }
     }
 
