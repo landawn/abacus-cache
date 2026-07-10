@@ -34,6 +34,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
@@ -243,6 +244,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // non-negative index even when key.hashCode() is negative (it keeps only the low bits).
         return storeKeyLocks[key.hashCode() & (storeKeyLocks.length - 1)];
     }
+
+    // Guards native memory against close(): writers of off-heap memory (put(), and the
+    // disk-to-memory promotion in getOrNull()) hold the read lock across their copyToMemory
+    // calls, and close() holds the write lock across deallocate(). Without it, a thread that
+    // passed the isClosed() fail-fast could still be mid-copy when close() frees the region -
+    // a use-after-free (SIGSEGV or silent corruption for the Unsafe-based subclass). Reads do
+    // not need it: SlotWrapper/MultiSlotsWrapper.read() hold the wrapper monitor for the whole
+    // copyFromMemory, and every destroy path (including _pool.close()) must acquire that same
+    // monitor first, so deallocate() can only run after in-flight reads finish.
+    private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
 
     /**
      * Constructs an {@code AbstractOffHeapCache} with the specified configuration.
@@ -510,7 +521,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                  base class as {@code arrayOffset}: an {@code Unsafe}-based implementation receives
      *                  an address-style offset that already includes the array base offset, whereas a
      *                  {@code MemorySegment}-based implementation receives a plain zero-based index.
-     * @param len the number of bytes to copy. Must be positive and must not exceed the
+     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the
      *            available space at the destination address.
      */
     protected abstract void copyToMemory(long startPtr, byte[] srcBytes, int srcOffset, int len);
@@ -536,7 +547,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                   base class as {@code arrayOffset}: an {@code Unsafe}-based implementation receives
      *                   an address-style offset that already includes the array base offset, whereas a
      *                   {@code MemorySegment}-based implementation receives a plain zero-based index.
-     * @param len the number of bytes to copy. Must be positive and must not exceed the
+     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the
      *            available space in the destination array starting from {@code destOffset}.
      */
     protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
@@ -562,7 +573,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         final Wrapper<V> w = _pool.get(key);
 
-        // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
+        // Dispatch on the int kind tag rather than instanceof: the wrapper types are generic
+        // inner classes, so instanceof/cast-based dispatch would need raw types and unchecked casts.
         if (w != null && w.kind == Wrapper.KIND_STORE) {
             final StoreWrapper storeWrapper = (StoreWrapper) w;
 
@@ -611,119 +623,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     final byte[] bytes = liveTime > 0 ? diskBytes : null;
 
                     if (bytes != null && bytes.length == size) {
-                        Slot slot = null;
-                        List<Slot> slots = null;
-                        // Must be long (not int): for a multi-slot promotion of a near-2GB value this
-                        // accumulates ceil(size/maxBlockSize) slot sizes and would overflow int to a
-                        // negative number, corrupting totalOccupiedMemorySize. Matches the put() path.
-                        long occupiedMemory = 0;
-                        Wrapper<V> slotWrapper = null;
-
+                        // The promotion copies into native memory (copyToMemory below), so it must
+                        // hold the lifecycle read lock like put() does - close() could otherwise
+                        // deallocate the region mid-copy. Promotion is an optimization: on a closed
+                        // (or closing) cache it is simply skipped and the value read from disk is
+                        // still returned.
+                        lifecycleLock.readLock().lock();
                         try {
-                            if (size <= _maxBlockSize) {
-                                slot = getAvailableSlot(size);
-
-                                if (slot != null) {
-                                    final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-
-                                    copyToMemory(slotStartPtr, bytes, _arrayOffset, size);
-
-                                    occupiedMemory = slot.segment.sizeOfSlot;
-
-                                    slotWrapper = new SlotWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slot, slotStartPtr);
-                                }
-                            } else {
-                                slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
-                                int copiedSize = 0;
-                                int srcOffset = _arrayOffset;
-
-                                while (copiedSize < size) {
-                                    final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
-                                    slot = getAvailableSlot(sizeToCopy);
-
-                                    if (slot == null) {
-                                        break;
-                                    }
-
-                                    final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-
-                                    copyToMemory(startPtr, bytes, srcOffset, sizeToCopy);
-
-                                    srcOffset += sizeToCopy;
-                                    copiedSize += sizeToCopy;
-
-                                    occupiedMemory += slot.segment.sizeOfSlot;
-                                    slots.add(slot);
-                                    // The slot now belongs to the list; null the loop variable so the
-                                    // cleanup below can never release the same slot twice (once via
-                                    // `slot`, once via `slots`) if a later step throws.
-                                    slot = null;
-                                }
-
-                                if (copiedSize == size) {
-                                    slotWrapper = new MultiSlotsWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slots);
-                                }
+                            if (!_pool.isClosed()) {
+                                promoteToMemory(key, storeWrapper, bytes, size, liveTime, maxIdleTime);
                             }
                         } finally {
-                            if (slotWrapper == null) {
-                                if (slot != null) {
-                                    slot.release();
-                                }
-
-                                if (slots != null) {
-                                    for (final Slot e : slots) {
-                                        e.release();
-                                    }
-                                }
-                            }
-                        }
-
-                        if (slotWrapper != null) {
-                            // Account for the promoted in-memory copy up front: every wrapper
-                            // destroy() unconditionally subtracts these amounts, so they must be
-                            // added on every path that may destroy the wrapper - including the
-                            // concurrent-replacement branch below, which previously subtracted
-                            // without a matching add and permanently skewed the accounting
-                            // (eventually driving the sums negative and making stats() throw).
-                            totalOccupiedMemorySize.add(occupiedMemory);
-                            totalDataSize.add(size);
-
-                            // Only promote when the disk-backed entry we read is still the current
-                            // mapping. A concurrent put()/remove() may have replaced it between the
-                            // _pool.get(key) at the top of this method and now; an unconditional
-                            // remove(key) here would destroy that newer entry and resurrect the
-                            // (older) value we just read from disk - a lost update. This mirrors the
-                            // "only if current" pattern in removeStaleStoreWrapperIfCurrent().
-                            final Wrapper<V> removed = _pool.remove(key);
-
-                            if (removed == storeWrapper) {
-                                // Current entry is the disk wrapper we promoted from; retire it
-                                // (this removes the now-redundant on-disk bytes) and install the
-                                // in-memory copy.
-                                removed.destroy(Caller.REMOVE_REPLACE_CLEAR);
-
-                                boolean result = false;
-
-                                try {
-                                    result = _pool.put(key, slotWrapper);
-                                } finally {
-                                    if (!result) {
-                                        slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
-                                    }
-                                }
-                            } else {
-                                // The mapping changed concurrently. Restore whatever is now current
-                                // and discard the promoted slots instead of clobbering the newer entry.
-                                if (removed != null) {
-                                    final boolean restored = _pool.put(key, removed);
-
-                                    if (!restored) {
-                                        removed.destroy(Caller.PUT_ADD_FAILURE);
-                                    }
-                                }
-
-                                slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
-                            }
+                            lifecycleLock.readLock().unlock();
                         }
                     }
                 }
@@ -742,6 +653,146 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
         } else {
             return w == null ? null : w.read();
+        }
+    }
+
+    /**
+     * Copies a value just read from disk into off-heap memory and, if the disk-backed wrapper is
+     * still the current pool mapping, replaces it with the in-memory copy. Called from
+     * {@link #getOrNull(Object)} under the lifecycle read lock. Failure to promote is never an
+     * error: the promoted slots are released and the disk-backed entry is left (or restored) as-is.
+     */
+    private void promoteToMemory(final K key, final StoreWrapper storeWrapper, final byte[] bytes, final int size, final long liveTime,
+            final long maxIdleTime) {
+        Slot slot = null;
+        List<Slot> slots = null;
+        // Must be long (not int): for a multi-slot promotion of a near-2GB value this
+        // accumulates ceil(size/maxBlockSize) slot sizes and would overflow int to a
+        // negative number, corrupting totalOccupiedMemorySize. Matches the put() path.
+        long occupiedMemory = 0;
+        Wrapper<V> slotWrapper = null;
+
+        try {
+            if (size <= _maxBlockSize) {
+                slot = getAvailableSlot(size);
+
+                if (slot != null) {
+                    final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
+
+                    copyToMemory(slotStartPtr, bytes, _arrayOffset, size);
+
+                    occupiedMemory = slot.segment.sizeOfSlot;
+
+                    slotWrapper = new SlotWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slot, slotStartPtr);
+                }
+            } else {
+                slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
+                int copiedSize = 0;
+                int srcOffset = _arrayOffset;
+
+                while (copiedSize < size) {
+                    final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
+                    slot = getAvailableSlot(sizeToCopy);
+
+                    if (slot == null) {
+                        break;
+                    }
+
+                    final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
+
+                    copyToMemory(startPtr, bytes, srcOffset, sizeToCopy);
+
+                    srcOffset += sizeToCopy;
+                    copiedSize += sizeToCopy;
+
+                    occupiedMemory += slot.segment.sizeOfSlot;
+                    slots.add(slot);
+                    // The slot now belongs to the list; null the loop variable so the
+                    // cleanup below can never release the same slot twice (once via
+                    // `slot`, once via `slots`) if a later step throws.
+                    slot = null;
+                }
+
+                if (copiedSize == size) {
+                    slotWrapper = new MultiSlotsWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slots);
+                }
+            }
+        } finally {
+            if (slotWrapper == null) {
+                if (slot != null) {
+                    slot.release();
+                }
+
+                if (slots != null) {
+                    for (final Slot e : slots) {
+                        e.release();
+                    }
+                }
+            }
+        }
+
+        if (slotWrapper != null) {
+            // Account for the promoted in-memory copy up front: every wrapper
+            // destroy() unconditionally subtracts these amounts, so they must be
+            // added on every path that may destroy the wrapper - including the
+            // concurrent-replacement branch below, which previously subtracted
+            // without a matching add and permanently skewed the accounting
+            // (eventually driving the sums negative and making stats() throw).
+            totalOccupiedMemorySize.add(occupiedMemory);
+            totalDataSize.add(size);
+
+            // Only promote when the disk-backed entry we read is still the current
+            // mapping. A concurrent put()/remove() may have replaced it between the
+            // _pool.get(key) at the top of getOrNull and now; an unconditional
+            // remove(key) here would destroy that newer entry and resurrect the
+            // (older) value we just read from disk - a lost update. This mirrors the
+            // "only if current" pattern in removeStaleStoreWrapperIfCurrent().
+            final Wrapper<V> removed = _pool.remove(key);
+
+            if (removed == storeWrapper) {
+                // Current entry is still the disk wrapper we promoted from. Install the
+                // in-memory copy FIRST, then retire the disk wrapper (which deletes the
+                // now-redundant on-disk bytes). Destroying the disk wrapper before a
+                // successful install used to permanently drop the entry whenever the
+                // subsequent pool put failed: the disk bytes were already gone and the
+                // promoted slots were discarded, so a stored-and-acknowledged value
+                // vanished without any operation reporting a failure.
+                boolean result = false;
+
+                try {
+                    result = _pool.put(key, slotWrapper);
+                } finally {
+                    if (result) {
+                        storeWrapper.destroy(Caller.REMOVE_REPLACE_CLEAR);
+                    } else {
+                        // Could not install the memory copy; put the disk wrapper back so
+                        // the entry survives, and discard the promoted slots.
+                        final boolean restored = _pool.put(key, storeWrapper);
+
+                        if (!restored) {
+                            storeWrapper.destroy(Caller.PUT_ADD_FAILURE);
+
+                            if (logger.isWarnEnabled()) {
+                                logger.warn("Failed to restore off-heap cache entry after a failed disk-to-memory promotion for key: " + key);
+                            }
+                        }
+
+                        slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
+                    }
+                }
+            } else {
+                // The mapping changed concurrently. Restore whatever is now current
+                // and discard the promoted slots instead of clobbering the newer entry.
+                if (removed != null) {
+                    final boolean restored = _pool.put(key, removed);
+
+                    if (!restored) {
+                        removed.destroy(Caller.PUT_ADD_FAILURE);
+                    }
+                }
+
+                slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
+            }
         }
     }
 
@@ -786,22 +837,34 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the time-to-live for this entry in milliseconds; values {@code <= 0} mean no expiration
      * @param maxIdleTime the maximum idle time for this entry in milliseconds; values {@code <= 0} mean no idle timeout
      * @return {@code true} if the value was successfully cached (in memory or on disk);
-     *         {@code false} otherwise
+     *         {@code false} otherwise. Note that a failed put that was replacing an existing
+     *         disk-spilled entry may leave the cache without either value: the replacement removes
+     *         the previous entry as part of the attempt, and when the disk bytes have already been
+     *         overwritten the previous value cannot be restored.
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
-        // Must be checked before any slot allocation or native copy: close() frees the off-heap
-        // allocation via deallocate(), so a put() that reached copyToMemory(...) on a closed cache
-        // would write into freed native memory. Fail fast instead.
-        if (_pool.isClosed()) {
-            throw new IllegalStateException("This cache has been closed");
-        }
-
         N.checkArgNotNull(key, "key");
         N.checkArgNotNull(value, "value");
 
+        // The lifecycle read lock (held for the whole put) keeps close() from deallocating the
+        // off-heap region while this put is mid-copy; the isClosed() check inside the lock is
+        // then a reliable fail-fast rather than a racy check-then-act.
+        lifecycleLock.readLock().lock();
+        try {
+            if (_pool.isClosed()) {
+                throw new IllegalStateException("This cache has been closed");
+            }
+
+            return doPut(key, value, liveTime, maxIdleTime);
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    private boolean doPut(final K key, final V value, final long liveTime, final long maxIdleTime) {
         // A non-positive liveTime/maxIdleTime means "no expiration" per the documented contract
         // (see Cache#put and the OffHeapCache/ForeignMemoryOffHeapCache Builder javadoc). The underlying
         // ActivityPrint rejects values <= 0 with IllegalArgumentException, so translate them to
@@ -916,7 +979,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         } finally {
             Objectory.recycle(os);
 
-            // Due to error:  cannot be safely cast to StoreWrapper/MultiSlotsWrapper
+            // Dispatch on the int kind tag rather than instanceof (see Wrapper.kind).
             if (w == null || w.kind == Wrapper.KIND_STORE) {
                 if (slot != null) {
                     slot.release();
@@ -965,8 +1028,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             if (!result) {
                 // The pool rejected the wrapper; for a StoreWrapper this also removes the disk bytes
                 // that putToDisk just wrote. Since nothing was retained, do NOT count it toward the
-                // disk write stats — that keeps putCountToDisk consistent with putCount, which by
-                // contract excludes puts that fail before the wrapper is installed in the pool.
+                // disk write stats (writeCountToDisk) — that keeps the disk-write count consistent
+                // with putCount, which by contract excludes puts that fail before the wrapper is
+                // installed in the pool.
                 w.destroy(Caller.PUT_ADD_FAILURE);
             } else if (wkind == Wrapper.KIND_STORE) {
                 writeCountToDisk.increment();
@@ -992,14 +1056,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * stored on disk. Delegates to {@code offHeapStore} for actual disk persistence and
      * creates a {@code StoreWrapper} to track the disk-stored value within the cache.
      *
-     * <p>Before writing the new bytes, any existing wrapper at this key is removed from the
-     * pool and destroyed. This is required so that a prior {@code StoreWrapper}'s
-     * {@code destroy()} call invokes {@code offHeapStore.remove(k)} on the OLD bytes rather
-     * than wiping the NEW bytes that are about to be written. For memory-backed prior
-     * wrappers ({@code SlotWrapper} / {@code MultiSlotsWrapper}), this just releases their
-     * slots a moment earlier than the pool's own replace would. The prior wrapper's
-     * bookkeeping ({@code sizeOnDisk} / {@code dataSizeOnDisk} / {@code totalDataSize}) is
-     * decremented as part of the destroy.
+     * <p>Protocol: any existing wrapper at this key is first removed from the pool. The byte
+     * write and the ownership claim (registration in {@code storeOwners}) then happen atomically
+     * under the per-key store lock, so a prior {@code StoreWrapper}'s later {@code destroy()}
+     * cannot delete the new bytes — it only removes store bytes while it is still the registered
+     * owner. On a successful write, a prior disk-backed wrapper has its metadata discarded
+     * without touching the store ({@code discardReplacedStoreMetadata()}), while a prior
+     * memory-backed wrapper is destroyed (releasing its slots); on a failed write, the prior
+     * wrapper is restored to the pool so a failed replacement does not silently delete the
+     * existing entry. The caller is responsible for installing the returned wrapper in the pool.
      *
      * <p>The new {@code StoreWrapper} maintains metadata about the disk-stored value including
      * its type, size, expiration settings, and the key needed to retrieve it from the
@@ -1433,39 +1498,48 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public synchronized void close() {
-        if (_pool.isClosed()) {
-            return;
-        }
+        // The lifecycle write lock excludes in-flight writers of native memory (put() and the
+        // disk-to-memory promotion hold the read lock across their copyToMemory calls), so
+        // deallocate() below can never free the region under a thread that is mid-copy.
+        lifecycleLock.writeLock().lock();
 
         try {
-            if (scheduleFuture != null) {
-                scheduleFuture.cancel(true);
+            if (_pool.isClosed()) {
+                return;
             }
-        } finally {
+
             try {
-                if (shutdownHook != null) {
-                    try {
-                        Runtime.getRuntime().removeShutdownHook(shutdownHook);
-                        shutdownHook = null;
-                    } catch (final IllegalStateException e) {
-                        // Expected when close() is invoked from the shutdown hook itself (JVM already
-                        // shutting down); the hook will run anyway, so this is safe to ignore.
-                        if (logger.isDebugEnabled()) {
-                            logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
-                        }
-                    }
+                if (scheduleFuture != null) {
+                    scheduleFuture.cancel(true);
                 }
             } finally {
                 try {
-                    _pool.close();
+                    if (shutdownHook != null) {
+                        try {
+                            Runtime.getRuntime().removeShutdownHook(shutdownHook);
+                            shutdownHook = null;
+                        } catch (final IllegalStateException e) {
+                            // Expected when close() is invoked from the shutdown hook itself (JVM already
+                            // shutting down); the hook will run anyway, so this is safe to ignore.
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
+                            }
+                        }
+                    }
                 } finally {
                     try {
-                        deallocate();
+                        _pool.close();
                     } finally {
-                        closeOffHeapStore();
+                        try {
+                            deallocate();
+                        } finally {
+                            closeOffHeapStore();
+                        }
                     }
                 }
             }
+        } finally {
+            lifecycleLock.writeLock().unlock();
         }
     }
 
@@ -1763,10 +1837,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         /** Discriminator: value stored on disk via {@link OffHeapStore}. */
         static final int KIND_STORE = 3;
 
-        // Final discriminator set once at construction. Used instead of
-        // getClass()/Class.equals(...) dispatch on the hot get/put paths (a
-        // generic inner-class instanceof here triggers unchecked-cast warnings,
-        // which is why an int tag is used rather than instanceof).
+        // Final discriminator set once at construction, used for dispatch on the hot get/put
+        // paths. An int tag is cheaper than getClass() comparisons, and because the wrapper
+        // types are generic inner classes, instanceof/cast-based dispatch would require raw
+        // types and unchecked casts - the tag keeps the dispatch cheap and warning-free.
         final int kind;
         final Type<T> type;
         final int size;
@@ -2032,28 +2106,39 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     return null; // Already destroyed by concurrent eviction
                 }
 
+                final K k = permanentKey;
+
                 // A newer wrapper for the same key may have replaced the bytes in the store (the
                 // store is keyed by the cache key alone). When this wrapper is no longer the
                 // registered owner, its recorded metadata no longer describes what the store
                 // holds: treat the entry as stale (a miss) instead of misreading the new bytes
                 // or throwing a spurious "data corruption" error on the size mismatch.
-                if (storeOwners.get(permanentKey) != this) {
-                    return null;
+                //
+                // The owner check and the store fetch must be atomic with respect to a concurrent
+                // same-key re-spill (putToDisk overwrites the bytes and claims ownership under this
+                // same per-key lock): without it, the bytes could be replaced between the check and
+                // the fetch, surfacing to a plain get() as a spurious "data corruption" exception -
+                // or, on a coincidental size match, as bytes of the wrong value. The lock order
+                // (wrapper monitor -> storeKeyLock) matches destroy(), so this cannot deadlock.
+                synchronized (storeKeyLockFor(k)) {
+                    if (storeOwners.get(k) != this) {
+                        return null;
+                    }
+
+                    final byte[] bytes = offHeapStore.get(k);
+
+                    if (bytes == null) {
+                        return null;
+                    }
+
+                    // should never happen: ownership is held and re-spills are excluded by the lock.
+                    if (bytes.length != size) {
+                        throw new IllegalStateException(
+                                "Failed to retrieve value: fetched size (" + bytes.length + " bytes) does not match expected size (" + size + " bytes)");
+                    }
+
+                    return bytes;
                 }
-
-                final byte[] bytes = offHeapStore.get(permanentKey);
-
-                if (bytes == null) {
-                    return null;
-                }
-
-                // should never happen.
-                if (bytes.length != size) {
-                    throw new IllegalStateException(
-                            "Failed to retrieve value: fetched size (" + bytes.length + " bytes) does not match expected size (" + size + " bytes)");
-                }
-
-                return bytes;
             }
         }
 

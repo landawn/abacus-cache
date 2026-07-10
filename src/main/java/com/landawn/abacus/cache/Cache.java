@@ -196,8 +196,8 @@ public interface Cache<K, V> extends Closeable {
      * <p><b>Expiration Semantics:</b>
      * <ul>
      * <li><b>liveTime (TTL):</b> Absolute expiration time from insertion. Entry is removed after this duration
-     *     regardless of access patterns. The exact handling of 0 / negative values is implementation-defined
-     *     (some implementations treat them as "no TTL", others reject them).</li>
+     *     regardless of access patterns. A value {@code <= 0} means "no TTL": all framework implementations
+     *     translate it to no expiration and never reject it, so {@code 0} can be passed portably.</li>
      * <li><b>maxIdleTime:</b> Expiration based on last access. Entry is removed if not accessed within this duration.
      *     <b>Not supported by all implementations</b> — distributed caches (e.g. Memcached, Redis) typically ignore
      *     this parameter. Check the implementing class's documentation.</li>
@@ -220,9 +220,10 @@ public interface Cache<K, V> extends Closeable {
      *
      * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
-     * @param liveTime the time-to-live in milliseconds from insertion; handling of {@code <= 0} is implementation-defined
-     * @param maxIdleTime the maximum idle time in milliseconds since last access; handling of {@code <= 0} is
-     *                    implementation-defined and the parameter may be ignored entirely by distributed caches
+     * @param liveTime the time-to-live in milliseconds from insertion; a value {@code <= 0} means "no TTL"
+     *                 and is never rejected by the framework implementations
+     * @param maxIdleTime the maximum idle time in milliseconds since last access; a value {@code <= 0} means
+     *                    "no idle timeout" and is never rejected; the parameter may be ignored entirely by distributed caches
      * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full or write failure;
      *         calling this method on a closed cache is implementation-defined and typically throws {@link IllegalStateException})
      * @see #put(Object, Object)
@@ -390,9 +391,10 @@ public interface Cache<K, V> extends Closeable {
      *
      * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
-     * @param liveTime the time-to-live in milliseconds from insertion; handling of {@code <= 0} is implementation-defined
-     * @param maxIdleTime the maximum idle time in milliseconds since last access; handling of {@code <= 0} is
-     *                    implementation-defined and the parameter may be ignored entirely by distributed caches
+     * @param liveTime the time-to-live in milliseconds from insertion; a value {@code <= 0} means "no TTL"
+     *                 and is never rejected by the framework implementations
+     * @param maxIdleTime the maximum idle time in milliseconds since last access; a value {@code <= 0} means
+     *                    "no idle timeout" and is never rejected; the parameter may be ignored entirely by distributed caches
      * @return a ContinuableFuture that completes with {@code true} on success, {@code false} otherwise.
      *         The future completes exceptionally if the underlying {@code put} call throws.
      * @see #put(Object, Object, long, long)

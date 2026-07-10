@@ -268,8 +268,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li><b>Open (Failing Fast):</b> When {@code failedCounter >= maxFailedNumForRetry} AND the time
      *     since the last failure is less than {@code retryDelay} milliseconds, this method returns
      *     {@code null} immediately without attempting cache access. Once the retry window elapses, ALL
-     *     subsequent reads attempt the cache again — there is no single-probe restriction, so a still-
-     *     unavailable cache may briefly cause a burst of failures before re-opening the circuit.</li>
+     *     subsequent reads attempt the cache again — there is no single-probe restriction, so a
+     *     still-unavailable cache may briefly cause a burst of failures before re-opening the circuit.</li>
      * </ul>
      *
      * <p><b>State Transitions:</b>

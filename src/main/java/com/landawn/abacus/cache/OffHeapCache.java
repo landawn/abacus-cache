@@ -55,9 +55,19 @@ import lombok.experimental.Accessors;
  * <ul>
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
- * <li>Requires JVM flags for Unsafe access (see class comment)</li>
+ * <li>Requires JVM flags for Unsafe access (see below)</li>
  * <li>Memory is allocated at startup and held until shutdown</li>
  * </ul>
+ *
+ * <p>Required JVM flags (for {@code sun.misc.Unsafe} access, plus the opens commonly needed by
+ * serialization libraries such as Kryo):
+ * <pre>
+ * --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
+ * --add-exports=java.base/sun.nio.ch=ALL-UNNAMED
+ * --add-opens=java.base/java.lang=ALL-UNNAMED
+ * --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+ * --add-opens=java.base/java.io=ALL-UNNAMED
+ * </pre>
  *
  * <p>Example usage:
  * <pre>{@code
@@ -345,7 +355,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
      *                  operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
      *                  to skip past the array header to the actual data. Must be non-negative.
-     * @param len the number of bytes to copy. Must be positive and must not exceed the available
+     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the available
      *            space at the destination address or the size of the source array from srcOffset.
      * @see #allocate(long)
      * @see #copyFromMemory(long, byte[], int, int)
@@ -379,7 +389,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param destOffset the byte offset within the destination array object in memory. For Unsafe-based
      *                   operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
      *                   to skip past the array header to the actual data. Must be non-negative.
-     * @param len the number of bytes to copy. Must be positive and must not exceed the available
+     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the available
      *            space in the destination array starting from destOffset.
      * @see #allocate(long)
      * @see #copyToMemory(long, byte[], int, int)

@@ -341,7 +341,7 @@ public class CacheFactoryTest extends TestBase {
     @Test
     public void testCreateCache_RedisCluster_keyPrefixLookingLikeHostPort_notAbsorbedAsSeed() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
-                MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+             MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
             try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1,5000)")) {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);

@@ -131,6 +131,12 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * }
      * }</pre>
      *
+     * <p><b>Round-trip contract:</b> the returned array must contain exactly the bytes passed to
+     * {@code put(key, value)} — same content and same length. Any compression or encoding applied by
+     * the implementation must be fully transparent (decoded before returning). The cache treats a
+     * length mismatch between the returned array and the size it recorded at put time as data
+     * corruption and fails the read with an exception rather than a cache miss.
+     *
      * @param key the key whose associated value is to be retrieved; must not be {@code null}
      * @return the stored byte array, or {@code null} if not found or an error occurs
      */

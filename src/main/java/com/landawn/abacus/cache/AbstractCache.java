@@ -404,7 +404,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Integer ttl = cache.getProperty("ttlSeconds");
      * ttl.intValue();                            // returns 60
      *
-     * // Edge: an unset property returns null ({@code null} is returned regardless of the inferred type {@code T}).
+     * // Edge: an unset property returns null (regardless of the inferred type T).
      * String missing = cache.getProperty("absent");  // returns null
      * }</pre>
      *

@@ -416,8 +416,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        cacheImpl.invalidateAll();
+        // Flip the flag BEFORE invalidating so a concurrent put that has not yet passed
+        // assertNotClosed() fails fast instead of inserting an entry after the invalidation
+        // (which would leave a "closed" wrapper still strongly referencing that entry).
         isClosed = true;
+        cacheImpl.invalidateAll();
     }
 
     /**
@@ -466,8 +469,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>This method does not check whether the cache has been closed.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and returns a consistent snapshot
-     * of statistics at the time of invocation.
+     * <p><b>Thread Safety:</b> This method is thread-safe and returns a point-in-time snapshot;
+     * the individual counters are sampled non-atomically and may be transiently inconsistent
+     * with each other under concurrent activity.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -505,8 +509,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Statistics are only meaningful if the underlying cache was built with {@code recordStats()};
      * otherwise all counters are zero. This method does not check whether the cache has been closed.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe and returns a consistent snapshot
-     * of statistics at the time of invocation.
+     * <p><b>Thread Safety:</b> This method is thread-safe and returns a point-in-time snapshot;
+     * Caffeine documents that the counters are read non-atomically and may be transiently
+     * inconsistent with each other under concurrent activity.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

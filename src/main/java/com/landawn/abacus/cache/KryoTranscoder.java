@@ -31,9 +31,15 @@ import net.spy.memcached.transcoders.Transcoder;
  * <ul>
  * <li>Faster serialization/deserialization.</li>
  * <li>Smaller serialized data size.</li>
- * <li>Support for circular references.</li>
  * <li>No requirement for the {@link java.io.Serializable} interface.</li>
  * </ul>
+ *
+ * <p><b>Circular references are NOT supported by default:</b> the default {@link KryoParser}
+ * creates its Kryo instances with reference tracking disabled (Kryo's default), so encoding an
+ * object graph with a cycle (e.g., a bidirectional parent/child link) recurses until
+ * {@link StackOverflowError}, and even acyclic shared references are duplicated in the payload
+ * (object identity is not preserved on decode). Only cache value types whose object graphs are
+ * trees, or supply a {@code KryoParser} configured with Kryo reference tracking enabled.
  *
  * <p><b>Thread Safety:</b> This class is thread-safe. Concurrency safety is delegated to the
  * underlying shared {@link KryoParser}, which internally pools Kryo/Output/Input instances.
@@ -264,8 +270,10 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     /**
      * Decodes cached data back into an object using Kryo deserialization.
      * Reconstructs the original object from its serialized byte-array representation. Supports
-     * any object type that Kryo can handle, including complex object graphs with nested structures
-     * and circular references.
+     * any object type that Kryo can handle, including complex object graphs with nested
+     * structures — but not circular references with the default parser (see the class-level note:
+     * reference tracking is disabled by default, so cyclic graphs fail at encode time and shared
+     * references are duplicated rather than preserved).
      *
      * <p>This method is thread-safe. The underlying {@link KryoParser} maintains internal pools of
      * Kryo/Output/Input instances guarded by internal locks rather than {@code ThreadLocal}; it is

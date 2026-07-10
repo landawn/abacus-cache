@@ -460,6 +460,17 @@ public final class CacheFactory {
      * <li>{@code com.example.CustomCache(params...)} - Custom implementation with fully qualified class name</li>
      * </ul>
      *
+     * <p><b>RedisCluster seed-node vs. key-prefix disambiguation:</b> because the cluster seed list may itself
+     * be comma-separated (e.g. {@code RedisCluster(host1:7000,host2:7000,myPrefix:,3000)}), consecutive
+     * parameters after the first are treated as additional seed nodes as long as they look like network
+     * endpoints: {@code host:port} with a port in 1-65535 and a host that is {@code localhost}, contains a dot,
+     * is a bracketed IPv6 literal, or contains a digit (e.g. {@code redis-0:7000}). The first parameter that
+     * does not look like an endpoint becomes the key prefix. A purely alphabetic bare hostname such as
+     * {@code valkey:7000} is therefore classified as a key prefix, and a digit-bearing prefix such as
+     * {@code v2:1} as a seed node - when in doubt, put ALL seed nodes space-separated in the FIRST parameter
+     * (like the Memcached/Redis forms), e.g. {@code RedisCluster(redis:7000 valkey:7000,myPrefix:,3000)},
+     * which is always parsed as a single seed list and is never ambiguous.
+     *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Memcached with single server and default timeout; the result is a DistributedCache
@@ -563,9 +574,9 @@ public final class CacheFactory {
                 if (parameters.length == 1) {
                     return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT));
                 } else if (parameters.length == 2) {
-                    return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
+                    return newDistributedCacheOrDisconnect(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
                 } else if (parameters.length == 3) {
-                    return new DistributedCache<>(new SpyMemcached<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
+                    return newDistributedCacheOrDisconnect(new SpyMemcached<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
                 } else {
                     throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
                 }
@@ -573,9 +584,9 @@ public final class CacheFactory {
                 if (parameters.length == 1) {
                     return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT));
                 } else if (parameters.length == 2) {
-                    return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
+                    return newDistributedCacheOrDisconnect(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
                 } else if (parameters.length == 3) {
-                    return new DistributedCache<>(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
+                    return newDistributedCacheOrDisconnect(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
                 } else {
                     throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
                 }
@@ -585,7 +596,7 @@ public final class CacheFactory {
                 if (redisClusterParameters.keyPrefix == null) {
                     return new DistributedCache<>(new JRedisCluster<>(redisClusterParameters.serverUrl, redisClusterParameters.timeout));
                 } else {
-                    return new DistributedCache<>(new JRedisCluster<>(redisClusterParameters.serverUrl, redisClusterParameters.timeout),
+                    return newDistributedCacheOrDisconnect(new JRedisCluster<>(redisClusterParameters.serverUrl, redisClusterParameters.timeout),
                             redisClusterParameters.keyPrefix);
                 }
             }
@@ -624,8 +635,31 @@ public final class CacheFactory {
     }
 
     /**
+     * Wraps {@code new DistributedCache<>(client, keyPrefix)} so that a rejected key prefix does not
+     * leak the already-connected client. The client is constructed eagerly ({@code SpyMemcached}
+     * spawns its IO thread, {@code JRedisCluster} discovers cluster topology), but the key prefix is
+     * validated inside the {@code DistributedCache} constructor - without this cleanup, an invalid
+     * prefix (e.g. one containing a space) would leave a live client thread/socket behind with no
+     * handle to shut it down, leaking one client per attempt in a configuration-retry loop.
+     */
+    private static <K, V> DistributedCache<K, V> newDistributedCacheOrDisconnect(final DistributedCacheClient<V> client, final String keyPrefix) {
+        try {
+            return new DistributedCache<>(client, keyPrefix);
+        } catch (final RuntimeException | Error e) {
+            try {
+                client.disconnect();
+            } catch (final RuntimeException | Error disconnectFailure) {
+                e.addSuppressed(disconnectFailure);
+            }
+
+            throw e;
+        }
+    }
+
+    /**
      * RedisCluster serverUrl itself is a comma-separated host:port seed list, so split provider
-     * parameters that still look like Redis nodes belong to serverUrl rather than keyPrefix.
+     * parameters that still look like Redis cluster nodes are treated as part of serverUrl rather
+     * than as the keyPrefix.
      */
     private static RedisClusterParameters parseRedisClusterParameters(final String[] parameters) {
         int keyPrefixIndex = -1;
@@ -642,7 +676,10 @@ public final class CacheFactory {
         }
 
         if (keyPrefixIndex < parameters.length - 2) {
-            throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+            throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters)
+                    + ". For RedisCluster the layout is (seedNodes...,keyPrefix,timeout): the first parameter that does not look like a host:port endpoint"
+                    + " ends the seed list and is taken as the key prefix. To avoid ambiguity, put all seed nodes space-separated in the first parameter,"
+                    + " e.g. RedisCluster(host1:7000 host2:7000,myPrefix:,3000)");
         }
 
         final long timeout = keyPrefixIndex == parameters.length - 2 ? parseTimeoutParameter(parameters[keyPrefixIndex + 1]) : DEFAULT_TIMEOUT;
@@ -671,19 +708,24 @@ public final class CacheFactory {
             }
 
             port = (port * 10) + ch - '0';
+
+            // Early exit also prevents a pathological digit run from overflowing past 2^64 and
+            // wrapping back into the valid range (e.g. "p:18446744073709551617" wraps to exactly 1).
+            if (port > 65535) {
+                return false;
+            }
         }
 
-        if (port <= 0 || port > 65535) {
+        if (port <= 0) {
             return false;
         }
 
         // The host part must look like a network endpoint, not a common key-prefix form such as
-        // "tenant:1" or "db:2". Without this filter, those prefixes were absorbed into serverUrl and
-        // silently dropped as key prefixes (and a trailing timeout could be misread as the prefix).
+        // "tenant:1" or "db:2". Without this filter, such a prefix was absorbed into serverUrl and
+        // the intended key prefix was silently dropped.
         final String host = parameter.substring(0, portSeparatorIndex);
-        final String hostLower = host.toLowerCase(java.util.Locale.ROOT);
 
-        if ("localhost".equals(hostLower) || host.indexOf('.') >= 0 || host.startsWith("[")) {
+        if ("localhost".equalsIgnoreCase(host) || host.indexOf('.') >= 0 || host.startsWith("[")) {
             // IPv4 / FQDN / localhost / IPv6 literal
             return true;
         }

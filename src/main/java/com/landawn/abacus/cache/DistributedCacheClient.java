@@ -239,7 +239,7 @@ public interface DistributedCacheClient<T> {
      * The exact meaning of the return value is implementation-specific:
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns the server's acknowledgement of the delete
-     *     operation. Typically returns {@code false} when the key did not exist.</li>
+     *     operation. Returns {@code false} when the key did not exist.</li>
      * <li><b>Redis (JRedis):</b> Returns {@code true} when the key existed and was removed,
      *     {@code false} when the key did not exist (based on the count returned by the DEL command).</li>
      * </ul>
@@ -391,17 +391,20 @@ public interface DistributedCacheClient<T> {
      *     throw new RateLimitException("Rate limit exceeded");
      * }
      *
-     * // Inventory management
+     * // Inventory management. Branch on == -1 (key never seeded) and == 0 (depleted): on
+     * // Memcached the result is never negative (clamped at 0), so a "< 0" guard would never fire.
      * long stock = client.decr("product:stock:123");
-     * if (stock < 0) {
-     *     // Handle out of stock
-     *     client.incr("product:stock:123");   // Revert
+     * if (stock == -1) {
+     *     throw new IllegalStateException("Stock counter was never seeded");   // Memcached: absent key
+     * } else if (stock == 0) {
+     *     // Depleted; on Memcached this also fires when an already-zero counter was clamped
      *     throw new OutOfStockException();
      * }
      *
-     * // Download counter
+     * // Download counter: seed the counter at (limit + 1) so that "> 0" cleanly means "allowed".
+     * // Decrementing an exhausted (0) counter stays 0 on Memcached (clamped), so it remains denied.
      * long remaining = client.decr("downloads:remaining:" + userId);
-     * if (remaining >= 0) {
+     * if (remaining > 0) {
      *     processDownload();
      * }
      * }</pre>
@@ -435,14 +438,17 @@ public interface DistributedCacheClient<T> {
      * long inventory = client.decr("product:stock:456", 5);
      * System.out.println("Remaining inventory: " + inventory);
      *
-     * // API quota management
+     * // API quota management. Note the guards below are written for Redis semantics (negative
+     * // results allowed). On Memcached the result is clamped at 0 and never negative, so a
+     * // multi-unit decrement CANNOT detect "not enough quota left" this way - seed the counter
+     * // and treat 0 as exhausted instead (see the single-decrement example on decr(String)).
      * int requestCost = calculateCost(request);
-     * long quotaRemaining = client.decr("quota:" + apiKey, requestCost);
+     * long quotaRemaining = client.decr("quota:" + apiKey, requestCost);   // Redis-style guard below
      * if (quotaRemaining < 0) {
      *     throw new QuotaExceededException();
      * }
      *
-     * // Reservation system
+     * // Reservation system (Redis semantics: a negative result reveals over-reservation)
      * long availableSeats = client.decr("event:seats:789", numberOfTickets);
      * if (availableSeats < 0) {
      *     // Revert the decrement
@@ -450,9 +456,12 @@ public interface DistributedCacheClient<T> {
      *     throw new NotEnoughSeatsException();
      * }
      *
-     * // Resource pool management
+     * // Resource pool management: seed the counter at (poolSize + 1) and use a strict "> 0"
+     * // guard - it is portable across both backends. On Memcached, decrementing an exhausted (0)
+     * // counter stays 0 (clamped), so a ">= 0" guard would hand out connections forever once
+     * // the pool hit zero.
      * long availableConnections = client.decr("pool:connections", 1);
-     * if (availableConnections >= 0) {
+     * if (availableConnections > 0) {
      *     return acquireConnection();
      * }
      * }</pre>
@@ -540,9 +549,12 @@ public interface DistributedCacheClient<T> {
      * }
      *
      * // Try-with-resources pattern via an AutoCloseable adapter
+     * // (AutoCloseable.close() declares checked Exception, so a catch clause is required)
      * try (AutoCloseable closeable = client::disconnect) {
      *     client.set("key", value, 3600000);
      *     // Client will be disconnected automatically when the block exits
+     * } catch (Exception e) {
+     *     logger.warn("Failed to disconnect cache client", e);
      * }
      *
      * // Application shutdown hook

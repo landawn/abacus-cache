@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2025, Haiyang Li.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.landawn.abacus.cache;
 
 import java.util.Collections;
@@ -26,7 +42,9 @@ import java.util.Objects;
  * <li>Put metrics: {@code putCount} counts successful inserts into the pool (both memory- and
  *     disk-resident wrappers go through the same pool). Failed put attempts (e.g., wrapper allocation
  *     failed before reaching the pool) are not included. As an approximate identity,
- *     {@code putCount} &asymp; {@code size + evictionCount + evictionCountFromDisk + removed/replaced entries}.</li>
+ *     {@code putCount} &asymp; {@code size + evictionCount + removed/replaced entries}
+ *     (note that {@code evictionCountFromDisk} is already included in {@code evictionCount};
+ *     it is the disk-resident subset, not an additional count).</li>
  * </ul>
  *
  * <p><b>Usage Examples:</b>
@@ -50,11 +68,13 @@ import java.util.Objects;
  * System.out.println("Disk write avg time: " + stats.writeToDiskTimeStats().avg() + "ms");
  * System.out.println("Disk read avg time: " + stats.readFromDiskTimeStats().avg() + "ms");
  *
- * // Fragmentation analysis (compare in-memory occupancy against the in-memory data size)
+ * // Fragmentation analysis (compare in-memory occupancy against the in-memory data size).
+ * // The ratio is >= 1.0 (slots are rounded up to 64-byte multiples); the overhead is the
+ * // part above 1.0 - e.g. a ratio of 1.2 means 20% overhead.
  * long inMemoryDataSize = stats.dataSize() - stats.dataSizeOnDisk();
- * double overhead = inMemoryDataSize == 0 ? 0.0
+ * double occupancyRatio = inMemoryDataSize == 0 ? 1.0
  *         : (double) stats.occupiedMemory() / inMemoryDataSize;
- * System.out.println("Memory overhead: " + (overhead * 100) + "%");
+ * System.out.println("Memory overhead: " + ((occupancyRatio - 1) * 100) + "%");
  * }</pre>
  *
  * @param capacity the configured upper bound on the number of in-memory entries the underlying keyed object
@@ -122,7 +142,8 @@ import java.util.Objects;
  *                    fixed-size segments (typically 1MB = 1048576 bytes) to manage memory allocation
  *                    and reduce fragmentation.
  * @param occupiedSlots a detailed map showing memory slot occupation across segments. The outer map's key
- *                      is the slot size in bytes (e.g., 64, 128, 256, 512, 1024, 2048, 4096, 8192), and
+ *                      is the slot size in bytes - any multiple of the 64-byte minimum block size up to
+ *                      {@code maxBlockSize} (e.g., 64, 128, 192, 256, 320, ...), not only powers of two - and
  *                      the inner map contains segment index as key and the number of occupied slots in
  *                      that segment as value. This provides granular visibility into memory fragmentation
  *                      and utilization patterns.
@@ -276,9 +297,9 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      */
     public record MinMaxAvg(double min, double max, double avg) {
         /**
-         * Canonical constructor that validates the values are non-negative. The tracked metric
-         * (disk I/O timing in milliseconds) can never be negative, so a negative value indicates a
-         * programming error.
+         * Canonical constructor that validates the values are non-negative and finite. The tracked
+         * metric (disk I/O timing in milliseconds) can never be negative, NaN, or infinite, so any
+         * such value indicates a programming error.
          *
          * @throws IllegalArgumentException if {@code min}, {@code max}, or {@code avg} is negative, NaN, or infinite
          */

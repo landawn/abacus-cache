@@ -333,7 +333,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @return the value after increment (will be 1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
+     * @throws RuntimeException if a network error or timeout occurs, or if the key contains a non-integer value
      * @see #incr(String, long)
      * @see #decr(String)
      */
@@ -369,7 +369,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *              SpyMemcached, which also rejects negative deltas).
      * @return the value after increment (will be equal to delta if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
-     * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
+     * @throws RuntimeException if a network error or timeout occurs, or if the key contains a non-integer value
      * @see #incr(String)
      * @see #decr(String, long)
      */
@@ -404,7 +404,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
+     * @throws RuntimeException if a network error or timeout occurs, or if the key contains a non-integer value
      * @see #decr(String, long)
      * @see #incr(String)
      */
@@ -442,7 +442,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
      *         if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
-     * @throws RuntimeException if a network error, timeout occurs, or if the key contains a non-integer value
+     * @throws RuntimeException if a network error or timeout occurs, or if the key contains a non-integer value
      * @see #decr(String)
      * @see #incr(String, long)
      */

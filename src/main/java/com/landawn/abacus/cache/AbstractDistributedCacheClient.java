@@ -38,7 +38,7 @@ import com.landawn.abacus.util.N;
  * <li>Stores and provides access to server URL(s)</li>
  * <li>Default implementations for optional operations (getBulk, flushAll)</li>
  * <li>Utility method for time conversion (milliseconds to seconds)</li>
- * <li>Template method pattern for consistent behavior across implementations</li>
+ * <li>Shared validation and conversion utilities for consistent behavior across implementations</li>
  * </ul>
  *
  * <p>Subclasses must implement the following abstract methods:

@@ -34,7 +34,9 @@ import com.landawn.abacus.util.function.TriPredicate;
 import lombok.Data;
 import lombok.experimental.Accessors;
 
-//--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
+// Flags for serialization libraries (e.g. Kryo) only - unlike OffHeapCache, this class itself needs no
+// --add-exports=jdk.unsupported/sun.misc flag (it uses the Foreign Memory API instead of Unsafe):
+//--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED
 
 /**
  * A modern off-heap cache implementation using Java's Foreign Function &amp; Memory API.
@@ -47,7 +49,8 @@ import lombok.experimental.Accessors;
  * <li>Uses the Foreign Memory API instead of {@code Unsafe}</li>
  * <li>Automatic memory management via {@link Arena}</li>
  * <li>Type-safe memory access via {@link MemorySegment}</li>
- * <li>Comparable performance to an {@code Unsafe}-based implementation</li>
+ * <li>Comparable steady-state (get/put) performance to an {@code Unsafe}-based implementation;
+ *     construction differs - see the startup-cost note on {@code allocate}</li>
  * <li>Better compatibility with future Java versions</li>
  * </ul>
  *
@@ -266,6 +269,12 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * <p>The memory is allocated from the native heap and is not managed by the Java garbage collector.
      * This reduces GC pressure but requires explicit release via {@link #deallocate()} to avoid leaks.
      *
+     * <p><b>Startup cost:</b> unlike {@code OffHeapCache}'s {@code Unsafe.allocateMemory} (uninitialized,
+     * near-instant), {@link Arena#allocate(long)} zero-initializes the entire segment, so construction is
+     * O(capacity) in time and commits every page immediately (full RSS up-front). For very large caches
+     * (tens of GB) expect a construction stall of seconds; steady-state get/put performance is unaffected.
+     * The public FFM API offers no non-zeroing allocation, so this cost is inherent to this implementation.
+     *
      * @param capacityInBytes the number of bytes to allocate. Must be positive. This is typically a multiple
      *                        of {@code SEGMENT_SIZE} (1,048,576 bytes).
      * @return the base address of the allocated {@link MemorySegment}, as reported by
@@ -344,7 +353,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *              to hold the copied data.
      * @param destOffset the index of the first byte in {@code bytes} to write to (zero-based; no array
      *                   header offset is applied by this implementation).
-     * @param len the number of bytes to copy. Must be positive and must not exceed the available
+     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the available
      *            space in the destination array starting from {@code destOffset}.
      * @throws IndexOutOfBoundsException if the computed segment offset or {@code len} falls outside the
      *                                   bounds of the memory segment or the destination array
@@ -376,7 +385,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @param srcBytes the source byte array from which to copy data. Must not be {@code null}.
      * @param srcOffset the index of the first byte in {@code srcBytes} to read (zero-based; no array
      *                  header offset is applied by this implementation).
-     * @param len the number of bytes to copy. Must be positive and must not exceed the available
+     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the available
      *            space at the destination address or the size of the source array.
      * @throws IndexOutOfBoundsException if the computed segment offset or {@code len} falls outside the
      *                                   bounds of the memory segment or the source array

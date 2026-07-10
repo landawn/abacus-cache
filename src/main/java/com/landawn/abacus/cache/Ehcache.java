@@ -102,7 +102,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Cache<String, User> ehcache = cacheManager.getCache("userCache", String.class, User.class);
      *
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);   // wraps the Ehcache instance
-     * boolean open = cache.isClosed();                        // returns false (freshly created)
+     * boolean closed = cache.isClosed();                      // returns false (freshly created)
      *
      * new Ehcache<>((Cache<String, User>) null);              // throws IllegalArgumentException (null cache)
      * }</pre>
@@ -602,7 +602,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
-     * boolean open = cache.isClosed();     // returns false (freshly created)
+     * boolean closed = cache.isClosed();   // returns false (freshly created)
      * if (!cache.isClosed()) {
      *     User user = cache.getOrNull("userId123");   // safe to use while the cache is open
      * }

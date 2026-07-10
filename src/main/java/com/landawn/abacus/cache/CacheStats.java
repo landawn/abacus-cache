@@ -99,7 +99,8 @@ package com.landawn.abacus.cache;
  *                 including both insertions of new entries and updates of existing entries. Must be non-negative.
  * @param getCount the total cumulative number of get operations attempted since cache creation,
  *                 regardless of whether the operation resulted in a hit or miss. Must be non-negative.
- *                 This should equal {@code hitCount + missCount}.
+ *                 Normally equals {@code hitCount + missCount}, but the relationship is not
+ *                 enforced because the counters are sampled non-atomically.
  * @param hitCount the number of get operations that successfully found and returned a cached value.
  *                 Must be non-negative. Under normal conditions this does not exceed {@code getCount},
  *                 but the relationship is not enforced because the counters are sampled non-atomically.

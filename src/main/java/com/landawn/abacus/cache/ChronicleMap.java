@@ -42,8 +42,8 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * Cache<String, String> map = new ChronicleMap<>();   // capacity 1024, 60s eviction delay
-     * map.stats().capacity();                             // returns 1024 (default capacity)
+     * ChronicleMap<String, String> map = new ChronicleMap<>();   // capacity 1024, 60s eviction delay
+     * map.stats().capacity();                                    // returns 1024 (default capacity)
      * map.isClosed();                                     // returns false (freshly created)
      * map.put("k", "v");                                  // returns true (stored with default 3h TTL / 30min idle)
      * String value = map.getOrNull("k");                  // returns "v"
@@ -63,8 +63,8 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * Cache<String, Integer> map = new ChronicleMap<>(1_024, 60_000L);   // capacity 1024, 60s eviction delay
-     * map.stats().capacity();                                            // returns 1024 (capacity reflected in stats)
+     * ChronicleMap<String, Integer> map = new ChronicleMap<>(1_024, 60_000L);   // capacity 1024, 60s eviction delay
+     * map.stats().capacity();                                                   // returns 1024 (capacity reflected in stats)
      * map.put("count", 42);                                              // returns true (uses default 3h TTL / 30min idle)
      * map.getOrNull("count");                                            // returns 42
      *
@@ -94,7 +94,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // capacity 2048, 30s eviction delay, 1h TTL, 5min idle (the per-cache defaults for put(key, value))
-     * Cache<String, String> map = new ChronicleMap<>(2_048, 30_000L, 3_600_000L, 300_000L);
+     * ChronicleMap<String, String> map = new ChronicleMap<>(2_048, 30_000L, 3_600_000L, 300_000L);
      * map.stats().capacity();                       // returns 2048 (capacity reflected in stats)
      *
      * // Per-entry overrides win over the constructor defaults.

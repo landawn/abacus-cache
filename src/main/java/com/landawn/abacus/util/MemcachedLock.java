@@ -399,7 +399,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * }</pre>
      *
      * @param target the target resource whose associated lock value is to be retrieved (must not be null)
-     * @return the value associated with the lock, or {@code null} if not locked or stores an empty byte array
+     * @return the value associated with the lock, or {@code null} if the target is not locked
+     *         or if the lock stores an empty byte array
      * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
@@ -526,9 +527,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <p>Like {@link #unlock(Object)}, this method deletes the key unconditionally and performs
      * <b>no ownership verification</b> — see that method for the full discussion of the associated
      * race. The only behavioral difference is error handling: {@code unlock} propagates a
-     * communication failure as a {@link RuntimeException}, whereas this method swallows it (and any
-     * key-rejection error) and returns {@code false}. A {@code null} target is still rejected, because
-     * that is a deterministic programming error rather than a transient failure.
+     * communication failure as a {@link RuntimeException}, whereas this method swallows it and
+     * returns {@code false}. A {@code null} target or a key rejected by the memcached client is
+     * still rejected with {@link IllegalArgumentException} (exactly as in {@code unlock}), because
+     * those are deterministic programming errors rather than transient failures — and if
+     * {@code lock()} succeeded for this target, the same key cannot be rejected at unlock time,
+     * so no exception-masking risk is introduced in the intended {@code finally}-block usage.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -551,8 +555,10 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @param target the target resource whose lock is to be released (must not be null)
      * @return {@code true} if an entry was deleted from Memcached for this target; {@code false} if no
      *         entry existed (e.g., the lock had already expired or was never acquired) <i>or</i> if the
-     *         release failed because of a communication or key error (which is logged at {@code WARN})
-     * @throws IllegalArgumentException if {@code target} is null
+     *         release failed because of a communication error (which is logged at {@code WARN})
+     * @throws IllegalArgumentException if {@code target} is null, or if the key derived from {@code target}
+     *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
+     *         or containing spaces/control characters)
      * @see #unlock(Object)
      * @see #lock(Object, long)
      */
@@ -569,10 +575,15 @@ public class MemcachedLock<K, V> implements AutoCloseable {
             }
 
             return released;
+        } catch (final IllegalArgumentException e) {
+            // A key the memcached client rejects is a deterministic programming error, not a
+            // transient failure: no lock can exist under such a key (lock() would have failed the
+            // same way), so swallowing it here would only disguise the bug as "already expired".
+            throw e;
         } catch (final Exception e) {
             if (logger.isWarnEnabled()) {
                 logger.warn("Failed to quietly release lock for key: " + key
-                        + " (Memcached communication or key error); returning false, the lock may remain held until it expires", e);
+                        + " due to a Memcached communication error; returning false, the lock may remain held until it expires", e);
             }
 
             return false;

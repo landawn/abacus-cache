@@ -123,6 +123,16 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
     private final MemcachedClient mc;
     private final long operationTimeout;
+
+    /**
+     * Outer bound used by {@link #resultOf(Future)}: a generous multiple of the operation timeout,
+     * precomputed once since {@code operationTimeout} is final. The saturation guard protects
+     * against a huge configured timeout making both candidate bounds wrap negative; it is
+     * unreachable in practice because the constructor already clamps {@code operationTimeout} to
+     * {@code MAX_SAFE_OPERATION_TIMEOUT_MILLIS}, but is kept as cheap one-time defense.
+     */
+    private final long resultWaitBoundMillis;
+
     private volatile boolean isShutdown = false;
 
     /**
@@ -194,6 +204,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
         this.operationTimeout = effectiveTimeout;
 
+        this.resultWaitBoundMillis = effectiveTimeout > (Long.MAX_VALUE - 5_000L) / 4 //
+                ? Long.MAX_VALUE
+                : Math.max(effectiveTimeout * 4, effectiveTimeout + 5_000L);
+
         MemcachedClient tempMc = null;
         try {
             final Transcoder<Object> transcoder = ParserFactory.isKryoParserAvailable() ? new KryoTranscoder<>() : null;
@@ -217,6 +231,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             tempMc = createSpyMemcachedClient(serverUrl, connFactory);
             this.mc = tempMc;
         } catch (final Exception e) {
+            // NOTE: with the current try-block body the shutdown below is unreachable (the only
+            // statement after client creation is the field assignment, which cannot throw). It is
+            // kept deliberately so that any code later added between creation and the end of the
+            // try block cannot silently leak a connected client and its IO thread.
             if (logger.isWarnEnabled()) {
                 logger.warn("Failed to create SpyMemcached client for server(s): " + serverUrl + " (timeout=" + timeout + "ms)", e);
             }
@@ -921,7 +939,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @param key the cache key whose associated value is to be incremented; must not be {@code null}
      * @return the value after the increment, or {@code -1} if the key does not exist
-     *         (Memcached returns {@code -1} for non-existent keys)
+     *         (the client maps memcached's {@code NOT_FOUND} response to {@code -1})
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -978,7 +996,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @param key the cache key whose associated value is to be incremented; must not be {@code null}
      * @param delta the amount by which to increment the value; must be non-negative
      * @return the value after the increment, or {@code -1} if the key does not exist
-     *         (Memcached returns {@code -1} for non-existent keys)
+     *         (the client maps memcached's {@code NOT_FOUND} response to {@code -1})
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if the operation times out or encounters a network error
      */
@@ -1450,6 +1468,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * @return a {@link Future} that will yield {@code true} when the flush completes successfully,
      *         or {@code false} on failure
+     * @throws RuntimeException if the operation fails to initiate (e.g., the operation queue is
+     *         full or the client is shutting down)
      */
     public Future<Boolean> asyncFlushAll() {
         return mc.flush();
@@ -1539,6 +1559,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *         successfully, or {@code false} on failure
      * @throws IllegalArgumentException if {@code delay} is large enough that its absolute expiration
      *              timestamp would exceed memcached's 32-bit expiration limit (roughly beyond the year 2038)
+     * @throws RuntimeException if the operation fails to initiate (e.g., the operation queue is
+     *         full or the client is shutting down)
      */
     public Future<Boolean> asyncFlushAll(final long delay) {
         // See flushAll(long): flush_all's delay is subject to the server's 30-day absolute-vs-
@@ -1696,15 +1718,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
             // Defense-in-depth bounded wait so a hung/stalled connection cannot pin the
             // calling thread indefinitely. spymemcached enforces its own per-operation
             // timeout internally; this outer bound is intentionally generous (a multiple
-            // of the configured operation timeout) so legitimately slower bulk operations
-            // are not failed prematurely. Saturate instead of overflowing: a huge configured
-            // timeout (e.g. Long.MAX_VALUE as a "no timeout" sentinel) would otherwise make
-            // both candidate bounds wrap negative and fail every operation instantly.
-            final long waitBound = operationTimeout > (Long.MAX_VALUE - 5_000L) / 4 //
-                    ? Long.MAX_VALUE
-                    : Math.max(operationTimeout * 4, operationTimeout + 5_000L);
-
-            return future.get(waitBound, TimeUnit.MILLISECONDS);
+            // of the configured operation timeout, precomputed in the constructor) so
+            // legitimately slower bulk operations are not failed prematurely.
+            return future.get(resultWaitBoundMillis, TimeUnit.MILLISECONDS);
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt(); // Restore interrupt status
 

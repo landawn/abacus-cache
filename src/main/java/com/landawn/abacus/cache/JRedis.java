@@ -39,22 +39,22 @@ import redis.clients.jedis.RedisClient;
  * <p><b>Key Features:</b>
  * <ul>
  *   <li>Client-side sharding across multiple standalone Redis instances for horizontal scaling</li>
- *   <li>A thread-safe, internally pooled connection ({@link RedisClient}) per shard</li>
+ *   <li>A thread-safe {@link RedisClient} (with its own internal connection pool) per shard</li>
  *   <li>Efficient object serialization using Kryo parser</li>
  *   <li>Atomic operations for counters (incr/decr)</li>
  *   <li>TTL (time-to-live) support for automatic expiration</li>
  * </ul>
  *
  * <p><b>Sharding:</b> Each configured {@code host:port} becomes an independent shard backed by its
- * own {@link RedisClient} client. A key is routed to a shard by hashing its UTF-8 bytes with CRC-32
+ * own {@link RedisClient}. A key is routed to a shard by hashing its UTF-8 bytes with CRC-32
  * modulo the number of shards, so a given key always maps to the same shard within a fixed topology.
  * The mapping is purely client-side: the standalone Redis servers do not coordinate with each other.
  * Changing the number of servers changes the mapping for many keys — acceptable for a cache, where a
  * miss simply triggers a reload. With a single server there is exactly one shard and no hashing is
  * performed.
  *
- * <p><b>Thread Safety:</b> This client is thread-safe. Each shard is backed by a {@link RedisClient}
- * client, which maintains its own internal connection pool and transparently borrows and returns a
+ * <p><b>Thread Safety:</b> This client is thread-safe. Each shard is backed by a {@link RedisClient},
+ * which maintains its own internal connection pool and transparently borrows and returns a
  * connection for each command, so the client may be freely shared across threads.
  *
  * <p><b>Connection pooling:</b> Each shard's {@link RedisClient} uses the default connection pool

@@ -184,14 +184,30 @@ public class MemcachedLockTest {
     }
 
     /**
-     * Unlike {@link MemcachedLock#unlock(Object)} (which rethrows the client's
-     * {@link IllegalArgumentException} for an over-long key), {@code tryUnlockQuietly} swallows the
-     * release failure and returns {@code false} so it is safe to call from a {@code finally} block.
+     * A key the memcached client rejects is a deterministic programming error, so
+     * {@code tryUnlockQuietly} rethrows it exactly like {@link MemcachedLock#unlock(Object)} —
+     * swallowing it would disguise the bug as "lock already expired". If {@code lock()} succeeded
+     * for a target, the same key cannot be rejected at unlock time, so this rethrow can never mask
+     * an exception from the guarded critical section in the intended {@code finally}-block usage.
      */
     @Test
-    public void testTryUnlockQuietly_swallowsMemcachedError_returnsFalse() {
+    public void testTryUnlockQuietly_EdgeCase_OverlongKey_throwsIAE() {
         final String tooLongKey = "x".repeat(251);
-        assertFalse(lock.tryUnlockQuietly(tooLongKey));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryUnlockQuietly(tooLongKey));
+    }
+
+    /**
+     * A genuine communication failure — here, the underlying client has been shut down, which makes
+     * every operation throw {@code IllegalStateException("Shutting down")} — is swallowed and
+     * reported as {@code false}, so releasing in a {@code finally} block cannot mask the exception
+     * thrown by the guarded critical section.
+     */
+    @Test
+    public void testTryUnlockQuietly_swallowsCommunicationError_returnsFalse() {
+        final MemcachedLock<String, Long> local = new MemcachedLock<>(SERVER_URL);
+        local.close();
+
+        assertFalse(local.tryUnlockQuietly("k"));
     }
 
     // --- construction / lifecycle --------------------------------------------------------------
