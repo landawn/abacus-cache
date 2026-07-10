@@ -13,9 +13,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -440,8 +448,8 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
-     * Replacing a memory-backed entry with a disk-routed value: {@code putToDisk} removes and
-     * destroys the prior in-memory wrapper before installing the new {@code StoreWrapper}.
+     * Replacing a memory-backed entry with a disk-routed value: the prior in-memory wrapper is
+     * replaced by the pool when the new {@code StoreWrapper} is installed.
      */
     @Test
     public void testPutToDisk_replacesMemoryWrapper() {
@@ -466,6 +474,223 @@ public class AbstractOffHeapCacheTest {
             assertTrue(cache.put("k", large));
             assertEquals(1L, cache.stats().sizeOnDisk());
             assertArrayEquals(large, cache.getOrNull("k"));
+        }
+    }
+
+    /**
+     * Regression: concurrent same-key disk puts must leave a consistent mapping. Previously the
+     * ownership claim and pool install were not under the same lock, so one interleaving installed a
+     * non-owner wrapper while the real owner's destroy deleted the survivor's disk bytes.
+     */
+    @Test
+    public void testConcurrentSameKeyDiskPuts_leaveReadableValue() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final int threads = 8;
+        final int iterations = 200;
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2) // always disk
+                .build()) {
+
+            final ExecutorService pool = Executors.newFixedThreadPool(threads);
+            final CountDownLatch start = new CountDownLatch(1);
+            final AtomicInteger successCount = new AtomicInteger();
+            final List<Future<?>> futures = new ArrayList<>();
+
+            for (int t = 0; t < threads; t++) {
+                final int threadId = t;
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    for (int i = 0; i < iterations; i++) {
+                        final byte[] payload = new byte[] { (byte) threadId, (byte) i, (byte) (i >> 8) };
+                        if (cache.put("shared", payload)) {
+                            successCount.incrementAndGet();
+                        }
+                    }
+                    return null;
+                }));
+            }
+
+            start.countDown();
+            for (final Future<?> f : futures) {
+                f.get(30, TimeUnit.SECONDS);
+            }
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS));
+
+            assertTrue(successCount.get() > 0, "at least one concurrent disk put should succeed");
+            final byte[] current = cache.getOrNull("shared");
+            assertNotNull(current, "after concurrent same-key disk puts the key must remain readable");
+            assertEquals(3, current.length);
+        }
+    }
+
+    /**
+     * Regression: a failed disk write must not delete or replace a concurrent successful put for the
+     * same key. The prior mapping is no longer pre-removed before the disk write, so a failed spill
+     * leaves any concurrent winner intact.
+     */
+    @Test
+    public void testFailedDiskWrite_doesNotClobberConcurrentSuccess() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final AtomicBoolean failNextPut = new AtomicBoolean(false);
+
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                if (failNextPut.getAndSet(false)) {
+                    return false;
+                }
+                backing.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return backing.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return backing.remove(key) != null;
+            }
+        };
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .offHeapStore(store)
+                .storeSelector((k, v, size) -> 2)
+                .build()) {
+
+            final byte[] first = new byte[] { 1, 2, 3 };
+            assertTrue(cache.put("k", first));
+            assertArrayEquals(first, cache.getOrNull("k"));
+
+            // Force the next disk write to fail; the existing mapping must survive.
+            failNextPut.set(true);
+            assertFalse(cache.put("k", new byte[] { 9, 9, 9 }));
+            assertArrayEquals(first, cache.getOrNull("k"), "failed disk put must not clobber the prior value");
+        }
+    }
+
+    /**
+     * {@code close()} must wait for in-flight puts (via the lifecycle write lock) so native memory
+     * is not freed while a concurrent put is still copying. This stress test races close against
+     * puts and asserts no put observes a post-deallocate native copy.
+     */
+    @Test
+    public void testConcurrentCloseAndPut_noNativeCopyAfterDeallocate() throws Exception {
+        final GuardedOffHeapCache cache = new GuardedOffHeapCache();
+        final ExecutorService pool = Executors.newFixedThreadPool(4);
+        final CountDownLatch start = new CountDownLatch(1);
+        final AtomicBoolean sawError = new AtomicBoolean(false);
+        final List<Future<?>> futures = new ArrayList<>();
+
+        for (int t = 0; t < 4; t++) {
+            futures.add(pool.submit(() -> {
+                start.await();
+                try {
+                    for (int i = 0; i < 50; i++) {
+                        try {
+                            cache.put("k" + i, new byte[] { 1, 2, 3 });
+                        } catch (final IllegalStateException expected) {
+                            // closed mid-flight
+                        }
+                    }
+                } catch (final Throwable t1) {
+                    sawError.set(true);
+                    throw t1;
+                }
+                return null;
+            }));
+        }
+
+        futures.add(pool.submit(() -> {
+            start.await();
+            Thread.sleep(5);
+            cache.close();
+            return null;
+        }));
+
+        start.countDown();
+        for (final Future<?> f : futures) {
+            f.get(30, TimeUnit.SECONDS);
+        }
+        pool.shutdown();
+
+        assertFalse(sawError.get());
+        assertFalse(cache.copiedAfterDeallocate.get(), "no put may copy into memory after deallocate()");
+        assertTrue(cache.isClosed());
+    }
+
+    /**
+     * Regression: disk puts racing disk-to-memory promotions on the same key must neither deadlock
+     * nor lose the entry. Previously (a) putToDisk installed into the pool while holding the per-key
+     * store lock, while a concurrent promotion's pool install destroyed the replaced StoreWrapper
+     * under the pool's internal lock and blocked on that same store lock - an ABBA deadlock; and
+     * (b) the promotion's unlocked remove-then-install window could replace a concurrently installed
+     * owner wrapper, whose pool-side destroy deleted the survivor's freshly written disk bytes.
+     */
+    @Test
+    public void testConcurrentPromotionAndDiskPuts_noDeadlockOrLostEntry() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final int iterations = 200;
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(600_000)
+                .defaultMaxIdleTime(600_000)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2) // always disk
+                .testerForLoadingItemFromDiskToMemory((activityPrint, size, readTime) -> true) // always promote
+                .build()) {
+
+            assertTrue(cache.put("shared", new byte[] { 0, 0, 0 }));
+
+            final ExecutorService pool = Executors.newFixedThreadPool(8);
+            final CountDownLatch start = new CountDownLatch(1);
+            final List<Future<?>> futures = new ArrayList<>();
+
+            for (int t = 0; t < 4; t++) {
+                final int threadId = t;
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    for (int i = 0; i < iterations; i++) {
+                        assertTrue(cache.put("shared", new byte[] { (byte) threadId, (byte) i, (byte) (i >> 8) }));
+                    }
+                    return null;
+                }));
+            }
+
+            for (int t = 0; t < 4; t++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    for (int i = 0; i < iterations; i++) {
+                        cache.getOrNull("shared");
+                    }
+                    return null;
+                }));
+            }
+
+            start.countDown();
+            // A 30s timeout converts the pre-fix deadlock into a test failure instead of a hang.
+            for (final Future<?> f : futures) {
+                f.get(30, TimeUnit.SECONDS);
+            }
+            pool.shutdown();
+
+            final byte[] current = cache.getOrNull("shared");
+            assertNotNull(current, "the key must remain readable after concurrent promotions and disk puts");
+            assertEquals(3, current.length);
         }
     }
 
