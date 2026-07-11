@@ -111,9 +111,10 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     /**
      * Property bag for storing custom configuration and metadata.
      * Can be used by cache implementations and users to store arbitrary properties.
-     * Backed by a synchronized map so concurrent property access through this cache
-     * (or the live view returned by {@link #getProperties()}) is safe; iteration over
-     * the view still requires external synchronization, as usual for synchronized maps.
+     * Backed by a synchronized map so individual property operations through this cache or the
+     * live view returned by {@link #getProperties()} are serialized. Iterators and collection
+     * views are not safe while another thread mutates the properties; the backing map's mutex is
+     * internal and cannot be acquired through the returned {@link Properties} object.
      */
     protected final Properties<String, Object> properties = new Properties<>() {
         {
@@ -145,8 +146,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * Creates an {@code AbstractCache} with the supplied default expiration times.
-     * These defaults are used when entries are added via {@link #put(Object, Object)}
-     * without explicit expiration.
+     * These values are passed as the requested defaults when entries are added via
+     * {@link #put(Object, Object)}. A concrete adapter may ignore expiration controls that its
+     * backing cache does not support; see {@link Cache#put(Object, Object, long, long)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -453,7 +455,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.setProperty("foo", "bar");           // returns null (no previous mapping)
      *
      * String removed = cache.removeProperty("foo");
-     * removed;                                   // returns "bar"
+     * assert "bar".equals(removed);
      * cache.getProperty("foo");                  // returns null (entry removed)
      *
      * // Edge: removing a name that was never set returns null.

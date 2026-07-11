@@ -28,6 +28,10 @@ import java.util.Objects;
  * cache counters (size, put/get/hit/miss/eviction counts) it exposes off-heap-specific
  * metrics such as disk I/O timings and memory segment utilization.
  *
+ * <p><b>&#9888;&#65039; Independently sampled fields:</b> The cache gathers these components from
+ * several concurrent counters and data structures. Relationships described below are
+ * conceptual and may be transiently inconsistent while operations are in flight.
+ *
  * <p>Understanding the metrics:
  * <ul>
  * <li>Memory metrics: {@code allocatedMemory} is the total reserved off-heap memory;
@@ -37,8 +41,8 @@ import java.util.Objects;
  *     subset; the in-memory portion is {@code dataSize - dataSizeOnDisk}. The in-memory portion is
  *     typically smaller than {@code occupiedMemory} because the slot allocator rounds each entry up
  *     to the next multiple of the minimum block size (64 bytes).</li>
- * <li>Hit metrics: {@code hitCount + missCount = getCount}. {@code hitCountFromDisk} is the subset of
- *     {@code hitCount} that was served from disk (so {@code hitCountFromDisk} &le; {@code hitCount}).</li>
+ * <li>Hit metrics: conceptually, {@code hitCount + missCount = getCount}. {@code hitCountFromDisk}
+ *     normally represents the subset of {@code hitCount} served from disk.</li>
  * <li>Put metrics: {@code putCount} counts successful inserts into the pool (both memory- and
  *     disk-resident wrappers go through the same pool). Failed put attempts (e.g., wrapper allocation
  *     failed before reaching the pool) are not included. As an approximate identity,
@@ -69,12 +73,13 @@ import java.util.Objects;
  * System.out.println("Disk read avg time: " + stats.readFromDiskTimeStats().avg() + "ms");
  *
  * // Fragmentation analysis (compare in-memory occupancy against the in-memory data size).
- * // The ratio is >= 1.0 (slots are rounded up to 64-byte multiples); the overhead is the
- * // part above 1.0 - e.g. a ratio of 1.2 means 20% overhead.
- * long inMemoryDataSize = stats.dataSize() - stats.dataSizeOnDisk();
+ * // With a quiescent cache the ratio is normally >= 1.0 because slots are rounded up;
+ * // under concurrent updates treat the independently sampled result as approximate.
+ * long inMemoryDataSize = Math.max(0L, stats.dataSize() - stats.dataSizeOnDisk());
  * double occupancyRatio = inMemoryDataSize == 0 ? 1.0
  *         : (double) stats.occupiedMemory() / inMemoryDataSize;
  * System.out.println("Memory overhead: " + ((occupancyRatio - 1) * 100) + "%");
+ * cache.close();
  * }</pre>
  *
  * @param capacity the configured upper bound on the number of in-memory entries the underlying keyed object
@@ -96,9 +101,8 @@ import java.util.Objects;
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
  *                       when off-heap memory is full and the value is stored to disk via the configured
  *                       {@link OffHeapStore}, or when the {@code storeSelector} explicitly routes the value to disk.
- * @param getCount the total number of get operations performed since cache creation. The identity is
- *                 {@code getCount = hitCount + missCount}. {@code hitCountFromDisk} is NOT additive here
- *                 because it is already part of {@code hitCount}.
+ * @param getCount the total number of get operations performed since cache creation. Conceptually,
+ *                 {@code getCount = hitCount + missCount}; a concurrent snapshot may temporarily differ.
  * @param hitCount the number of successful get operations, including those that ultimately served the value
  *                 from disk. To compute the number of hits served purely from off-heap memory, subtract
  *                 {@code hitCountFromDisk} from {@code hitCount}. Note that this counter is maintained at the
@@ -106,9 +110,8 @@ import java.util.Objects;
  *                 {@link OffHeapStore} (the degraded path where {@code get} returns {@code null}) is still
  *                 counted as a hit, so a flaky store can slightly inflate the hit rate.
  * @param hitCountFromDisk the number of successful get operations where the entry was read from disk via the
- *                       configured {@link OffHeapStore}. Always {@code &le; hitCount}; the disk read happens
- *                       after the pool lookup hit, which is the reason the pool's {@code hitCount} already
- *                       includes this case.
+ *                       configured {@link OffHeapStore}. It normally forms a subset of {@code hitCount},
+ *                       but independently sampled counters can be transiently inconsistent.
  * @param missCount the number of failed get operations where the entry was not found in either memory or
  *                  disk. This can occur when the key never existed, was explicitly removed, or has expired.
  * @param evictionCount the total number of entries removed by the eviction / vacate paths (i.e., entries

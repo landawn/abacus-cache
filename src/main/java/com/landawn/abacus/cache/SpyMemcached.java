@@ -122,7 +122,6 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     };
 
     private final MemcachedClient mc;
-    private final long operationTimeout;
 
     /**
      * Outer bound used by {@link #resultOf(Future)}: a generous multiple of the operation timeout,
@@ -149,8 +148,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * new SpyMemcached<>("   ");         // throws IllegalArgumentException (blank)
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) in the format
-     *                  {@code "host1:port1,host2:port2,..."}; must not be {@code null}, empty, or blank
+     * @param serverUrl one or more {@code host:port} addresses separated by commas, whitespace,
+     *                  or both; must not be {@code null}, empty, or blank
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains
      *         no valid server addresses
      * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the
@@ -179,8 +178,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * new SpyMemcached<>("localhost:11211", -1); // throws IllegalArgumentException
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) in the format
-     *                  {@code "host1:port1,host2:port2,..."}; must not be {@code null}, empty, or blank
+     * @param serverUrl one or more {@code host:port} addresses separated by commas, whitespace,
+     *                  or both; must not be {@code null}, empty, or blank
      * @param timeout the operation timeout in milliseconds; must be positive. Applies to all cache
      *                operations. Extremely large values (beyond a ~146-year safety cap) are clamped,
      *                because spymemcached's internal nanosecond arithmetic would otherwise overflow
@@ -201,8 +200,6 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
 
         // Clamp to the spymemcached-safe maximum: see MAX_SAFE_OPERATION_TIMEOUT_MILLIS.
         final long effectiveTimeout = Math.min(timeout, MAX_SAFE_OPERATION_TIMEOUT_MILLIS);
-
-        this.operationTimeout = effectiveTimeout;
 
         this.resultWaitBoundMillis = effectiveTimeout > (Long.MAX_VALUE - 5_000L) / 4 //
                 ? Long.MAX_VALUE
@@ -329,9 +326,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Retrieves multiple objects from the cache in a single operation.
-     * This is more efficient than multiple individual get operations as it uses a single
-     * network round-trip to fetch all values. Keys not found in the cache or that have expired
+     * Retrieves multiple objects in one batched request. The client generally sends one operation
+     * to each server owning at least one requested key, reducing round-trips versus individual gets.
+     * Keys not found in the cache or that have expired
      * will not be present in the returned map. This is a synchronous operation that blocks until
      * complete or timeout.
      *
@@ -378,8 +375,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Asynchronously retrieves multiple objects from the cache.
      * This method returns immediately without blocking. The returned Future contains a map of
      * found key-value pairs. Keys not found in the cache or that have expired will not be present
-     * in the returned map. This operation is more efficient than multiple individual async get
-     * operations as it uses a single network round-trip.
+     * in the returned map. The client generally sends one operation to each involved server.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
@@ -416,9 +412,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
-     * Retrieves multiple objects from the cache using a collection of keys.
-     * This is more efficient than multiple individual get operations as it uses a single
-     * network round-trip to fetch all values. Keys not found in the cache or that have expired
+     * Retrieves multiple objects from the cache using a batched collection request. The client
+     * generally sends one operation to each server owning at least one requested key. Keys not
+     * found in the cache or that have expired
      * will not be present in the returned map. This is a synchronous operation that blocks until
      * complete or timeout.
      *
@@ -465,8 +461,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * Asynchronously retrieves multiple objects using a collection of keys.
      * This method returns immediately without blocking. The returned Future contains a map of
      * found key-value pairs. Keys not found in the cache or that have expired will not be present
-     * in the returned map. This operation is more efficient than multiple individual async get
-     * operations as it uses a single network round-trip.
+     * in the returned map. The client generally sends one operation to each involved server.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
@@ -1760,8 +1755,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * MemcachedClient client = createSpyMemcachedClient("localhost:11211", factory);
      * }</pre>
      *
-     * @param serverUrl the Memcached server URL(s) to connect to (e.g.,
-     *                  {@code "host1:port1,host2:port2,..."})
+     * @param serverUrl one or more {@code host:port} addresses separated by commas, whitespace,
+     *                  or both
      * @param connFactory the connection factory configured with timeout and transcoder settings
      * @return a configured {@link MemcachedClient} instance
      * @throws UncheckedIOException if the connection to the Memcached server(s) fails

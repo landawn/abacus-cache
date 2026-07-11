@@ -103,7 +103,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis GET command. If the key
      * does not exist or has expired, {@code null} is returned. The operation is O(1) time complexity.
      *
-     * <p><b>Counter keys cannot be read with this method:</b> keys created by {@code incr}/{@code decr}
+     * <p><b>&#9888;&#65039; Counter keys cannot be read with this method:</b> keys created by {@code incr}/{@code decr}
      * hold raw ASCII digits, not Kryo-serialized bytes, so deserialization fails. Read counters back
      * with {@code incr(key, 0)} (or {@code decr(key, 0)}) instead.
      *
@@ -312,7 +312,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis INCR command. If the key doesn't exist,
      * it will be automatically created with value 1 (Redis initializes to 0, then increments by 1).
      * This differs from Memcached which returns -1 for non-existent keys. The operation is O(1) time complexity.
-     * If the key contains a value that cannot be represented as an integer, an error will occur.
+     * If the key is not an integer or the result exceeds Redis's signed 64-bit range, an error occurs.
      *
      * <p><b>Thread Safety:</b> The Redis INCR command is atomic on the server side, so concurrent
      * increments — whether from separate client instances or multiple threads sharing this pooled
@@ -333,7 +333,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @return the value after increment (will be 1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error or timeout occurs, or if the key contains a non-integer value
+     * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
+     *         value, or the result exceeds Redis's signed 64-bit integer range
      * @see #incr(String, long)
      * @see #decr(String)
      */
@@ -349,7 +350,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis INCRBY command. If the key doesn't exist,
      * it will be automatically created with the delta value. The operation is O(1) time complexity.
-     * If the key contains a value that cannot be represented as an integer, an error will occur.
+     * If the key is not an integer or the result exceeds Redis's signed 64-bit range, an error occurs.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -369,7 +370,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *              SpyMemcached, which also rejects negative deltas).
      * @return the value after increment (will be equal to delta if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
-     * @throws RuntimeException if a network error or timeout occurs, or if the key contains a non-integer value
+     * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
+     *         value, or the result exceeds Redis's signed 64-bit integer range
      * @see #incr(String)
      * @see #decr(String, long)
      */
@@ -387,8 +389,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis DECR command. If the key doesn't exist,
      * it will be automatically created with value -1. Unlike Memcached where values cannot go below 0,
-     * Redis allows negative values. The operation is O(1) time complexity. If the key contains a value
-     * that cannot be represented as an integer, an error will occur.
+     * Redis allows negative values. The operation is O(1) time complexity. If the key is not an
+     * integer or the result exceeds Redis's signed 64-bit range, an error occurs.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -404,7 +406,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws RuntimeException if a network error or timeout occurs, or if the key contains a non-integer value
+     * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
+     *         value, or the result exceeds Redis's signed 64-bit integer range
      * @see #decr(String, long)
      * @see #incr(String)
      */
@@ -421,7 +424,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * <p><b>Redis-specific behavior:</b> This operation uses the Redis DECRBY command. If the key doesn't exist,
      * it will be automatically created with the negative delta value. Unlike Memcached where values
      * cannot go below 0, Redis allows negative values. The operation is O(1) time complexity. If the
-     * key contains a value that cannot be represented as an integer, an error will occur.
+     * key is not an integer or the result exceeds Redis's signed 64-bit range, an error occurs.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -442,7 +445,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
      *         if the key did not exist before)
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
-     * @throws RuntimeException if a network error or timeout occurs, or if the key contains a non-integer value
+     * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
+     *         value, or the result exceeds Redis's signed 64-bit integer range
      * @see #decr(String)
      * @see #incr(String, long)
      */

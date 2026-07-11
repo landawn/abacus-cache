@@ -117,9 +117,9 @@ public interface DistributedCacheClient<T> {
     T get(String key);
 
     /**
-     * Retrieves multiple values from the cache in a single operation.
-     * This is more efficient than multiple individual get operations as it reduces
-     * network round-trips. Keys not found in the cache will not be present in the returned map.
+     * Retrieves multiple values from the cache. Implementations may batch requests by server or
+     * issue individual gets when backend topology requires it. Keys not found in the cache will
+     * not be present in the returned map.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -142,9 +142,11 @@ public interface DistributedCacheClient<T> {
      *       .forEach(key -> System.out.println("Missing: " + key));
      * }</pre>
      *
-     * @param keys the cache keys to retrieve, must not be {@code null} or contain {@code null} elements
+     * @param keys the cache keys to retrieve; a supporting implementation requires a non-null array
+     *             with no null elements
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
+     * @throws IllegalArgumentException if bulk retrieval is supported and {@code keys} is
+     *         {@code null} or contains a null element
      * @throws RuntimeException if a network error or timeout occurs
      * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
      *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
@@ -152,9 +154,9 @@ public interface DistributedCacheClient<T> {
     Map<String, T> getBulk(String... keys);
 
     /**
-     * Retrieves multiple values from the cache in a single operation.
-     * This is more efficient than multiple individual get operations as it reduces
-     * network round-trips. Keys not found in the cache will not be present in the returned map.
+     * Retrieves multiple values from the cache. Implementations may batch requests by server or
+     * issue individual gets when backend topology requires it. Keys not found in the cache will
+     * not be present in the returned map.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -177,9 +179,11 @@ public interface DistributedCacheClient<T> {
      * Map<String, User> users = client.getBulk(keys);
      * }</pre>
      *
-     * @param keys the collection of cache keys to retrieve, must not be {@code null} or contain {@code null} elements
+     * @param keys the cache keys to retrieve; a supporting implementation requires a non-null
+     *             collection with no null elements
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements
+     * @throws IllegalArgumentException if bulk retrieval is supported and {@code keys} is
+     *         {@code null} or contains a null element
      * @throws RuntimeException if a network error or timeout occurs
      * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
      *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
@@ -240,7 +244,7 @@ public interface DistributedCacheClient<T> {
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns the server's acknowledgement of the delete
      *     operation. Returns {@code false} when the key did not exist.</li>
-     * <li><b>Redis (JRedis):</b> Returns {@code true} when the key existed and was removed,
+     * <li><b>Redis ({@link JRedis}/{@link JRedisCluster}):</b> Returns {@code true} when the key existed and was removed,
      *     {@code false} when the key did not exist (based on the count returned by the DEL command).</li>
      * </ul>
      *
@@ -285,7 +289,7 @@ public interface DistributedCacheClient<T> {
      * <p><b>Implementation-specific behavior when key doesn't exist:</b>
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns -1 if key doesn't exist</li>
-     * <li><b>Redis (JRedis):</b> Creates key with value 1 (initializes to 0, then increments)</li>
+     * <li><b>Redis ({@link JRedis}/{@link JRedisCluster}):</b> Creates key with value 1 (initializes to 0, then increments)</li>
      * </ul>
      *
      * <p>This operation is atomic and thread-safe across all distributed cache clients.
@@ -332,7 +336,7 @@ public interface DistributedCacheClient<T> {
      * <p><b>Implementation-specific behavior when key doesn't exist:</b>
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns -1 if key doesn't exist</li>
-     * <li><b>Redis (JRedis):</b> Creates key with delta value (initializes to 0, then increments by delta)</li>
+     * <li><b>Redis ({@link JRedis}/{@link JRedisCluster}):</b> Creates key with delta value (initializes to 0, then increments by delta)</li>
      * </ul>
      *
      * <p>This operation is atomic and thread-safe across all distributed cache clients.
@@ -376,7 +380,7 @@ public interface DistributedCacheClient<T> {
      * <p><b>Implementation-specific behavior when key doesn't exist:</b>
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns -1 if key doesn't exist. Values cannot go below 0.</li>
-     * <li><b>Redis (JRedis):</b> Creates key with value -1 (initializes to 0, then decrements)</li>
+     * <li><b>Redis ({@link JRedis}/{@link JRedisCluster}):</b> Creates key with value -1 (initializes to 0, then decrements)</li>
      * </ul>
      *
      * <p>This operation is atomic and thread-safe across all distributed cache clients.
@@ -425,7 +429,7 @@ public interface DistributedCacheClient<T> {
      * <p><b>Implementation-specific behavior when key doesn't exist:</b>
      * <ul>
      * <li><b>Memcached (SpyMemcached):</b> Returns -1 if key doesn't exist. Values cannot go below 0.</li>
-     * <li><b>Redis (JRedis):</b> Creates key with negative delta value (initializes to 0, then decrements by delta)</li>
+     * <li><b>Redis ({@link JRedis}/{@link JRedisCluster}):</b> Creates key with negative delta value (initializes to 0, then decrements by delta)</li>
      * </ul>
      *
      * <p>This operation is atomic and thread-safe across all distributed cache clients.
@@ -481,6 +485,9 @@ public interface DistributedCacheClient<T> {
      * Removes all keys from all connected cache servers.
      * This is a destructive operation that affects all data across all servers.
      * Use with extreme caution in production environments.
+     *
+     * <p><b>&#9888;&#65039; Destructive operation:</b> The scope is implementation-specific and may
+     * include databases or namespaces used by other applications on the same servers.
      *
      * <p>This method is thread-safe but its effects are visible immediately to all clients.
      * Once executed, all cached data will be permanently lost. There is no way to recover

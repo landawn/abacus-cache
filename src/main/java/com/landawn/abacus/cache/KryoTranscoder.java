@@ -34,7 +34,7 @@ import net.spy.memcached.transcoders.Transcoder;
  * <li>No requirement for the {@link java.io.Serializable} interface.</li>
  * </ul>
  *
- * <p><b>Circular references are NOT supported by default:</b> the default {@link KryoParser}
+ * <p><b>&#9888;&#65039; Circular references are not supported by default:</b> the default {@link KryoParser}
  * creates its Kryo instances with reference tracking disabled (Kryo's default), so encoding an
  * object graph with a cycle (e.g., a bidirectional parent/child link) recurses until
  * {@link StackOverflowError}, and even acyclic shared references are duplicated in the payload
@@ -279,7 +279,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * Kryo/Output/Input instances guarded by internal locks rather than {@code ThreadLocal}; it is
      * safe for concurrent use, though highly concurrent workloads may contend on the shared pool.
      *
-     * <p><b>Important:</b> The class definitions of the objects being deserialized must be
+     * <p><b>&#9888;&#65039; Class compatibility:</b> The class definitions of the objects being deserialized must be
      * available on the classpath. If the class structure has changed between encoding and decoding
      * (e.g., fields added or removed), deserialization may fail or produce unexpected results.
      *
@@ -305,7 +305,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * @param d the cached data to decode and deserialize; if {@code null}, {@code null} is returned
      * @return the deserialized object of type {@code T}, or {@code null} if {@code d} is
-     *         {@code null}, its data is {@code null} or empty, or {@code null} was originally encoded
+     *         {@code null}, its data is empty, or {@code null} was originally encoded
      * @throws RuntimeException if deserialization fails (e.g., corrupt data, class not found,
      *         or incompatible class version)
      * @see #encode(Object)

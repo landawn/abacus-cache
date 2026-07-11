@@ -147,12 +147,13 @@ public interface Cache<K, V> extends Closeable {
 
     /**
      * Stores a key-value pair in the cache using the implementation's default expiration settings.
-     * If the key already exists, its value is replaced and its expiration is reset.
+     * If the operation succeeds and the key already exists, its value is replaced and its
+     * expiration is reset.
      *
      * <p><b>Behavior:</b>
      * <ul>
-     * <li>Overwrites any existing entry with the same key</li>
-     * <li>Resets TTL and idle-timeout counters for the entry</li>
+     * <li>A successful write overwrites any existing entry with the same key</li>
+     * <li>A successful write resets the implementation's applicable expiration counters</li>
      * <li>May trigger eviction of other entries if cache capacity is reached</li>
      * <li>Returns {@code false} if the operation fails (e.g., cache full and eviction not possible)</li>
      * </ul>
@@ -195,14 +196,17 @@ public interface Cache<K, V> extends Closeable {
      *
      * <p><b>Expiration Semantics:</b>
      * <ul>
-     * <li><b>liveTime (TTL):</b> Absolute expiration time from insertion. Entry is removed after this duration
-     *     regardless of access patterns. A value {@code <= 0} means "no TTL": all framework implementations
-     *     translate it to no expiration and never reject it, so {@code 0} can be passed portably.</li>
+     * <li><b>liveTime (TTL):</b> Absolute expiration time from insertion. For implementations that
+     *     support per-entry TTL, a value {@code <= 0} means no per-entry TTL and is not rejected.</li>
      * <li><b>maxIdleTime:</b> Expiration based on last access. Entry is removed if not accessed within this duration.
      *     <b>Not supported by all implementations</b> — distributed caches (e.g. Memcached, Redis) typically ignore
      *     this parameter. Check the implementing class's documentation.</li>
      * <li>If both are set, the entry expires when either condition is met (whichever comes first).</li>
      * </ul>
+     *
+     * <p><b>&#9888;&#65039; Implementation-dependent expiration:</b> adapters backed by cache-level expiry
+     * configuration, including {@link CaffeineCache} and {@link Ehcache}, ignore both timing
+     * arguments. Distributed implementations generally support TTL but ignore {@code maxIdleTime}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -220,10 +224,10 @@ public interface Cache<K, V> extends Closeable {
      *
      * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
-     * @param liveTime the time-to-live in milliseconds from insertion; a value {@code <= 0} means "no TTL"
-     *                 and is never rejected by the framework implementations
+     * @param liveTime the requested time-to-live in milliseconds from insertion; where per-entry TTL
+     *                 is supported, a value {@code <= 0} means no per-entry TTL
      * @param maxIdleTime the maximum idle time in milliseconds since last access; a value {@code <= 0} means
-     *                    "no idle timeout" and is never rejected; the parameter may be ignored entirely by distributed caches
+     *                    no idle timeout where supported; this parameter may be ignored by the implementation
      * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full or write failure;
      *         calling this method on a closed cache is implementation-defined and typically throws {@link IllegalStateException})
      * @see #put(Object, Object)

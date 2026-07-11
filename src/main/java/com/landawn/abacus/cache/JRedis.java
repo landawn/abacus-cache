@@ -245,11 +245,11 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      *
      * <p><b>Redis-specific behavior:</b> This operation issues the Redis FLUSHALL command on each
      * shard. It removes all keys from all databases (not just the currently selected database). If a
-     * FLUSHALL on one shard fails, the remaining shards are still attempted (each failure is logged at
-     * WARN level) and the <em>first</em> encountered exception is rethrown after all shards have been
-     * processed.
+     * FLUSHALL on one shard fails, the remaining shards are still attempted. The first failure is
+     * rethrown after all shards have been processed; additional failures, which would otherwise be
+     * lost, are logged at WARN level with their shard index.
      *
-     * <p><b>Warning:</b> This operation affects ALL databases on each Redis instance, not just the one
+     * <p><b>&#9888;&#65039; Destructive operation:</b> This operation affects ALL databases on each Redis instance, not just the one
      * being used by this client. If other applications share the same Redis instances, their data will
      * also be deleted.
      *
@@ -261,19 +261,18 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
     public void flushAll() {
         RuntimeException firstException = null;
 
-        for (final RedisClient jedis : clients) {
+        for (int shardIndex = 0; shardIndex < clients.size(); shardIndex++) {
+            final RedisClient jedis = clients.get(shardIndex);
+
             try {
                 jedis.flushAll();
             } catch (final RuntimeException e) {
-                // Continue flushing the remaining shards; the first failure is rethrown
-                // after the loop. Log every shard failure so errors on later shards
-                // (which are otherwise swallowed) remain visible.
-                if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to flush a Redis shard during flushAll(); continuing with remaining shards", e);
-                }
-
                 if (firstException == null) {
                     firstException = e;
+                } else if (logger.isWarnEnabled()) {
+                    // The first exception is rethrown to the caller. Log only later failures to avoid
+                    // reporting that same exception both here and at the eventual catch site.
+                    logger.warn("Additional Redis flushAll() failure on shard index " + shardIndex + "; continuing with remaining shards", e);
                 }
             }
         }
@@ -290,12 +289,15 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      */
     @Override
     protected void closeClients() {
-        for (final RedisClient jedis : clients) {
+        for (int shardIndex = 0; shardIndex < clients.size(); shardIndex++) {
+            @SuppressWarnings("resource")
+            final RedisClient jedis = clients.get(shardIndex);
+
             try {
                 jedis.close();
             } catch (final RuntimeException e) {
                 if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to close a Redis shard client during disconnect(); continuing with remaining shards", e);
+                    logger.warn("Failed to close Redis client for shard index " + shardIndex + " during disconnect(); continuing with remaining shards", e);
                 }
             }
         }

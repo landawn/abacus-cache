@@ -161,6 +161,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Thread Safety:</b> This cache is fully thread-safe if the provided pool is thread-safe.
      *
+     * <p><b>&#9888;&#65039; Ownership transfer:</b> This cache assumes ownership of {@code pool}.
+     * Calling {@link #close()} closes the supplied pool, so it must not be shared with a
+     * component whose lifetime extends beyond this cache.
+     *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create a custom pool with specific configuration
@@ -219,6 +223,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key whose associated value is to be returned (must not be null)
      * @return the value associated with the specified key, or {@code null} if the key is not found, has expired, or has been evicted
      * @throws IllegalArgumentException if key is null
+     * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
     public V getOrNull(final K key) {
@@ -268,14 +273,17 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.put(null, user, 1000, 1000);             // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
+     * <p><b>&#9888;&#65039; Replacement failure:</b> Some custom pools remove an existing mapping
+     * before attempting to store its replacement. If such a pool rejects the new entry,
+     * this method returns {@code false} and the previous mapping may no longer be present.
+     *
      * @param key the cache key with which the specified value is to be associated (must not be null)
      * @param value the cache value to be associated with the specified key (must not be null)
      * @param liveTime the time-to-live in milliseconds from entry creation (0 or negative for no TTL expiration)
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout)
-     * @return {@code true} if the entry was successfully stored; {@code false} if the cache is full and unable to evict entries, or if the underlying pool
-     *         rejected the entry. Note that on failure any previous entry under the key has already been removed by the underlying pool (reachable only with
-     *         a custom pool whose {@code put} can fail, e.g. auto-balancing disabled or a memory limit configured)
+     * @return {@code true} if the entry was successfully stored; {@code false} if the underlying pool rejected the entry
      * @throws IllegalArgumentException if key or value is null
+     * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
@@ -319,6 +327,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key whose mapping is to be removed from the cache (must not be null)
      * @throws IllegalArgumentException if key is null
+     * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
     public void remove(final K key) {
@@ -359,6 +368,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key whose presence in the cache is to be tested (must not be null)
      * @return {@code true} if the cache contains a mapping for the specified key and it has not expired; {@code false} otherwise
      * @throws IllegalArgumentException if key is null
+     * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
     public boolean containsKey(final K key) {
@@ -411,6 +421,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @return a set containing all cache keys (including potentially expired entries that haven't been evicted yet)
+     * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
     public Set<K> keySet() {
@@ -444,6 +455,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @return the number of entries currently in the cache (including potentially expired entries that haven't been evicted yet)
+     * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
     public int size() {
@@ -479,6 +491,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
+     * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
     public void clear() {
@@ -549,6 +562,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @return a snapshot of current cache statistics including capacity, size, hit/miss counts, and eviction metrics
+     * @throws IllegalStateException if the underlying pool has been closed
      * @see CacheStats
      * @see PoolStats
      */
@@ -615,8 +629,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks if the cache has been closed.
-     * Returns {@code true} if {@link #close()} has been called on this cache, {@code false} otherwise.
+     * Checks whether the underlying pool has been closed, either through {@link #close()} or
+     * directly by code that supplied a custom pool.
      * Use this method to verify whether the cache is still operational before
      * performing operations, especially in long-running applications or when
      * sharing cache instances across components. Once closed, the cache cannot
@@ -650,7 +664,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * System.out.println("Cache closed: " + cache.isClosed());   // prints "Cache closed: true"
      * }</pre>
      *
-     * @return {@code true} if {@link #close()} has been called on this cache; {@code false} if the cache is still operational
+     * @return {@code true} if the underlying pool is closed; {@code false} otherwise
      */
     @Override
     public boolean isClosed() {

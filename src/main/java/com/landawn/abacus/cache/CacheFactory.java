@@ -210,6 +210,9 @@ public final class CacheFactory {
      * @param capacityInMB the total off-heap memory to allocate, in megabytes (must be positive)
      * @return a new OffHeapCache instance with the specified capacity
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
+     * @throws OutOfMemoryError if the native allocation cannot be reserved
+     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
+     * @throws SecurityException if runtime policy denies shutdown-hook registration
      * @see #createOffHeapCache(int, long)
      * @see #createOffHeapCache(int, long, long, long)
      * @see OffHeapCache#builder()
@@ -226,9 +229,13 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param capacityInMB the total off-heap memory to allocate, in megabytes (must be positive)
-     * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
+     * @param evictDelay the delay in milliseconds between eviction runs; {@code 0} or a negative
+     *                   value disables periodic eviction
      * @return a new OffHeapCache instance with the specified configuration
-     * @throws IllegalArgumentException if {@code capacityInMB} is not positive or {@code evictDelay} is negative
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive
+     * @throws OutOfMemoryError if the native allocation cannot be reserved
+     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
+     * @throws SecurityException if runtime policy denies shutdown-hook registration
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long, long, long)
      */
@@ -243,11 +250,15 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param capacityInMB the total off-heap memory to allocate, in megabytes (must be positive)
-     * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
+     * @param evictDelay the delay in milliseconds between eviction runs; {@code 0} or a negative
+     *                   value disables periodic eviction
      * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 for no expiration)
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 for no idle timeout)
      * @return a new OffHeapCache instance with the specified configuration
-     * @throws IllegalArgumentException if {@code capacityInMB} is not positive or {@code evictDelay} is negative
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive
+     * @throws OutOfMemoryError if the native allocation cannot be reserved
+     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
+     * @throws SecurityException if runtime policy denies shutdown-hook registration
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long)
      */
@@ -578,7 +589,8 @@ public final class CacheFactory {
                 } else if (parameters.length == 3) {
                     return newDistributedCacheOrDisconnect(new SpyMemcached<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
                 } else {
-                    throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+                    throw new IllegalArgumentException(
+                            "Unsupported parameters for Memcached: " + Strings.join(parameters) + ". Expected Memcached(serverUrl[,keyPrefix[,timeout]])");
                 }
             } else if (DistributedCacheClient.REDIS.equalsIgnoreCase(className)) {
                 if (parameters.length == 1) {
@@ -588,7 +600,8 @@ public final class CacheFactory {
                 } else if (parameters.length == 3) {
                     return newDistributedCacheOrDisconnect(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
                 } else {
-                    throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters));
+                    throw new IllegalArgumentException(
+                            "Unsupported parameters for Redis: " + Strings.join(parameters) + ". Expected Redis(serverUrl[,keyPrefix[,timeout]])");
                 }
             } else {
                 final RedisClusterParameters redisClusterParameters = parseRedisClusterParameters(parameters);
@@ -676,7 +689,7 @@ public final class CacheFactory {
         }
 
         if (keyPrefixIndex < parameters.length - 2) {
-            throw new IllegalArgumentException("Unsupported parameters: " + Strings.join(parameters)
+            throw new IllegalArgumentException("Unsupported parameters for RedisCluster: " + Strings.join(parameters)
                     + ". For RedisCluster the layout is (seedNodes...,keyPrefix,timeout): the first parameter that does not look like a host:port endpoint"
                     + " ends the seed list and is taken as the key prefix. To avoid ambiguity, put all seed nodes space-separated in the first parameter,"
                     + " e.g. RedisCluster(host1:7000 host2:7000,myPrefix:,3000)");

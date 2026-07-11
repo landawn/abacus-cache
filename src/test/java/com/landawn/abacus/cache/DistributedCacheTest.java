@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,8 +20,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.config.Configurator;
@@ -146,14 +146,16 @@ public class DistributedCacheTest extends TestBase {
     @Test
     public void testKeySet_Unsupported() {
         try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
-            assertThrows(UnsupportedOperationException.class, cache::keySet);
+            final UnsupportedOperationException e = assertThrows(UnsupportedOperationException.class, cache::keySet);
+            assertEquals("keySet() is not supported by DistributedCache", e.getMessage());
         }
     }
 
     @Test
     public void testSize_Unsupported() {
         try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
-            assertThrows(UnsupportedOperationException.class, cache::size);
+            final UnsupportedOperationException e = assertThrows(UnsupportedOperationException.class, cache::size);
+            assertEquals("size() is not supported by DistributedCache", e.getMessage());
         }
     }
 
@@ -196,6 +198,30 @@ public class DistributedCacheTest extends TestBase {
     }
 
     // --- circuit breaker -----------------------------------------------------------------------
+
+    /**
+     * Regression guard for the torn-state race: the failure count and its timestamp must be
+     * published through one atomic holder, not through independently writable atomics.
+     */
+    @Test
+    public void testCircuitBreaker_CountAndTimestampUseOneAtomicState() throws Exception {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
+            final Field stateField = DistributedCache.class.getDeclaredField("circuitBreaker");
+            stateField.setAccessible(true);
+
+            assertTrue(AtomicReference.class.isAssignableFrom(stateField.getType()));
+
+            final Object state = ((AtomicReference<?>) stateField.get(cache)).get();
+            final Field failedCountField = state.getClass().getDeclaredField("failedCount");
+            final Field lastFailedTimeField = state.getClass().getDeclaredField("lastFailedTime");
+            failedCountField.setAccessible(true);
+            lastFailedTimeField.setAccessible(true);
+            assertEquals(0, failedCountField.getInt(state));
+            assertEquals(Long.MIN_VALUE, lastFailedTimeField.getLong(state));
+            assertThrows(NoSuchFieldException.class, () -> DistributedCache.class.getDeclaredField("failedCounter"));
+            assertThrows(NoSuchFieldException.class, () -> DistributedCache.class.getDeclaredField("lastFailedTime"));
+        }
+    }
 
     /**
      * A read failure from the backend is swallowed and surfaced as a cache miss (null). The failure is
@@ -390,22 +416,25 @@ public class DistributedCacheTest extends TestBase {
         }
     }
 
-    // --- reflection helpers for the circuit-breaker internal state -----------------------------
-    // lastFailedTime holds a System.nanoTime() timestamp (or Long.MIN_VALUE for "never failed").
+    // --- reflection helpers for the atomically-paired circuit-breaker state --------------------
 
+    @SuppressWarnings("unchecked")
     private static void setBreakerState(final DistributedCache<?, ?> cache, final int failedCount, final long lastFailedTime) throws Exception {
-        final Field fc = DistributedCache.class.getDeclaredField("failedCounter");
-        fc.setAccessible(true);
-        ((AtomicInteger) fc.get(cache)).set(failedCount);
-
-        final Field lt = DistributedCache.class.getDeclaredField("lastFailedTime");
-        lt.setAccessible(true);
-        ((AtomicLong) lt.get(cache)).set(lastFailedTime);
+        final Field stateField = DistributedCache.class.getDeclaredField("circuitBreaker");
+        stateField.setAccessible(true);
+        final AtomicReference<Object> stateRef = (AtomicReference<Object>) stateField.get(cache);
+        final Class<?> stateType = Class.forName(DistributedCache.class.getName() + "$CircuitBreakerState");
+        final Constructor<?> constructor = stateType.getDeclaredConstructor(int.class, long.class);
+        constructor.setAccessible(true);
+        stateRef.set(constructor.newInstance(failedCount, lastFailedTime));
     }
 
     private static int failedCounter(final DistributedCache<?, ?> cache) throws Exception {
-        final Field fc = DistributedCache.class.getDeclaredField("failedCounter");
-        fc.setAccessible(true);
-        return ((AtomicInteger) fc.get(cache)).get();
+        final Field stateField = DistributedCache.class.getDeclaredField("circuitBreaker");
+        stateField.setAccessible(true);
+        final Object state = ((AtomicReference<?>) stateField.get(cache)).get();
+        final Field countField = state.getClass().getDeclaredField("failedCount");
+        countField.setAccessible(true);
+        return countField.getInt(state);
     }
 }

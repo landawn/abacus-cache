@@ -203,6 +203,20 @@ public class AbstractOffHeapCacheTest {
         assertFalse(cache.copiedAfterDeallocate.get(), "put after close must not copy into deallocated memory");
     }
 
+    /** Invalid custom routing results are programming errors, not undocumented aliases. */
+    @Test
+    public void testStoreSelectorRejectsUnknownAndNullResults() {
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).storeSelector((key, value, size) -> 3).build()) {
+            assertThrows(IllegalArgumentException.class, () -> cache.put("k", new byte[] { 1 }));
+            assertEquals(0, cache.size());
+        }
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).storeSelector((key, value, size) -> null).build()) {
+            assertThrows(IllegalArgumentException.class, () -> cache.put("k", new byte[] { 1 }));
+            assertEquals(0, cache.size());
+        }
+    }
+
     // ByteBufferType.byteArrayOf() reads bytes [0, position); build a buffer whose written content
     // (position advanced to the end) is exactly the supplied data so it round-trips through the cache.
     private static ByteBuffer bufferOf(final byte[] data) {

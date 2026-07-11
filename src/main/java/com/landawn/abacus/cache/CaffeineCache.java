@@ -23,12 +23,12 @@ import com.landawn.abacus.util.N;
 /**
  * A wrapper implementation that adapts a Caffeine cache to the Abacus
  * {@link com.landawn.abacus.cache.Cache Cache} interface.
- * Caffeine is a high-performance, near-optimal caching library for Java 8 and later.
+ * Caffeine is a high-performance, near-optimal caching library for Java 11 and later.
  * This class bridges Caffeine's API and the standardized {@code Cache} interface,
  * allowing Caffeine to be used seamlessly within the Abacus caching framework.
  *
  * <p>
- * <b>Important Note:</b> This wrapper does not use Caffeine's per-entry expiration API
+ * <b>&#9888;&#65039; Per-entry expiration is ignored:</b> This wrapper does not use Caffeine's per-entry expiration API
  * ({@code Policy.expireVariably()}, available when the cache is built with
  * {@code expireAfter(Expiry)}). The {@code liveTime} and {@code maxIdleTime} parameters
  * in the {@link #put(Object, Object, long, long)} method are therefore ignored.
@@ -91,6 +91,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Creates a new CaffeineCache wrapper instance.
      * The underlying Caffeine cache should be pre-configured with desired
      * eviction policies, maximum size, and expiration settings.
+     *
+     * <p><b>&#9888;&#65039; Shared-instance impact:</b> Calling {@link #close()} invalidates every
+     * entry in the supplied Caffeine cache. Do not share that instance with components
+     * that expect its entries to survive this wrapper's lifetime.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -156,7 +160,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Stores a key-value pair in the cache.
      * If the key already exists, its value will be replaced atomically.
      *
-     * <p><b>Important:</b> This wrapper does not use Caffeine's per-entry expiration API
+     * <p><b>&#9888;&#65039; Per-entry expiration is ignored:</b> This wrapper does not use Caffeine's per-entry expiration API
      * ({@code Policy.expireVariably()}), so the {@code liveTime} and {@code maxIdleTime}
      * parameters are ignored by this implementation. All entries use the cache-wide
      * expiration settings configured when building the Caffeine instance.
@@ -257,11 +261,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * record a read access or update Caffeine's frequency sketch, so it does not
      * influence access-based eviction or pollute hit/miss statistics.
      *
-     * <p>Note that {@code asMap().containsKey()} does evaluate expiration against the
-     * cache's ticker (a logically expired entry reports {@code false}), but it does not
-     * record an access, update statistics, or trigger Caffeine's housekeeping/maintenance
-     * task. Writes still buffered but not yet drained may make the result lag slightly
-     * behind a concurrent {@code put}.
+     * <p>Note that {@code asMap().containsKey()} evaluates expiration against the cache's
+     * ticker (a logically expired entry reports {@code false}), but it does not record an
+     * access, update statistics, or trigger Caffeine's housekeeping task. As with any
+     * concurrent map query, a concurrent update may change the result immediately.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads.
@@ -322,10 +325,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns the estimated number of entries in the cache.
-     * This is an approximation and may not be exact: Caffeine maintains internal read/write buffers,
-     * and entries that have been added or removed but not yet drained from those buffers are not
-     * reflected in this count, so the returned value can lag slightly behind the true size. It may
-     * also include entries that have expired but have not yet been removed by Caffeine's housekeeping.
+     * This is an approximation and may include entries that have expired but have not yet
+     * been removed by Caffeine's housekeeping. Concurrent updates can also change the count
+     * immediately after it is observed.
      * If the underlying {@code long} estimate exceeds {@link Integer#MAX_VALUE}, it is clamped to
      * {@code Integer.MAX_VALUE}.
      *
@@ -384,10 +386,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Closes this cache wrapper and releases its references to cached entries.
-     * After closing, subsequent operations throw {@link IllegalStateException}.
+     * After closing, operations that read or mutate entries throw {@link IllegalStateException};
+     * {@link #stats()}, {@link #caffeineStats()}, and {@link #isClosed()} remain available,
+     * while {@link #keySet()} remains unsupported.
      * This method invalidates all entries and marks the wrapper as closed. Unlike some other
      * cache implementations, the underlying Caffeine cache instance is not explicitly closed
      * (Caffeine caches do not implement {@link AutoCloseable}); only its entries are invalidated.
+     *
+     * <p><b>&#9888;&#65039; Shared-instance impact:</b> Invalidation affects every user of the supplied
+     * Caffeine cache, not only this wrapper.
      *
      * <p><b>Thread Safety:</b> This method is {@code synchronized}, thread-safe, and idempotent.
      * Calling it again has no additional effect and does not throw.

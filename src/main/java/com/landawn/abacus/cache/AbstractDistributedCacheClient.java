@@ -180,9 +180,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
     }
 
     /**
-     * Retrieves multiple objects from the cache using varargs.
-     * This is more efficient than multiple individual get operations.
-     * Keys not found in the cache will not be present in the returned map.
+     * Optional bulk retrieval using varargs. The base implementation does not support this
+     * operation; overriding implementations return only keys that were found.
      *
      * <p><b>Default Implementation:</b> This default implementation throws {@code UnsupportedOperationException}.
      * Subclasses should override this method if the underlying cache system supports bulk retrieval
@@ -232,9 +231,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
     }
 
     /**
-     * Retrieves multiple objects from the cache using a collection.
-     * This is more efficient than multiple individual get operations.
-     * Keys not found in the cache will not be present in the returned map.
+     * Optional bulk retrieval using a collection. The base implementation does not support this
+     * operation; overriding implementations return only keys that were found.
      *
      * <p><b>Default Implementation:</b> This default implementation throws {@code UnsupportedOperationException}.
      * Subclasses should override this method if the underlying cache system supports bulk retrieval
@@ -316,7 +314,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * once executed, all cached data will be permanently lost and the effects are
      * visible immediately to all clients connected to the same cache servers.
      *
-     * <p><b>Warning:</b> This is a destructive operation that removes all data
+     * <p><b>&#9888;&#65039; Destructive operation:</b> An overriding implementation removes all data
      * from all connected cache servers. There is no way to undo this operation.
      * Use with extreme caution in production environments.
      *
@@ -349,9 +347,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
 
     /**
      * Converts milliseconds to seconds for cache operations.
-     * Most distributed caches (like Memcached and Redis) use seconds for time-to-live (TTL),
-     * so this utility method converts milliseconds (used by the Cache interface) to seconds.
-     * The method rounds up to ensure the TTL is not shorter than requested.
+     * Converts a millisecond TTL to the whole-second representation required by second-resolution
+     * backends such as Memcached. The bundled Redis clients use millisecond precision directly.
+     * The result rounds up so the converted TTL is not shorter than requested.
      *
      * <p><b>Rounding Behavior:</b>
      * <ul>
@@ -362,11 +360,6 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *     {@link DistributedCacheClient#set(String, Object, long)} contract that documents
      *     "0 or negative for no expiration"</li>
      * </ul>
-     *
-     * <p><b>Implementation Details:</b> The conversion algorithm uses integer division
-     * and modulo operations to efficiently round up fractional seconds. If the millisecond
-     * value is evenly divisible by 1000, it performs exact division. Otherwise, it adds 1
-     * to round up. This ensures that a TTL of 1ms becomes 1s, not 0s.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe as it has no side effects
      * and operates only on method parameters.
@@ -410,7 +403,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
         final long seconds = (liveTime % 1000 == 0) ? (liveTime / 1000) : (liveTime / 1000) + 1;
 
         if (seconds > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Time value too large: " + liveTime + " ms (exceeds max integer seconds)");
+            throw new IllegalArgumentException("liveTime of " + liveTime + " ms exceeds the maximum supported TTL of " + Integer.MAX_VALUE + " seconds");
         }
 
         return (int) seconds;

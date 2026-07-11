@@ -33,7 +33,7 @@ import com.landawn.abacus.util.N;
  * allowing Ehcache to be used seamlessly within the Abacus caching framework.
  *
  * <p>
- * <b>Important Note:</b> Ehcache configures expiration policies at the cache level during
+ * <b>&#9888;&#65039; Per-entry expiration is ignored:</b> Ehcache configures expiration policies at the cache level during
  * cache creation, not per-entry. Therefore, the {@code liveTime} and {@code maxIdleTime}
  * parameters in the {@link #put(Object, Object, long, long)} method are ignored.
  * Configure expiration settings when building the Ehcache instance instead.
@@ -157,7 +157,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * If the key already exists, its value will be replaced.
      *
      * <p>
-     * <b>Important Note:</b> Ehcache's expiration policy is configured at cache creation time.
+     * <b>&#9888;&#65039; Per-entry expiration is ignored:</b> Ehcache's expiration policy is configured at cache creation time.
      * The liveTime and maxIdleTime parameters are ignored by this implementation.
      * All entries use the cache-wide expiration settings.
      *
@@ -326,6 +326,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * In other words, do not rely on {@code result.containsKey(k)} == false meaning "absent" —
      * check {@code result.get(k) == null} instead.
      *
+     * <p><b>&#9888;&#65039; Partial result:</b> If bulk loading fails, some requested keys may
+     * already have succeeded. Inspect the success and failure maps carried by
+     * {@link BulkCacheLoadingException} before deciding whether to retry.
+     *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
      * providing optimized batch retrieval capabilities.
      *
@@ -371,6 +375,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * in a single batch operation for optimal performance. If a cache writer is configured, all
      * writes are performed in a single batch. Existing entries are overwritten.
      *
+     * <p><b>&#9888;&#65039; Partial write:</b> A {@link BulkCacheWritingException} can report
+     * both successful and failed entries; the operation is not all-or-nothing.
+     *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
      * providing optimized batch storage capabilities.
      *
@@ -413,6 +420,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * when removing many entries or when using remote storage tiers. All keys are removed in a single
      * batch operation for optimal performance. The operation is idempotent - non-existent keys are
      * silently ignored. If a cache writer is configured, all deletions are performed in a single batch.
+     *
+     * <p><b>&#9888;&#65039; Partial removal:</b> A {@link BulkCacheWritingException} can report
+     * both successful and failed removals; the operation is not all-or-nothing.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
      * providing optimized batch removal capabilities.
@@ -533,6 +543,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * This operation invalidates all cached key-value pairs immediately across all storage tiers
      * (on-heap, off-heap, disk). This is a potentially expensive operation for large caches.
      *
+     * <p><b>&#9888;&#65039; Global, non-transactional operation:</b> Concurrent writes may remain
+     * after this call, and Ehcache does not invoke the configured cache writer or publish
+     * removal events for entries discarded by {@code clear()}.
+     *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
      * execution of the clear operation.
      *
@@ -560,8 +574,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Closes this wrapper. The underlying Ehcache instance is NOT cleared or disposed
      * because its lifecycle is owned by the {@code CacheManager} that created it —
      * multiple wrappers may share the same Ehcache instance, and the manager is free to
-     * keep using it directly after this wrapper is closed. After closing, this wrapper
-     * rejects further operations with {@link IllegalStateException}.
+     * keep using it directly after this wrapper is closed. After closing, supported entry
+     * operations reject calls with {@link IllegalStateException}; {@link #isClosed()} remains
+     * available, while {@link #keySet()} and {@link #size()} remain unsupported.
      *
      * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
      * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.

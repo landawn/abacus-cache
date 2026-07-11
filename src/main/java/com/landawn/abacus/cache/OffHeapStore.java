@@ -77,7 +77,11 @@ package com.landawn.abacus.cache;
  *             Files.write(file, value);
  *             Path previous = keyToFile.put(key, file);
  *             if (previous != null) {
- *                 Files.deleteIfExists(previous); // drop the file superseded by this put
+ *                 try {
+ *                     Files.deleteIfExists(previous); // best-effort cleanup of superseded bytes
+ *                 } catch (IOException ignored) {
+ *                     // The replacement is already committed; report it as successful.
+ *                 }
  *             }
  *             return true;
  *         } catch (IOException e) {
@@ -87,17 +91,19 @@ package com.landawn.abacus.cache;
  *     }
  *
  *     public boolean remove(K key) {
- *         Path file = keyToFile.remove(key);
- *         if (file != null) {
- *             try {
- *                 // Propagate the real result: false means nothing was actually deleted.
- *                 return Files.deleteIfExists(file);
- *             } catch (IOException e) {
- *                 // Log error and return false
+ *         Path file = keyToFile.get(key);
+ *         if (file == null) {
+ *             return false;
+ *         }
+ *         try {
+ *             if (!Files.deleteIfExists(file)) {
  *                 return false;
  *             }
+ *             return keyToFile.remove(key, file);
+ *         } catch (IOException e) {
+ *             // Keep the mapping so a later remove can retry cleanup.
+ *             return false;
  *         }
- *         return false;
  *     }
  * }
  * }</pre>

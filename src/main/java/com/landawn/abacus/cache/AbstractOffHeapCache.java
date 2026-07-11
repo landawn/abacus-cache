@@ -275,6 +275,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>The constructor is safe to invoke from a single initializing thread; all data
      * structures it sets up are designed for concurrent access thereafter.
+     * Custom serializers, deserializers, promotion predicates, storage selectors, and
+     * stores may be invoked concurrently and therefore must be thread-safe.
+     *
+     * <p><b>&#9888;&#65039; Store ownership:</b> When an {@code offHeapStore} is supplied, this cache
+     * assumes ownership and closes it from {@link #close()}.
      *
      * @param capacityInMB the total off-heap memory capacity in megabytes. Determines the total
      *                     number of segments ({@code capacityInMB} MB / 1 MB per segment). Must be positive.
@@ -406,7 +411,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         // Swallowed so the scheduled task keeps running; eviction retries on the next cycle.
                         // Pass the exception (not just its message) so the stack trace is preserved.
                         if (logger.isWarnEnabled()) {
-                            logger.warn("Error during background cache eviction; will retry on next scheduled run", e);
+                            logger.warn("Background empty-segment reclamation failed; will retry on the next scheduled run", e);
                         }
                     }
                 };
@@ -432,11 +437,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         shutdownHook = new Thread(() -> {
             logger.info("Initiating OffHeapCache shutdown");
 
-            try {
-                close();
-            } finally {
-                logger.info("OffHeapCache shutdown completed");
-            }
+            close();
+            logger.info("OffHeapCache shutdown completed");
         });
 
         // Adding a shutdown hook can fail with IllegalStateException if the JVM is already
@@ -447,9 +449,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         try {
             Runtime.getRuntime().addShutdownHook(shutdownHook);
         } catch (final IllegalStateException shuttingDown) {
-            if (logger.isWarnEnabled()) {
-                logger.warn("Cannot register shutdown hook (JVM is shutting down); cleaning up off-heap allocation", shuttingDown);
-            }
             try {
                 if (scheduleFuture != null) {
                     scheduleFuture.cancel(true);
@@ -775,7 +774,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                             storeWrapper.destroy(Caller.PUT_ADD_FAILURE);
 
                             if (logger.isWarnEnabled()) {
-                                logger.warn("Failed to restore off-heap cache entry after a failed disk-to-memory promotion for key: " + key);
+                                logger.warn("Failed to restore an off-heap cache entry after disk-to-memory promotion failed; the entry was discarded");
                             }
                         }
 
@@ -816,7 +815,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             removed.destroy(Caller.PUT_ADD_FAILURE);
 
             if (logger.isWarnEnabled()) {
-                logger.warn("Failed to restore off-heap cache entry after removing stale disk wrapper for key: " + key);
+                logger.warn("Failed to restore an off-heap cache entry after removing a stale disk wrapper; the entry was discarded");
             }
         }
     }
@@ -834,16 +833,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <p>Non-positive {@code liveTime} or {@code maxIdleTime} values are interpreted as
      * "no expiration" and internally translated to {@code Long.MAX_VALUE}.
      *
+     * <p><b>&#9888;&#65039; Replacement failure:</b> A failed replacement of a disk-spilled entry
+     * may leave the key without either value when the old store bytes have already been
+     * overwritten and cannot be restored.
+     *
      * @param key the key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to be cached; must not be {@code null}
      * @param liveTime the time-to-live for this entry in milliseconds; values {@code <= 0} mean no expiration
      * @param maxIdleTime the maximum idle time for this entry in milliseconds; values {@code <= 0} mean no idle timeout
      * @return {@code true} if the value was successfully cached (in memory or on disk);
-     *         {@code false} otherwise. Note that a failed put that was replacing an existing
-     *         disk-spilled entry may leave the cache without either value: the replacement removes
-     *         the previous entry as part of the attempt, and when the disk bytes have already been
-     *         overwritten the previous value cannot be restored.
-     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
+     *         {@code false} otherwise
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or if
+     *                                  {@code storeSelector} returns {@code null} or a value outside 0, 1, and 2
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -922,7 +923,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         try {
             // Inside the try so a throwing storeSelector still reaches the finally below,
             // which recycles the pooled serialization buffer.
-            final int storeSelection = storeSelector == null ? 0 : storeSelector.apply(key, value, size);
+            final Integer selectedStore = storeSelector == null ? Integer.valueOf(0) : storeSelector.apply(key, value, size);
+
+            if (selectedStore == null || selectedStore < 0 || selectedStore > 2) {
+                throw new IllegalArgumentException("storeSelector must return 0 (default), 1 (memory only), or 2 (disk only), but returned: " + selectedStore);
+            }
+
+            final int storeSelection = selectedStore;
             final boolean canBeStoredInMemory = storeSelection < 2;
             final boolean canBeStoredToDisk = storeSelection != 1;
             vacateOnNull = canBeStoredInMemory;
@@ -1083,7 +1090,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param type the value type information needed for deserialization when reading from disk
      * @param bytes the serialized value bytes to store on disk. The array may be larger than
      *              the actual data size, so only the first {@code size} bytes are stored.
-     * @param size the actual size of the serialized data in bytes. Must be positive and
+     * @param size the actual size of the serialized data in bytes. Must be non-negative and
      *             must not exceed the length of the {@code bytes} array.
      * @return a {@code StoreWrapper} for the disk-stored value if storage was successful,
      *         or {@code null} if the {@code offHeapStore.put()} operation failed
@@ -1152,7 +1159,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 prior.destroy(Caller.PUT_ADD_FAILURE);
 
                 if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to restore previous off-heap cache entry after disk write failure for key: " + k);
+                    logger.warn("Failed to restore the previous off-heap cache entry after a disk write failed; the previous entry was discarded");
                 }
             }
         }
@@ -1405,15 +1412,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Returns a point-in-time snapshot of cache statistics.
+     * Returns a sampled, point-in-time snapshot of cache statistics.
      * The snapshot includes entry counts, hit/miss counters, eviction counters, memory and disk usage,
      * disk I/O timing aggregates, and segment-slot occupancy details.
      *
      * <p>This method collects statistics from the underlying pool and segment queues, then assembles
-     * an immutable {@link OffHeapCacheStats} view. Segment queues and the disk I/O timing aggregates
-     * are synchronized while being read (under the same monitors used by
-     * {@link #put(Object, Object, long, long)} and {@link #getOrNull(Object)}), so the returned
-     * values are internally consistent for the capture moment.
+     * an immutable {@link OffHeapCacheStats} view. Each segment queue and each disk-I/O timing
+     * aggregate is captured under the monitor used to mutate that structure. Cross-component
+     * counters use {@link LongAdder} and pool snapshots, however, so the complete result is
+     * intentionally non-atomic and may be transiently inconsistent under concurrent activity.
+     *
+     * <p><b>&#9888;&#65039; Non-atomic snapshot:</b> Relationships between fields are conceptual
+     * invariants and may not hold exactly while the cache is being updated.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1563,7 +1573,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 offHeapStore.close();
             } catch (final Exception e) {
                 if (logger.isWarnEnabled()) {
-                    logger.warn("Error while closing the OffHeapStore during cache close()", e);
+                    logger.warn("Failed to close the configured OffHeapStore; off-heap memory is released but store resources may remain allocated", e);
                 }
             }
         }

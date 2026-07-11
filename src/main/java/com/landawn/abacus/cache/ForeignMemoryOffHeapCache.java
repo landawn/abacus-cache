@@ -47,7 +47,7 @@ import lombok.experimental.Accessors;
  * <p>Key features:
  * <ul>
  * <li>Uses the Foreign Memory API instead of {@code Unsafe}</li>
- * <li>Automatic memory management via {@link Arena}</li>
+ * <li>Deterministic memory lifetime through a shared {@link Arena}</li>
  * <li>Type-safe memory access via {@link MemorySegment}</li>
  * <li>Comparable steady-state (get/put) performance to an {@code Unsafe}-based implementation;
  *     construction differs - see the startup-cost note on {@code allocate}</li>
@@ -59,7 +59,7 @@ import lombok.experimental.Accessors;
  * <li>Requires the finalized Foreign Function &amp; Memory API (Java 22+; available as a preview in earlier releases)</li>
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
- * <li>Memory is allocated at startup and held until shutdown</li>
+ * <li>Memory is allocated during construction and held until {@link #close()}</li>
  * </ul>
  *
  * <p>Example usage:
@@ -78,6 +78,7 @@ import lombok.experimental.Accessors;
  * OffHeapCacheStats stats = cache.stats();
  * System.out.println("Memory utilization: " +
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
+ * cache.close();
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -269,11 +270,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * <p>The memory is allocated from the native heap and is not managed by the Java garbage collector.
      * This reduces GC pressure but requires explicit release via {@link #deallocate()} to avoid leaks.
      *
-     * <p><b>Startup cost:</b> unlike {@code OffHeapCache}'s {@code Unsafe.allocateMemory} (uninitialized,
-     * near-instant), {@link Arena#allocate(long)} zero-initializes the entire segment, so construction is
-     * O(capacity) in time and commits every page immediately (full RSS up-front). For very large caches
-     * (tens of GB) expect a construction stall of seconds; steady-state get/put performance is unaffected.
-     * The public FFM API offers no non-zeroing allocation, so this cost is inherent to this implementation.
+     * <p><b>Construction cost:</b> {@link Arena#allocate(long)} returns zero-initialized memory.
+     * Allocation latency and when physical pages become resident are operating-system dependent,
+     * so applications should measure construction and resident-memory behavior for their platform.
      *
      * @param capacityInBytes the number of bytes to allocate. Must be positive. This is typically a multiple
      *                        of {@code SEGMENT_SIZE} (1,048,576 bytes).
@@ -442,6 +441,11 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * <p>The builder uses Lombok's {@code @Data} and {@code @Accessors(chain = true, fluent = true)}
      * annotations to generate fluent setter methods automatically. All fields have sensible defaults
      * (except {@code capacityInMB}) and can be overridden before calling {@link #build()}.
+     * Custom serializers, deserializers, promotion predicates, storage selectors, and
+     * stores may be invoked concurrently and therefore must be thread-safe.
+     *
+     * <p><b>&#9888;&#65039; Store ownership:</b> A built cache assumes ownership of its configured
+     * {@link OffHeapStore} and closes it when the cache is closed.
      *
      * <p><b>Default Values:</b>
      * <ul>
@@ -635,7 +639,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * <li>1 - memory only (never store to disk, operation fails if memory unavailable)</li>
          * <li>2 - disk only (always store to disk via {@link #offHeapStore}, skip memory)</li>
          * </ul>
-         * Only applies when {@link #offHeapStore} is configured.
+         * The selector is evaluated for every put. Disk routing requires an
+         * {@link #offHeapStore}; without one, disk-only puts return {@code false}.
          *
          * <p>Default: {@code null} (default routing behavior)
          */
@@ -690,6 +695,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192),
          *                                  or if {@code vacatingFactor} is outside [0.0, 1.0]
          * @throws OutOfMemoryError if native memory allocation fails
+         * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is registered
+         * @throws SecurityException if the JVM denies shutdown-hook registration
          */
         public ForeignMemoryOffHeapCache<K, V> build() {
             return new ForeignMemoryOffHeapCache<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay,

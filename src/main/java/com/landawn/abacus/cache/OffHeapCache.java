@@ -56,7 +56,7 @@ import lombok.experimental.Accessors;
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
  * <li>Requires JVM flags for Unsafe access (see below)</li>
- * <li>Memory is allocated at startup and held until shutdown</li>
+ * <li>Memory is allocated during construction and held until {@link #close()}</li>
  * </ul>
  *
  * <p>Required JVM flags (for {@code sun.misc.Unsafe} access, plus the opens commonly needed by
@@ -85,6 +85,7 @@ import lombok.experimental.Accessors;
  * OffHeapCacheStats stats = cache.stats();
  * System.out.println("Memory utilization: " +
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
+ * cache.close();
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -347,7 +348,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * This method uses {@link sun.misc.Unsafe#copyMemory(Object, long, Object, long, long)} to perform
      * a fast, bulk memory copy. The first object parameter (srcBytes) indicates the source is a Java heap
      * object, while the second object parameter (null) indicates the destination is native memory.
-     * No bounds checking is performed - invalid parameters will cause a JVM crash.
+     * <p><b>&#9888;&#65039; No bounds checks:</b> Invalid addresses, offsets, or lengths can corrupt
+     * memory or terminate the JVM.
      *
      * @param startPtr the destination memory address in off-heap memory. Must be a valid address
      *                 within the allocated memory region (between _startPtr and _startPtr + capacity).
@@ -355,8 +357,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
      *                  operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
      *                  to skip past the array header to the actual data. Must be non-negative.
-     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the available
-     *            space at the destination address or the size of the source array from srcOffset.
+     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy), fit at the destination address,
+     *            and satisfy {@code srcOffset - BYTE_ARRAY_BASE + len <= srcBytes.length}.
      * @see #allocate(long)
      * @see #copyFromMemory(long, byte[], int, int)
      */
@@ -380,12 +382,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * This method uses {@link sun.misc.Unsafe#copyMemory(Object, long, Object, long, long)} to perform
      * a fast, bulk memory copy. The first object parameter (null) indicates the source is native memory,
      * while the second object parameter (bytes) indicates the destination is a Java heap object.
-     * No bounds checking is performed - invalid parameters will cause a JVM crash.
+     * <p><b>&#9888;&#65039; No bounds checks:</b> Invalid addresses, offsets, or lengths can corrupt
+     * memory or terminate the JVM.
      *
      * @param startPtr the source memory address in off-heap memory from which to copy data. Must be a
      *                 valid address within the allocated memory region (between _startPtr and _startPtr + capacity).
-     * @param bytes the destination byte array. Must not be null and must have sufficient capacity to
-     *              hold the copied data (at least destOffset + len).
+     * @param bytes the destination byte array. Must not be null and must satisfy
+     *              {@code destOffset - BYTE_ARRAY_BASE + len <= bytes.length}.
      * @param destOffset the byte offset within the destination array object in memory. For Unsafe-based
      *                   operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
      *                   to skip past the array header to the actual data. Must be non-negative.
@@ -450,6 +453,11 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * <p>The builder uses Lombok's {@code @Data} and {@code @Accessors} annotations to generate fluent
      * setter methods automatically. All fields have sensible defaults (except {@code capacityInMB}, which is required)
      * and can be overridden as needed before calling {@link #build()}.
+     * Custom serializers, deserializers, promotion predicates, storage selectors, and
+     * stores may be invoked concurrently and therefore must be thread-safe.
+     *
+     * <p><b>&#9888;&#65039; Store ownership:</b> A built cache assumes ownership of its configured
+     * {@link OffHeapStore} and closes it when the cache is closed.
      *
      * <p><b>Default Values:</b>
      * <ul>
@@ -646,7 +654,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * <li>1 - memory only (never store to disk, operation fails if memory unavailable)</li>
          * <li>2 - disk only (always store to disk via {@link #offHeapStore}, skip memory)</li>
          * </ul>
-         * Only applies when {@link #offHeapStore} is configured.
+         * The selector is evaluated for every put. Disk routing requires an
+         * {@link #offHeapStore}; without one, disk-only puts return {@code false}.
          *
          * <p>Default: {@code null} (default routing behavior)
          */
@@ -708,6 +717,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192),
          *                                  or if {@code vacatingFactor} is outside [0.0, 1.0]
          * @throws OutOfMemoryError if native memory allocation fails
+         * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is registered
+         * @throws SecurityException if the JVM denies shutdown-hook registration
          */
         public OffHeapCache<K, V> build() {
             return new OffHeapCache<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,

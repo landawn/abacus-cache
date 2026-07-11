@@ -46,6 +46,12 @@ package com.landawn.abacus.cache;
  * <p><b>Thread Safety:</b> Instances are immutable and thread-safe; multiple threads may read
  * the statistics concurrently without external synchronization.
  *
+ * <p><b>&#9888;&#65039; Adapter-reported metrics:</b> values reflect what the backing implementation
+ * exposes. For example, an unbounded adapter may report {@code capacity == 0}, and an adapter
+ * with statistics recording disabled may report zero operation counters even after use. Treat
+ * zero as an implementation-specific reported value, not universally as proof that no capacity
+ * or operations exist.
+ *
  * <p>Inspired by <a href="https://github.com/ben-manes/caffeine">Caffeine</a>'s cache statistics concept.
  *
  * <p><b>Usage Examples:</b>
@@ -91,14 +97,13 @@ package com.landawn.abacus.cache;
  * System.out.println("Requests (derived): " + derivedRequestCount + ", reported: " + stats.getCount());
  * }</pre>
  *
- * @param capacity the maximum number of entries the cache can hold. This value is set during cache creation
- *                 and represents the upper limit of entries before eviction occurs. Must be non-negative.
+ * @param capacity the capacity reported by the cache adapter; depending on the backing cache this
+ *                 may be an entry limit, another policy limit, or {@code 0} when unbounded/unreported.
+ *                 Must be non-negative.
  * @param size the current number of entries stored in the cache at the time of this snapshot. This count
  *             may transiently include expired entries that have not yet been evicted. Must be non-negative.
- * @param putCount the total cumulative number of put operations performed since cache creation,
- *                 including both insertions of new entries and updates of existing entries. Must be non-negative.
- * @param getCount the total cumulative number of get operations attempted since cache creation,
- *                 regardless of whether the operation resulted in a hit or miss. Must be non-negative.
+ * @param putCount the cumulative put count reported by the adapter. Must be non-negative.
+ * @param getCount the cumulative get count reported by the adapter. Must be non-negative.
  *                 Normally equals {@code hitCount + missCount}, but the relationship is not
  *                 enforced because the counters are sampled non-atomically.
  * @param hitCount the number of get operations that successfully found and returned a cached value.

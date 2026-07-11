@@ -217,8 +217,8 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * masters fail, Jedis raises a broadcast exception <em>after</em> attempting every master, so a
      * single failing node does not prevent the others from being flushed.
      *
-     * <p><b>Warning:</b> This affects ALL databases on every cluster node. If other applications share
-     * the cluster, their data will also be deleted.
+     * <p><b>&#9888;&#65039; Destructive operation:</b> This removes all keys from database 0 on every primary
+     * node. If other applications share the cluster, their data is also deleted.
      *
      * @throws RuntimeException if flushing one or more cluster nodes fails (typically a
      *         {@code JedisBroadcastException} reporting the per-node outcomes)
