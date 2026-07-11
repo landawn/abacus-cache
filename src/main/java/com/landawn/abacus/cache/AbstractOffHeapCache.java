@@ -242,9 +242,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     private Object storeKeyLockFor(final K key) {
-        // storeKeyLocks.length is a power of two, so masking with (length - 1) already yields a
-        // non-negative index even when key.hashCode() is negative (it keeps only the low bits).
-        return storeKeyLocks[key.hashCode() & (storeKeyLocks.length - 1)];
+        // Spread the hash before masking (same as ConcurrentHashMap): masking keeps only the low
+        // bits, so keys whose hashCodes share them (e.g. numeric IDs with a stride that is a
+        // multiple of the stripe count) would otherwise collapse onto one stripe and serialize
+        // their disk I/O. The power-of-two mask also keeps the index non-negative.
+        final int h = key.hashCode();
+        return storeKeyLocks[(h ^ (h >>> 16)) & (storeKeyLocks.length - 1)];
     }
 
     // Guards native memory against close(): writers of off-heap memory (put(), and the
@@ -565,8 +568,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
      *         or the disk-backed entry has been removed from the store
      * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws IllegalStateException if a value cannot be reconstructed because the retrieved
-     *                               size no longer matches the recorded size (data corruption detected)
+     * @throws IllegalStateException if the cache has been closed, or if a value cannot be
+     *                               reconstructed because the retrieved size no longer matches
+     *                               the recorded size (data corruption detected)
      */
     @Override
     public V getOrNull(final K key) {
@@ -798,7 +802,22 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     private void removeStaleStoreWrapperIfCurrent(final K key, final StoreWrapper storeWrapper) {
-        final Wrapper<V> removed = _pool.remove(key);
+        // Runs from getOrNull(), which deliberately does not hold the lifecycle lock, so a
+        // concurrent close() can complete at any point here and make the pool reject remove/put
+        // with an IllegalStateException. Treat that as "nothing left to clean up" instead of
+        // letting a plain get() throw: post-close, the pool has destroyed its entries and the
+        // native memory and store are torn down, so any bookkeeping skipped here is inert.
+        final Wrapper<V> removed;
+
+        try {
+            removed = _pool.remove(key);
+        } catch (final IllegalStateException e) {
+            if (_pool.isClosed()) {
+                return;
+            }
+
+            throw e;
+        }
 
         if (removed == null) {
             return;
@@ -809,7 +828,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        final boolean restored = _pool.put(key, removed);
+        final boolean restored;
+
+        try {
+            restored = _pool.put(key, removed);
+        } catch (final IllegalStateException e) {
+            if (_pool.isClosed()) {
+                // The wrapper removed above escaped _pool.close()'s destroy sweep, but destroying
+                // it here would touch the already-closed OffHeapStore; skip it (inert post-close).
+                return;
+            }
+
+            throw e;
+        }
 
         if (!restored) {
             removed.destroy(Caller.PUT_ADD_FAILURE);
@@ -1354,6 +1385,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the key whose mapping is to be removed from the cache; must not be {@code null}
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public void remove(final K key) {
@@ -1372,6 +1404,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param key the key whose presence in the cache is to be tested; must not be {@code null}
      * @return {@code true} if the cache contains a mapping for the specified key; {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean containsKey(final K key) {
@@ -1385,6 +1418,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * including the keys of entries that have been spilled to disk.
      *
      * @return the set of cache keys; never {@code null}
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public Set<K> keySet() {
@@ -1395,6 +1429,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Returns the number of entries currently held in the cache (including disk-stored entries).
      *
      * @return the current cache size
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public int size() {
@@ -1404,6 +1439,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes all entries from the cache, destroying their wrappers and releasing
      * any associated off-heap memory and disk storage.
+     *
+     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public void clear() {
@@ -1439,6 +1476,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @return the statistics snapshot for this cache instance; never {@code null}
+     * @throws IllegalStateException if the cache has been closed
      */
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();
@@ -1504,8 +1542,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Closes the cache and releases all resources.
      * Cancels the scheduled eviction task, shuts down the asynchronous vacation executor,
-     * removes JVM shutdown hooks, closes the underlying object pool, and deallocates all
-     * off-heap memory. This method is
+     * removes JVM shutdown hooks, closes the underlying object pool, deallocates all
+     * off-heap memory, and closes the configured {@link OffHeapStore}, if any. This method is
      * idempotent: invoking it on an already-closed cache returns immediately. It is
      * also invoked automatically by the registered shutdown hook during JVM shutdown.
      */

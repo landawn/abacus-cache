@@ -90,7 +90,6 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      */
     protected static final long DEFAULT_RETRY_DELAY = 1000;
 
-    // ...
     private final DistributedCacheClient<V> client;
 
     private final String keyPrefix;

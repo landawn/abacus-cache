@@ -152,8 +152,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *                  or both; must not be {@code null}, empty, or blank
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains
      *         no valid server addresses
-     * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the
-     *         Memcached server(s) fails
+     * @throws RuntimeException if {@code serverUrl} cannot be parsed (e.g., an unresolvable hostname)
+     *         or local client/socket setup fails. Note: connections are established asynchronously by
+     *         the SpyMemcached IO thread — a resolvable but unreachable or down server does <b>not</b>
+     *         fail construction; operations against it fail later with timeouts.
      * @see #SpyMemcached(String, long)
      */
     public SpyMemcached(final String serverUrl) {
@@ -186,8 +188,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *                and fail every operation instantly.
      * @throws IllegalArgumentException if {@code timeout} is not positive, or if {@code serverUrl}
      *         is {@code null}, empty, blank, or contains no valid server addresses
-     * @throws RuntimeException if {@code serverUrl} cannot be parsed or the connection to the
-     *         Memcached server(s) fails
+     * @throws RuntimeException if {@code serverUrl} cannot be parsed (e.g., an unresolvable hostname)
+     *         or local client/socket setup fails. Note: connections are established asynchronously by
+     *         the SpyMemcached IO thread — a resolvable but unreachable or down server does <b>not</b>
+     *         fail construction; operations against it fail later with timeouts.
      */
     public SpyMemcached(final String serverUrl, final long timeout) {
         super(serverUrl);
@@ -903,7 +907,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> If the key doesn't exist, returns -1. Only works with string
      * representations of 64-bit unsigned integers stored in Memcached. The value must be stored as a
-     * decimal string representation.
+     * decimal string representation. Although memcached counters are unsigned 64-bit, this client
+     * parses responses as a signed {@code long}: keep counter values below 2<sup>63</sup> — a stored
+     * value at or above that is valid to the server but unparseable by the client, and every
+     * subsequent access fails and tears down the connection.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
@@ -952,7 +959,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> If the key doesn't exist, returns -1. Only works with string
      * representations of 64-bit unsigned integers stored in Memcached. The value must be stored as a
-     * decimal string representation.
+     * decimal string representation. Although memcached counters are unsigned 64-bit, this client
+     * parses responses as a signed {@code long}: keep counter values below 2<sup>63</sup> — a stored
+     * value at or above that is valid to the server but unparseable by the client, and every
+     * subsequent access fails and tears down the connection.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
@@ -1014,7 +1024,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <b>the increment is NOT applied on the initial insert</b>: when the key is absent the stored
      * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
      * {@code defaultValue + delta}). The {@code delta} only takes effect on subsequent calls when the
-     * key already exists. Values are stored as 64-bit unsigned integers in decimal string format.
+     * key already exists. Values are stored as 64-bit unsigned integers in decimal string format;
+     * keep seeds and accumulated values below 2<sup>63</sup> (see {@link #incr(String, long)}).
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
@@ -1069,7 +1080,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <b>the increment is NOT applied on the initial insert</b>: when the key is absent the stored
      * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
      * {@code defaultValue + delta}). The {@code delta} only takes effect on subsequent calls when the
-     * key already exists. Values are stored as 64-bit unsigned integers in decimal string format.
+     * key already exists. Values are stored as 64-bit unsigned integers in decimal string format;
+     * keep seeds and accumulated values below 2<sup>63</sup> (see {@link #incr(String, long)}).
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent increment operations are guaranteed to be serialized correctly,
@@ -1123,7 +1135,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Memcached-Specific Behavior:</b> If the key doesn't exist, returns -1. Values cannot go below 0
      * (Memcached prevents underflow - attempting to decrement 0 results in 0, not a negative value).
      * Only works with string representations of 64-bit unsigned integers stored in Memcached. The value
-     * must be stored as a decimal string representation.
+     * must be stored as a decimal string representation, and must be below 2<sup>63</sup> — a stored
+     * value at or above that is valid to the server but unparseable by this client, and every
+     * subsequent access fails and tears down the connection.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
@@ -1170,7 +1184,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p><b>Memcached-Specific Behavior:</b> If the key doesn't exist, returns -1. Values cannot go below 0
      * (Memcached prevents underflow - if delta is larger than the current value, the result will be 0, not negative).
      * Only works with string representations of 64-bit unsigned integers stored in Memcached. The value
-     * must be stored as a decimal string representation.
+     * must be stored as a decimal string representation, and must be below 2<sup>63</sup> — a stored
+     * value at or above that is valid to the server but unparseable by this client, and every
+     * subsequent access fails and tears down the connection.
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
@@ -1233,7 +1249,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
      * {@code defaultValue - delta}). The {@code delta} only takes effect on subsequent calls when the
      * key already exists. Values cannot go below {@code 0} (Memcached clamps underflow). Values are
-     * stored as 64-bit unsigned integers in decimal string format.
+     * stored as 64-bit unsigned integers in decimal string format; keep seeds and accumulated values
+     * below 2<sup>63</sup> (see {@link #decr(String, long)}).
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
@@ -1291,7 +1308,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
      * {@code defaultValue - delta}). The {@code delta} only takes effect on subsequent calls when the
      * key already exists. Values cannot go below {@code 0} (Memcached clamps underflow). Values are
-     * stored as 64-bit unsigned integers in decimal string format.
+     * stored as 64-bit unsigned integers in decimal string format; keep seeds and accumulated values
+     * below 2<sup>63</sup> (see {@link #decr(String, long)}).
      *
      * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
      * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
@@ -1352,6 +1370,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * <p>Semantics mirror memcached's incr-with-default: when the key is absent, the stored value
      * is {@code defaultValue} and that same value is returned — the delta is NOT applied on the
      * initial insert.
+     *
+     * <p>Bound: memcached counters are unsigned 64-bit, but spymemcached parses every mutate
+     * response with {@code Long.parseLong}; a counter at or above 2<sup>63</sup> throws a
+     * {@code NumberFormatException} inside the client's IO thread, which tears down (and
+     * reconnects) the whole connection on every access to that key. Validation here cannot prevent
+     * accumulated increments from crossing that bound, so the public counter docs instruct callers
+     * to keep seeds and values below {@code Long.MAX_VALUE}.
      *
      * @param isIncrement {@code true} for incr, {@code false} for decr
      * @param key the counter key
@@ -1759,7 +1784,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *                  or both
      * @param connFactory the connection factory configured with timeout and transcoder settings
      * @return a configured {@link MemcachedClient} instance
-     * @throws UncheckedIOException if the connection to the Memcached server(s) fails
+     * @throws UncheckedIOException if local client/socket setup fails. Connections are established
+     *         asynchronously by the SpyMemcached IO thread, so an unreachable or down server does
+     *         not cause this method to fail
      */
     protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory) throws UncheckedIOException {
         try {

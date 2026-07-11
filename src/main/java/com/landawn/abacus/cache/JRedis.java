@@ -285,10 +285,15 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
     /**
      * Closes every shard's {@link RedisClient}, shutting down its connection pool. Best-effort: a
      * failure closing one shard is logged at WARN level and does not prevent the remaining shards from
-     * being closed. Invoked once by the idempotent {@link #disconnect()} template.
+     * being closed. An {@link Error} thrown by a close is rethrown only after every shard has been
+     * attempted (later failures attached as suppressed) — aborting on the first shard would leave the
+     * remaining pools permanently unclosable, because {@code disconnect()} marks the client shut down
+     * even on failure. Invoked once by the idempotent {@link #disconnect()} template.
      */
     @Override
     protected void closeClients() {
+        Error firstError = null;
+
         for (int shardIndex = 0; shardIndex < clients.size(); shardIndex++) {
             @SuppressWarnings("resource")
             final RedisClient jedis = clients.get(shardIndex);
@@ -299,7 +304,17 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
                 if (logger.isWarnEnabled()) {
                     logger.warn("Failed to close Redis client for shard index " + shardIndex + " during disconnect(); continuing with remaining shards", e);
                 }
+            } catch (final Error e) {
+                if (firstError == null) {
+                    firstError = e;
+                } else {
+                    firstError.addSuppressed(e);
+                }
             }
+        }
+
+        if (firstError != null) {
+            throw firstError;
         }
     }
 }

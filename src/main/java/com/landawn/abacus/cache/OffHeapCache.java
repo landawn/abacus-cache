@@ -33,7 +33,9 @@ import com.landawn.abacus.util.function.TriPredicate;
 import lombok.Data;
 import lombok.experimental.Accessors;
 
-//--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
+// --sun-misc-unsafe-memory-access=allow is what this class itself needs on JDK 24+ (JEP 498); the
+// opens/exports below are for serialization libraries (e.g. Kryo), not for Unsafe access:
+//--sun-misc-unsafe-memory-access=allow --add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED
 
 /**
  * A high-performance off-heap cache implementation using sun.misc.Unsafe for direct memory management.
@@ -55,14 +57,22 @@ import lombok.experimental.Accessors;
  * <ul>
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
- * <li>Requires JVM flags for Unsafe access (see below)</li>
+ * <li>Requires a JVM flag for Unsafe memory access on JDK 24+ (see below)</li>
  * <li>Memory is allocated during construction and held until {@link #close()}</li>
  * </ul>
  *
- * <p>Required JVM flags (for {@code sun.misc.Unsafe} access, plus the opens commonly needed by
- * serialization libraries such as Kryo):
+ * <p>Required JVM flag on JDK 24+ (JEP 498) — permits the {@code sun.misc.Unsafe} memory-access
+ * methods this cache is built on. Without it, JDK 24+ prints a startup warning, and once the JDK's
+ * default becomes {@code deny} in a future release, this class will fail with
+ * {@code UnsupportedOperationException} at class load:
  * <pre>
- * --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
+ * --sun-misc-unsafe-memory-access=allow
+ * </pre>
+ *
+ * <p>Additional flags commonly needed by serialization libraries such as Kryo (not by this class
+ * itself &mdash; {@code jdk.unsupported} exports and opens {@code sun.misc} unconditionally, so no
+ * {@code --add-exports} flag is needed to reach {@code Unsafe}):
+ * <pre>
  * --add-exports=java.base/sun.nio.ch=ALL-UNNAMED
  * --add-opens=java.base/java.lang=ALL-UNNAMED
  * --add-opens=java.base/java.lang.reflect=ALL-UNNAMED

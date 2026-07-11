@@ -44,8 +44,10 @@ import com.landawn.abacus.logging.LoggerFactory;
  * </ul>
  *
  * <p><b>&#9888;&#65039; Lease safety limitation:</b> this is a best-effort, expiring lease rather than a
- * correctness-grade distributed lock. Memcached has no atomic compare-and-delete operation, so
- * {@link #unlock(Object)} deletes the key without proving ownership. If a holder pauses longer than
+ * correctness-grade distributed lock. The classic memcached text protocol used by the underlying
+ * client has no atomic compare-and-delete operation (modern memcached offers one only via the meta
+ * protocol, which SpyMemcached does not speak), so {@link #unlock(Object)} deletes the key without
+ * proving ownership. If a holder pauses longer than
  * the TTL, another client can acquire the expired key and the original holder can subsequently
  * delete that newer lease. Memcached eviction, restart, failover, or a global flush may also remove
  * the key before its TTL, allowing overlapping holders even without a pause. Do not use this class
@@ -106,7 +108,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * @param serverUrl one or more {@code host:port} addresses separated by commas, whitespace,
      *                  or both; must not be null, empty, or blank
-     * @throws IllegalArgumentException if serverUrl is null, empty, or blank
+     * @throws IllegalArgumentException if serverUrl is null, empty, or blank, or contains no
+     *         valid {@code host:port} addresses
      * @throws RuntimeException if connection to the Memcached server(s) fails
      */
     public MemcachedLock(final String serverUrl) {
@@ -446,8 +449,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * scheduling, network jitter), the original holder's lock can expire and be reacquired by a
      * second client before the first client's unlock call runs — at which point the first client
      * deletes the second client's lock and a third client may immediately acquire it. A safe
-     * "delete-if-mine" requires an atomic compare-and-delete primitive (e.g., Redis Lua scripts),
-     * which the Memcached protocol does not provide.
+     * "delete-if-mine" requires an atomic compare-and-delete primitive (e.g., Redis Lua scripts,
+     * or memcached's meta-protocol {@code md <key> C<cas>}), which the classic text protocol used
+     * by the underlying SpyMemcached client does not provide.
      *
      * <p>Implementing ownership verification by reading {@link #get(Object)} and comparing before
      * calling {@code unlock} is <b>also racy</b> (the lock can expire between the read and the
@@ -666,8 +670,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      */
     protected String toKey(final K target) {
         // Match the Javadoc contract: a null target is a programming error and must be rejected.
-        // Without this check, N.stringOf(null) returns the string "null", which would silently
-        // collide on a single global "null" lock key across the whole application.
+        // Without this check, N.stringOf(null) returns null, and the null key would fail later
+        // inside the memcached client with an unhelpful NPE instead of the documented
+        // IllegalArgumentException.
         N.checkArgNotNull(target, "target");
         return N.stringOf(target);
     }

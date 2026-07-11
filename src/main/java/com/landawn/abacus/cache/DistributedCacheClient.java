@@ -396,7 +396,9 @@ public interface DistributedCacheClient<T> {
      * }
      *
      * // Inventory management. Branch on == -1 (key never seeded) and == 0 (depleted): on
-     * // Memcached the result is never negative (clamped at 0), so a "< 0" guard would never fire.
+     * // Memcached an existing counter is clamped at 0 and never goes negative; -1 is returned
+     * // only as the absent-key sentinel, so a "< 0" guard fires only for a never-seeded key
+     * // and can never detect depletion.
      * long stock = client.decr("product:stock:123");
      * if (stock == -1) {
      *     throw new IllegalStateException("Stock counter was never seeded");   // Memcached: absent key
@@ -443,9 +445,11 @@ public interface DistributedCacheClient<T> {
      * System.out.println("Remaining inventory: " + inventory);
      *
      * // API quota management. Note the guards below are written for Redis semantics (negative
-     * // results allowed). On Memcached the result is clamped at 0 and never negative, so a
-     * // multi-unit decrement CANNOT detect "not enough quota left" this way - seed the counter
-     * // and treat 0 as exhausted instead (see the single-decrement example on decr(String)).
+     * // results allowed). On Memcached an existing counter is clamped at 0, so a multi-unit
+     * // decrement CANNOT detect "not enough quota left" this way - and the "< 0" guard would
+     * // fire for a never-seeded key (-1 sentinel), misreporting "counter absent" as "quota
+     * // exceeded". Seed the counter and treat 0 as exhausted instead (see the single-decrement
+     * // example on decr(String)).
      * int requestCost = calculateCost(request);
      * long quotaRemaining = client.decr("quota:" + apiKey, requestCost);   // Redis-style guard below
      * if (quotaRemaining < 0) {

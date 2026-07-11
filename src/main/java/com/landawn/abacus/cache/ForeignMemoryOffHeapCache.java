@@ -35,7 +35,7 @@ import lombok.Data;
 import lombok.experimental.Accessors;
 
 // Flags for serialization libraries (e.g. Kryo) only - unlike OffHeapCache, this class itself needs no
-// --add-exports=jdk.unsupported/sun.misc flag (it uses the Foreign Memory API instead of Unsafe):
+// --sun-misc-unsafe-memory-access=allow flag (it uses the Foreign Memory API instead of Unsafe):
 //--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED
 
 /**

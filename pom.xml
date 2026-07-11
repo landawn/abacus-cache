@@ -241,6 +241,7 @@
 					if you want failures to fail the build -->
 					<argLine>
 						-Dfile.encoding=UTF-8
+						--sun-misc-unsafe-memory-access=allow
 						--add-opens java.base/java.lang=ALL-UNNAMED
 						--add-opens java.base/java.lang.reflect=ALL-UNNAMED
 						--add-opens java.base/java.io=ALL-UNNAMED

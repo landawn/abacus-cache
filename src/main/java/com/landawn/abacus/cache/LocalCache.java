@@ -273,9 +273,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.put(null, user, 1000, 1000);             // throws IllegalArgumentException (key must not be null)
      * }</pre>
      *
-     * <p><b>&#9888;&#65039; Replacement failure:</b> Some custom pools remove an existing mapping
-     * before attempting to store its replacement. If such a pool rejects the new entry,
-     * this method returns {@code false} and the previous mapping may no longer be present.
+     * <p><b>&#9888;&#65039; Replacement failure:</b> The underlying pool (including the default
+     * {@code GenericKeyedObjectPool}) removes and destroys an existing mapping <i>before</i>
+     * attempting to store its replacement. If the pool then rejects the new entry (capacity or
+     * memory limit), this method returns {@code false} and the previous mapping is no longer present.
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
      * @param value the cache value to be associated with the specified key (must not be null)
@@ -514,7 +515,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <ul>
      * <li><b>capacity</b> - Maximum number of entries the cache can hold</li>
      * <li><b>size</b> - Current number of entries in the cache (may include expired entries)</li>
-     * <li><b>putCount</b> - Total number of put operations since cache creation</li>
+     * <li><b>putCount</b> - Total number of successful put operations since cache creation
+     *     (puts rejected by the pool's capacity or memory limit are not counted)</li>
      * <li><b>getCount</b> - Total number of get operations (hits + misses)</li>
      * <li><b>hitCount</b> - Number of successful cache hits (entry found and not expired)</li>
      * <li><b>missCount</b> - Number of cache misses (entry not found or expired)</li>

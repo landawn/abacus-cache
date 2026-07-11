@@ -201,7 +201,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // This base-class default always throws; the calls below assume a subclass override.
+     * // The successful calls below need a subclass that overrides getBulk (SpyMemcached does).
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * Map<String, User> users = client.getBulk("user:123", "user:456", "user:789");   // map of found keys; missing keys are absent
      * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));  // prints one line per found entry
@@ -211,8 +211,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * Map<String, User> result = client.getBulk(requestedKeys);                                         // size() <= 3 (only found keys)
      * System.out.println("Retrieved " + result.size() + " out of " + requestedKeys.length + " users");  // prints e.g. "Retrieved 2 out of 3 users"
      *
-     * // Without a subclass override, the base-class default does not validate keys and simply throws {@code UnsupportedOperationException}:
-     * client.getBulk("user:123");                                                      // throws UnsupportedOperationException (default impl)
+     * // Without a subclass override, the base-class default does not validate keys and simply throws:
+     * AbstractDistributedCacheClient<User> plain = new MyDistributedCache<>("localhost:11211");  // does not override getBulk
+     * plain.getBulk("user:123");                                                       // throws UnsupportedOperationException (default impl)
      * }</pre>
      *
      * @param keys the cache keys to retrieve values for (variable number of String arguments),
@@ -257,7 +258,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // This base-class default always throws; the calls below assume a subclass override.
+     * // The successful calls below need a subclass that overrides getBulk (SpyMemcached does).
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * List<String> userKeys = Arrays.asList("user:123", "user:456", "user:789");       // setup: 3 keys to look up
      * Map<String, User> users = client.getBulk(userKeys);                              // map of found keys; missing keys are absent
@@ -270,8 +271,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *         .collect(Collectors.toSet());                                            // -> {"product:101", "product:102", "product:103"}
      * Map<String, Product> products = client.getBulk(productKeys);                     // map of found keys; missing keys are absent
      *
-     * // Without a subclass override, the base-class default does not validate keys and simply throws {@code UnsupportedOperationException}:
-     * client.getBulk(userKeys);                                                        // throws UnsupportedOperationException (default impl)
+     * // Without a subclass override, the base-class default does not validate keys and simply throws:
+     * AbstractDistributedCacheClient<User> plain = new MyDistributedCache<>("localhost:11211");  // does not override getBulk
+     * plain.getBulk(userKeys);                                                         // throws UnsupportedOperationException (default impl)
      * }</pre>
      *
      * @param keys the collection of cache keys to retrieve values for,
@@ -320,10 +322,11 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * // WARNING: a subclass override of flushAll() removes ALL data from all cache servers!
+     * // (SpyMemcached, for example, overrides it — calling flushAll() there wipes every server.)
      *
      * // Without a subclass override, the base-class default simply throws:
+     * AbstractDistributedCacheClient<User> client = new MyDistributedCache<>("localhost:11211");  // does not override flushAll()
      * client.flushAll();                                              // throws UnsupportedOperationException (default impl)
      *
      * // Safe usage in testing

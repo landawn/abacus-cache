@@ -56,7 +56,9 @@ import redis.clients.jedis.params.SetParams;
  *       ASCII digits that {@code get} cannot deserialize (Kryo decode fails), and {@code incr}/
  *       {@code decr} on a {@code set}-stored value always fails because its Kryo bytes are not a
  *       Redis integer — even when the logical value is a number. Read counters back with
- *       {@code incr(key, 0)} or {@code decr(key, 0)}, never with {@code get}</li>
+ *       {@code incr(key, 0)} or {@code decr(key, 0)}, never with {@code get}. Caveat: reading an
+ *       absent or expired counter this way re-creates it as a persistent key with value 0
+ *       (Redis {@code INCRBY} auto-initializes missing keys and sets no TTL)</li>
  * </ul>
  *
  * <p><b>Thread Safety:</b> Thread-safe. Each command is dispatched through a {@link UnifiedJedis}
@@ -105,7 +107,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * <p><b>&#9888;&#65039; Counter keys cannot be read with this method:</b> keys created by {@code incr}/{@code decr}
      * hold raw ASCII digits, not Kryo-serialized bytes, so deserialization fails. Read counters back
-     * with {@code incr(key, 0)} (or {@code decr(key, 0)}) instead.
+     * with {@code incr(key, 0)} (or {@code decr(key, 0)}) instead — but note that reading an absent
+     * or expired counter this way re-creates it as a persistent key with value 0.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
