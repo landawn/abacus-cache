@@ -37,7 +37,8 @@ import com.landawn.abacus.util.TypeAttrParser;
  * <li>CaffeineCache / Ehcache - wrappers around a pre-configured Caffeine or Ehcache 3.x instance</li>
  * <li>DistributedCache - Wrapper for distributed cache clients</li>
  * <li>Memcached - Via SpyMemcached client</li>
- * <li>Redis - Via JRedis client</li>
+ * <li>Redis - Via JRedis client (standalone)</li>
+ * <li>Redis Cluster - Via JRedisCluster client</li>
  * <li>Custom implementations via class name</li>
  * </ul>
  *
@@ -67,6 +68,7 @@ import com.landawn.abacus.util.TypeAttrParser;
  * @see DistributedCache
  * @see SpyMemcached
  * @see JRedis
+ * @see JRedisCluster
  */
 public final class CacheFactory {
 

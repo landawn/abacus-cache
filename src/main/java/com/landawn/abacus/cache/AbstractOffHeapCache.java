@@ -342,7 +342,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                                  {@code logger} is {@code null}
      * @throws OutOfMemoryError if the underlying call to {@link #allocate(long)} fails because the host
      *                          cannot reserve {@code capacityInMB} MB of native memory
-     * @throws IllegalStateException if the JVM is already shutting down when the eviction shutdown hook is
+     * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is
      *                               registered (the off-heap allocation is released before this propagates)
      */
     @SuppressWarnings("rawtypes")
@@ -501,7 +501,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * occur during cleanup.
      *
      * <p>Thread safety: this method is called only from the synchronized {@link #close()}
-     * operation, so thread-safety is not required for the implementation.
+     * operation, or from the constructor's own failure-cleanup path before the instance is
+     * published, so thread-safety is not required for the implementation.
      */
     protected abstract void deallocate();
 

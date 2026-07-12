@@ -64,7 +64,7 @@ import redis.clients.jedis.RedisClusterClient;
  *
  * // Store and retrieve objects (routing is handled server-side by the cluster)
  * User user = new User("John", "john@example.com");
- * cache.set("user:123", user, 3600000);   // Cache for 1 hour
+ * cache.put("user:123", user, 3600000);   // Cache for 1 hour
  * User cached = cache.get("user:123");
  *
  * // Use atomic counters
@@ -128,7 +128,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      *
      * // Use the cache
      * Data data = new Data("value");
-     * cache.set("key", data, 7200000);                                        // Cache for 2 hours; returns true
+     * cache.put("key", data, 7200000);                                        // Cache for 2 hours; returns true
      * Data retrieved = cache.get("key");                                      // the cached Data, or null
      *
      * // Negative: a non-positive timeout is rejected (checkArgPositive)

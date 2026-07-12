@@ -44,8 +44,8 @@ import com.landawn.abacus.util.N;
  * <p>Subclasses must implement the following abstract methods:
  * <ul>
  * <li>{@link #get(String)} - retrieves a single value from cache</li>
- * <li>{@link #set(String, Object, long)} - stores a value with TTL</li>
- * <li>{@link #delete(String)} - removes a key from cache</li>
+ * <li>{@link #put(String, Object, long)} - stores a value with TTL</li>
+ * <li>{@link #remove(String)} - removes a key from cache</li>
  * <li>{@link #incr(String)} and {@link #incr(String, long)} - atomic increment operations</li>
  * <li>{@link #decr(String)} and {@link #decr(String, long)} - atomic decrement operations</li>
  * <li>{@link #disconnect()} - releases resources and closes connections</li>
@@ -360,7 +360,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <li>Fractional seconds are rounded up (e.g., 1500ms → 2s, 999ms → 1s)</li>
      * <li>This ensures cached items live at least as long as requested</li>
      * <li>Zero or negative milliseconds returns zero seconds (no expiration), matching the
-     *     {@link DistributedCacheClient#set(String, Object, long)} contract that documents
+     *     {@link DistributedCacheClient#put(String, Object, long)} contract that documents
      *     "0 or negative for no expiration"</li>
      * </ul>
      *
@@ -393,7 +393,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * }</pre>
      *
      * @param liveTime the time-to-live in milliseconds; zero or negative values are normalized to
-     *                 {@code 0} (no expiration) per the {@link DistributedCacheClient#set(String, Object, long)} contract
+     *                 {@code 0} (no expiration) per the {@link DistributedCacheClient#put(String, Object, long)} contract
      * @return the time-to-live in seconds, rounded up if there's a fractional second, or {@code 0} if {@code liveTime <= 0}
      * @throws IllegalArgumentException if the rounded-up second value is greater than {@link Integer#MAX_VALUE}
      *         (approximately 68 years)

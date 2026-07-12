@@ -168,7 +168,7 @@ public class JRedisTest {
         when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
         Account account = createAccount();
-        boolean ok = cache.set("user:1", account, 60_000); // 60 seconds
+        boolean ok = cache.put("user:1", account, 60_000); // 60 seconds
 
         assertTrue(ok);
         // 60_000 ms should be SET ... PX 60000 (SetParams.equals compares the param content)
@@ -186,7 +186,7 @@ public class JRedisTest {
     public void test_set_subSecondTtl_honoredWithMillisecondPrecision() {
         when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
-        assertTrue(cache.set("short-lived", "v", 300));
+        assertTrue(cache.put("short-lived", "v", 300));
 
         verify(mockJedis).set(eq(utf8("short-lived")), any(byte[].class), eq(SetParams.setParams().px(300L)));
     }
@@ -195,7 +195,7 @@ public class JRedisTest {
     public void test_set_without_ttl_uses_plain_set() {
         when(mockJedis.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
 
-        boolean ok = cache.set("forever", "value", 0);
+        boolean ok = cache.put("forever", "value", 0);
 
         assertTrue(ok);
         verify(mockJedis).set(eq(utf8("forever")), any(byte[].class));
@@ -206,14 +206,14 @@ public class JRedisTest {
     public void test_set_returns_false_when_server_does_not_say_OK() {
         when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("NOT_OK");
 
-        assertFalse(cache.set("k", "v", 60_000));
+        assertFalse(cache.put("k", "v", 60_000));
     }
 
     @Test
     public void test_set_null_value_encodes_as_empty_byte_array() {
         when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
-        cache.set("k", null, 60_000);
+        cache.put("k", null, 60_000);
 
         verify(mockJedis).set(eq(utf8("k")), eq(new byte[0]), any(SetParams.class));
     }
@@ -222,7 +222,7 @@ public class JRedisTest {
     public void test_delete_calls_del_and_returns_true() {
         when(mockJedis.del(any(byte[].class))).thenReturn(1L);
 
-        assertTrue(cache.delete("k"));
+        assertTrue(cache.remove("k"));
         verify(mockJedis).del(utf8("k"));
     }
 
@@ -236,7 +236,7 @@ public class JRedisTest {
     public void test_delete_returns_false_when_key_did_not_exist() {
         when(mockJedis.del(any(byte[].class))).thenReturn(0L);
 
-        assertFalse(cache.delete("missing"));
+        assertFalse(cache.remove("missing"));
         verify(mockJedis).del(utf8("missing"));
     }
 
@@ -245,7 +245,7 @@ public class JRedisTest {
         // A single-key DEL would report 1; just verify any positive count maps to true.
         when(mockJedis.del(any(byte[].class))).thenReturn(2L);
 
-        assertTrue(cache.delete("k"));
+        assertTrue(cache.remove("k"));
     }
 
     @Test
@@ -381,7 +381,7 @@ public class JRedisTest {
         when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
         Account account = createAccount();
-        cache.set("k", account, 30_000);
+        cache.put("k", account, 30_000);
 
         org.mockito.ArgumentCaptor<byte[]> payload = org.mockito.ArgumentCaptor.forClass(byte[].class);
         verify(mockJedis).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().px(30_000L)));

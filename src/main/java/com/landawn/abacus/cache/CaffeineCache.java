@@ -472,9 +472,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Returns Caffeine-specific cache statistics.
-     * Returns a snapshot of cache statistics in the framework's {@link CacheStats} form, so the
-     * value is consistent with {@link LocalCache#stats()} and the rest of the cache family.
+     * Returns a snapshot of this cache's statistics in the framework's {@link CacheStats} form.
+     * This standardized form is consistent with {@link LocalCache#stats()} and the rest of the cache family.
      *
      * <p>Hit/miss/eviction counts come from Caffeine and are only meaningful if the underlying cache
      * was built with {@code recordStats()} (otherwise they are zero). {@code putCount} is tracked by

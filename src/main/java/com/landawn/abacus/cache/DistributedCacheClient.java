@@ -25,7 +25,7 @@ import java.util.Map;
  *
  * <p>Key features:
  * <ul>
- * <li>Basic CRUD operations (get, set, delete)</li>
+ * <li>Basic CRUD operations (get, put, remove)</li>
  * <li>Bulk operations for efficiency</li>
  * <li>Atomic increment/decrement operations</li>
  * <li>Time-based expiration support</li>
@@ -35,7 +35,7 @@ import java.util.Map;
  * <pre>{@code
  * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
  * User user = new User("John", "john@example.com");
- * client.set("user:123", user, 3600000);   // Cache for 1 hour
+ * client.put("user:123", user, 3600000);   // Cache for 1 hour
  * User cached = client.get("user:123");
  * long visits = client.incr("visits:123");
  * }</pre>
@@ -105,7 +105,7 @@ public interface DistributedCacheClient<T> {
      * User user = client.get("user:123");
      * if (user == null) {
      *     user = database.findUser(123);
-     *     client.set("user:123", user, 3600000);
+     *     client.put("user:123", user, 3600000);
      * }
      * }</pre>
      *
@@ -210,23 +210,23 @@ public interface DistributedCacheClient<T> {
      * <pre>{@code
      * // Cache with 1 hour TTL
      * User user = new User("John", "john@example.com");
-     * boolean success = client.set("user:123", user, 3600000);
+     * boolean success = client.put("user:123", user, 3600000);
      * if (success) {
      *     System.out.println("User cached successfully");
      * }
      *
      * // Cache session data with 30 minute TTL
      * Session session = new Session("abc123", user);
-     * client.set("session:" + session.getId(), session, 1800000);
+     * client.put("session:" + session.getId(), session, 1800000);
      *
      * // Cache with no expiration
      * Config config = loadConfig();
-     * client.set("app:config", config, 0);   // No expiration
+     * client.put("app:config", config, 0);   // No expiration
      *
      * // Updating existing value
      * Product product = client.get("product:456");
      * product.setPrice(99.99);
-     * client.set("product:456", product, 7200000);   // 2 hour TTL
+     * client.put("product:456", product, 7200000);   // 2 hour TTL
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
@@ -236,7 +236,7 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */
-    boolean set(String key, T value, long liveTime);
+    boolean put(String key, T value, long liveTime);
 
     /**
      * Removes a key-value pair from the cache.
@@ -254,23 +254,23 @@ public interface DistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple delete
-     * boolean success = client.delete("user:123");
+     * boolean success = client.remove("user:123");
      * System.out.println("Delete operation sent: " + success);
      *
      * // Delete after update
      * User user = client.get("user:456");
      * if (user != null && user.isInactive()) {
-     *     client.delete("user:456");
+     *     client.remove("user:456");
      * }
      *
      * // Delete multiple keys
      * String[] keysToDelete = {"session:1", "session:2", "session:3"};
-     * Arrays.stream(keysToDelete).forEach(client::delete);
+     * Arrays.stream(keysToDelete).forEach(client::remove);
      *
      * // Invalidate cache on entity update
      * void updateUser(User user) {
      *     database.save(user);
-     *     client.delete("user:" + user.getId());   // Invalidate cache
+     *     client.remove("user:" + user.getId());   // Invalidate cache
      * }
      * }</pre>
      *
@@ -281,7 +281,7 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */
-    boolean delete(String key);
+    boolean remove(String key);
 
     /**
      * Atomically increments a numeric value by 1.
@@ -305,7 +305,7 @@ public interface DistributedCacheClient<T> {
      * // Request counter with Redis (auto-initializes)
      * long requestCount = client.incr("api:requests");
      *
-     * // Memcached returns -1 for a counter that was never seeded. Do NOT seed it with set(...):
+     * // Memcached returns -1 for a counter that was never seeded. Do NOT seed it with put(...):
      * // the bundled SpyMemcached transcoder serializes the value, and native incr/decr cannot
      * // mutate those bytes. Seed Memcached counters through a path that writes a plain
      * // ASCII-decimal value (see the SpyMemcached implementation's counter handling). Redis, by
@@ -326,7 +326,7 @@ public interface DistributedCacheClient<T> {
      *         increment is 1).
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
-     *         not a valid integer counter (e.g. a value previously stored via {@code set})
+     *         not a valid integer counter (e.g. a value previously stored via {@code put})
      */
     long incr(String key);
 
@@ -370,7 +370,7 @@ public interface DistributedCacheClient<T> {
      *         increment is {@code delta}).
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
-     *         not a valid integer counter (e.g. a value previously stored via {@code set})
+     *         not a valid integer counter (e.g. a value previously stored via {@code put})
      */
     long incr(String key, long delta);
 
@@ -421,7 +421,7 @@ public interface DistributedCacheClient<T> {
      *         creates non-existent keys (effective value after decrement is -1).
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
-     *         not a valid integer counter (e.g. a value previously stored via {@code set})
+     *         not a valid integer counter (e.g. a value previously stored via {@code put})
      */
     long decr(String key);
 
@@ -481,7 +481,7 @@ public interface DistributedCacheClient<T> {
      *         creates non-existent keys (effective value after decrement is {@code -delta}).
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
-     *         not a valid integer counter (e.g. a value previously stored via {@code set})
+     *         not a valid integer counter (e.g. a value previously stored via {@code put})
      */
     long decr(String key, long delta);
 
@@ -552,7 +552,7 @@ public interface DistributedCacheClient<T> {
      * // Try-finally pattern
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * try {
-     *     client.set("user:123", user, 3600000);
+     *     client.put("user:123", user, 3600000);
      *     User cached = client.get("user:123");
      * } finally {
      *     client.disconnect();
@@ -562,7 +562,7 @@ public interface DistributedCacheClient<T> {
      * // Try-with-resources pattern via an AutoCloseable adapter
      * // (AutoCloseable.close() declares checked Exception, so a catch clause is required)
      * try (AutoCloseable closeable = client::disconnect) {
-     *     client.set("key", value, 3600000);
+     *     client.put("key", value, 3600000);
      *     // Client will be disconnected automatically when the block exits
      * } catch (Exception e) {
      *     logger.warn("Failed to disconnect cache client", e);

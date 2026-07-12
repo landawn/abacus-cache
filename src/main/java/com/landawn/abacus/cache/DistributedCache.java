@@ -495,7 +495,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         clients accept the millisecond {@code liveTime} directly and impose no such limit)
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #generateKey(Object)
-     * @see DistributedCacheClient#set(String, Object, long)
+     * @see DistributedCacheClient#put(String, Object, long)
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
@@ -503,7 +503,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
         N.checkArgNotNull(key, "key");
 
-        return client.set(generateKey(key), value, liveTime);
+        return client.put(generateKey(key), value, liveTime);
     }
 
     /**
@@ -562,7 +562,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #clear()
      * @see #generateKey(Object)
-     * @see DistributedCacheClient#delete(String)
+     * @see DistributedCacheClient#remove(String)
      */
     @Override
     public void remove(final K key) {
@@ -570,7 +570,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
         N.checkArgNotNull(key, "key");
 
-        client.delete(generateKey(key));
+        client.remove(generateKey(key));
     }
 
     /**
@@ -954,8 +954,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Transformation Process:</b>
      * <ol>
      * <li>Validate key is not null (throws {@link IllegalArgumentException} if null)</li>
-     * <li>Convert key to string: the key itself if it is already a {@code String}, otherwise {@code N.stringOf(k)}</li>
-     * <li>Encode to UTF-8 bytes: {@code toString(k).getBytes(Charsets.UTF_8)}</li>
+     * <li>Convert key to string: the key itself if it is already a {@code String}, otherwise {@code N.stringOf(key)}</li>
+     * <li>Encode to UTF-8 bytes: {@code toString(key).getBytes(Charsets.UTF_8)}</li>
      * <li>Base64 encode: {@code Strings.base64Encode(bytes)}</li>
      * <li>Prepend prefix if configured: {@code keyPrefix + base64Key}</li>
      * </ol>

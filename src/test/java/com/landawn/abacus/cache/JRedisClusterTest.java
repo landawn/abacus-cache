@@ -112,7 +112,7 @@ public class JRedisClusterTest {
     public void test_set_with_ttl_uses_set_with_expiry() {
         when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
-        assertTrue(cache.set("k", "v", 60_000)); // 60 seconds, sent with millisecond precision (PX)
+        assertTrue(cache.put("k", "v", 60_000)); // 60 seconds, sent with millisecond precision (PX)
         verify(mockCluster).set(eq(utf8("k")), any(byte[].class), eq(SetParams.setParams().px(60_000L)));
         verify(mockCluster, never()).set(any(byte[].class), any(byte[].class));
     }
@@ -121,7 +121,7 @@ public class JRedisClusterTest {
     public void test_set_without_ttl_uses_plain_set() {
         when(mockCluster.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
 
-        assertTrue(cache.set("forever", "v", 0));
+        assertTrue(cache.put("forever", "v", 0));
         verify(mockCluster).set(eq(utf8("forever")), any(byte[].class));
         verify(mockCluster, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
     }
@@ -130,14 +130,14 @@ public class JRedisClusterTest {
     public void test_set_returns_false_when_server_does_not_say_OK() {
         when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("NOT_OK");
 
-        assertFalse(cache.set("k", "v", 60_000));
+        assertFalse(cache.put("k", "v", 60_000));
     }
 
     @Test
     public void test_set_null_value_encodes_as_empty_byte_array() {
         when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
-        cache.set("k", null, 60_000);
+        cache.put("k", null, 60_000);
 
         verify(mockCluster).set(eq(utf8("k")), eq(new byte[0]), any(SetParams.class));
     }
@@ -146,7 +146,7 @@ public class JRedisClusterTest {
     public void test_set_round_trip_uses_kryo_encoding() {
         when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
-        cache.set("k", "hello", 30_000);
+        cache.put("k", "hello", 30_000);
 
         ArgumentCaptor<byte[]> payload = ArgumentCaptor.forClass(byte[].class);
         verify(mockCluster).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().px(30_000L)));
@@ -157,7 +157,7 @@ public class JRedisClusterTest {
     public void test_delete_returns_true_when_removed() {
         when(mockCluster.del(any(byte[].class))).thenReturn(1L);
 
-        assertTrue(cache.delete("k"));
+        assertTrue(cache.remove("k"));
         verify(mockCluster).del(utf8("k"));
     }
 
@@ -165,7 +165,7 @@ public class JRedisClusterTest {
     public void test_delete_returns_false_when_key_did_not_exist() {
         when(mockCluster.del(any(byte[].class))).thenReturn(0L);
 
-        assertFalse(cache.delete("missing"));
+        assertFalse(cache.remove("missing"));
     }
 
     @Test

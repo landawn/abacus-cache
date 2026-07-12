@@ -57,13 +57,13 @@ public class AbstractDistributedCacheClientTest extends TestBase {
         }
 
         @Override
-        public boolean set(final String key, final T value, final long liveTime) {
-            return delegate.set(key, value, liveTime);
+        public boolean put(final String key, final T value, final long liveTime) {
+            return delegate.put(key, value, liveTime);
         }
 
         @Override
-        public boolean delete(final String key) {
-            return delegate.delete(key);
+        public boolean remove(final String key) {
+            return delegate.remove(key);
         }
 
         @Override
@@ -162,9 +162,9 @@ public class AbstractDistributedCacheClientTest extends TestBase {
     @Test
     public void testAbstractOperations_roundTripAgainstRealServer() {
         final String key = "abstract-client:" + Strings.uuid();
-        assertTrue(client.set(key, "v", 60_000));
+        assertTrue(client.put(key, "v", 60_000));
         assertEquals("v", client.get(key));
-        assertTrue(client.delete(key));
+        assertTrue(client.remove(key));
         assertNull(client.get(key));
     }
 
@@ -198,7 +198,7 @@ public class AbstractDistributedCacheClientTest extends TestBase {
 
     @Test
     public void testToSeconds_EdgeCase_NegativeLiveTime() {
-        // Per DistributedCacheClient.set(...) contract: 0 or negative means "no expiration".
+        // Per DistributedCacheClient.put(...) contract: 0 or negative means "no expiration".
         // toSeconds must therefore normalize any negative input to 0 rather than throwing.
         assertEquals(0, client.callToSeconds(-1));
         assertEquals(0, client.callToSeconds(-1000));

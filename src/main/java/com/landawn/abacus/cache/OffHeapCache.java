@@ -306,6 +306,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @return the base address (pointer) of the allocated memory block in native memory. This address is
      *         used for all subsequent memory access operations via copyToMemory and copyFromMemory.
      * @throws OutOfMemoryError if the allocation fails due to insufficient native memory available on the system
+     * @throws IllegalArgumentException if {@code capacityInBytes} is negative
+     *         ({@link sun.misc.Unsafe#allocateMemory(long)} rejects a negative size). Unreachable
+     *         through normal construction because {@code capacityInMB} is validated to be positive first.
      * @see #deallocate()
      * @see #copyToMemory(long, byte[], int, int)
      * @see #copyFromMemory(long, byte[], int, int)

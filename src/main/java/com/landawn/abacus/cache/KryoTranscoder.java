@@ -38,7 +38,7 @@ import net.spy.memcached.transcoders.Transcoder;
  * creates its Kryo instances with reference tracking disabled (Kryo's default), so encoding an
  * object graph with a cycle (e.g., a bidirectional parent/child link) recurses until
  * {@link StackOverflowError}, and even acyclic shared references are duplicated in the payload
- * (object identity is not preserved on decode). Only cache value types whose object graphs are
+ * (object identity is not preserved on decode). Cache only value types whose object graphs are
  * trees, or supply a {@code KryoParser} configured with Kryo reference tracking enabled.
  *
  * <p><b>Thread Safety:</b> This class is thread-safe. Concurrency safety is delegated to the

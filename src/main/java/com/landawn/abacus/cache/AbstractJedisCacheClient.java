@@ -54,7 +54,7 @@ import redis.clients.jedis.params.SetParams;
  *   <li>All string keys are encoded using UTF-8</li>
  *   <li>Counter keys and object keys are disjoint worlds: {@code incr}/{@code decr} store raw
  *       ASCII digits that {@code get} cannot deserialize (Kryo decode fails), and {@code incr}/
- *       {@code decr} on a {@code set}-stored value always fails because its Kryo bytes are not a
+ *       {@code decr} on a {@code put}-stored value always fails because its Kryo bytes are not a
  *       Redis integer — even when the logical value is a number. Read counters back with
  *       {@code incr(key, 0)} or {@code decr(key, 0)}, never with {@code get}. Caveat: reading an
  *       absent or expired counter this way re-creates it as a persistent key with value 0
@@ -129,8 +129,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the cached value, or {@code null} if not found, expired, or evicted
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or deserialization error occurs
-     * @see #set(String, Object, long)
-     * @see #delete(String)
+     * @see #put(String, Object, long)
+     * @see #remove(String)
      */
     @Override
     public T get(final String key) {
@@ -234,16 +234,16 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Cache with 1 hour TTL (3600000 ms -> SET ... PX 3600000)
-     * boolean success = cache.set("user:123", user, 3600000);       // returns true when Redis replies "OK"
+     * boolean success = cache.put("user:123", user, 3600000);       // returns true when Redis replies "OK"
      *
      * // Edge: liveTime <= 0 means NO expiration -> plain SET (no PX)
-     * cache.set("forever", user, 0);                                // uses SET; key never auto-expires
+     * cache.put("forever", user, 0);                                // uses SET; key never auto-expires
      *
      * // Edge: a null value is allowed; it is stored as an empty byte array
-     * cache.set("empty:key", (User) null, 3600000);                // returns true; get(...) later returns null
+     * cache.put("empty:key", (User) null, 3600000);                // returns true; get(...) later returns null
      *
      * // Negative: a null key is rejected
-     * cache.set(null, user, 60000);                                // throws IllegalArgumentException
+     * cache.put(null, user, 60000);                                // throws IllegalArgumentException
      * }</pre>
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
@@ -255,10 +255,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or serialization error occurs
      * @see #get(String)
-     * @see #delete(String)
+     * @see #remove(String)
      */
     @Override
-    public boolean set(final String key, final T value, final long liveTime) {
+    public boolean put(final String key, final T value, final long liveTime) {
         final byte[] keyBytes = getKeyBytes(key);
         final byte[] valueBytes = encode(value);
         final UnifiedJedis jedis = clientFor(keyBytes);
@@ -284,14 +284,14 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * cache.set("user:123", user, 60000);                          // key now present
-     * boolean removed = cache.delete("user:123");                  // returns true (DEL count == 1)
+     * cache.put("user:123", user, 60000);                          // key now present
+     * boolean removed = cache.remove("user:123");                  // returns true (DEL count == 1)
      *
      * // Edge: deleting a key that does not exist returns false (DEL count == 0)
-     * boolean wasThere = cache.delete("never:set");                // returns false
+     * boolean wasThere = cache.remove("never:set");                // returns false
      *
      * // Negative: a null key is rejected
-     * cache.delete(null);                                          // throws IllegalArgumentException
+     * cache.remove(null);                                          // throws IllegalArgumentException
      * }</pre>
      *
      * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
@@ -300,10 +300,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      * @see #get(String)
-     * @see #set(String, Object, long)
+     * @see #put(String, Object, long)
      */
     @Override
-    public boolean delete(final String key) {
+    public boolean remove(final String key) {
         final byte[] keyBytes = getKeyBytes(key);
 
         return clientFor(keyBytes).del(keyBytes) > 0L;
@@ -329,7 +329,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * cache.incr(null);                                           // throws IllegalArgumentException
      *
      * // Negative: incrementing a non-integer value fails on the server
-     * cache.set("name", "Alice", 0);
+     * cache.put("name", "Alice", 0);
      * cache.incr("name");                                        // throws RuntimeException
      * }</pre>
      *

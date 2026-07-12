@@ -55,7 +55,7 @@ public class MemcachedLockTest {
 
     @Test
     public void test_lock_acquires_when_absent() {
-        assertTrue(lock.lock("mysql", 10_000), "first lock() should acquire");
+        assertTrue(lock.tryLock("mysql", 10_000), "first lock() should acquire");
         assertTrue(lock.isLocked("mysql"));
         // A value-less lock(target, liveTime) stores the empty-byte sentinel, which get() maps to null.
         assertNull(lock.get("mysql"));
@@ -63,17 +63,17 @@ public class MemcachedLockTest {
 
     @Test
     public void test_lock_returns_false_when_already_held() {
-        assertTrue(lock.lock("k", 5_000));
-        assertFalse(lock.lock("k", 5_000), "second acquire on a held lock must fail");
+        assertTrue(lock.tryLock("k", 5_000));
+        assertFalse(lock.tryLock("k", 5_000), "second acquire on a held lock must fail");
     }
 
     @Test
     public void test_unlock_deletes_key_and_returns_true() {
-        assertTrue(lock.lock("k", 10_000));
-        assertTrue(lock.unlock("k"));
+        assertTrue(lock.tryLock("k", 10_000));
+        assertTrue(lock.tryUnlock("k"));
         assertFalse(lock.isLocked("k"));
         // Releasing an already-released lock reports false (nothing was deleted).
-        assertFalse(lock.unlock("k"));
+        assertFalse(lock.tryUnlock("k"));
     }
 
     @Test
@@ -83,7 +83,7 @@ public class MemcachedLockTest {
 
     @Test
     public void test_get_returns_null_for_value_less_lock() {
-        assertTrue(lock.lock("k", 10_000));
+        assertTrue(lock.tryLock("k", 10_000));
         assertNull(lock.get("k"));
     }
 
@@ -91,14 +91,14 @@ public class MemcachedLockTest {
 
     @Test
     public void testLock_WithValue() {
-        assertTrue(lock.lock("k", Long.valueOf(42), 5_000L));
+        assertTrue(lock.tryLock("k", Long.valueOf(42), 5_000L));
         assertTrue(lock.isLocked("k"));
         assertEquals(Long.valueOf(42), lock.get("k"));
     }
 
     @Test
     public void testLock_WithNullValue_usesValueLessSentinel() {
-        assertTrue(lock.lock("k", null, 5_000L));
+        assertTrue(lock.tryLock("k", null, 5_000L));
         assertTrue(lock.isLocked("k"));
         // A null value is stored as the same empty-byte sentinel as the no-value overload.
         assertNull(lock.get("k"));
@@ -106,7 +106,7 @@ public class MemcachedLockTest {
 
     @Test
     public void testGet_ReturnsStoredValue() {
-        assertTrue(lock.lock("k", "holder-1", 5_000L));
+        assertTrue(lock.tryLock("k", "holder-1", 5_000L));
         assertEquals("holder-1", lock.get("k"));
     }
 
@@ -115,7 +115,7 @@ public class MemcachedLockTest {
         // A TTL beyond 30 days is converted to an absolute Unix expiration timestamp; the lock value
         // must be immediately retrievable (not stored already-expired).
         final long liveTime = 31L * 24 * 60 * 60 * 1000; // 31 days
-        assertTrue(lock.lock("k", Long.valueOf(42), liveTime));
+        assertTrue(lock.tryLock("k", Long.valueOf(42), liveTime));
         assertEquals(Long.valueOf(42), lock.get("k"));
     }
 
@@ -123,15 +123,15 @@ public class MemcachedLockTest {
 
     @Test
     public void testLock_EdgeCase_NullTarget() {
-        assertThrows(IllegalArgumentException.class, () -> lock.lock(null, 1000L));
-        assertThrows(IllegalArgumentException.class, () -> lock.lock(null, Long.valueOf(1), 1000L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock(null, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock(null, Long.valueOf(1), 1000L));
     }
 
     @Test
     public void testLock_EdgeCase_NonPositiveLiveTime() {
-        assertThrows(IllegalArgumentException.class, () -> lock.lock("k", 0L));
-        assertThrows(IllegalArgumentException.class, () -> lock.lock("k", -1L));
-        assertThrows(IllegalArgumentException.class, () -> lock.lock("k", Long.valueOf(1), 0L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("k", 0L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("k", -1L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("k", Long.valueOf(1), 0L));
     }
 
     @Test
@@ -146,7 +146,7 @@ public class MemcachedLockTest {
 
     @Test
     public void testUnlock_EdgeCase_NullTarget() {
-        assertThrows(IllegalArgumentException.class, () -> lock.unlock(null));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryUnlock(null));
     }
 
     /**
@@ -157,35 +157,35 @@ public class MemcachedLockTest {
     @Test
     public void testLock_preservesMemcachedIllegalArgumentException() {
         final String tooLongKey = "x".repeat(251);
-        assertThrows(IllegalArgumentException.class, () -> lock.lock(tooLongKey, Long.valueOf(42), 5_000L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock(tooLongKey, Long.valueOf(42), 5_000L));
     }
 
     @Test
     public void testUnlock_preservesMemcachedIllegalArgumentException() {
         final String tooLongKey = "x".repeat(251);
-        assertThrows(IllegalArgumentException.class, () -> lock.unlock(tooLongKey));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryUnlock(tooLongKey));
     }
 
     // --- tryUnlockQuietly ----------------------------------------------------------------------
 
     @Test
     public void test_tryUnlockQuietly_deletes_key_and_returns_true() {
-        assertTrue(lock.lock("k", 10_000));
-        assertTrue(lock.tryUnlockQuietly("k"));
+        assertTrue(lock.tryLock("k", 10_000));
+        assertTrue(lock.unlockQuietly("k"));
         assertFalse(lock.isLocked("k"));
         // Quietly releasing an already-released lock reports false (nothing was deleted).
-        assertFalse(lock.tryUnlockQuietly("k"));
+        assertFalse(lock.unlockQuietly("k"));
     }
 
     @Test
     public void testTryUnlockQuietly_EdgeCase_NullTarget() {
         // A null target is a deterministic programming error, so it is still rejected (not swallowed).
-        assertThrows(IllegalArgumentException.class, () -> lock.tryUnlockQuietly(null));
+        assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly(null));
     }
 
     /**
      * A key the memcached client rejects is a deterministic programming error, so
-     * {@code tryUnlockQuietly} rethrows it exactly like {@link MemcachedLock#unlock(Object)} —
+     * {@code tryUnlockQuietly} rethrows it exactly like {@link MemcachedLock#tryUnlock(Object)} —
      * swallowing it would disguise the bug as "lock already expired". If {@code lock()} succeeded
      * for a target, the same key cannot be rejected at unlock time, so this rethrow can never mask
      * an exception from the guarded critical section in the intended {@code finally}-block usage.
@@ -193,7 +193,7 @@ public class MemcachedLockTest {
     @Test
     public void testTryUnlockQuietly_EdgeCase_OverlongKey_throwsIAE() {
         final String tooLongKey = "x".repeat(251);
-        assertThrows(IllegalArgumentException.class, () -> lock.tryUnlockQuietly(tooLongKey));
+        assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly(tooLongKey));
     }
 
     /**
@@ -207,7 +207,7 @@ public class MemcachedLockTest {
         final MemcachedLock<String, Long> local = new MemcachedLock<>(SERVER_URL);
         local.close();
 
-        assertFalse(local.tryUnlockQuietly("k"));
+        assertFalse(local.unlockQuietly("k"));
     }
 
     // --- construction / lifecycle --------------------------------------------------------------
@@ -235,6 +235,27 @@ public class MemcachedLockTest {
 
         // After close the underlying client is shut down, so further use fails fast.
         assertThrows(IllegalStateException.class, () -> local.isLocked("k"));
+    }
+
+    // --- deprecated name aliases ---------------------------------------------------------------
+
+    /**
+     * The deprecated {@code lock}/{@code unlock}/{@code tryUnlockQuietly} aliases must keep delegating
+     * to their renamed counterparts ({@code tryLock}/{@code tryUnlock}/{@code unlockQuietly}) so
+     * existing callers keep working until the aliases are removed.
+     */
+    @Test
+    @SuppressWarnings("deprecation")
+    public void test_deprecated_aliases_delegate_to_new_names() {
+        assertTrue(lock.lock("dep", 10_000), "deprecated lock() should still acquire");
+        assertTrue(lock.isLocked("dep"));
+        assertTrue(lock.unlock("dep"), "deprecated unlock() should still release");
+        assertFalse(lock.isLocked("dep"));
+
+        assertTrue(lock.lock("dep", "holder", 10_000L), "deprecated value lock() should still acquire");
+        assertEquals("holder", lock.get("dep"));
+        assertTrue(lock.tryUnlockQuietly("dep"), "deprecated tryUnlockQuietly() should still release");
+        assertFalse(lock.isLocked("dep"));
     }
 
     // --- subclassability of toKey --------------------------------------------------------------

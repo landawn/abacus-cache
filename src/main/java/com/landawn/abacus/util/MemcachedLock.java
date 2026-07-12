@@ -46,7 +46,7 @@ import com.landawn.abacus.logging.LoggerFactory;
  * <p><b>&#9888;&#65039; Lease safety limitation:</b> this is a best-effort, expiring lease rather than a
  * correctness-grade distributed lock. The classic memcached text protocol used by the underlying
  * client has no atomic compare-and-delete operation (modern memcached offers one only via the meta
- * protocol, which SpyMemcached does not speak), so {@link #unlock(Object)} deletes the key without
+ * protocol, which SpyMemcached does not speak), so {@link #tryUnlock(Object)} deletes the key without
  * proving ownership. If a holder pauses longer than
  * the TTL, another client can acquire the expired key and the original holder can subsequently
  * delete that newer lease. Memcached eviction, restart, failover, or a global flush may also remove
@@ -59,12 +59,12 @@ import com.landawn.abacus.logging.LoggerFactory;
  * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
  *
  * // Simple lock without value
- * if (lock.lock("resource1", 30000)) { // 30 second TTL on the lock
+ * if (lock.tryLock("resource1", 30000)) { // 30 second TTL on the lock
  *     try {
  *         // Critical section - exclusive access to resource1
  *         performExclusiveOperation();
  *     } finally {
- *         lock.unlock("resource1");
+ *         lock.tryUnlock("resource1");
  *     }
  * } else {
  *     // Lock is held by another process
@@ -73,7 +73,7 @@ import com.landawn.abacus.logging.LoggerFactory;
  *
  * // Lock with associated value
  * String lockHolder = InetAddress.getLocalHost().getHostName();
- * if (lock.lock("resource2", lockHolder, 60000)) {
+ * if (lock.tryLock("resource2", lockHolder, 60000)) {
  *     // Lock acquired with holder information
  *     String currentHolder = lock.get("resource2");
  *     System.out.println("Lock held by: " + currentHolder);
@@ -94,7 +94,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
     private final SpyMemcached<V> mc;
 
     /**
-     * Creates a new MemcachedLock instance connected to the specified Memcached server(s).
+     * Creates a new MemcachedLock instance backed by the specified Memcached server(s).
      * Multiple {@code host:port} addresses may be separated by commas, whitespace, or both.
      *
      * <p><b>Usage Examples:</b>
@@ -110,7 +110,10 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *                  or both; must not be null, empty, or blank
      * @throws IllegalArgumentException if serverUrl is null, empty, or blank, or contains no
      *         valid {@code host:port} addresses
-     * @throws RuntimeException if connection to the Memcached server(s) fails
+     * @throws RuntimeException if {@code serverUrl} cannot be parsed (e.g., an unresolvable hostname)
+     *         or local client/socket setup fails. Because connections are established asynchronously
+     *         by the underlying SpyMemcached IO thread, a resolvable but unreachable or down server
+     *         does <b>not</b> fail construction; operations against it fail later with timeouts.
      */
     public MemcachedLock(final String serverUrl) {
         N.checkArgNotBlank(serverUrl, "serverUrl");
@@ -149,12 +152,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
      * // Basic lock usage with 30-second TTL (30000 ms -> 30 s on the server)
-     * if (lock.lock("resource1", 30000)) {   // true: acquired (key was absent, value-less lock stored)
+     * if (lock.tryLock("resource1", 30000)) {   // true: acquired (key was absent, value-less lock stored)
      *     try {
      *         // Critical section - perform exclusive operations
      *         performOperation();            // your exclusive work runs here
      *     } finally {
-     *         lock.unlock("resource1");      // returns true: the lock key was deleted
+     *         lock.tryUnlock("resource1");      // returns true: the lock key was deleted
      *     }
      * } else {                               // false: key already exists (held by another process)
      *     System.out.println("Failed to acquire lock - already held by another process");   // reached on contention
@@ -178,19 +181,19 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws RuntimeException if the Memcached operation fails. The lock state is then
      *         indeterminate: the {@code add} command may have reached the server even though its
      *         response was lost or timed out, in which case the lock IS held server-side (under this
-     *         client's marker) until the TTL expires and no caller will ever {@code unlock} it.
+     *         client's marker) until the TTL expires and no caller will ever {@code tryUnlock} it.
      *         Prefer short TTLs where this matters for availability.
-     * @see #lock(Object, Object, long)
-     * @see #unlock(Object)
+     * @see #tryLock(Object, Object, long)
+     * @see #tryUnlock(Object)
      */
     @SuppressWarnings("unchecked")
-    public boolean lock(final K target, final long liveTime) {
+    public boolean tryLock(final K target, final long liveTime) {
         N.checkArgNotNull(target, "target");
         N.checkArgPositive(liveTime, "liveTime");
 
         // The empty byte[] is only a value-less lock marker; get() maps an empty marker back to null,
         // so it is never returned to the caller as a V and this unchecked cast cannot raise a ClassCastException.
-        return lock(target, (V) N.EMPTY_BYTE_ARRAY, liveTime);
+        return tryLock(target, (V) N.EMPTY_BYTE_ARRAY, liveTime);
     }
 
     /**
@@ -225,12 +228,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * // Example 1: Store hostname with lock (60000 ms -> 60 s TTL)
      * String lockHolder = InetAddress.getLocalHost().getHostName();
-     * if (lock.lock("resource1", lockHolder, 60000)) {   // true: acquired, lockHolder stored as the value
+     * if (lock.tryLock("resource1", lockHolder, 60000)) {   // true: acquired, lockHolder stored as the value
      *     try {
      *         System.out.println("Lock acquired by: " + lock.get("resource1"));   // prints lockHolder
      *         // Perform operations
      *     } finally {
-     *         lock.unlock("resource1");                  // returns true: the lock key was deleted
+     *         lock.tryUnlock("resource1");                  // returns true: the lock key was deleted
      *     }
      * } else {                                           // false: key already exists (held)
      *     System.out.println("Lock is held by: " + lock.get("resource1"));        // prints the current holder's value
@@ -243,12 +246,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * metadata.put("host", "server1");                                // seed metadata map
      * metadata.put("thread", Thread.currentThread().getName());       // seed metadata map
      * metadata.put("timestamp", System.currentTimeMillis());          // seed metadata map
-     * metaLock.lock("resource2", metadata, 30000);                    // returns true: acquired, metadata stored as the value
+     * metaLock.tryLock("resource2", metadata, 30000);                    // returns true: acquired, metadata stored as the value
      * }</pre>
      *
      * @param target the target resource on which to acquire the lock (must not be null)
      * @param value the value to associate with the lock (can be {@code null}; a {@code null}
-     *              value is stored as the same value-less marker used by {@link #lock(Object, long)})
+     *              value is stored as the same value-less marker used by {@link #tryLock(Object, long)})
      * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive;
      *                 converted to whole seconds for Memcached, with fractional seconds rounded up;
      *                 rejected if its absolute expiration exceeds Memcached's signed 32-bit field)
@@ -262,14 +265,14 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws RuntimeException if the Memcached operation fails. The lock state is then
      *         indeterminate: the {@code add} command may have reached the server even though its
      *         response was lost or timed out, in which case the lock IS held server-side (under this
-     *         client's value) until the TTL expires and no caller will ever {@code unlock} it.
+     *         client's value) until the TTL expires and no caller will ever {@code tryUnlock} it.
      *         Prefer short TTLs where this matters for availability.
-     * @see #lock(Object, long)
+     * @see #tryLock(Object, long)
      * @see #get(Object)
-     * @see #unlock(Object)
+     * @see #tryUnlock(Object)
      */
     @SuppressWarnings("unchecked")
-    public boolean lock(final K target, final V value, final long liveTime) {
+    public boolean tryLock(final K target, final V value, final long liveTime) {
         N.checkArgNotNull(target, "target");
         N.checkArgPositive(liveTime, "liveTime");
 
@@ -304,7 +307,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <p><b>&#9888;&#65039; Point-in-time observation:</b> Due to the distributed nature and timing, a lock could expire or be
      * acquired between checking and subsequent operations. This is a point-in-time check
      * and should not be relied upon for critical synchronization logic. Always use the
-     * return value of {@link #lock(Object, long)} or {@link #lock(Object, Object, long)}
+     * return value of {@link #tryLock(Object, long)} or {@link #tryLock(Object, Object, long)}
      * to determine if you successfully acquired the lock rather than checking first with
      * this method.
      *
@@ -329,15 +332,15 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * // Example 2: INCORRECT usage - race condition
      * if (!lock.isLocked("resource1")) {       // point-in-time check only; not atomic with the lock below
      *     // Lock could be acquired by another process here!
-     *     lock.lock("resource1", 30000);       // may return false: another process raced in and acquired it
+     *     lock.tryLock("resource1", 30000);       // may return false: another process raced in and acquired it
      * }
      *
      * // Example 3: CORRECT usage - atomic check
-     * if (lock.lock("resource1", 30000)) {     // true: acquired atomically (single add-if-absent attempt)
+     * if (lock.tryLock("resource1", 30000)) {     // true: acquired atomically (single add-if-absent attempt)
      *     try {
      *         // Lock successfully acquired
      *     } finally {
-     *         lock.unlock("resource1");        // returns true: the lock key was deleted
+     *         lock.tryUnlock("resource1");        // returns true: the lock key was deleted
      *     }
      * }
      * }</pre>
@@ -348,8 +351,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
      * @throws RuntimeException if the Memcached operation fails
-     * @see #lock(Object, long)
-     * @see #lock(Object, Object, long)
+     * @see #tryLock(Object, long)
+     * @see #tryLock(Object, Object, long)
      */
     public boolean isLocked(final K target) {
         N.checkArgNotNull(target, "target");
@@ -360,7 +363,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
     /**
      * Retrieves the value associated with a lock on the specified target.
      * If no lock exists (key not found), this method returns {@code null}.
-     * If the lock stores an empty byte array (the default when using {@link #lock(Object, long)}),
+     * If the lock stores an empty byte array (the default when using {@link #tryLock(Object, long)}),
      * {@code null} is returned for convenience to distinguish empty values from actual data.
      *
      * <p>This method is useful for:
@@ -394,13 +397,13 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * // Example 2: Verify lock ownership before unlocking
      * String myId = InetAddress.getLocalHost().getHostName();
-     * if (lock.lock("resource2", myId, 60000)) {       // true: acquired, myId stored as the value
+     * if (lock.tryLock("resource2", myId, 60000)) {       // true: acquired, myId stored as the value
      *     try {
      *         // Perform operations
      *     } finally {
      *         // Verify we still own the lock before unlocking (note: this read-then-delete is itself racy)
      *         if (myId.equals(lock.get("resource2"))) {   // get() returns myId while we hold it
-     *             lock.unlock("resource2");               // returns true: the lock key was deleted
+     *             lock.tryUnlock("resource2");               // returns true: the lock key was deleted
      *         } else {
      *             System.out.println("Lock ownership changed - not unlocking");   // reached if the value no longer matches
      *         }
@@ -425,7 +428,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws ClassCastException if the stored value is not compatible with {@code V}; because of generic
      *         type erasure this is typically surfaced at the call site rather than inside this method
      * @throws RuntimeException if the Memcached operation fails
-     * @see #lock(Object, Object, long)
+     * @see #tryLock(Object, Object, long)
      * @see #isLocked(Object)
      */
     @SuppressWarnings("unchecked")
@@ -439,7 +442,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
 
     /**
      * Releases the lock on the specified target.
-     * This method immediately removes the lock by deleting the key from Memcached (via mc.delete),
+     * This method immediately removes the lock by deleting the key from Memcached (via mc.remove),
      * making the target available for other clients to acquire. It's important to always unlock
      * in a finally block to ensure locks are released even if exceptions occur.
      *
@@ -454,18 +457,18 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * by the underlying SpyMemcached client does not provide.
      *
      * <p>Implementing ownership verification by reading {@link #get(Object)} and comparing before
-     * calling {@code unlock} is <b>also racy</b> (the lock can expire between the read and the
+     * calling {@code tryUnlock} is <b>also racy</b> (the lock can expire between the read and the
      * delete) and only narrows the window — it does not eliminate it.
      *
      * <p>Best practices:
      * <ul>
      * <li>Release the lock in a finally block to ensure cleanup; in a finally block prefer
-     *     {@link #tryUnlockQuietly(Object)}, which logs and returns {@code false} on a communication
-     *     error instead of throwing (a throwing {@code unlock} in finally can mask the exception from
+     *     {@link #unlockQuietly(Object)}, which logs and returns {@code false} on a communication
+     *     error instead of throwing (a throwing {@code tryUnlock} in finally can mask the exception from
      *     the guarded code)</li>
      * <li>Do not rely on a read-before-delete ownership check for correctness; it remains racy</li>
-     * <li>Don't assume unlock() always succeeds - check the return value if needed</li>
-     * <li>Be aware that locks can expire automatically, so unlock() may return false</li>
+     * <li>Don't assume tryUnlock() always succeeds - check the return value if needed</li>
+     * <li>Be aware that locks can expire automatically, so tryUnlock() may return false</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -473,26 +476,26 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
      * // Example 1: Basic unlock in finally block
-     * if (lock.lock("resource1", 30000)) {                     // true: acquired
+     * if (lock.tryLock("resource1", 30000)) {                     // true: acquired
      *     try {
      *         performOperation();                              // your exclusive work runs here
      *     } finally {
-     *         boolean unlocked = lock.unlock("resource1");     // true: key deleted; false: already expired/removed
+     *         boolean unlocked = lock.tryUnlock("resource1");     // true: key deleted; false: already expired/removed
      *         if (!unlocked) {
-     *             System.out.println("Lock may have already expired or been removed");   // reached when unlock() returned false
+     *             System.out.println("Lock may have already expired or been removed");   // reached when tryUnlock() returned false
      *         }
      *     }
      * }
      *
      * // Example 2: Unlock with ownership verification (still racy - only narrows the window)
      * String myId = "server-1";
-     * if (lock.lock("resource2", myId, 60000)) {               // true: acquired, myId stored as the value
+     * if (lock.tryLock("resource2", myId, 60000)) {               // true: acquired, myId stored as the value
      *     try {
      *         performOperation();                              // your exclusive work runs here
      *     } finally {
      *         // Only unlock if we still own it (unlock itself does NO ownership check)
      *         if (myId.equals(lock.get("resource2"))) {        // get() returns myId while we hold it
-     *             lock.unlock("resource2");                    // returns true: the lock key was deleted
+     *             lock.tryUnlock("resource2");                    // returns true: the lock key was deleted
      *         } else {
      *             System.out.println("Lock no longer owned by us - skipping unlock");   // reached if the value no longer matches
      *         }
@@ -508,17 +511,17 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
      * @throws RuntimeException if the Memcached operation fails
-     * @see #tryUnlockQuietly(Object)
-     * @see #lock(Object, long)
-     * @see #lock(Object, Object, long)
+     * @see #unlockQuietly(Object)
+     * @see #tryLock(Object, long)
+     * @see #tryLock(Object, Object, long)
      */
-    public boolean unlock(final K target) {
+    public boolean tryUnlock(final K target) {
         N.checkArgNotNull(target, "target");
 
         final String key = toKey(target);
 
         try {
-            final boolean released = mc.delete(key);
+            final boolean released = mc.remove(key);
 
             if (logger.isDebugEnabled()) {
                 logger.debug(released ? "Released lock for key: " + key : "No lock to release for key: " + key);
@@ -538,31 +541,31 @@ public class MemcachedLock<K, V> implements AutoCloseable {
 
     /**
      * Releases the lock on the specified target without throwing when the Memcached operation fails.
-     * This is the "quiet" counterpart of {@link #unlock(Object)}, intended for use inside a
+     * This is the "quiet" counterpart of {@link #tryUnlock(Object)}, intended for use inside a
      * {@code finally} block: if releasing the lock fails because of a network or protocol error, this
      * method logs the failure at {@code WARN} level and returns {@code false} instead of throwing, so
      * it can never mask an exception thrown by the guarded critical section.
      *
-     * <p>Like {@link #unlock(Object)}, this method deletes the key unconditionally and performs
+     * <p>Like {@link #tryUnlock(Object)}, this method deletes the key unconditionally and performs
      * <b>no ownership verification</b> — see that method for the full discussion of the associated
-     * race. The only behavioral difference is error handling: {@code unlock} propagates a
+     * race. The only behavioral difference is error handling: {@code tryUnlock} propagates a
      * communication failure as a {@link RuntimeException}, whereas this method swallows it and
      * returns {@code false}. A {@code null} target or a key rejected by the memcached client is
-     * still rejected with {@link IllegalArgumentException} (exactly as in {@code unlock}), because
+     * still rejected with {@link IllegalArgumentException} (exactly as in {@code tryUnlock}), because
      * those are deterministic programming errors rather than transient failures — and if
-     * {@code lock()} succeeded for this target, the same key cannot be rejected at unlock time,
+     * {@code tryLock()} succeeded for this target, the same key cannot be rejected at unlock time,
      * so no exception-masking risk is introduced in the intended {@code finally}-block usage.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      *
-     * if (lock.lock("resource1", 30000)) {                        // true: acquired
+     * if (lock.tryLock("resource1", 30000)) {                        // true: acquired
      *     try {
      *         performOperation();                                 // may throw; that exception must survive
      *     } finally {
      *         // Never throws on a Memcached hiccup, so it cannot suppress an exception from performOperation()
-     *         boolean released = lock.tryUnlockQuietly("resource1");
+     *         boolean released = lock.unlockQuietly("resource1");
      *         if (!released) {
      *             // either the lock had already expired/been removed, or the release failed and was logged
      *             System.out.println("Lock was not released cleanly; it will expire on its own");
@@ -578,16 +581,16 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalArgumentException if {@code target} is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
-     * @see #unlock(Object)
-     * @see #lock(Object, long)
+     * @see #tryUnlock(Object)
+     * @see #tryLock(Object, long)
      */
-    public boolean tryUnlockQuietly(final K target) {
+    public boolean unlockQuietly(final K target) {
         N.checkArgNotNull(target, "target");
 
         final String key = toKey(target);
 
         try {
-            final boolean released = mc.delete(key);
+            final boolean released = mc.remove(key);
 
             if (logger.isDebugEnabled()) {
                 logger.debug(released ? "Released lock for key: " + key : "No lock to release for key: " + key);
@@ -596,7 +599,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
             return released;
         } catch (final IllegalArgumentException e) {
             // A key the memcached client rejects is a deterministic programming error, not a
-            // transient failure: no lock can exist under such a key (lock() would have failed the
+            // transient failure: no lock can exist under such a key (tryLock() would have failed the
             // same way), so swallowing it here would only disguise the bug as "already expired".
             throw e;
         } catch (final Exception e) {
@@ -606,6 +609,66 @@ public class MemcachedLock<K, V> implements AutoCloseable {
 
             return false;
         }
+    }
+
+    /**
+     * Attempts to acquire a value-less lock on the specified target for the given duration.
+     *
+     * @param target the target resource on which to acquire the lock (must not be null)
+     * @param liveTime the time-to-live in milliseconds before the lock automatically expires; must be positive
+     * @return {@code true} if the lock was successfully acquired, {@code false} if it is already held
+     * @deprecated renamed to {@link #tryLock(Object, long)} to reflect its non-blocking, single-attempt
+     *             semantics (it returns immediately rather than waiting for the lock). This alias
+     *             delegates to it and will be removed in a future release.
+     */
+    @Deprecated
+    public boolean lock(final K target, final long liveTime) {
+        return tryLock(target, liveTime);
+    }
+
+    /**
+     * Attempts to acquire a lock on the specified target with an associated value.
+     *
+     * @param target the target resource on which to acquire the lock (must not be null)
+     * @param value the value to associate with the lock (may be {@code null})
+     * @param liveTime the time-to-live in milliseconds before the lock automatically expires; must be positive
+     * @return {@code true} if the lock was successfully acquired, {@code false} if it is already held
+     * @deprecated renamed to {@link #tryLock(Object, Object, long)} to reflect its non-blocking, single-attempt
+     *             semantics (it returns immediately rather than waiting for the lock). This alias
+     *             delegates to it and will be removed in a future release.
+     */
+    @Deprecated
+    public boolean lock(final K target, final V value, final long liveTime) {
+        return tryLock(target, value, liveTime);
+    }
+
+    /**
+     * Releases the lock on the specified target.
+     *
+     * @param target the target resource whose lock is to be released (must not be null)
+     * @return {@code true} if an entry was deleted for this target; {@code false} if no entry existed
+     * @deprecated renamed to {@link #tryUnlock(Object)} to pair with {@link #tryLock(Object, long)};
+     *             this alias delegates to it and will be removed in a future release.
+     */
+    @Deprecated
+    public boolean unlock(final K target) {
+        return tryUnlock(target);
+    }
+
+    /**
+     * Releases the lock on the specified target without throwing when the Memcached operation fails.
+     *
+     * @param target the target resource whose lock is to be released (must not be null)
+     * @return {@code true} if an entry was deleted for this target; {@code false} if no entry existed
+     *         or the release failed (which is logged at {@code WARN})
+     * @deprecated renamed to {@link #unlockQuietly(Object)}. The {@code try} prefix wrongly implied a
+     *             non-blocking acquisition attempt, whereas this method's distinguishing behavior is
+     *             swallowing communication errors on release. This alias delegates to it and will be
+     *             removed in a future release.
+     */
+    @Deprecated
+    public boolean tryUnlockQuietly(final K target) {
+        return unlockQuietly(target);
     }
 
     /**
@@ -642,7 +705,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * // Usage
      * NamespacedLock<String> lock = new NamespacedLock<>("localhost:11211", "myapp");
-     * lock.lock("resource1", 30000);   // Key in Memcached: "lock:myapp:resource1"
+     * lock.tryLock("resource1", 30000);   // Key in Memcached: "lock:myapp:resource1"
      *
      * // Example 2: Custom implementation that hashes long keys to stay under the Memcached limit.
      * class HashedLock<K, V> extends MemcachedLock<K, V> {
@@ -694,7 +757,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p>Warning: Direct use of the client bypasses the lock abstraction. Be careful not to:
      * <ul>
-     * <li>Delete lock keys using the client directly (use {@link #unlock(Object)} instead)</li>
+     * <li>Delete lock keys using the client directly (use {@link #tryUnlock(Object)} instead)</li>
      * <li>Modify lock keys in ways that could break the locking protocol</li>
      * <li>Use conflicting TTL values that could cause unexpected behavior</li>
      * </ul>
@@ -705,7 +768,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * // Example 1: Access the underlying client for custom operations
      * SpyMemcached<String> client = lock.client();          // never null; the same instance on every call
-     * client.set("custom:key", "value", 60000);             // returns true on success (60000 ms -> 60 s TTL)
+     * client.put("custom:key", "value", 60000);             // returns true on success (60000 ms -> 60 s TTL)
      *
      * // Example 2: Store metadata alongside lock
      * String metadata = client.get("custom:key");           // returns "value" (or null if absent/expired)
@@ -717,7 +780,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * data.put("data:key2", "value2");                      // seed local data map
      * // Note: Use different key prefix to avoid conflicts with lock keys
      * for (Map.Entry<String, String> entry : data.entrySet()) {
-     *     client.set(entry.getKey(), entry.getValue(), 300000);   // returns true on success (300000 ms -> 300 s TTL)
+     *     client.put(entry.getKey(), entry.getValue(), 300000);   // returns true on success (300000 ms -> 300 s TTL)
      * }
      * }</pre>
      *
@@ -749,12 +812,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <pre>{@code
      * // Example 1: Recommended pattern with try-with-resources
      * try (MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211")) {
-     *     if (lock.lock("resource", 30000)) {        // true: acquired
+     *     if (lock.tryLock("resource", 30000)) {        // true: acquired
      *         try {
      *             // Critical section
      *             performOperation();                // your exclusive work runs here
      *         } finally {
-     *             lock.unlock("resource");           // returns true: the lock key was deleted
+     *             lock.tryUnlock("resource");           // returns true: the lock key was deleted
      *         }
      *     }
      * } // close() runs automatically: disconnects the client; does NOT release any still-held locks
@@ -762,11 +825,11 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * // Example 2: Manual close (not recommended)
      * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
      * try {
-     *     if (lock.lock("resource", 30000)) {        // true: acquired
+     *     if (lock.tryLock("resource", 30000)) {        // true: acquired
      *         try {
      *             performOperation();                // your exclusive work runs here
      *         } finally {
-     *             lock.unlock("resource");           // returns true: the lock key was deleted
+     *             lock.tryUnlock("resource");           // returns true: the lock key was deleted
      *         }
      *     }
      * } finally {
@@ -775,8 +838,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * // Example 3: Multiple locks with single client
      * try (MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211")) {
-     *     boolean lock1 = lock.lock("resource1", 30000);   // true: acquired
-     *     boolean lock2 = lock.lock("resource2", 30000);   // true: acquired (distinct key)
+     *     boolean lock1 = lock.tryLock("resource1", 30000);   // true: acquired
+     *     boolean lock2 = lock.tryLock("resource2", 30000);   // true: acquired (distinct key)
      *
      *     try {
      *         if (lock1 && lock2) {
@@ -784,8 +847,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *             performOperation();                      // your exclusive work runs here
      *         }
      *     } finally {
-     *         if (lock1) lock.unlock("resource1");         // returns true: the lock key was deleted
-     *         if (lock2) lock.unlock("resource2");         // returns true: the lock key was deleted
+     *         if (lock1) lock.tryUnlock("resource1");         // returns true: the lock key was deleted
+     *         if (lock2) lock.tryUnlock("resource2");         // returns true: the lock key was deleted
      *     }
      * } // close() runs automatically here
      * }</pre>

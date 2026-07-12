@@ -15,6 +15,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
+import com.landawn.abacus.util.ContinuableFuture;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -65,7 +67,7 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_get_returns_value() {
-        cache.set("user:1", "hello", 60_000);
+        cache.put("user:1", "hello", 60_000);
         assertEquals("hello", cache.get("user:1"));
     }
 
@@ -83,27 +85,27 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_set_stores_and_returns_true() {
-        assertTrue(cache.set("k", "value", 60_000));
+        assertTrue(cache.put("k", "value", 60_000));
         assertEquals("value", cache.get("k"));
     }
 
     @Test
     public void test_set_overwrites_existing_value() {
-        cache.set("k", "v1", 60_000);
-        assertTrue(cache.set("k", "v2", 60_000));
+        cache.put("k", "v1", 60_000);
+        assertTrue(cache.put("k", "v2", 60_000));
         assertEquals("v2", cache.get("k"));
     }
 
     @Test
     public void test_set_null_value_is_stored_and_reads_back_null() {
         // A null value is accepted (memcached stores the empty Kryo payload); get maps it back to null.
-        assertTrue(cache.set("maybe-null", null, 60_000));
+        assertTrue(cache.put("maybe-null", null, 60_000));
         assertNull(cache.get("maybe-null"));
     }
 
     @Test
     public void test_set_rejects_null_key() {
-        assertThrows(IllegalArgumentException.class, () -> cache.set(null, "v", 60_000));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 60_000));
     }
 
     @Test
@@ -112,7 +114,7 @@ public class SpyMemcachedTest {
         // immediately retrievable (i.e. NOT stored already-expired, which is what a botched conversion
         // would produce).
         final long liveTime = 31L * 24 * 60 * 60 * 1000; // 31 days
-        assertTrue(cache.set("k", "value", liveTime));
+        assertTrue(cache.put("k", "value", liveTime));
         assertEquals("value", cache.get("k"));
     }
 
@@ -120,7 +122,7 @@ public class SpyMemcachedTest {
     public void test_set_short_ttl_expires() throws Exception {
         // 1_000 ms -> 1 s. The value is present immediately and gone shortly after the TTL elapses,
         // confirming the ms->s conversion is honored end-to-end by the real server.
-        cache.set("ttl", "v", 1_000);
+        cache.put("ttl", "v", 1_000);
         assertEquals("v", cache.get("ttl"));
 
         Thread.sleep(2_500);
@@ -133,23 +135,40 @@ public class SpyMemcachedTest {
      */
     @Test
     public void test_set_expiration_overflow_throws() {
-        assertThrows(IllegalArgumentException.class, () -> cache.set("k", "v", 2_000_000_000_000L));
+        assertThrows(IllegalArgumentException.class, () -> cache.put("k", "v", 2_000_000_000_000L));
     }
 
     @Test
     public void test_asyncSet_then_asyncGet() throws Exception {
-        assertTrue(cache.asyncSet("k", "v", 60_000).get());
+        assertTrue(cache.asyncPut("k", "v", 60_000).get());
         assertEquals("v", cache.asyncGet("k").get());
     }
 
     @Test
     public void test_asyncSet_rejects_null_key() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncSet(null, "v", 60_000));
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncPut(null, "v", 60_000));
     }
 
     @Test
     public void test_asyncGet_rejects_null_key() {
         assertThrows(IllegalArgumentException.class, () -> cache.asyncGet(null));
+    }
+
+    @Test
+    public void test_async_methods_return_ContinuableFuture() throws Exception {
+        // The async* methods wrap the spymemcached Future in an abacus ContinuableFuture; the static
+        // types below only compile because of that, and the ContinuableFuture-specific map(...) chain
+        // (absent from java.util.concurrent.Future) confirms the concrete type at runtime.
+        final ContinuableFuture<Boolean> putFuture = cache.asyncPut("k", "v", 60_000);
+        assertTrue(putFuture.get());
+
+        final ContinuableFuture<Object> getFuture = cache.asyncGet("k");
+        assertEquals("v", getFuture.get());
+
+        assertEquals("v", cache.asyncGet("k").map(v -> v).get());
+
+        final ContinuableFuture<Map<String, Object>> bulkFuture = cache.asyncGetBulk("k");
+        assertEquals("v", bulkFuture.get().get("k"));
     }
 
     // --- add -----------------------------------------------------------------------------------
@@ -184,7 +203,7 @@ public class SpyMemcachedTest {
     public void test_replace_fails_when_absent_and_succeeds_when_present() {
         assertFalse(cache.replace("missing", "v", 60_000));
 
-        cache.set("k", "v1", 60_000);
+        cache.put("k", "v1", 60_000);
         assertTrue(cache.replace("k", "v2", 60_000));
         assertEquals("v2", cache.get("k"));
     }
@@ -196,7 +215,7 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_asyncReplace_forwards() throws Exception {
-        cache.set("k", "v1", 60_000);
+        cache.put("k", "v1", 60_000);
         assertTrue(cache.asyncReplace("k", "v2", 60_000).get());
         assertEquals("v2", cache.get("k"));
     }
@@ -210,31 +229,31 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_delete_existing_returns_true_and_removes() {
-        cache.set("k", "v", 60_000);
-        assertTrue(cache.delete("k"));
+        cache.put("k", "v", 60_000);
+        assertTrue(cache.remove("k"));
         assertNull(cache.get("k"));
     }
 
     @Test
     public void test_delete_missing_returns_false() {
-        assertFalse(cache.delete("never-existed"));
+        assertFalse(cache.remove("never-existed"));
     }
 
     @Test
     public void test_delete_rejects_null_key() {
-        assertThrows(IllegalArgumentException.class, () -> cache.delete(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
     }
 
     @Test
     public void test_asyncDelete_forwards() throws Exception {
-        cache.set("k", "v", 60_000);
-        assertTrue(cache.asyncDelete("k").get());
+        cache.put("k", "v", 60_000);
+        assertTrue(cache.asyncRemove("k").get());
         assertNull(cache.get("k"));
     }
 
     @Test
     public void test_asyncDelete_rejects_null_key() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncDelete(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncRemove(null));
     }
 
     // --- incr ----------------------------------------------------------------------------------
@@ -284,7 +303,7 @@ public class SpyMemcachedTest {
         assertEquals(16L, cache.incr("adv-counter", 1)); // plain incr also works on the seeded key
 
         // The connection must remain healthy after the counter operations.
-        assertTrue(cache.set("health-check", "ok", 60_000));
+        assertTrue(cache.put("health-check", "ok", 60_000));
         assertEquals("ok", cache.get("health-check"));
     }
 
@@ -371,8 +390,8 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_getBulk_varargs_returns_only_found_keys() {
-        cache.set("a", 1, 60_000);
-        cache.set("b", 2, 60_000);
+        cache.put("a", 1, 60_000);
+        cache.put("b", 2, 60_000);
 
         final Map<String, Object> got = cache.getBulk("a", "b", "missing");
 
@@ -384,7 +403,7 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_getBulk_collection_returns_only_found_keys() {
-        cache.set("a", 1, 60_000);
+        cache.put("a", 1, 60_000);
 
         final List<String> keys = Arrays.asList("a", "b");
         final Map<String, Object> got = cache.getBulk(keys);
@@ -412,8 +431,8 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_asyncGetBulk_varargs_forwards() throws Exception {
-        cache.set("a", 1, 60_000);
-        cache.set("b", 2, 60_000);
+        cache.put("a", 1, 60_000);
+        cache.put("b", 2, 60_000);
 
         final Map<String, Object> got = cache.asyncGetBulk("a", "b").get();
 
@@ -423,7 +442,7 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_asyncGetBulk_collection_forwards() throws Exception {
-        cache.set("a", 1, 60_000);
+        cache.put("a", 1, 60_000);
 
         final Map<String, Object> got = cache.asyncGetBulk(Arrays.asList("a")).get();
 
@@ -435,8 +454,8 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_flushAll_clears_all_keys() {
-        cache.set("a", 1, 60_000);
-        cache.set("b", 2, 60_000);
+        cache.put("a", 1, 60_000);
+        cache.put("b", 2, 60_000);
 
         cache.flushAll();
 
@@ -446,7 +465,7 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_flushAll_with_immediate_delay_clears() {
-        cache.set("a", 1, 60_000);
+        cache.put("a", 1, 60_000);
 
         assertTrue(cache.flushAll(0));
 
@@ -461,7 +480,7 @@ public class SpyMemcachedTest {
         // deferred flush. The client therefore converts >30-day delays to absolute now+delay
         // timestamps (same rule as set/add/replace), so the flush is genuinely scheduled 40 days
         // out and the value is still present right after the call.
-        cache.set("a", 1, 60_000);
+        cache.put("a", 1, 60_000);
 
         assertTrue(cache.flushAll(3_456_000_000L)); // 40 days
 
@@ -470,7 +489,7 @@ public class SpyMemcachedTest {
 
     @Test
     public void test_asyncFlushAll_forwards() throws Exception {
-        cache.set("a", 1, 60_000);
+        cache.put("a", 1, 60_000);
 
         assertTrue(cache.asyncFlushAll().get());
 
@@ -540,7 +559,7 @@ public class SpyMemcachedTest {
     public void test_constructor_with_huge_timeout_operationsStillWork() {
         final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL, Long.MAX_VALUE);
         try {
-            assertTrue(local.set("huge-timeout-key", "v", 60_000));
+            assertTrue(local.put("huge-timeout-key", "v", 60_000));
             assertEquals("v", local.get("huge-timeout-key"));
         } finally {
             local.disconnect();
