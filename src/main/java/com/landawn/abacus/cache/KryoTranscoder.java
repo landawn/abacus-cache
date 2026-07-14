@@ -44,7 +44,9 @@ import net.spy.memcached.transcoders.Transcoder;
  * <p><b>Thread Safety:</b> This class is thread-safe. Concurrency safety is delegated to the
  * underlying shared {@link KryoParser}, which internally pools Kryo/Output/Input instances.
  * The pool is guarded by internal locks rather than thread-locals, so highly concurrent
- * encode/decode workloads may contend on the shared pool; correctness is unaffected.
+ * encode/decode workloads may contend on the shared pool; correctness is unaffected. Treat parser
+ * configuration as initialization-only: finish class registration and other configuration before
+ * the first concurrent encode/decode, and do not mutate the parser while it is in use.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
@@ -148,7 +150,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * shared default parser.
      *
      * <p><b>Thread Safety:</b> The supplied {@link KryoParser} must be safe for concurrent use; the
-     * bundled parsers pool Kryo/Output/Input instances internally.
+     * bundled parsers pool Kryo/Output/Input instances internally. Complete all registrations and
+     * configuration before passing this transcoder to concurrent clients.
      *
      * @param kryoParser the Kryo parser to use for serialization; must not be {@code null}
      * @throws IllegalArgumentException if {@code kryoParser} is {@code null}
@@ -167,7 +170,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * compactness and version stability) rather than relying on the shared default parser.
      *
      * <p><b>Thread Safety:</b> The supplied {@link KryoParser} must be safe for concurrent use; the
-     * bundled parsers pool Kryo/Output/Input instances internally.
+     * bundled parsers pool Kryo/Output/Input instances internally. Complete all registrations and
+     * configuration before passing this transcoder to concurrent clients.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

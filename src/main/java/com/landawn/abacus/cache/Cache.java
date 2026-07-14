@@ -78,6 +78,9 @@ public interface Cache<K, V> extends Closeable {
      * <ul>
      * <li>Returns {@code Optional.empty()} if the key does not exist</li>
      * <li>Returns {@code Optional.empty()} if the entry has expired (TTL or idle timeout exceeded)</li>
+     * <li>Also returns {@code Optional.empty()} for a present entry explicitly mapped to {@code null}
+     *     when the implementation permits null values. Whether {@link #containsKey(Object)} can
+     *     distinguish that mapping is implementation-specific</li>
      * <li>May update the last-access time for idle-timeout tracking (implementation-specific)</li>
      * <li>Does not throw for missing keys - returns an empty Optional instead</li>
      * </ul>
@@ -100,7 +103,8 @@ public interface Cache<K, V> extends Closeable {
      * }</pre>
      *
      * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
-     * @return an Optional containing the cached value if present and not expired, or an empty Optional otherwise
+     * @return an Optional containing a non-null cached value if present and not expired, or an empty
+     *         Optional for a miss, expiration, or an explicitly cached {@code null}
      * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
@@ -272,8 +276,8 @@ public interface Cache<K, V> extends Closeable {
      *
      * <p><b>Behavior:</b>
      * <ul>
-     * <li>Returns {@code true} if the key has a live (non-expired) entry</li>
-     * <li>Returns {@code false} if the key does not exist or has expired</li>
+     * <li>Returns {@code true} if the implementation currently considers the key present</li>
+     * <li>Returns {@code false} if the key does not exist</li>
      * <li>Whether the call updates access time / LRU ordering / idle counters is implementation-defined</li>
      * <li>Whether expired-but-not-yet-evicted entries are visible here is implementation-defined</li>
      * </ul>
@@ -292,7 +296,8 @@ public interface Cache<K, V> extends Closeable {
      * }</pre>
      *
      * @param key the cache key to check for; null-handling is implementation-defined (most implementations reject null)
-     * @return {@code true} if an entry for the key exists and is not expired, {@code false} otherwise
+     * @return {@code true} if the implementation currently considers an entry for the key present;
+     *         visibility of expired or null-valued entries is implementation-specific
      * @see #get(Object)
      * @see #asyncContainsKey(Object)
      */
@@ -440,9 +445,8 @@ public interface Cache<K, V> extends Closeable {
      * }</pre>
      *
      * @param key the cache key to check for; null-handling is implementation-defined (most implementations reject null)
-     * @return a ContinuableFuture that completes with {@code true} if a live entry for the key
-     *         exists, {@code false} otherwise. The future completes exceptionally if the
-     *         underlying {@code containsKey} call throws.
+     * @return a ContinuableFuture that completes with the result of {@link #containsKey(Object)}.
+     *         The future completes exceptionally if the underlying call throws.
      * @see #containsKey(Object)
      * @see #asyncGet(Object)
      */
@@ -461,9 +465,9 @@ public interface Cache<K, V> extends Closeable {
      * Set<String> keys = cache.keySet();
      * keys.forEach(key -> System.out.println("Cached key: " + key));
      *
-     * // Most implementations return a snapshot, so mutating the returned Set does NOT
-     * // mutate the cache itself - call remove() to actually evict.
-     * cache.keySet().stream()
+     * // The returned Set may be a snapshot, an unmodifiable set, or a live view. Copy it before
+     * // traversing while invalidating entries, and call remove() on the cache itself.
+     * new HashSet<>(cache.keySet()).stream()
      *     .filter(key -> key.startsWith("temp:"))
      *     .forEach(cache::remove);
      * }</pre>
@@ -502,9 +506,11 @@ public interface Cache<K, V> extends Closeable {
     int size();
 
     /**
-     * Removes all entries from the cache. After this call, {@link #size()} returns 0
-     * (subject to concurrent insertions). Cache configuration and {@link #getProperties() properties}
-     * are not affected.
+     * Removes all entries in the implementation-defined scope of this cache. For implementations
+     * that support {@link #size()}, it normally returns 0 afterward, subject to concurrent insertions
+     * and backend consistency. Some distributed implementations support {@code clear()} while still
+     * not supporting {@code size()}. Cache configuration and {@link #getProperties() properties} are
+     * not affected.
      *
      * <p>May be expensive for very large caches and for distributed cache backends.
      *

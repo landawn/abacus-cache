@@ -26,7 +26,7 @@ import java.util.Map;
  * <p>Key features:
  * <ul>
  * <li>Basic CRUD operations (get, put, remove)</li>
- * <li>Bulk operations for efficiency</li>
+ * <li>Optional bulk and flush operations (unsupported implementations may throw)</li>
  * <li>Atomic increment/decrement operations</li>
  * <li>Time-based expiration support</li>
  * </ul>
@@ -68,7 +68,7 @@ public interface DistributedCacheClient<T> {
     String REDIS_CLUSTER = "RedisCluster";
 
     /**
-     * Returns the server URL(s) this client is connected to.
+     * Returns the server URL(s) this client is configured to use.
      * For multiple servers, the format is implementation-specific
      * (e.g., comma-separated for some implementations).
      *
@@ -206,6 +206,11 @@ public interface DistributedCacheClient<T> {
      * The implementation handles concurrent access safely across distributed cache clients.
      * When multiple clients set the same key concurrently, the last write wins.
      *
+     * <p><b>Implementation compatibility:</b> the default implementation delegates to the legacy
+     * {@link #set(String, Object, long)} name. A concrete client must override either this method
+     * (recommended) or {@code set}; overriding neither causes the two compatibility defaults to
+     * call one another recursively.
+     *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Cache with 1 hour TTL
@@ -236,7 +241,31 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */
-    boolean put(String key, T value, long liveTime);
+    default boolean put(final String key, final T value, final long liveTime) {
+        return set(key, value, liveTime);
+    }
+
+    /**
+     * Legacy name for {@link #put(String, Object, long)}.
+     *
+     * <p>This compatibility bridge is deliberately a default method. Implementations compiled
+     * against versions through 2.8.4 may override only {@code set}, while newer implementations
+     * override {@code put}; the two defaults let either implementation style serve callers using
+     * the other name. Every concrete client must override at least one of the pair.
+     *
+     * @param key the cache key, must not be {@code null}
+     * @param value the value to cache, may be {@code null} if supported by the implementation
+     * @param liveTime the time-to-live in milliseconds ({@code 0} or negative for no expiration)
+     * @return {@code true} if the operation was successful, {@code false} otherwise
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if a network error or timeout occurs
+     * @deprecated Use {@link #put(String, Object, long)}. Retained for source and binary
+     *             compatibility with clients compiled against version 2.8.4 and earlier.
+     */
+    @Deprecated(since = "2.8.5", forRemoval = false)
+    default boolean set(final String key, final T value, final long liveTime) {
+        return put(key, value, liveTime);
+    }
 
     /**
      * Removes a key-value pair from the cache.
@@ -250,6 +279,11 @@ public interface DistributedCacheClient<T> {
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
+     *
+     * <p><b>Implementation compatibility:</b> the default implementation delegates to the legacy
+     * {@link #delete(String)} name. A concrete client must override either this method
+     * (recommended) or {@code delete}; overriding neither causes the two compatibility defaults to
+     * call one another recursively.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -281,7 +315,28 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      */
-    boolean remove(String key);
+    default boolean remove(final String key) {
+        return delete(key);
+    }
+
+    /**
+     * Legacy name for {@link #remove(String)}.
+     *
+     * <p>As with {@link #set(String, Object, long)}, this default bridge supports both legacy
+     * implementations that override {@code delete} and current implementations that override
+     * {@code remove}. Every concrete client must override at least one of the pair.
+     *
+     * @param key the cache key, must not be {@code null}
+     * @return {@code true} if the key existed and was removed; {@code false} otherwise
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if a network error or timeout occurs
+     * @deprecated Use {@link #remove(String)}. Retained for source and binary compatibility with
+     *             clients compiled against version 2.8.4 and earlier.
+     */
+    @Deprecated(since = "2.8.5", forRemoval = false)
+    default boolean delete(final String key) {
+        return remove(key);
+    }
 
     /**
      * Atomically increments a numeric value by 1.
@@ -486,9 +541,9 @@ public interface DistributedCacheClient<T> {
     long decr(String key, long delta);
 
     /**
-     * Removes all keys from all connected cache servers.
-     * This is a destructive operation that affects all data across all servers.
-     * Use with extreme caution in production environments.
+     * Requests removal of cached data in the implementation-defined backend scope.
+     * This may affect every configured server, database, or namespace, including data belonging
+     * to other applications. Use with extreme caution in production environments.
      *
      * <p><b>&#9888;&#65039; Destructive operation:</b> The scope is implementation-specific and may
      * include databases or namespaces used by other applications on the same servers.

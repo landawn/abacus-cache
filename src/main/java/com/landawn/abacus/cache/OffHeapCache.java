@@ -139,8 +139,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Create a 100MB off-heap cache
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(100);
+     * // Create a 100MB off-heap cache through the public factory
+     * OffHeapCache<String, byte[]> cache = CacheFactory.createOffHeapCache(100);
      *
      * byte[] largeData = new byte[1024];
      * cache.put("key1", largeData);
@@ -154,6 +154,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *                     The actual capacity will be capacityInMB * 1048576 bytes.
      * @throws IllegalArgumentException if capacityInMB is not positive
      * @throws OutOfMemoryError if native memory allocation fails
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
+     * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     OffHeapCache(final int capacityInMB) {
         this(capacityInMB, 3000);
@@ -174,7 +176,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // 200MB cache with 60 second eviction interval
-     * OffHeapCache<Long, Data> cache = new OffHeapCache<>(200, 60000);
+     * OffHeapCache<Long, Data> cache = CacheFactory.createOffHeapCache(200, 60000);
      *
      * Data data = new Data();
      * cache.put(123L, data, 7200000, 3600000);   // 2h TTL, 1h idle
@@ -188,6 +190,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
      * @throws IllegalArgumentException if capacityInMB is not positive
      * @throws OutOfMemoryError if native memory allocation fails
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
+     * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     OffHeapCache(final int capacityInMB, final long evictDelay) {
         this(capacityInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -207,7 +211,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // 500MB, 30s eviction, 1h TTL, 30min idle
-     * OffHeapCache<String, byte[]> cache = new OffHeapCache<>(500, 30000, 3600000, 1800000);
+     * OffHeapCache<String, byte[]> cache = CacheFactory.createOffHeapCache(500, 30000, 3600000, 1800000);
      *
      * cache.put("key1", "data".getBytes());
      * byte[] data = cache.getOrNull("key1");
@@ -222,6 +226,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
      * @throws IllegalArgumentException if capacityInMB is not positive
      * @throws OutOfMemoryError if native memory allocation fails
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
+     * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null,
@@ -277,6 +283,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @throws IllegalArgumentException if capacityInMB is not positive, if maxBlockSize is outside the valid
      *                                  range, or if vacatingFactor is outside [0.0, 1.0]
      * @throws OutOfMemoryError if native memory allocation fails
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
+     * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,

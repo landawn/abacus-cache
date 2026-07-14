@@ -5,6 +5,7 @@
 package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -32,6 +33,14 @@ import redis.clients.jedis.providers.ClusterConnectionProvider;
 
 @Tag("2025")
 public class CacheFactoryTest extends TestBase {
+
+    private static boolean nonCacheProviderInitialized;
+
+    private static final class NonCacheProviderWithInitializer {
+        static {
+            nonCacheProviderInitialized = true;
+        }
+    }
 
     @SuppressWarnings("unchecked")
     private static DistributedCacheClient<?> distributedClient(final Cache<?, ?> cache) throws ReflectiveOperationException {
@@ -410,6 +419,22 @@ public class CacheFactoryTest extends TestBase {
     }
 
     /**
+     * Resolving an invalid custom provider must not execute arbitrary static initialization before
+     * the factory has established that the type implements {@link Cache}. Class literals load but
+     * do not initialize their class, so the probe remains deterministic until the factory call.
+     */
+    @Test
+    public void testCreateCache_NonCacheClassIsRejectedWithoutInitialization() {
+        nonCacheProviderInitialized = false;
+        final String provider = NonCacheProviderWithInitializer.class.getName() + "()";
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache(provider));
+
+        assertTrue(ex.getMessage().contains("must implement Cache"));
+        assertFalse(nonCacheProviderInitialized, "type validation must not run an invalid provider's static initializer");
+    }
+
+    /**
      * A non-empty parameter list whose first (server-URL) parameter is empty is rejected with the
      * "server URL cannot be empty" message. {@code Memcached(,prefix:)} parses to a two-element
      * parameter array with an empty first element (distinct from {@code Memcached()}, which has no
@@ -467,10 +492,6 @@ public class CacheFactoryTest extends TestBase {
         }
     }
 
-    // TODO: createCache's "attrResult == null" and "Cannot find class (cls == null)" guards are
-    // unreachable — TypeAttrParser.parse never returns null and ClassUtil.forName throws (rather than
-    // returning null) for a missing class. The "catch (IllegalArgumentException) -> rethrow" guard is
-    // likewise unreachable because TypeAttrParser.parse only throws non-IAE RuntimeExceptions
-    // (ParsingException / StringIndexOutOfBoundsException), which are handled by the RuntimeException
-    // branch instead.
+    // TypeAttrParser.parse currently never returns null, so createCache's defensive attrResult-null
+    // guard is not directly reachable through the dependency's public parser implementation.
 }

@@ -43,9 +43,11 @@ import java.util.Objects;
  *     to the next multiple of the minimum block size (64 bytes).</li>
  * <li>Hit metrics: conceptually, {@code hitCount + missCount = getCount}. {@code hitCountFromDisk}
  *     normally represents the subset of {@code hitCount} served from disk.</li>
- * <li>Put metrics: {@code putCount} counts successful inserts into the pool (both memory- and
- *     disk-resident wrappers go through the same pool). Failed put attempts (e.g., wrapper allocation
- *     failed before reaching the pool) are not included. As an approximate identity,
+ * <li>Put metrics: {@code putCount} counts successful wrapper installations in the pool (both
+ *     memory- and disk-resident wrappers go through the same pool). This normally corresponds to
+ *     successful cache puts, but an internal disk-to-memory promotion or recovery reinsertion also
+ *     installs a wrapper and is counted. Failed attempts that never reach or are rejected by the
+ *     pool are not included. As an approximate identity,
  *     {@code putCount} &asymp; {@code size + evictionCount + removed/replaced entries}
  *     (note that {@code evictionCountFromDisk} is already included in {@code evictionCount};
  *     it is the disk-resident subset, not an additional count).</li>
@@ -94,10 +96,10 @@ import java.util.Objects;
  * @param sizeOnDisk the current number of entries whose value bytes are stored on disk via the configured
  *                   {@link OffHeapStore}. These entries are still represented as wrappers in the pool (and
  *                   therefore counted in {@code size}); only their payloads live on disk.
- * @param putCount the total number of <em>successful</em> put operations performed since cache creation,
- *                 counting both memory-backed and disk-spilled stores. A put that fails before the wrapper
- *                 is installed in the pool (e.g., neither memory nor disk could accept the value) is NOT
- *                 counted here.
+ * @param putCount the total number of successful wrapper installations in the underlying pool since
+ *                 cache creation, counting memory-backed and disk-spilled wrappers as well as internal
+ *                 disk-to-memory promotion/recovery reinsertions. A cache put that fails before its
+ *                 wrapper is installed (e.g., neither memory nor disk could accept the value) is not counted.
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
  *                       when off-heap memory is full and the value is stored to disk via the configured
  *                       {@link OffHeapStore}, or when the {@code storeSelector} explicitly routes the value to disk.
@@ -123,9 +125,8 @@ import java.util.Objects;
  *                              and {@code put()} replacements of a disk-stored key are NOT counted here.
  * @param allocatedMemory the total allocated off-heap memory in bytes. This represents the maximum memory
  *                        that has been reserved for the cache, typically organized into fixed-size segments.
- * @param occupiedMemory the currently occupied off-heap memory in bytes, including both data and internal
- *                       overhead. This value includes the actual data size plus any metadata and alignment
- *                       padding required by the slot-based allocation system.
+ * @param occupiedMemory the currently occupied off-heap slot space in bytes. This includes serialized
+ *                       data plus slot-rounding/alignment padding, but not the heap-resident wrapper metadata.
  * @param dataSize the total size of actual serialized data tracked by the cache in bytes, across both
  *                 the off-heap memory pool and the disk store, excluding any slot-allocation padding or
  *                 internal overhead. To isolate the in-memory portion, subtract {@code dataSizeOnDisk}
@@ -182,8 +183,9 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      *
      * @throws NullPointerException if {@code writeToDiskTimeStats}, {@code readFromDiskTimeStats},
      *         or {@code occupiedSlots} is {@code null}, or if {@code occupiedSlots} contains a
-     *         {@code null} key or a {@code null} nested map
-     * @throws IllegalArgumentException if any numeric component is negative
+     *         {@code null} key, nested map, segment index, or occupied-slot count
+     * @throws IllegalArgumentException if any numeric component is negative, or if an occupied-slot
+     *                                  size is not positive
      */
     public OffHeapCacheStats {
         Objects.requireNonNull(writeToDiskTimeStats, "writeToDiskTimeStats cannot be null");
@@ -276,7 +278,26 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
             final Map<Integer, Integer> segmentSlots = Objects.requireNonNull(entry.getValue(),
                     "occupiedSlots contains a null nested map for slot size: " + sizeOfSlot);
 
-            copy.put(sizeOfSlot, Collections.unmodifiableMap(new LinkedHashMap<>(segmentSlots)));
+            if (sizeOfSlot <= 0) {
+                throw new IllegalArgumentException("occupiedSlots contains a non-positive slot size: " + sizeOfSlot);
+            }
+
+            final Map<Integer, Integer> segmentCopy = new LinkedHashMap<>(segmentSlots.size());
+            for (final Map.Entry<Integer, Integer> segmentEntry : segmentSlots.entrySet()) {
+                final Integer segmentIndex = Objects.requireNonNull(segmentEntry.getKey(),
+                        "occupiedSlots contains a null segment index for slot size: " + sizeOfSlot);
+                final Integer occupiedCount = Objects.requireNonNull(segmentEntry.getValue(),
+                        "occupiedSlots contains a null occupied count for slot size: " + sizeOfSlot + ", segment: " + segmentIndex);
+
+                if (segmentIndex < 0 || occupiedCount < 0) {
+                    throw new IllegalArgumentException(
+                            "occupiedSlots contains a negative segment index/count for slot size " + sizeOfSlot + ": " + segmentIndex + "=" + occupiedCount);
+                }
+
+                segmentCopy.put(segmentIndex, occupiedCount);
+            }
+
+            copy.put(sizeOfSlot, Collections.unmodifiableMap(segmentCopy));
         }
 
         return Collections.unmodifiableMap(copy);
@@ -306,7 +327,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
          * metric (disk I/O timing in milliseconds) can never be negative, NaN, or infinite, so any
          * such value indicates a programming error.
          *
-         * @throws IllegalArgumentException if {@code min}, {@code max}, or {@code avg} is negative, NaN, or infinite
+         * @throws IllegalArgumentException if {@code min}, {@code max}, or {@code avg} is negative,
+         *                                  NaN, or infinite, or if {@code min <= avg <= max} does not hold
          */
         public MinMaxAvg {
             // N.checkArgNotNegative(double) only rejects values strictly less than 0; because every
@@ -316,6 +338,10 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
             checkNonNegativeFinite(min, "min");
             checkNonNegativeFinite(max, "max");
             checkNonNegativeFinite(avg, "avg");
+
+            if (min > max || avg < min || avg > max) {
+                throw new IllegalArgumentException("Expected min <= avg <= max but was: min=" + min + ", avg=" + avg + ", max=" + max);
+            }
         }
 
         private static void checkNonNegativeFinite(final double value, final String name) {

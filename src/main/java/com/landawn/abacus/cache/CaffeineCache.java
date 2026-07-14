@@ -166,7 +166,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * expiration settings configured when building the Caffeine instance.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
-     * from multiple threads. The underlying Caffeine cache handles synchronization.
+     * from multiple threads. The underlying Caffeine cache handles synchronization. If this
+     * operation races with {@link #close()}, it removes its own late write when that mapping is
+     * still current and then throws {@link IllegalStateException}; a newer mapping with a different
+     * value instance written directly through the caller-owned Caffeine cache is not removed. As
+     * with any value-only conditional removal, an ABA rewrite of the same instance is indistinguishable.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -209,10 +213,15 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
         // close() marks the wrapper closed before invalidating the cache. A put can pass the
         // initial check, pause, and then write after that invalidation. Recheck the volatile flag
-        // and remove such a late write so a closed wrapper cannot retain an entry. This keeps the
-        // normal path lock-free and avoids serializing concurrent puts on the close() monitor.
+        // and remove such a late write so a closed wrapper cannot retain an entry. Remove only the
+        // exact value instance written by this call: because callers can also retain and use the
+        // supplied Caffeine cache directly, an unconditional invalidate(key) could erase a newer
+        // direct write of a different instance that won the race after this put completed. A
+        // same-instance ABA rewrite cannot be distinguished without controlling all delegate
+        // writers. This keeps the normal path lock-free and avoids serializing concurrent puts on
+        // the close() monitor.
         if (isClosed) {
-            cacheImpl.invalidate(key);
+            cacheImpl.asMap().computeIfPresent(key, (k, currentValue) -> currentValue == value ? null : currentValue);
             throw new IllegalStateException("This cache has been closed");
         }
 
@@ -385,16 +394,18 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes this cache wrapper and releases its references to cached entries.
+     * Closes this cache wrapper and invalidates entries currently present in the supplied Caffeine
+     * cache.
      * After closing, operations that read or mutate entries throw {@link IllegalStateException};
      * {@link #stats()}, {@link #caffeineStats()}, and {@link #isClosed()} remain available,
      * while {@link #keySet()} remains unsupported.
-     * This method invalidates all entries and marks the wrapper as closed. Unlike some other
-     * cache implementations, the underlying Caffeine cache instance is not explicitly closed
-     * (Caffeine caches do not implement {@link AutoCloseable}); only its entries are invalidated.
+     * This method invalidates all entries and marks the wrapper as closed. It neither closes nor
+     * relinquishes the underlying Caffeine cache (Caffeine caches do not implement
+     * {@link AutoCloseable}); callers that supplied the delegate may continue using it directly.
      *
      * <p><b>&#9888;&#65039; Shared-instance impact:</b> Invalidation affects every user of the supplied
-     * Caffeine cache, not only this wrapper.
+     * Caffeine cache, not only this wrapper. Entries written directly to the delegate after that
+     * invalidation are outside the closed wrapper's ownership and may remain present.
      *
      * <p><b>Thread Safety:</b> This method is {@code synchronized}, thread-safe, and idempotent.
      * Calling it again has no additional effect and does not throw.
@@ -413,7 +424,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * try {
      *     cache.put("user:123", user, 0, 0);   // seed one entry
      * } finally {
-     *     cache.close();   // always close to release entry references
+     *     cache.close();   // always close the wrapper and invalidate existing entries
      * }
      *
      * // Safe to call multiple times (idempotent)

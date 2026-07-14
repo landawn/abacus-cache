@@ -59,8 +59,9 @@ import redis.clients.jedis.RedisClient;
  *
  * <p><b>Connection pooling:</b> Each shard's {@link RedisClient} uses the default connection pool
  * configuration (Apache Commons Pool). The pool is created lazily — constructing a {@code JRedis}
- * does not open a socket; connections are established on first use. If a Redis server is unreachable,
- * the failure surfaces on the first operation routed to that shard, not at construction time.
+ * does not open a Redis socket; connections are established on first use. Address parsing and DNS
+ * resolution may still fail during construction. A resolvable but unreachable Redis server normally
+ * fails on the first operation routed to that shard.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
@@ -123,6 +124,7 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses
+     * @throws RuntimeException if an address cannot be resolved or a client pool cannot be constructed
      * @see #JRedis(String, long)
      */
     public JRedis(final String serverUrl) {
@@ -161,6 +163,7 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
+     * @throws RuntimeException if an address cannot be resolved or a client pool cannot be constructed
      * @see #JRedis(String)
      */
     public JRedis(final String serverUrl, final long timeout) {
@@ -246,19 +249,23 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * <p><b>Redis-specific behavior:</b> This operation issues the Redis FLUSHALL command on each
      * shard. It removes all keys from all databases (not just the currently selected database). If a
      * FLUSHALL on one shard fails, the remaining shards are still attempted. The first failure is
-     * rethrown after all shards have been processed; additional failures, which would otherwise be
-     * lost, are logged at WARN level with their shard index.
+     * rethrown after all shards have been processed; additional failures are attached to the first as
+     * suppressed exceptions and logged at WARN level with their shard index.
      *
      * <p><b>&#9888;&#65039; Destructive operation:</b> This operation affects ALL databases on each Redis instance, not just the one
      * being used by this client. If other applications share the same Redis instances, their data will
      * also be deleted.
      *
      * @throws RuntimeException the first exception encountered while flushing any shard (all remaining
-     *         shards are still attempted before the exception is rethrown)
+     *         shards are still attempted before the exception is rethrown; later failures are attached
+     *         to it as suppressed exceptions)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @see #disconnect()
      */
     @Override
     public void flushAll() {
+        assertNotShutdown();
+
         RuntimeException firstException = null;
 
         for (int shardIndex = 0; shardIndex < clients.size(); shardIndex++) {
@@ -269,10 +276,16 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
             } catch (final RuntimeException e) {
                 if (firstException == null) {
                     firstException = e;
-                } else if (logger.isWarnEnabled()) {
-                    // The first exception is rethrown to the caller. Log only later failures to avoid
-                    // reporting that same exception both here and at the eventual catch site.
-                    logger.warn("Additional Redis flushAll() failure on shard index " + shardIndex + "; continuing with remaining shards", e);
+                } else {
+                    if (e != firstException) {
+                        firstException.addSuppressed(e);
+                    }
+
+                    if (logger.isWarnEnabled()) {
+                        // The first exception is rethrown to the caller. Log later failures to identify
+                        // their shard while retaining them on the thrown exception for programmatic use.
+                        logger.warn("Additional Redis flushAll() failure on shard index " + shardIndex + "; continuing with remaining shards", e);
+                    }
                 }
             }
         }

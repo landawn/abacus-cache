@@ -66,15 +66,18 @@ package com.landawn.abacus.cache;
  * // Get statistics snapshot
  * CacheStats stats = cache.stats();
  *
- * // Calculate cache hit rate
- * long totalRequests = stats.hitCount() + stats.missCount();
- * double hitRate = totalRequests > 0 ? (double) stats.hitCount() / totalRequests : 0.0;
+ * // Calculate cache hit rate (the helper avoids long overflow in hitCount + missCount)
+ * double hitRate = stats.hitRate();
  * System.out.printf("Cache hit rate: %.2f%%\n", hitRate * 100);
  *
- * // Check cache utilization
- * double utilizationPercent = (double) stats.size() / stats.capacity() * 100;
- * System.out.printf("Cache utilization: %d/%d entries (%.1f%%)\n",
- *     stats.size(), stats.capacity(), utilizationPercent);
+ * // Check cache utilization. Capacity 0 can mean unbounded/unreported, so do not divide by it.
+ * if (stats.capacity() > 0) {
+ *     double utilizationPercent = (double) stats.size() / stats.capacity() * 100;
+ *     System.out.printf("Cache utilization: %d/%d entries (%.1f%%)\n",
+ *         stats.size(), stats.capacity(), utilizationPercent);
+ * } else {
+ *     System.out.printf("Cache size: %d entries (capacity unreported)%n", stats.size());
+ * }
  *
  * // Monitor memory usage
  * if (stats.maxMemory() > 0) {
@@ -93,8 +96,8 @@ package com.landawn.abacus.cache;
  * // exceed maxMemory(), but these relationships are NOT guaranteed at snapshot time: the underlying
  * // counters are sampled non-atomically and may be transiently inconsistent under concurrent load,
  * // so do not assert them.
- * long derivedRequestCount = stats.hitCount() + stats.missCount();
- * System.out.println("Requests (derived): " + derivedRequestCount + ", reported: " + stats.getCount());
+ * double sampledRequestCount = (double) stats.hitCount() + stats.missCount();
+ * System.out.println("Requests (sampled): " + sampledRequestCount + ", reported: " + stats.getCount());
  * }</pre>
  *
  * @param capacity the capacity reported by the cache adapter; depending on the backing cache this

@@ -12,16 +12,21 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
+import java.util.AbstractCollection;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -163,6 +168,50 @@ public class JRedisTest {
         verify(mockJedis, never()).get(any(byte[].class));
     }
 
+    /**
+     * The caller retains ownership of a varargs array. Mutating it after the first GET must not change
+     * the already-validated operation or inject an unvalidated null into the remaining requests.
+     */
+    @Test
+    public void test_getBulk_varargs_usesPrivateSnapshot() {
+        final String[] keys = { "a", "b" };
+        when(mockJedis.get(utf8("a"))).thenAnswer(invocation -> {
+            keys[1] = null;
+            return null;
+        });
+        when(mockJedis.get(utf8("b"))).thenReturn(KRYO.encode("value-b"));
+
+        final Map<String, Object> result = cache.getBulk(keys);
+
+        assertEquals("value-b", result.get("b"));
+        verify(mockJedis).get(utf8("b"));
+    }
+
+    /**
+     * A collection is copied and validated in one pass. The old validate-then-fetch implementation
+     * iterated a live collection twice, so a changed second view could issue requests for keys that
+     * had never been validated.
+     */
+    @Test
+    public void test_getBulk_collection_isValidatedAndSnapshottedInOnePass() {
+        final AtomicInteger iteratorCalls = new AtomicInteger();
+        final Collection<String> changingView = new AbstractCollection<>() {
+            @Override
+            public Iterator<String> iterator() {
+                return (iteratorCalls.getAndIncrement() == 0 ? List.of("a") : Arrays.asList("a", null)).iterator();
+            }
+
+            @Override
+            public int size() {
+                return 1;
+            }
+        };
+        when(mockJedis.get(utf8("a"))).thenReturn(KRYO.encode("value-a"));
+
+        assertEquals("value-a", cache.getBulk(changingView).get("a"));
+        assertEquals(1, iteratorCalls.get(), "the caller's collection must be consumed exactly once");
+    }
+
     @Test
     public void test_set_with_ttl_uses_set_with_expiry() {
         when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
@@ -189,6 +238,15 @@ public class JRedisTest {
         assertTrue(cache.put("short-lived", "v", 300));
 
         verify(mockJedis).set(eq(utf8("short-lived")), any(byte[].class), eq(SetParams.setParams().px(300L)));
+    }
+
+    @Test
+    public void test_set_largeTtl_isNotNarrowedOrConverted() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+
+        assertTrue(cache.put("large-ttl", "v", Long.MAX_VALUE));
+
+        verify(mockJedis).set(eq(utf8("large-ttl")), any(byte[].class), eq(SetParams.setParams().px(Long.MAX_VALUE)));
     }
 
     @Test
@@ -324,6 +382,23 @@ public class JRedisTest {
         verify(shards.get(1)).flushAll();
     }
 
+    @Test
+    public void test_flushAll_retains_additional_failures_asSuppressed() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379,h3:6379");
+        final RuntimeException first = new RuntimeException("shard 1 down");
+        final RuntimeException second = new RuntimeException("shard 2 down");
+        when(shards.get(0).flushAll()).thenThrow(first);
+        when(shards.get(1).flushAll()).thenThrow(second);
+        when(shards.get(2).flushAll()).thenReturn("OK");
+
+        final RuntimeException thrown = assertThrows(RuntimeException.class, sharded::flushAll);
+
+        assertTrue(thrown == first);
+        assertEquals(1, thrown.getSuppressed().length);
+        assertTrue(thrown.getSuppressed()[0] == second);
+        verify(shards.get(2)).flushAll();
+    }
+
     // ---- shard routing ----
 
     @Test
@@ -365,6 +440,20 @@ public class JRedisTest {
 
         // The underlying shard client should only be closed once.
         verify(mockJedis, times(1)).close();
+    }
+
+    @Test
+    public void test_disconnect_publishesShutdownBeforeClosingClient() {
+        doAnswer(invocation -> {
+            assertThrows(IllegalStateException.class, () -> cache.get("during-close"));
+            return null;
+        }).when(mockJedis).close();
+
+        cache.disconnect();
+
+        verify(mockJedis, never()).get(utf8("during-close"));
+        assertThrows(IllegalStateException.class, () -> cache.getBulk());
+        assertThrows(IllegalStateException.class, cache::flushAll);
     }
 
     @Test

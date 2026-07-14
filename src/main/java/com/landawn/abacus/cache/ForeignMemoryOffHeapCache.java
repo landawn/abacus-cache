@@ -116,7 +116,12 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(100);   // 100MB
+     * ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]>builder()
+     *     .capacityInMB(100)
+     *     .evictDelay(3000)
+     *     .defaultLiveTime(Cache.DEFAULT_LIVE_TIME)
+     *     .defaultMaxIdleTime(Cache.DEFAULT_MAX_IDLE_TIME)
+     *     .build();
      * byte[] largeData = new byte[1024];
      * cache.put("key1", largeData);
      * byte[] retrieved = cache.getOrNull("key1");
@@ -127,6 +132,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
+     * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     ForeignMemoryOffHeapCache(final int capacityInMB) {
         this(capacityInMB, 3000);
@@ -147,7 +154,12 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * ForeignMemoryOffHeapCache<Long, Data> cache = new ForeignMemoryOffHeapCache<>(200, 60000);   // 200MB, 60s eviction
+     * ForeignMemoryOffHeapCache<Long, Data> cache = ForeignMemoryOffHeapCache.<Long, Data>builder()
+     *     .capacityInMB(200)
+     *     .evictDelay(60000)
+     *     .defaultLiveTime(Cache.DEFAULT_LIVE_TIME)
+     *     .defaultMaxIdleTime(Cache.DEFAULT_MAX_IDLE_TIME)
+     *     .build();
      * Data data = new Data();
      * cache.put(123L, data, 7200000, 3600000);   // 2h TTL, 1h idle
      * Data retrieved = cache.getOrNull(123L);
@@ -159,6 +171,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @param evictDelay the delay between eviction runs in milliseconds. Use {@code 0} or negative to disable automatic eviction.
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
+     * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     ForeignMemoryOffHeapCache(final int capacityInMB, final long evictDelay) {
         this(capacityInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -178,7 +192,12 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // 500MB, 30s eviction, 1h TTL, 30min idle
-     * ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(500, 30000, 3600000, 1800000);
+     * ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]>builder()
+     *     .capacityInMB(500)
+     *     .evictDelay(30000)
+     *     .defaultLiveTime(3600000)
+     *     .defaultMaxIdleTime(1800000)
+     *     .build();
      * cache.put("key1", "data".getBytes());
      * byte[] data = cache.getOrNull("key1");
      * cache.close();
@@ -191,6 +210,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use {@code 0} or negative for no idle timeout.
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
+     * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     ForeignMemoryOffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null,
@@ -251,6 +272,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if {@code maxBlockSize} is
      *                                  outside the valid range, or if {@code vacatingFactor} is outside [0.0, 1.0]
      * @throws OutOfMemoryError if native memory allocation fails
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
+     * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     ForeignMemoryOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
@@ -293,9 +316,14 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
 
             arena = newArena;
             buffer = newBuffer;
-        } catch (final Throwable e) {
-            newArena.close();
-            throw e;
+        } catch (final Throwable allocationFailure) {
+            try {
+                newArena.close();
+            } catch (final Throwable closeFailure) {
+                allocationFailure.addSuppressed(closeFailure);
+            }
+
+            throw allocationFailure;
         }
 
         return buffer.address();

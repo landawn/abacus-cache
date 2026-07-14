@@ -54,6 +54,12 @@ import com.landawn.abacus.logging.LoggerFactory;
  * where overlapping critical sections could corrupt data; prefer a coordination system with
  * ownership tokens/fencing and atomic conditional release.
  *
+ * <p><b>No ownership-safe renewal:</b> this class intentionally has no lease-renewal method. Calling
+ * {@code touch} or {@code replace} through {@link #client()} cannot atomically prove that the lease
+ * still belongs to the caller; after expiry and reacquisition it could extend or overwrite another
+ * holder's lease. Choose a TTL that covers the critical section, or use a lock service with atomic
+ * token-checked renewal and fencing.
+ *
  * <p>Example usage:
  * <pre>{@code
  * MemcachedLock<String, String> lock = new MemcachedLock<>("localhost:11211");
@@ -81,7 +87,11 @@ import com.landawn.abacus.logging.LoggerFactory;
  * }</pre>
  *
  * <p>Thread Safety: This class is thread-safe. Multiple threads can safely call methods
- * on the same instance. However, the lock itself is not reentrant.
+ * on the same instance. However, the lock itself is not reentrant. {@link #close()} publishes
+ * the closed state before shutting down the client, so ordinary operations begun after close starts
+ * fail with {@link IllegalStateException} ({@link #unlockQuietly(Object)} instead reports
+ * {@code false}); an already in-flight operation may still surface the underlying client's shutdown
+ * exception.
  *
  * @param <K> the type of lock identifiers used as keys (typically String)
  * @param <V> the type of optional metadata values associated with locks
@@ -92,6 +102,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(MemcachedLock.class);
 
     private final SpyMemcached<V> mc;
+
+    /** Published before client shutdown so operations begun during close fail deterministically. */
+    private volatile boolean isClosed;
 
     /**
      * Creates a new MemcachedLock instance backed by the specified Memcached server(s).
@@ -140,7 +153,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <ul>
      * <li>The lock is not reentrant - the same client cannot acquire the same lock twice</li>
      * <li>Choose an appropriate liveTime to balance between deadlock prevention and operational needs</li>
-     * <li>Always release locks in a finally block to prevent resource leaks</li>
+     * <li>Always make a best-effort release in a finally block so contenders need not wait for TTL expiry</li>
      * <li><b>Memcached TTL upper bound:</b> Memcached treats any TTL greater than 30 days
      *     (2,592,000 seconds = 2,592,000,000 ms) as an <em>absolute Unix timestamp</em>.
      *     The underlying {@link SpyMemcached} adapter converts longer relative {@code liveTime}
@@ -172,6 +185,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *                 to whole seconds for Memcached, with fractional seconds rounded up; values whose
      *                 absolute expiration exceeds Memcached's signed 32-bit field are rejected.
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
+     * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if target is null, liveTime is not positive or cannot be
      *         represented by Memcached's expiration field, or if the key
      *         derived from {@code target} (via {@code toKey}) is rejected by the memcached client —
@@ -190,6 +204,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
     public boolean tryLock(final K target, final long liveTime) {
         N.checkArgNotNull(target, "target");
         N.checkArgPositive(liveTime, "liveTime");
+        assertOpen();
 
         // The empty byte[] is only a value-less lock marker; get() maps an empty marker back to null,
         // so it is never returned to the caller as a V and this unchecked cast cannot raise a ClassCastException.
@@ -256,6 +271,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *                 converted to whole seconds for Memcached, with fractional seconds rounded up;
      *                 rejected if its absolute expiration exceeds Memcached's signed 32-bit field)
      * @return {@code true} if the lock was successfully acquired, {@code false} if it's already held
+     * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if target is null, liveTime is not positive or cannot be
      *         represented by Memcached's expiration field, or if the key
      *         derived from {@code target} (via {@code toKey}) is rejected by the memcached client —
@@ -275,6 +291,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
     public boolean tryLock(final K target, final V value, final long liveTime) {
         N.checkArgNotNull(target, "target");
         N.checkArgPositive(liveTime, "liveTime");
+        assertOpen();
 
         final String key = toKey(target);
         final V lockValue = value == null ? (V) N.EMPTY_BYTE_ARRAY : value;
@@ -347,6 +364,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * @param target the target resource whose lock status is to be checked (must not be null)
      * @return {@code true} if the lock is currently held, {@code false} otherwise
+     * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
@@ -356,6 +374,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      */
     public boolean isLocked(final K target) {
         N.checkArgNotNull(target, "target");
+        assertOpen();
 
         return mc.get(toKey(target)) != null;
     }
@@ -370,7 +389,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <ul>
      * <li>Identifying which client holds a lock</li>
      * <li>Storing lock metadata or state information</li>
-     * <li>Implementing lock ownership verification</li>
+     * <li>Inspecting the claimed holder for diagnostics (not enforcing ownership)</li>
      * <li>Debugging distributed locking issues</li>
      * </ul>
      *
@@ -395,13 +414,13 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *     System.out.println("No lock exists or value is empty");   // reached when get() returned null
      * }
      *
-     * // Example 2: Verify lock ownership before unlocking
+     * // Example 2: Best-effort holder check before unlocking (diagnostic only; still racy)
      * String myId = InetAddress.getLocalHost().getHostName();
      * if (lock.tryLock("resource2", myId, 60000)) {       // true: acquired, myId stored as the value
      *     try {
      *         // Perform operations
      *     } finally {
-     *         // Verify we still own the lock before unlocking (note: this read-then-delete is itself racy)
+     *         // Check whether the claimed holder still matches (this does NOT prove safe ownership)
      *         if (myId.equals(lock.get("resource2"))) {   // get() returns myId while we hold it
      *             lock.tryUnlock("resource2");               // returns true: the lock key was deleted
      *         } else {
@@ -422,6 +441,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @param target the target resource whose associated lock value is to be retrieved (must not be null)
      * @return the value associated with the lock, or {@code null} if the target is not locked
      *         or if the lock stores an empty byte array
+     * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
@@ -434,6 +454,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
     @SuppressWarnings("unchecked")
     public V get(final K target) {
         N.checkArgNotNull(target, "target");
+        assertOpen();
 
         final Object value = mc.get(toKey(target));
 
@@ -487,13 +508,13 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *     }
      * }
      *
-     * // Example 2: Unlock with ownership verification (still racy - only narrows the window)
+     * // Example 2: Unlock after a best-effort holder check (still racy - only narrows the window)
      * String myId = "server-1";
      * if (lock.tryLock("resource2", myId, 60000)) {               // true: acquired, myId stored as the value
      *     try {
      *         performOperation();                              // your exclusive work runs here
      *     } finally {
-     *         // Only unlock if we still own it (unlock itself does NO ownership check)
+     *         // Only proceed when the claimed holder matches; this is not an atomic ownership proof
      *         if (myId.equals(lock.get("resource2"))) {        // get() returns myId while we hold it
      *             lock.tryUnlock("resource2");                    // returns true: the lock key was deleted
      *         } else {
@@ -507,6 +528,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @return {@code true} if an entry was deleted from Memcached for this target (regardless of
      *         which client originally acquired the lock), {@code false} if no entry existed
      *         (e.g., the lock had already expired or was never acquired)
+     * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
@@ -517,6 +539,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      */
     public boolean tryUnlock(final K target) {
         N.checkArgNotNull(target, "target");
+        assertOpen();
 
         final String key = toKey(target);
 
@@ -577,7 +600,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @param target the target resource whose lock is to be released (must not be null)
      * @return {@code true} if an entry was deleted from Memcached for this target; {@code false} if no
      *         entry existed (e.g., the lock had already expired or was never acquired) <i>or</i> if the
-     *         release failed during the Memcached operation (which is logged at {@code WARN})
+     *         release failed during the Memcached operation, including because this lock client has
+     *         been closed (which is logged at {@code WARN})
      * @throws IllegalArgumentException if {@code target} is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
      *         or containing spaces/control characters)
@@ -590,6 +614,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
         final String key = toKey(target);
 
         try {
+            assertOpen();
+
             final boolean released = mc.remove(key);
 
             if (logger.isDebugEnabled()) {
@@ -759,7 +785,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <ul>
      * <li>Delete lock keys using the client directly (use {@link #tryUnlock(Object)} instead)</li>
      * <li>Modify lock keys in ways that could break the locking protocol</li>
-     * <li>Use conflicting TTL values that could cause unexpected behavior</li>
+     * <li>Use {@code touch}/{@code replace} as lease renewal; neither operation proves ownership and
+     *     either can affect a newer holder after this caller's lease expires</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -795,15 +822,17 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * Closes the underlying Memcached client and releases all associated resources.
      * This method calls mc.disconnect() to properly shut down the SpyMemcached client
      * and close network connections. After calling this method, the MemcachedLock instance
-     * cannot be used anymore. This method is idempotent - calling it multiple times has no
-     * additional effect because disconnect() handles multiple calls gracefully.
+     * cannot be used anymore. This method is synchronized and idempotent: it marks the instance
+     * closed before invoking {@code disconnect()}, and later calls are no-ops even if that first
+     * disconnect attempt threw.
      *
      * <p><b>&#9888;&#65039; Outstanding leases survive close:</b>
      * <ul>
      * <li>Closing the lock does NOT automatically release any held locks</li>
      * <li>Locks will remain in Memcached until they expire or are explicitly unlocked</li>
      * <li>Always unlock resources before closing the lock instance</li>
-     * <li>After close(), any method calls will likely throw exceptions</li>
+     * <li>After close(), acquisition/status/value/release operations throw
+     *     {@link IllegalStateException}; {@link #unlockQuietly(Object)} returns {@code false}</li>
      * </ul>
      *
      * <p>It's strongly recommended to use this class with try-with-resources to ensure proper cleanup.
@@ -853,9 +882,24 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * } // close() runs automatically here
      * }</pre>
      *
+     * @throws RuntimeException if shutting down the underlying client fails; the lock remains marked
+     *         closed and later calls to {@code close()} are no-ops
      */
     @Override
-    public void close() {
+    public synchronized void close() {
+        if (isClosed) {
+            return;
+        }
+
+        // Publish closure before shutting down the underlying client. This prevents a new lock
+        // operation from entering a client whose IO threads/pools are concurrently being torn down.
+        isClosed = true;
         mc.disconnect();
+    }
+
+    private void assertOpen() {
+        if (isClosed) {
+            throw new IllegalStateException("This MemcachedLock has been closed");
+        }
     }
 }

@@ -108,6 +108,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      *
      * @param serverUrl the Redis Cluster seed node(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses
+     * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
      * @see #JRedisCluster(String, long)
      */
     public JRedisCluster(final String serverUrl) {
@@ -142,6 +143,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
+     * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
      * @see #JRedisCluster(String)
      */
     public JRedisCluster(final String serverUrl, final long timeout) {
@@ -222,10 +224,13 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      *
      * @throws RuntimeException if flushing one or more cluster nodes fails (typically a
      *         {@code JedisBroadcastException} reporting the per-node outcomes)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @see #disconnect()
      */
     @Override
     public void flushAll() {
+        assertNotShutdown();
+
         // RedisClusterClient.flushAll() is a broadcast command: Jedis sends FLUSHALL to every primary
         // node and aggregates the per-node results, so no manual node iteration is required here.
         cluster.flushAll();

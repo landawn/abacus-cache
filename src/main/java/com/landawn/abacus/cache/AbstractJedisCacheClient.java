@@ -14,9 +14,11 @@
 
 package com.landawn.abacus.cache;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import com.landawn.abacus.parser.KryoParser;
@@ -63,7 +65,11 @@ import redis.clients.jedis.params.SetParams;
  *
  * <p><b>Thread Safety:</b> Thread-safe. Each command is dispatched through a {@link UnifiedJedis}
  * client that maintains its own internal connection pool and transparently borrows and returns a
- * connection per command, so instances may be freely shared across threads.
+ * connection per command, so instances may be freely shared across threads. {@link #disconnect()}
+ * publishes the shutdown state before closing those pools, so operations started after shutdown
+ * begins fail with {@link IllegalStateException}. An operation that already passed its lifecycle
+ * check may still race with shutdown and surface the underlying Jedis close/connection exception;
+ * callers should quiesce users before disconnecting when that distinction matters.
  *
  * @param <T> the type of objects to be cached
  * @see JRedis
@@ -127,6 +133,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
      * @return the cached value, or {@code null} if not found, expired, or evicted
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or deserialization error occurs
      * @see #put(String, Object, long)
@@ -134,6 +141,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public T get(final String key) {
+        assertNotShutdown();
+
         final byte[] keyBytes = getKeyBytes(key);
 
         return decode(clientFor(keyBytes).get(keyBytes));
@@ -161,6 +170,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param keys the cache keys to retrieve; must not be {@code null} or contain {@code null} elements
      * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
      * @throws RuntimeException if a network error, timeout, or deserialization error occurs
      * @see #get(String)
@@ -168,9 +178,16 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public Map<String, T> getBulk(final String... keys) {
-        checkBulkKeys(keys);
+        assertNotShutdown();
 
-        return fetchBulk(Arrays.asList(keys));
+        // Work from a private snapshot. The caller owns the array and may reuse or mutate it as soon
+        // as this method starts; validating one view and later fetching from the caller's live array
+        // could otherwise issue commands for keys that were never validated.
+        N.checkArgNotNull(keys, "keys");
+        final String[] keySnapshot = keys.clone();
+        checkBulkKeys(keySnapshot);
+
+        return fetchBulk(Arrays.asList(keySnapshot));
     }
 
     /**
@@ -191,6 +208,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param keys the collection of cache keys to retrieve; must not be {@code null} or contain {@code null} elements
      * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
      * @throws RuntimeException if a network error, timeout, or deserialization error occurs
      * @see #get(String)
@@ -198,9 +216,34 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public Map<String, T> getBulk(final Collection<String> keys) {
-        checkBulkKeys(keys);
+        assertNotShutdown();
 
-        return fetchBulk(keys);
+        return fetchBulk(snapshotBulkKeys(keys));
+    }
+
+    /**
+     * Copies and validates a collection in one pass. Besides insulating the operation from later
+     * caller mutations, the single pass avoids the validate-then-iterate time-of-check/time-of-use
+     * gap that would otherwise be observable for concurrent or custom collections.
+     */
+    private List<String> snapshotBulkKeys(final Collection<String> keys) {
+        N.checkArgNotNull(keys, "keys");
+
+        // Do not trust keys.size() for preallocation: custom/concurrent collections may report a
+        // stale or adversarially large size. ArrayList will grow according to elements actually seen.
+        final List<String> keySnapshot = new ArrayList<>();
+        int index = 0;
+
+        for (final String key : keys) {
+            if (key == null) {
+                throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + index);
+            }
+
+            keySnapshot.add(key);
+            index++;
+        }
+
+        return keySnapshot;
     }
 
     private Map<String, T> fetchBulk(final Collection<String> keys) {
@@ -226,10 +269,11 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * <p><b>Redis-specific behavior:</b> When {@code liveTime} is positive, this operation uses the
      * Redis SET command with the {@code PX} option, which atomically sets both the value and a
-     * millisecond-precision expiration time — the requested {@code liveTime} is honored exactly,
-     * with no rounding to seconds. When {@code liveTime} is 0 or negative, a plain SET command is
-     * used without expiration, meaning the key will persist until explicitly deleted. If the key
-     * already exists, the previous value and TTL are completely replaced.
+     * millisecond-precision expiration time — the requested {@code liveTime} is passed unchanged,
+     * with no client-side rounding to seconds. Redis may reject an extreme value that cannot be
+     * represented as an absolute server-side expiration. When {@code liveTime} is 0 or negative, a
+     * plain SET command is used without expiration, meaning the key will persist until explicitly
+     * deleted. If the key already exists, the previous value and TTL are completely replaced.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -248,10 +292,13 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param key the cache key with which the specified value is to be associated. Must not be {@code null}.
      * @param value the value to cache. May be {@code null} (stored as empty byte array).
-     * @param liveTime the time-to-live in milliseconds. Positive values set a millisecond-precision expiration via SET ... PX. 0 or negative means no expiration (plain SET).
+     * @param liveTime the time-to-live in milliseconds. Positive values are passed unchanged to
+     *        SET ... PX (subject to Redis's representable expiration range). 0 or negative means no
+     *        expiration (plain SET).
      * @return {@code true} when Redis acknowledges the write with "OK" (the normal success reply). An
      *         unconditional {@code SET} either replies "OK" or fails with a {@code JedisException}, so in
      *         practice this returns {@code true} on success and throws on failure rather than returning {@code false}
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error, timeout, or serialization error occurs
      * @see #get(String)
@@ -259,6 +306,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public boolean put(final String key, final T value, final long liveTime) {
+        assertNotShutdown();
+
         final byte[] keyBytes = getKeyBytes(key);
         final byte[] valueBytes = encode(value);
         final UnifiedJedis jedis = clientFor(keyBytes);
@@ -297,6 +346,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param key the cache key whose associated value is to be removed. Must not be {@code null}.
      * @return {@code true} if Redis reported at least one key was actually removed; {@code false}
      *         if the key did not exist at the time the {@code DEL} command was issued
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
      * @see #get(String)
@@ -304,6 +354,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public boolean remove(final String key) {
+        assertNotShutdown();
+
         final byte[] keyBytes = getKeyBytes(key);
 
         return clientFor(keyBytes).del(keyBytes) > 0L;
@@ -335,6 +387,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @return the value after increment (will be 1 if the key did not exist before)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
      *         value, or the result exceeds Redis's signed 64-bit integer range
@@ -343,6 +396,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public long incr(final String key) {
+        assertNotShutdown();
+
         final byte[] keyBytes = getKeyBytes(key);
 
         return clientFor(keyBytes).incr(keyBytes);
@@ -372,6 +427,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *              {@link IllegalArgumentException} for portability across cache backends (e.g.
      *              SpyMemcached, which also rejects negative deltas).
      * @return the value after increment (will be equal to delta if the key did not exist before)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
      *         value, or the result exceeds Redis's signed 64-bit integer range
@@ -380,6 +436,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public long incr(final String key, final long delta) {
+        assertNotShutdown();
+
         final byte[] keyBytes = getKeyBytes(key);
 
         N.checkArgNotNegative(delta, "delta");
@@ -408,6 +466,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
      *         value, or the result exceeds Redis's signed 64-bit integer range
@@ -416,6 +475,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public long decr(final String key) {
+        assertNotShutdown();
+
         final byte[] keyBytes = getKeyBytes(key);
 
         return clientFor(keyBytes).decr(keyBytes);
@@ -447,6 +508,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *              SpyMemcached, which also rejects negative deltas).
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
      *         if the key did not exist before)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
      *         value, or the result exceeds Redis's signed 64-bit integer range
@@ -455,6 +517,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     @Override
     public long decr(final String key, final long delta) {
+        assertNotShutdown();
+
         final byte[] keyBytes = getKeyBytes(key);
 
         N.checkArgNotNegative(delta, "delta");
@@ -467,6 +531,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * according to their topology (every standalone shard for {@link JRedis}; every cluster master
      * node for {@link JRedisCluster}).
      *
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws RuntimeException if flushing a backend fails
      * @see #disconnect()
      */
@@ -478,9 +543,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * After calling this method, the client cannot be used anymore and any subsequent
      * operations will fail or throw exceptions.
      *
-     * <p>This template method is idempotent: the first call closes the underlying client(s) (via
-     * {@code closeClients()}) and marks the instance shut down; subsequent calls are no-ops. It does
-     * not remove any data from Redis; it only closes the client-side connections.
+     * <p>This template method is idempotent: the first call marks the instance shut down and then
+     * closes the underlying client(s) (via {@code closeClients()}); subsequent calls are no-ops.
+     * Publishing shutdown first prevents new operations from starting while pool closure is in
+     * progress. It does not remove any data from Redis; it only closes client-side connections.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe, but once called, no other operations should be
      * attempted on this client instance from any thread.
@@ -494,11 +560,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
             return;
         }
 
-        try {
-            closeClients();
-        } finally {
-            isShutdown = true;
-        }
+        // Publish shutdown before closing potentially slow pools. Operations already in flight are
+        // not forcibly cancelled, but no operation beginning after this write may enter a client.
+        isShutdown = true;
+        closeClients();
     }
 
     /**
@@ -507,6 +572,18 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * client even if one fails (logging per-client failures), rather than aborting on the first error.
      */
     protected abstract void closeClients();
+
+    /**
+     * Rejects an operation once {@link #disconnect()} has begun. Concrete topology-specific
+     * operations such as {@code flushAll()} call this hook as well as the common per-key methods.
+     *
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     */
+    protected final void assertNotShutdown() {
+        if (isShutdown) {
+            throw new IllegalStateException("This Redis cache client has been disconnected");
+        }
+    }
 
     /**
      * Converts a string key to UTF-8 encoded bytes for Redis operations.

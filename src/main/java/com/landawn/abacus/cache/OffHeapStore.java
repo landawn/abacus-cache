@@ -118,8 +118,9 @@ public interface OffHeapStore<K> extends AutoCloseable {
     /**
      * Retrieves the byte array associated with the specified key.
      * Returns {@code null} if the key is not found or if an error occurs during retrieval.
-     * Implementations should consider returning a defensive copy to prevent external
-     * modifications, though this behavior is implementation-specific.
+     * Implementations may return either a defensive copy or an internally retained array. The
+     * owning cache treats the returned array as store-owned and makes its own copy before exposing
+     * bytes to a caller or custom deserializer.
      *
      * <p><b>Thread Safety:</b>
      * Implementations of this method must be thread-safe and support concurrent

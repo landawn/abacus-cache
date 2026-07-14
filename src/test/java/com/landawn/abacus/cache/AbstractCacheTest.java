@@ -21,6 +21,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -236,6 +237,67 @@ public class AbstractCacheTest extends TestBase {
                     assertNotNull(value);
                     assertEquals(t * perThread + i, value.intValue());
                 }
+            }
+        }
+    }
+
+    /**
+     * Regression for the synchronized-wrapper gap: {@link Properties} implements
+     * {@code computeIfAbsent} as separate {@code get}/{@code put} calls unless the cache's wrapper
+     * delegates it to the synchronized backing map. With separate calls every worker can run the
+     * mapping function for the same absent key; the atomic implementation runs it exactly once.
+     */
+    @Test
+    public void testProperties_ComputeIfAbsent_IsAtomic() throws Exception {
+        try (LocalCache<String, String> cache = newCache()) {
+            final int threads = 16;
+            final ExecutorService pool = Executors.newFixedThreadPool(threads);
+            final CountDownLatch ready = new CountDownLatch(threads);
+            final CountDownLatch start = new CountDownLatch(1);
+            final CountDownLatch firstMappingStarted = new CountDownLatch(1);
+            final CountDownLatch releaseMapping = new CountDownLatch(1);
+            final AtomicInteger mappingCalls = new AtomicInteger();
+            final List<Future<String>> futures = new ArrayList<>();
+
+            try {
+                for (int i = 0; i < threads; i++) {
+                    futures.add(pool.submit(() -> {
+                        ready.countDown();
+                        start.await();
+
+                        return cache.getProperties().computeIfAbsent("shared", key -> {
+                            mappingCalls.incrementAndGet();
+                            firstMappingStarted.countDown();
+
+                            try {
+                                releaseMapping.await();
+                            } catch (final InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new IllegalStateException(e);
+                            }
+
+                            return "computed";
+                        }).toString();
+                    }));
+                }
+
+                assertTrue(ready.await(10, TimeUnit.SECONDS));
+                start.countDown();
+                assertTrue(firstMappingStarted.await(10, TimeUnit.SECONDS));
+
+                // Give every already-started worker an opportunity to reach computeIfAbsent. In
+                // the fixed implementation they block on one map mutex and cannot enter the mapper.
+                Thread.sleep(100);
+                releaseMapping.countDown();
+
+                for (final Future<String> future : futures) {
+                    assertEquals("computed", future.get(10, TimeUnit.SECONDS));
+                }
+
+                assertEquals(1, mappingCalls.get(), "the mapping function must run once for one absent key");
+            } finally {
+                releaseMapping.countDown();
+                pool.shutdownNow();
             }
         }
     }

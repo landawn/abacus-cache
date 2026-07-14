@@ -10,12 +10,24 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
+import java.lang.reflect.Field;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import com.landawn.abacus.util.ContinuableFuture;
+
+import net.spy.memcached.MemcachedClient;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -33,10 +45,10 @@ import org.junit.jupiter.api.Test;
  *
  * <p><b>Memcached + Kryo note:</b> this client serializes values with a Kryo transcoder, so a stored
  * value is NOT an ASCII-decimal string. Memcached's native {@code incr}/{@code decr} therefore only
- * operate correctly on counters created through the increment-with-default seeding path, and only for
- * the initial seed — attempting to increment a Kryo-encoded value yields a server-side
- * "cannot increment or decrement non-numeric value" error. The counter tests below stay within the
- * behavior the real server actually supports (missing-key sentinel and first-seed).
+ * operate correctly on counters created through the increment-with-default seeding path, which writes
+ * a raw ASCII decimal. Those counters remain mutable on subsequent calls, but they cannot be decoded by
+ * the Kryo-backed {@code get} method. Attempting to increment an ordinary Kryo-encoded value yields a
+ * server-side "cannot increment or decrement non-numeric value" error.
  */
 @Tag("2025")
 public class SpyMemcachedTest {
@@ -150,6 +162,14 @@ public class SpyMemcachedTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")
+    public void test_deprecated_asyncSet_alias_delegates_to_asyncPut() throws Exception {
+        assertTrue(cache.asyncSet("legacy-set", "v", 60_000).get());
+        assertEquals("v", cache.get("legacy-set"));
+        assertEquals(Future.class, SpyMemcached.class.getDeclaredMethod("asyncSet", String.class, Object.class, long.class).getReturnType());
+    }
+
+    @Test
     public void test_asyncGet_rejects_null_key() {
         assertThrows(IllegalArgumentException.class, () -> cache.asyncGet(null));
     }
@@ -169,6 +189,22 @@ public class SpyMemcachedTest {
 
         final ContinuableFuture<Map<String, Object>> bulkFuture = cache.asyncGetBulk("k");
         assertEquals("v", bulkFuture.get().get("k"));
+    }
+
+    /**
+     * An in-place return-type refinement changes a JVM method descriptor even when the new return
+     * type is covariant. These bridge checks protect already-compiled callers that still link to
+     * the original {@link Future}-returning descriptors.
+     */
+    @Test
+    public void test_existing_async_methods_retain_legacy_Future_bridges() {
+        assertTrue(hasFutureBridge("asyncGet", String.class));
+        assertTrue(hasFutureBridge("asyncGetBulk", String[].class));
+        assertTrue(hasFutureBridge("asyncGetBulk", Collection.class));
+        assertTrue(hasFutureBridge("asyncAdd", String.class, Object.class, long.class));
+        assertTrue(hasFutureBridge("asyncReplace", String.class, Object.class, long.class));
+        assertTrue(hasFutureBridge("asyncFlushAll"));
+        assertTrue(hasFutureBridge("asyncFlushAll", long.class));
     }
 
     // --- add -----------------------------------------------------------------------------------
@@ -254,6 +290,15 @@ public class SpyMemcachedTest {
     @Test
     public void test_asyncDelete_rejects_null_key() {
         assertThrows(IllegalArgumentException.class, () -> cache.asyncRemove(null));
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
+    public void test_deprecated_asyncDelete_alias_delegates_to_asyncRemove() throws Exception {
+        cache.put("legacy-delete", "v", 60_000);
+        assertTrue(cache.asyncDelete("legacy-delete").get());
+        assertNull(cache.get("legacy-delete"));
+        assertEquals(Future.class, SpyMemcached.class.getDeclaredMethod("asyncDelete", String.class).getReturnType());
     }
 
     // --- incr ----------------------------------------------------------------------------------
@@ -543,6 +588,67 @@ public class SpyMemcachedTest {
         assertThrows(IllegalArgumentException.class, () -> cache.disconnect(-1));
         // The shared client must remain usable (the negative timeout was rejected before shutdown).
         assertNotNull(cache.serverUrl());
+    }
+
+    @Test
+    public void test_disconnect_remains_idempotent_on_failure() throws Exception {
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
+        final Field clientField = SpyMemcached.class.getDeclaredField("mc");
+        clientField.setAccessible(true);
+        final MemcachedClient realClient = (MemcachedClient) clientField.get(local);
+        final MemcachedClient failingClient = mock(MemcachedClient.class);
+        clientField.set(local, failingClient);
+
+        final RuntimeException failure = new RuntimeException("unexpected shutdown failure");
+        doThrow(failure).when(failingClient).shutdown();
+
+        try {
+            assertEquals(failure, assertThrows(RuntimeException.class, local::disconnect));
+
+            // The delegate has already entered its terminal shutdown sequence; retrying can only
+            // repeat teardown against a partially released client.
+            local.disconnect();
+            verify(failingClient, times(1)).shutdown();
+        } finally {
+            realClient.shutdown();
+        }
+    }
+
+    /**
+     * Regression coverage for graceful-shutdown interruption. SpyMemcached's delegate wraps the
+     * {@link InterruptedException} raised by its queue wait in a plain RuntimeException and clears
+     * the flag. The wrapper must restore the flag and remember that the delegate has nevertheless
+     * entered its terminal shutdown sequence, so a second disconnect is a no-op.
+     */
+    @Test
+    public void test_disconnect_with_timeout_restores_interrupt_and_remains_idempotent_on_failure() throws Exception {
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
+        final Field clientField = SpyMemcached.class.getDeclaredField("mc");
+        clientField.setAccessible(true);
+        final MemcachedClient realClient = (MemcachedClient) clientField.get(local);
+        final MemcachedClient failingClient = mock(MemcachedClient.class);
+        clientField.set(local, failingClient);
+
+        final RuntimeException interruption = new RuntimeException("interrupted graceful shutdown", new InterruptedException("test interrupt"));
+        doThrow(interruption).when(failingClient).shutdown(anyLong(), eq(TimeUnit.MILLISECONDS));
+
+        try {
+            assertEquals(interruption, assertThrows(RuntimeException.class, () -> local.disconnect(1_000L)));
+            assertTrue(Thread.currentThread().isInterrupted());
+
+            // The failed call still terminally shut down the delegate; do not invoke it again.
+            local.disconnect(1_000L);
+            verify(failingClient, times(1)).shutdown(1_000L, TimeUnit.MILLISECONDS);
+        } finally {
+            Thread.interrupted(); // Do not leak the intentional interrupt into the JUnit worker.
+            realClient.shutdown();
+        }
+    }
+
+    private static boolean hasFutureBridge(final String name, final Class<?>... parameterTypes) {
+        return Arrays.stream(SpyMemcached.class.getDeclaredMethods())
+                .anyMatch(method -> method.isBridge() && method.getName().equals(name) && method.getReturnType() == Future.class
+                        && Arrays.equals(method.getParameterTypes(), parameterTypes));
     }
 
     /**

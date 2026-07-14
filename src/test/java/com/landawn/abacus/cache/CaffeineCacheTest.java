@@ -15,6 +15,8 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -71,14 +73,17 @@ public class CaffeineCacheTest extends TestBase {
 
     @SuppressWarnings("unchecked")
     @Test
-    public void testPut_RacingClose_RemovesLateWrite() throws InterruptedException {
+    public void testPut_RacingClose_RemovesOwnLateWrite() throws InterruptedException {
         final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final ConcurrentMap<String, String> delegateMap = new ConcurrentHashMap<>();
         final CountDownLatch putStarted = new CountDownLatch(1);
         final CountDownLatch allowPutToFinish = new CountDownLatch(1);
 
+        org.mockito.Mockito.when(delegate.asMap()).thenReturn(delegateMap);
         doAnswer(invocation -> {
             putStarted.countDown();
             assertTrue(allowPutToFinish.await(5, TimeUnit.SECONDS));
+            delegateMap.put("k", "v");
             return null;
         }).when(delegate).put("k", "v");
 
@@ -102,8 +107,58 @@ public class CaffeineCacheTest extends TestBase {
 
             assertFalse(putThread.isAlive());
             assertInstanceOf(IllegalStateException.class, putFailure.get());
+            assertFalse(delegateMap.containsKey("k"));
             verify(delegate).invalidateAll();
-            verify(delegate).invalidate("k");
+        } finally {
+            allowPutToFinish.countDown();
+            putThread.join(5_000L);
+            cache.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void testPut_RacingClose_DoesNotRemoveNewerDelegateValue() throws InterruptedException {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final ConcurrentMap<String, String> delegateMap = new ConcurrentHashMap<>();
+        final CountDownLatch putStarted = new CountDownLatch(1);
+        final CountDownLatch allowPutToFinish = new CountDownLatch(1);
+
+        org.mockito.Mockito.when(delegate.asMap()).thenReturn(delegateMap);
+        doAnswer(invocation -> {
+            putStarted.countDown();
+            assertTrue(allowPutToFinish.await(5, TimeUnit.SECONDS));
+
+            // The wrapper's late write lands after close() invalidated the delegate. Before the
+            // wrapper can perform its closed-state cleanup, a direct delegate user replaces it.
+            // Cleanup must not erase that newer, externally-owned mapping.
+            delegateMap.put("k", "v");
+            delegateMap.put("k", "newer-direct-value");
+            return null;
+        }).when(delegate).put("k", "v");
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final AtomicReference<Throwable> putFailure = new AtomicReference<>();
+        final Thread putThread = new Thread(() -> {
+            try {
+                cache.put("k", "v", 0, 0);
+            } catch (final Throwable e) {
+                putFailure.set(e);
+            }
+        });
+
+        try {
+            putThread.start();
+            assertTrue(putStarted.await(5, TimeUnit.SECONDS));
+
+            cache.close();
+            allowPutToFinish.countDown();
+            putThread.join(5_000L);
+
+            assertFalse(putThread.isAlive());
+            assertInstanceOf(IllegalStateException.class, putFailure.get());
+            assertEquals("newer-direct-value", delegateMap.get("k"));
+            verify(delegate).invalidateAll();
         } finally {
             allowPutToFinish.countDown();
             putThread.join(5_000L);

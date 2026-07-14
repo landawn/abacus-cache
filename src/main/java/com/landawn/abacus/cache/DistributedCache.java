@@ -107,6 +107,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     // arbitrary (and may be negative), so a real timestamp can't double as the sentinel.
     private static final long NEVER_FAILED = Long.MIN_VALUE;
 
+    // Base64 of an empty byte sequence is the empty string, which is not a legal Memcached key.
+    // '-' is outside the standard Base64 alphabet, so it cannot collide with any non-empty encoded key.
+    private static final String EMPTY_KEY_MARKER = "-";
+
     // Precomputed from retryDelay; TimeUnit.toNanos saturates at Long.MAX_VALUE for huge delays.
     private final long retryDelayNanos;
 
@@ -288,6 +292,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Successful operation: Atomically resets the failure count to 0 and clears the last-failure timestamp (closes circuit)</li>
      * <li>Failed operation: Atomically increments the failure count (capped at the threshold) and records the failure
      *     time using a monotonic clock ({@code System.nanoTime()}), so wall-clock adjustments cannot affect the window</li>
+     * <li>Local key conversion/validation runs before the circuit check, so an invalid application key
+     *     is rejected consistently even while the circuit is open.</li>
      * <li>All exceptions from the underlying cache client are caught and treated as failures, except
      *     {@link IllegalArgumentException} (a deterministic client-side validation error, e.g. an over-long
      *     generated key), which is rethrown without touching the breaker state; the closed-to-open
@@ -299,7 +305,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * immutable state object and updated through an {@link AtomicReference}, preventing torn snapshots.
      *
      * <p><b>Key Processing:</b>
-     * The key is transformed as follows: {@code key -> keyPrefix + Base64(UTF8(toString(key)))}.
+     * The key is normally transformed as follows: {@code key -> keyPrefix + Base64(UTF8(toString(key)))}.
+     * The sole special case is an empty string representation: its empty Base64 result is replaced
+     * with {@value #EMPTY_KEY_MARKER} so the generated key remains legal for Memcached.
      * Base64 encoding ensures compatibility with cache systems that restrict key characters
      * (e.g., spaces, special characters, Unicode).
      *
@@ -353,6 +361,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         // short-circuit to null before generateKey(key) is reached.
         N.checkArgNotNull(key, "key");
 
+        // Generate the key before consulting the breaker. Key conversion is deterministic local work;
+        // allowing an open circuit to bypass it would make an invalid non-null key sometimes throw and
+        // sometimes masquerade as a miss solely according to unrelated backend health.
+        final String cacheKey = generateKey(key);
+
         // Read count + timestamp as one coherent snapshot. Elapsed time is measured with
         // System.nanoTime(), so wall-clock corrections cannot extend the fail-fast window.
         final CircuitBreakerState breakerSnapshot = circuitBreaker.get();
@@ -361,8 +374,6 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 && ((System.nanoTime() - breakerSnapshot.lastFailedTime) < retryDelayNanos)) {
             return null;
         }
-
-        final String cacheKey = generateKey(key);
 
         V result = null;
         // TRUE = success, FALSE = availability failure, null = client-side validation error
@@ -492,7 +503,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         encoding (the bundled {@code SpyMemcached} client rejects a {@code liveTime} whose absolute
      *         expiration would exceed epoch second {@code 2^31-1} / January 2038, as well as any
      *         {@code liveTime} exceeding {@link Integer#MAX_VALUE} seconds / ~68 years; the bundled Redis
-     *         clients accept the millisecond {@code liveTime} directly and impose no such limit)
+     *         clients pass the millisecond {@code liveTime} directly to Redis; the server may reject
+     *         extreme values that cannot be represented as an absolute expiration)
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #generateKey(Object)
      * @see DistributedCacheClient#put(String, Object, long)
@@ -864,7 +876,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public synchronized void close() {
-        if (isClosed()) {
+        // Read the private lifecycle state directly. Calling the overridable isClosed() method here
+        // lets a subclass accidentally defeat idempotence by returning a synthetic value.
+        if (isClosed) {
             return;
         }
 
@@ -957,7 +971,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>Convert key to string: the key itself if it is already a {@code String}, otherwise {@code N.stringOf(key)}</li>
      * <li>Encode to UTF-8 bytes: {@code toString(key).getBytes(Charsets.UTF_8)}</li>
      * <li>Base64 encode: {@code Strings.base64Encode(bytes)}</li>
-     * <li>Prepend prefix if configured: {@code keyPrefix + base64Key}</li>
+     * <li>If the Base64 result is empty, substitute {@value #EMPTY_KEY_MARKER}; an empty string is not
+     *     a legal Memcached key and this marker cannot collide with standard Base64 output</li>
+     * <li>Prepend prefix if configured: {@code keyPrefix + encodedKey}</li>
      * </ol>
      *
      * <p><b>Rationale for Base64 Encoding:</b>
@@ -1007,10 +1023,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Integer key (converted to string first)
      * String intKey = cache.generateKey(12345);
      * // Result: "myapp:MTIzNDU=" (prefix + Base64 of "12345")
+     *
+     * // Empty String key: Base64 would be empty, so a non-empty, collision-free marker is used
+     * String emptyKey = cache2.generateKey("");
+     * // Result: "-"
      * }</pre>
      *
      * @param key the original key, must not be null
-     * @return the prefixed and Base64-encoded cache key suitable for distributed cache systems
+     * @return the prefixed and Base64-encoded cache key suitable for distributed cache systems; an
+     *         empty encoded key part is represented by {@value #EMPTY_KEY_MARKER}
      * @throws IllegalArgumentException if key is null, or if its string representation
      *         (the key itself for a String key, otherwise {@link N#stringOf(Object)}) is null
      * @see Strings#base64Encode(byte[])
@@ -1026,7 +1047,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             throw new IllegalArgumentException("Key string representation cannot be null");
         }
 
-        final String encodedKey = Strings.base64Encode(keyStr.getBytes(Charsets.UTF_8));
+        final String base64Key = Strings.base64Encode(keyStr.getBytes(Charsets.UTF_8));
+        final String encodedKey = base64Key.isEmpty() ? EMPTY_KEY_MARKER : base64Key;
 
         return hasKeyPrefix ? (keyPrefix + encodedKey) : encodedKey;
     }

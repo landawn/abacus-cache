@@ -39,6 +39,29 @@ import net.spy.memcached.MemcachedClient;
 import net.spy.memcached.transcoders.Transcoder;
 
 /**
+ * Preserves the pre-2.8.5 JVM descriptors of asynchronous methods whose source-level return type
+ * was refined from {@link Future} to {@link ContinuableFuture}. Implementing this contract causes
+ * javac to emit the covariant bridge methods needed by already-compiled clients while the public
+ * implementation continues to expose the richer return type to newly compiled code.
+ */
+interface LegacySpyMemcachedAsyncApi<T> {
+
+    Future<T> asyncGet(String key);
+
+    Future<Map<String, T>> asyncGetBulk(String... keys);
+
+    Future<Map<String, T>> asyncGetBulk(Collection<String> keys);
+
+    Future<Boolean> asyncAdd(String key, T value, long liveTime);
+
+    Future<Boolean> asyncReplace(String key, T value, long liveTime);
+
+    Future<Boolean> asyncFlushAll();
+
+    Future<Boolean> asyncFlushAll(long delay);
+}
+
+/**
  * A Memcached distributed cache client implementation backed by the SpyMemcached library.
  * Provides synchronous and asynchronous access to one or more Memcached servers. When the
  * Kryo parser is available on the classpath ({@link ParserFactory#isKryoParserAvailable()}),
@@ -58,6 +81,13 @@ import net.spy.memcached.transcoders.Transcoder;
  * network I/O on a dedicated selector thread and serializes commands through its internal
  * operation queue; concurrent calls from application threads enqueue operations safely.
  *
+ * <p><b>Counter encoding:</b> Memcached's native increment/decrement commands operate only on raw
+ * ASCII decimal values. Ordinary values written by {@link #put(String, Object, long)} use the
+ * configured transcoder and therefore are not valid native counters when Kryo is active. The
+ * increment/decrement overloads with a default value seed a missing key as raw ASCII; continue to
+ * access such keys through the counter methods because a Kryo-backed {@link #get(String)} cannot
+ * decode that raw representation.
+ *
  * <p>Example usage:
  * <pre>{@code
  * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211");
@@ -72,13 +102,15 @@ import net.spy.memcached.transcoders.Transcoder;
  *
  * // Bulk operations
  * Map<String, User> users = cache.getBulk("user:123", "user:456", "user:789");
+ *
+ * cache.disconnect();
  * }</pre>
  *
  * @param <T> the type of values stored and retrieved from the cache
  * @see AbstractDistributedCacheClient
  * @see MemcachedClient
  */
-public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
+public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implements LegacySpyMemcachedAsyncApi<T> {
 
     static final Logger logger = LoggerFactory.getLogger(SpyMemcached.class);
     private static final int MEMCACHED_MAX_RELATIVE_EXPIRATION_SECONDS = 30 * 24 * 60 * 60;
@@ -325,6 +357,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate
      */
     @SuppressWarnings("unchecked")
+    @Override
     public ContinuableFuture<T> asyncGet(final String key) {
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap((Future<T>) mc.asyncGet(key));
@@ -411,6 +444,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
+    @Override
     public final ContinuableFuture<Map<String, T>> asyncGetBulk(final String... keys) {
         checkBulkKeys(keys);
         return ContinuableFuture.wrap((Future) mc.asyncGetBulk(keys));
@@ -494,6 +528,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
+    @Override
     public ContinuableFuture<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
         checkBulkKeys(keys);
         return ContinuableFuture.wrap((Future) mc.asyncGetBulk(keys));
@@ -610,6 +645,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     }
 
     /**
+     * Compatibility alias for {@link #asyncPut(String, Object, long)}.
+     *
+     * @param key the cache key; must not be {@code null}
+     * @param value the value to cache
+     * @param liveTime the time-to-live in milliseconds
+     * @return a future that completes with the storage result
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @deprecated use {@link #asyncPut(String, Object, long)}; retained with its original
+     *             {@link Future} return descriptor for source and binary compatibility
+     */
+    @Deprecated(since = "2.8.5")
+    public Future<Boolean> asyncSet(final String key, final T value, final long liveTime) {
+        return asyncPut(key, value, liveTime);
+    }
+
+    /**
      * Adds an object to the cache only if the key doesn't already exist.
      * This operation is atomic and thread-safe across all distributed cache clients. The method blocks until
      * the operation completes or times out. If the key already exists, this operation will
@@ -711,6 +762,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
      */
+    @Override
     public ContinuableFuture<Boolean> asyncAdd(final String key, final T value, final long liveTime) {
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap(mc.add(key, toMemcachedExpiration(liveTime), value));
@@ -813,6 +865,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if the operation fails to initiate
      */
+    @Override
     public ContinuableFuture<Boolean> asyncReplace(final String key, final T value, final long liveTime) {
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap(mc.replace(key, toMemcachedExpiration(liveTime), value));
@@ -901,6 +954,21 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     public ContinuableFuture<Boolean> asyncRemove(final String key) {
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap(mc.delete(key));
+    }
+
+    /**
+     * Compatibility alias for {@link #asyncRemove(String)}.
+     *
+     * @param key the cache key to remove; must not be {@code null}
+     * @return a future that completes with {@code true} when the key was removed, or {@code false}
+     *         when it was absent
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @deprecated use {@link #asyncRemove(String)}; retained with its original {@link Future}
+     *             return descriptor for source and binary compatibility
+     */
+    @Deprecated(since = "2.8.5")
+    public Future<Boolean> asyncDelete(final String key) {
+        return asyncRemove(key);
     }
 
     /**
@@ -1021,7 +1089,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, long)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
-     * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
+     * {@code defaultValue} when missing. Per this wrapper's ASCII-protocol seeding contract,
      * <b>the increment is NOT applied on the initial insert</b>: when the key is absent the stored
      * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
      * {@code defaultValue + delta}). The {@code delta} only takes effect on subsequent calls when the
@@ -1077,7 +1145,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #incr(String)} and {@link #incr(String, long)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
-     * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
+     * {@code defaultValue} when missing. Per this wrapper's ASCII-protocol seeding contract,
      * <b>the increment is NOT applied on the initial insert</b>: when the key is absent the stored
      * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
      * {@code defaultValue + delta}). The {@code delta} only takes effect on subsequent calls when the
@@ -1245,7 +1313,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, long)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
-     * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
+     * {@code defaultValue} when missing. Per this wrapper's ASCII-protocol seeding contract,
      * <b>the decrement is NOT applied on the initial insert</b>: when the key is absent the stored
      * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
      * {@code defaultValue - delta}). The {@code delta} only takes effect on subsequent calls when the
@@ -1304,7 +1372,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *
      * <p><b>Memcached-Specific Behavior:</b> Unlike {@link #decr(String)} and {@link #decr(String, long)},
      * which return {@code -1} when the key is absent, this overload first-writes the key with
-     * {@code defaultValue} when missing. Per the SpyMemcached / Memcached binary-protocol contract,
+     * {@code defaultValue} when missing. Per this wrapper's ASCII-protocol seeding contract,
      * <b>the decrement is NOT applied on the initial insert</b>: when the key is absent the stored
      * value is {@code defaultValue} and that same {@code defaultValue} is returned (not
      * {@code defaultValue - delta}). The {@code delta} only takes effect on subsequent calls when the
@@ -1492,6 +1560,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate (e.g., the operation queue is
      *         full or the client is shutting down)
      */
+    @Override
     public ContinuableFuture<Boolean> asyncFlushAll() {
         return ContinuableFuture.wrap(mc.flush());
     }
@@ -1583,6 +1652,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      * @throws RuntimeException if the operation fails to initiate (e.g., the operation queue is
      *         full or the client is shutting down)
      */
+    @Override
     public ContinuableFuture<Boolean> asyncFlushAll(final long delay) {
         // See flushAll(long): flush_all's delay is subject to the server's 30-day absolute-vs-
         // relative rule, so it must be converted exactly like storage expirations.
@@ -1636,8 +1706,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
     @Override
     public synchronized void disconnect() {
         if (!isShutdown) {
-            mc.shutdown();
-            isShutdown = true;
+            try {
+                mc.shutdown();
+            } finally {
+                // MemcachedClient marks itself as shutting down before releasing its resources.
+                // Mirror that terminal state even if an unexpected unchecked failure escapes, so
+                // a second call does not attempt to shut the same client down again.
+                isShutdown = true;
+            }
         }
     }
 
@@ -1680,13 +1756,29 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> {
      *                A value of {@code 0} returns immediately without waiting for pending operations
      *                (unlike the constructor's operation {@code timeout}, which must be strictly positive).
      * @throws IllegalArgumentException if {@code timeout} is negative
+     * @throws RuntimeException if the graceful wait is interrupted or shutdown otherwise fails. If
+     *         the underlying cause is {@link InterruptedException}, this method restores the calling
+     *         thread's interrupt status before propagating the exception.
      */
     public synchronized void disconnect(final long timeout) {
         N.checkArgNotNegative(timeout, "timeout");
 
         if (!isShutdown) {
-            mc.shutdown(timeout, TimeUnit.MILLISECONDS);
-            isShutdown = true;
+            try {
+                mc.shutdown(timeout, TimeUnit.MILLISECONDS);
+            } catch (final RuntimeException e) {
+                // spymemcached wraps InterruptedException from its graceful queue wait without
+                // restoring the flag. Preserve cooperative cancellation just as resultOf does.
+                if (e.getCause() instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+
+                throw e;
+            } finally {
+                // shutdown(timeout, unit) always enters its terminal shutdown sequence in a
+                // finally block, including timeout/interruption/error paths.
+                isShutdown = true;
+            }
         }
     }
 

@@ -18,7 +18,6 @@ import static com.landawn.abacus.cache.DistributedCacheClient.DEFAULT_TIMEOUT;
 
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolableAdapter;
-import com.landawn.abacus.util.ClassUtil;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Numbers;
 import com.landawn.abacus.util.Strings;
@@ -528,8 +527,9 @@ public final class CacheFactory {
      *         parameters, has an empty server URL, specifies an unsupported parameter layout, or specifies a
      *         non-numeric or non-positive timeout; for custom classes, also if the class cannot
      *         be found (checked against this library's classloader, then the thread context classloader) or
-     *         does not implement {@link Cache}. A custom cache class with a no-arg constructor may be specified
-     *         without parameters, e.g. {@code "com.example.MyCache()"}
+     *         does not implement {@link Cache}. A candidate class is loaded without running its static
+     *         initializer until after this type check. A custom cache class with a no-arg constructor may be
+     *         specified without parameters, e.g. {@code "com.example.MyCache()"}
      * @throws RuntimeException if a custom class is found but cannot be instantiated (constructor invocation
      *         fails, security restrictions, etc.)
      * @see #createDistributedCache(DistributedCacheClient)
@@ -616,30 +616,7 @@ public final class CacheFactory {
                 }
             }
         } else {
-            Class<?> cls;
-
-            try {
-                cls = ClassUtil.forName(className);
-            } catch (final IllegalArgumentException primaryFailure) {
-                // ClassUtil.forName resolves against this library's defining classloader only. In
-                // layered-classloader deployments (servlet containers, OSGi, some Spring Boot
-                // setups), the user's custom cache class is often visible only to the application's
-                // context classloader, so fall back to it before giving up.
-                cls = null;
-                final ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
-
-                if (contextClassLoader != null) {
-                    try {
-                        cls = Class.forName(className, true, contextClassLoader);
-                    } catch (final ClassNotFoundException contextFailure) {
-                        primaryFailure.addSuppressed(contextFailure);
-                    }
-                }
-
-                if (cls == null) {
-                    throw new IllegalArgumentException("Cannot find class: " + className, primaryFailure);
-                }
-            }
+            final Class<?> cls = loadCustomCacheClass(className);
 
             if (!Cache.class.isAssignableFrom(cls)) {
                 throw new IllegalArgumentException("Custom cache class must implement Cache: " + className);
@@ -647,6 +624,38 @@ public final class CacheFactory {
 
             return TypeAttrParser.newInstance(cls, provider);
         }
+    }
+
+    /**
+     * Resolves a custom provider class without initializing it. Type validation must happen before
+     * arbitrary user-selected static initialization: otherwise even a class that does not implement
+     * {@link Cache} can execute its static initializer merely by appearing in configuration.
+     */
+    private static Class<?> loadCustomCacheClass(final String className) {
+        final ClassLoader libraryClassLoader = CacheFactory.class.getClassLoader();
+        final ClassNotFoundException primaryFailure;
+
+        try {
+            return Class.forName(className, false, libraryClassLoader);
+        } catch (final ClassNotFoundException e) {
+            primaryFailure = e;
+        }
+
+        // In layered-classloader deployments (servlet containers, OSGi, some Spring Boot
+        // setups), the user's custom cache class may be visible only to the application's
+        // context classloader, so fall back to it before giving up. Loading remains deliberately
+        // non-initializing; TypeAttrParser.newInstance initializes a validated Cache when needed.
+        final ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
+
+        if (contextClassLoader != null && contextClassLoader != libraryClassLoader) {
+            try {
+                return Class.forName(className, false, contextClassLoader);
+            } catch (final ClassNotFoundException contextFailure) {
+                primaryFailure.addSuppressed(contextFailure);
+            }
+        }
+
+        throw new IllegalArgumentException("Cannot find class: " + className, primaryFailure);
     }
 
     /**

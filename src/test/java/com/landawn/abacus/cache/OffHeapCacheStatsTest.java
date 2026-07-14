@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.Tag;
@@ -48,6 +49,13 @@ public class OffHeapCacheStatsTest {
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, 0, Double.POSITIVE_INFINITY));
     }
 
+    @Test
+    public void testMinMaxAvgRejectsInconsistentOrdering() {
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(2, 1, 1.5));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(1, 3, 0.5));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(1, 3, 3.5));
+    }
+
     /**
      * Regression coverage for the missing non-negative validation on
      * {@link OffHeapCacheStats}'s numeric components. The Javadoc has long stated that every
@@ -81,6 +89,29 @@ public class OffHeapCacheStatsTest {
         assertEquals(0, stats.capacity());
         assertEquals(0, stats.segmentSize());
         assertTrue(stats.occupiedSlots().isEmpty());
+    }
+
+    @Test
+    public void testRecordValidatesAndDefensivelyCopiesOccupiedSlots() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+        final Map<Integer, Integer> perSegment = new LinkedHashMap<>();
+        perSegment.put(2, 3);
+        final Map<Integer, Map<Integer, Integer>> slots = new LinkedHashMap<>();
+        slots.put(64, perSegment);
+
+        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1_048_576, slots);
+        perSegment.put(4, 5);
+        slots.put(128, Map.of(1, 1));
+
+        assertEquals(Map.of(64, Map.of(2, 3)), stats.occupiedSlots());
+        assertThrows(UnsupportedOperationException.class, () -> stats.occupiedSlots().put(128, Map.of()));
+        assertThrows(UnsupportedOperationException.class, () -> stats.occupiedSlots().get(64).put(4, 5));
+
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, Map.of(0, Map.of())));
+        assertThrows(IllegalArgumentException.class,
+                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, Map.of(64, Map.of(-1, 0))));
+        assertThrows(IllegalArgumentException.class,
+                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, Map.of(64, Map.of(0, -1))));
     }
 
     @Test

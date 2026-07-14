@@ -11,6 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -25,12 +27,11 @@ import com.landawn.abacus.util.Strings;
  * backed by a <b>real</b> Memcached server reachable at {@code localhost:11211}
  * (e.g. {@code docker run --name memcached -p 11211:11211 -d memcached:latest}).
  *
- * <p>No mock client and no in-memory fake is used. {@link MemcachedBackedClient} delegates the abstract
- * operations ({@code get}/{@code set}/{@code delete}/{@code incr}/{@code decr}/{@code disconnect}) to an
- * internal {@link SpyMemcached}, so they genuinely round-trip through the server. Crucially it does
- * <em>not</em> override {@link AbstractDistributedCacheClient#getBulk getBulk} or
- * {@link AbstractDistributedCacheClient#flushAll flushAll}, so the base class's default behavior (both
- * throw {@link UnsupportedOperationException}) and its {@code toSeconds} helper remain the focus here.
+ * <p>{@link MemcachedBackedClient} delegates the operational tests to a real {@link SpyMemcached}, so
+ * they genuinely round-trip through the server. It deliberately leaves {@code getBulk}/{@code flushAll}
+ * at their base-class defaults. A small in-memory {@link LegacyNamingClient} is used only to verify
+ * source/binary compatibility between the pre-2.8.5 {@code set}/{@code delete} names and the current
+ * {@code put}/{@code remove} names; it is not used to stand in for backend behavior.
  */
 @Tag("2025")
 public class AbstractDistributedCacheClientTest extends TestBase {
@@ -97,6 +98,57 @@ public class AbstractDistributedCacheClientTest extends TestBase {
         }
     }
 
+    /** Client shaped like a binary/source implementation from 2.8.4: only legacy write names. */
+    private static final class LegacyNamingClient<T> extends AbstractDistributedCacheClient<T> {
+        private final Map<String, T> values = new HashMap<>();
+
+        LegacyNamingClient() {
+            super("legacy.test:1");
+        }
+
+        @Override
+        public T get(final String key) {
+            return values.get(key);
+        }
+
+        @Deprecated
+        @Override
+        public boolean set(final String key, final T value, final long liveTime) {
+            values.put(key, value);
+            return true;
+        }
+
+        @Deprecated
+        @Override
+        public boolean delete(final String key) {
+            return values.remove(key) != null;
+        }
+
+        @Override
+        public long incr(final String key) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long incr(final String key, final long delta) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long decr(final String key) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long decr(final String key, final long delta) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void disconnect() {
+        }
+    }
+
     private static MemcachedBackedClient<Object> client;
 
     @BeforeAll
@@ -133,6 +185,25 @@ public class AbstractDistributedCacheClientTest extends TestBase {
     @Test
     public void testServerUrl() {
         assertEquals(SERVER_URL, client.serverUrl());
+    }
+
+    @SuppressWarnings("deprecation")
+    @Test
+    public void testLegacyWriteNames_DelegateToCurrentImplementation() {
+        final String key = "abstract-client-legacy:" + Strings.uuid();
+        assertTrue(client.set(key, "v", 60_000));
+        assertEquals("v", client.get(key));
+        assertTrue(client.delete(key));
+        assertNull(client.get(key));
+    }
+
+    @Test
+    public void testCurrentWriteNames_DelegateToLegacyImplementation() {
+        final LegacyNamingClient<String> legacy = new LegacyNamingClient<>();
+        assertTrue(legacy.put("k", "v", 0));
+        assertEquals("v", legacy.get("k"));
+        assertTrue(legacy.remove("k"));
+        assertNull(legacy.get("k"));
     }
 
     // --- base-class default operations (not overridden by the concrete client) -----------------

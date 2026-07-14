@@ -10,12 +10,20 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedConstruction;
+import org.mockito.Mockito;
 
 import com.landawn.abacus.util.MemcachedLock;
 
@@ -23,9 +31,10 @@ import com.landawn.abacus.util.MemcachedLock;
  * Integration tests for {@link MemcachedLock} that run against a real Memcached server reachable at
  * {@code localhost:11211} (e.g. {@code docker run --name memcached -p 11211:11211 -d memcached:latest}).
  *
- * <p>No mock client or in-memory fake is used: each lock/unlock round-trips through the real server.
- * A single lock instance is shared across the class and the server is flushed before each test so a
- * fresh test always sees an unlocked world.
+ * <p>Lock/lease behavior round-trips through the real server. The lifecycle regression uses a
+ * construction mock so it can pause inside disconnect and prove the closed state is published before
+ * client teardown starts. A single real lock instance is shared across the class and the server is
+ * flushed before each test so a fresh integration test always sees an unlocked world.
  */
 @Tag("2025")
 public class MemcachedLockTest {
@@ -229,12 +238,28 @@ public class MemcachedLockTest {
 
     @Test
     public void testClose_disconnectsUnderlyingClientAndIsIdempotent() {
-        final MemcachedLock<String, Long> local = new MemcachedLock<>(SERVER_URL);
-        local.close();
-        local.close(); // idempotent
+        try (MockedConstruction<SpyMemcached> construction = Mockito.mockConstruction(SpyMemcached.class)) {
+            final MemcachedLock<String, Long> local = new MemcachedLock<>(SERVER_URL);
+            final SpyMemcached<?> mockedClient = construction.constructed().get(0);
+            final AtomicReference<MemcachedLock<String, Long>> holder = new AtomicReference<>(local);
 
-        // After close the underlying client is shut down, so further use fails fast.
-        assertThrows(IllegalStateException.class, () -> local.isLocked("k"));
+            doAnswer(invocation -> {
+                // close() must publish its state before entering a potentially slow disconnect.
+                assertThrows(IllegalStateException.class, () -> holder.get().isLocked("during-close"));
+                return null;
+            }).when(mockedClient).disconnect();
+
+            local.close();
+            local.close(); // idempotent even though the underlying mock remains callable
+
+            verify(mockedClient, times(1)).disconnect();
+            verify(mockedClient, never()).get("during-close");
+            assertThrows(IllegalStateException.class, () -> local.isLocked("k"));
+            assertThrows(IllegalStateException.class, () -> local.tryLock("k", 1_000));
+            assertThrows(IllegalStateException.class, () -> local.get("k"));
+            assertThrows(IllegalStateException.class, () -> local.tryUnlock("k"));
+            assertFalse(local.unlockQuietly("k"));
+        }
     }
 
     // --- deprecated name aliases ---------------------------------------------------------------

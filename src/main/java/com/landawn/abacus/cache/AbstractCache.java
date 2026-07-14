@@ -18,6 +18,9 @@ import java.util.Collections;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ContinuableFuture;
@@ -111,16 +114,85 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
     /**
      * Property bag for storing custom configuration and metadata.
      * Can be used by cache implementations and users to store arbitrary properties.
-     * Backed by a synchronized map so individual property operations through this cache or the
-     * live view returned by {@link #getProperties()} are serialized. Iterators and collection
-     * views are not safe while another thread mutates the properties; the backing map's mutex is
-     * internal and cannot be acquired through the returned {@link Properties} object.
+     * Backed by a synchronized map so property operations through this cache or the live view
+     * returned by {@link #getProperties()} are serialized. The custom wrapper below also delegates
+     * compound {@link java.util.Map} operations such as {@code putIfAbsent}, {@code compute}, and
+     * {@code merge} directly to that synchronized map; inheriting {@link Properties}' multi-step
+     * implementations would make those operations non-atomic. Iterators and collection views are
+     * not safe while another thread mutates the properties because the backing map's mutex is
+     * internal. Use {@link Properties#copy()} to obtain a stable snapshot for traversal.
      */
-    protected final Properties<String, Object> properties = new Properties<>() {
-        {
+    protected final Properties<String, Object> properties = new SynchronizedProperties<>();
+
+    /**
+     * A {@link Properties} implementation whose entire {@link java.util.Map} surface delegates
+     * compound/default operations to one synchronized backing map. {@code Properties} implements
+     * several of these operations as separate {@code get}/{@code put}/{@code remove} calls; merely
+     * wrapping its backing map therefore does not make their check-then-act sequences atomic.
+     */
+    private static final class SynchronizedProperties<K, V> extends Properties<K, V> {
+
+        SynchronizedProperties() {
             values = Collections.synchronizedMap(values);
         }
-    };
+
+        @Override
+        public V putIfAbsent(final K key, final V value) {
+            return values.putIfAbsent(key, value);
+        }
+
+        @Override
+        public boolean remove(final Object key, final Object value) {
+            return values.remove(key, value);
+        }
+
+        @Override
+        public V replace(final K key, final V value) {
+            return values.replace(key, value);
+        }
+
+        @Override
+        public boolean replace(final K key, final V oldValue, final V newValue) {
+            return values.replace(key, oldValue, newValue);
+        }
+
+        @Override
+        public void forEach(final BiConsumer<? super K, ? super V> action) {
+            values.forEach(action);
+        }
+
+        @Override
+        public void replaceAll(final BiFunction<? super K, ? super V, ? extends V> function) {
+            values.replaceAll(function);
+        }
+
+        @Override
+        public V computeIfAbsent(final K key, final Function<? super K, ? extends V> mappingFunction) {
+            return values.computeIfAbsent(key, mappingFunction);
+        }
+
+        @Override
+        public V computeIfPresent(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
+            return values.computeIfPresent(key, remappingFunction);
+        }
+
+        @Override
+        public V compute(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
+            return values.compute(key, remappingFunction);
+        }
+
+        @Override
+        public V merge(final K key, final V value, final BiFunction<? super V, ? super V, ? extends V> remappingFunction) {
+            return values.merge(key, value, remappingFunction);
+        }
+
+        @Override
+        public Properties<K, V> copy() {
+            synchronized (values) {
+                return Properties.create(values);
+            }
+        }
+    }
 
     /**
      * Default time-to-live for cache entries, in milliseconds.
@@ -168,8 +240,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation delegates to {@link #getOrNull(Object)} and wraps the result via
-     * {@link Optional#ofNullable(Object)}. Subclasses that need different semantics should
-     * override {@link #getOrNull(Object)} rather than this method.
+     * {@link Optional#ofNullable(Object)}. Consequently, if a concrete cache permits a key to be
+     * explicitly mapped to {@code null}, this method returns an empty optional for that mapping.
+     * Such a mapping is distinguishable from absence only if the concrete implementation's
+     * {@link #containsKey(Object)} contract says so. Subclasses that need different semantics
+     * should override {@link #getOrNull(Object)} rather than this method.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

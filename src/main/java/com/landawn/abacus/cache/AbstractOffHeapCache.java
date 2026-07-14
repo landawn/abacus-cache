@@ -235,9 +235,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private static final int STORE_KEY_LOCK_COUNT = 64;
     private final Object[] storeKeyLocks = new Object[STORE_KEY_LOCK_COUNT];
 
+    // A disk spill is a compound operation: remove the old pool wrapper, replace the bytes in the
+    // key-only OffHeapStore, transfer store ownership, and install the new pool wrapper. The store
+    // lock above protects only the bytes/owner pair because StoreWrapper reads and destruction also
+    // use it while holding the wrapper monitor. A separate striped mutation lock keeps the complete
+    // same-key pool transition atomic without reversing that wrapper -> store-lock order (which
+    // would deadlock). It also coordinates memory replacements, removes, stale-entry cleanup, and
+    // disk-to-memory promotion with a spill of the same key.
+    private static final int KEY_MUTATION_LOCK_COUNT = 256;
+    private final Object[] keyMutationLocks = new Object[KEY_MUTATION_LOCK_COUNT];
+
     {
         for (int i = 0; i < storeKeyLocks.length; i++) {
             storeKeyLocks[i] = new Object();
+        }
+
+        for (int i = 0; i < keyMutationLocks.length; i++) {
+            keyMutationLocks[i] = new Object();
         }
     }
 
@@ -248,6 +262,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // their disk I/O. The power-of-two mask also keeps the index non-negative.
         final int h = key.hashCode();
         return storeKeyLocks[(h ^ (h >>> 16)) & (storeKeyLocks.length - 1)];
+    }
+
+    private Object keyMutationLockFor(final K key) {
+        final int h = key.hashCode();
+        return keyMutationLocks[(h ^ (h >>> 16)) & (keyMutationLocks.length - 1)];
     }
 
     // Guards native memory against close(): writers of off-heap memory (put(), and the
@@ -344,6 +363,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                          cannot reserve {@code capacityInMB} MB of native memory
      * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is
      *                               registered (the off-heap allocation is released before this propagates)
+     * @throws SecurityException if the runtime denies shutdown-hook registration (all cache-owned
+     *                           resources are released before this propagates)
      */
     @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
@@ -407,15 +428,25 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             if (evictDelay > 0) {
                 final Runnable evictTask = () -> {
-                    // Reclaim segments that have become empty
+                    // Keep close() from deallocating/closing the cache while a scheduled
+                    // maintenance pass is still traversing its segment metadata. A task that was
+                    // queued just before cancellation may start after close() has acquired the
+                    // write lock; once admitted, it observes the closed pool and becomes a no-op.
+                    lifecycleLock.readLock().lock();
                     try {
-                        reclaimEmptySegments();
-                    } catch (final Exception e) {
-                        // Swallowed so the scheduled task keeps running; eviction retries on the next cycle.
-                        // Pass the exception (not just its message) so the stack trace is preserved.
-                        if (logger.isWarnEnabled()) {
-                            logger.warn("Background empty-segment reclamation failed; will retry on the next scheduled run", e);
+                        if (!_pool.isClosed()) {
+                            try {
+                                reclaimEmptySegments();
+                            } catch (final Exception e) {
+                                // Swallowed so the scheduled task keeps running; eviction retries on the next cycle.
+                                // Pass the exception (not just its message) so the stack trace is preserved.
+                                if (logger.isWarnEnabled()) {
+                                    logger.warn("Background empty-segment reclamation failed; will retry on the next scheduled run", e);
+                                }
+                            }
                         }
+                    } finally {
+                        lifecycleLock.readLock().unlock();
                     }
                 };
 
@@ -429,7 +460,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             } finally {
                 try {
                     deallocate();
-                } catch (final RuntimeException deallocateFailure) {
+                } catch (final RuntimeException | Error deallocateFailure) {
                     initFailure.addSuppressed(deallocateFailure);
                 }
             }
@@ -451,21 +482,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // OS-allocated buffer dangling for the lifetime of the process.
         try {
             Runtime.getRuntime().addShutdownHook(shutdownHook);
-        } catch (final IllegalStateException shuttingDown) {
+        } catch (final IllegalStateException | SecurityException hookFailure) {
+            // Registration can fail either because shutdown has started or because the runtime
+            // denies hook management. close() performs the complete ownership cleanup (scheduled
+            // task, pool, native allocation, and OffHeapStore); the former hand-written path freed
+            // only native memory and leaked the already-created pool/store resources. Preserve the
+            // registration failure as the primary exception if cleanup itself also fails.
             try {
-                if (scheduleFuture != null) {
-                    scheduleFuture.cancel(true);
-                }
-            } finally {
-                try {
-                    deallocate();
-                } catch (final RuntimeException deallocateFailure) {
-                    if (logger.isErrorEnabled()) {
-                        logger.error("Failed to release off-heap memory after shutdown-hook registration failure", deallocateFailure);
-                    }
-                }
+                close();
+            } catch (final RuntimeException | Error cleanupFailure) {
+                hookFailure.addSuppressed(cleanupFailure);
             }
-            throw shuttingDown;
+
+            throw hookFailure;
         }
     }
 
@@ -614,16 +643,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     return null;
                 }
 
-                readCountFromDisk.increment();
-
                 final V value = storeWrapper.deserialize(diskBytes);
+
+                // Count only a value that was successfully reconstructed. Incrementing before the
+                // custom deserializer ran made a throwing deserializer look like a successful disk
+                // hit and differed from the non-timing branch below.
+                readCountFromDisk.increment();
 
                 if (testerForLoadingItemFromDiskToMemory != null
                         && testerForLoadingItemFromDiskToMemory.test(storeWrapper.activityPrint(), storeWrapper.size, elapsedTime)) {
 
                     final ActivityPrint activityPrint = storeWrapper.activityPrint();
                     final long maxIdleTime = activityPrint.getMaxIdleTime();
-                    final long liveTime = activityPrint.getLiveTime() - (System.currentTimeMillis() - activityPrint.getCreatedTime());
+                    final long liveTime = activityPrint.getMaxLiveTime() - (System.currentTimeMillis() - activityPrint.getCreatedTime());
 
                     final int size = storeWrapper.size;
                     final byte[] bytes = liveTime > 0 ? diskBytes : null;
@@ -665,10 +697,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Copies a value just read from disk into off-heap memory and, if the disk-backed wrapper is
      * still the current pool mapping, replaces it with the in-memory copy. Called from
-     * {@link #getOrNull(Object)} under the lifecycle read lock. Failure to promote is never an
-     * error: the promoted slots are released and the disk-backed entry is left (or restored) as-is.
+     * {@link #getOrNull(Object)} under the lifecycle read lock. Ordinary inability to allocate
+     * enough slots is best-effort: any partial allocation is released and the disk-backed entry is
+     * left in place. Exceptions from native copying or pool operations still propagate.
      */
     private void promoteToMemory(final K key, final StoreWrapper storeWrapper, final byte[] bytes, final int size, final long liveTime,
+            final long maxIdleTime) {
+        synchronized (keyMutationLockFor(key)) {
+            doPromoteToMemory(key, storeWrapper, bytes, size, liveTime, maxIdleTime);
+        }
+    }
+
+    private void doPromoteToMemory(final K key, final StoreWrapper storeWrapper, final byte[] bytes, final int size, final long liveTime,
             final long maxIdleTime) {
         Slot slot = null;
         List<Slot> slots = null;
@@ -753,6 +793,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             // remove(key) here would destroy that newer entry and resurrect the
             // (older) value we just read from disk - a lost update. This mirrors the
             // "only if current" pattern in removeStaleStoreWrapperIfCurrent().
+            // Same-key cache mutations are excluded by keyMutationLock, so a peek is sufficient to
+            // avoid detaching a newer mapping merely to discover that it is not the wrapper read
+            // above. The old remove-and-restore approach created a transient false miss for other
+            // readers and incorrectly incremented the pool's successful-put counter on restoration.
+            if (_pool.peek(key) != storeWrapper) {
+                slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
+                return;
+            }
+
             final Wrapper<V> removed = _pool.remove(key);
 
             if (removed == storeWrapper) {
@@ -803,11 +852,40 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     private void removeStaleStoreWrapperIfCurrent(final K key, final StoreWrapper storeWrapper) {
-        // Runs from getOrNull(), which deliberately does not hold the lifecycle lock, so a
-        // concurrent close() can complete at any point here and make the pool reject remove/put
-        // with an IllegalStateException. Treat that as "nothing left to clean up" instead of
-        // letting a plain get() throw: post-close, the pool has destroyed its entries and the
-        // native memory and store are torn down, so any bookkeeping skipped here is inert.
+        lifecycleLock.readLock().lock();
+        try {
+            if (!_pool.isClosed()) {
+                synchronized (keyMutationLockFor(key)) {
+                    doRemoveStaleStoreWrapperIfCurrent(key, storeWrapper);
+                }
+            }
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    private void doRemoveStaleStoreWrapperIfCurrent(final K key, final StoreWrapper storeWrapper) {
+        // Called with both the lifecycle read lock and this key's mutation lock held. The closed-pool
+        // checks below are defensive against an unexpected external/internal pool shutdown; normal
+        // cache close cannot overtake this cleanup.
+        final Wrapper<V> current;
+
+        try {
+            current = _pool.peek(key);
+        } catch (final IllegalStateException e) {
+            if (_pool.isClosed()) {
+                return;
+            }
+
+            throw e;
+        }
+
+        // Do not temporarily remove and re-put a newer mapping. Besides exposing a false miss to
+        // lock-free readers, that restoration is counted by the pool as another successful put.
+        if (current != storeWrapper) {
+            return;
+        }
+
         final Wrapper<V> removed;
 
         try {
@@ -864,6 +942,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>Non-positive {@code liveTime} or {@code maxIdleTime} values are interpreted as
      * "no expiration" and internally translated to {@code Long.MAX_VALUE}.
+     * For a {@link ByteBuffer} value, the bytes from index {@code 0} up to its current position are
+     * stored; the supplied buffer's position, limit, and mark are left unchanged.
      *
      * <p><b>&#9888;&#65039; Replacement failure:</b> A failed replacement of a disk-spilled entry
      * may leave the key without either value when the old store bytes have already been
@@ -893,7 +973,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 throw new IllegalStateException("This cache has been closed");
             }
 
-            return doPut(key, value, liveTime, maxIdleTime);
+            // In particular, serialize the remove/write/owner-transfer/pool-install sequence of a
+            // disk spill with every other mutation of this key. The lower-level store lock cannot
+            // cover that whole sequence because StoreWrapper uses the opposite (wrapper -> store)
+            // lock order for reads and destruction.
+            synchronized (keyMutationLockFor(key)) {
+                return doPut(key, value, liveTime, maxIdleTime);
+            }
         } finally {
             lifecycleLock.readLock().unlock();
         }
@@ -921,7 +1007,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             bytes = (byte[]) value;
             size = bytes.length;
         } else if (type.isByteBuffer()) {
-            bytes = ByteBufferType.byteArrayOf((ByteBuffer) value);
+            // ByteBufferType.byteArrayOf temporarily moves the supplied buffer's position to zero,
+            // which invalidates its mark even though the position is restored. Operate on a
+            // duplicate so put() is observationally read-only with respect to the caller's buffer.
+            bytes = ByteBufferType.byteArrayOf(((ByteBuffer) value).duplicate());
             size = bytes.length;
         } else {
             os = Objectory.createByteArrayOutputStream();
@@ -1112,8 +1201,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * {@code offHeapStore}. Disk-related statistics are automatically updated when the wrapper
      * is constructed ({@code sizeOnDisk}, {@code dataSizeOnDisk}, {@code totalDataSize}).
      *
-     * <p>Thread safety: this method may be called concurrently from multiple threads during put
-     * operations. The {@code offHeapStore} implementation must handle concurrent put operations safely.
+     * <p>Thread safety: the caller holds this cache's striped key-mutation lock. Consequently, the
+     * complete replacement protocol is serialized with other mutations of the same key, while
+     * different keys can still reach the {@code offHeapStore} concurrently. The store implementation
+     * must therefore be thread-safe across different keys.
      *
      * @param k the cache key to associate with the disk-stored value. Must not be {@code null}.
      *          This key is stored in the {@code StoreWrapper} for later retrieval and removal.
@@ -1340,6 +1431,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>Thread safety: this method is thread-safe and uses an atomic counter to ensure only
      * one vacating task runs at a time, even when called concurrently from multiple threads.
+     * The task holds the lifecycle read lock while touching the pool and segment metadata, so
+     * {@link #close()} waits for an in-flight task. A task queued immediately before shutdown
+     * checks the closed state after acquiring that lock and safely becomes a no-op.
      */
     private void vacate() {
         // Debounce: skip if a vacate finished very recently, so a burst of failing
@@ -1356,16 +1450,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         boolean scheduled = false;
         try {
             _asyncExecutor.execute(() -> {
+                lifecycleLock.readLock().lock();
                 try {
-                    _pool.evict();
+                    if (!_pool.isClosed()) {
+                        _pool.evict();
 
-                    reclaimEmptySegments();
+                        reclaimEmptySegments();
+                    }
                 } finally {
-                    // Record completion and release the gate immediately. The debounce
-                    // window above (not a thread-pinning sleep) prevents an immediate
-                    // re-vacation, so a fresh vacate can start as soon as it is needed.
-                    _lastVacateFinishedTime = System.currentTimeMillis();
-                    _activeVacationTaskCount.decrementAndGet();
+                    try {
+                        lifecycleLock.readLock().unlock();
+                    } finally {
+                        // Record completion and release the gate immediately. The debounce
+                        // window above (not a thread-pinning sleep) prevents an immediate
+                        // re-vacation, so a fresh vacate can start as soon as it is needed.
+                        _lastVacateFinishedTime = System.currentTimeMillis();
+                        _activeVacationTaskCount.decrementAndGet();
+                    }
                 }
             });
             scheduled = true;
@@ -1392,10 +1493,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public void remove(final K key) {
         N.checkArgNotNull(key, "key");
 
-        final Wrapper<V> w = _pool.remove(key);
+        // A disk wrapper's destroy() calls OffHeapStore.remove(). Keep close() from closing the
+        // store after the pool mapping is detached but before that cleanup call completes.
+        lifecycleLock.readLock().lock();
+        try {
+            if (_pool.isClosed()) {
+                throw new IllegalStateException("This cache has been closed");
+            }
 
-        if (w != null) {
-            w.destroy(Caller.REMOVE_REPLACE_CLEAR);
+            synchronized (keyMutationLockFor(key)) {
+                final Wrapper<V> w = _pool.remove(key);
+
+                if (w != null) {
+                    w.destroy(Caller.REMOVE_REPLACE_CLEAR);
+                }
+            }
+        } finally {
+            lifecycleLock.readLock().unlock();
         }
     }
 
@@ -1445,8 +1559,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public void clear() {
-        _pool.clear();
-        reclaimEmptySegments();
+        // Pool destruction can call the disk store, so exclude close() until all detached wrappers
+        // have completed their cleanup and empty segments have been reclaimed.
+        lifecycleLock.readLock().lock();
+        try {
+            if (_pool.isClosed()) {
+                throw new IllegalStateException("This cache has been closed");
+            }
+
+            _pool.clear();
+            reclaimEmptySegments();
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
     }
 
     /**
@@ -1470,7 +1595,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * cache.put("key2", "value2".getBytes());
      *
      * OffHeapCacheStats stats = cache.stats();
-     * System.out.println("Entries in memory: " + stats.size());
+     * System.out.println("Entries in memory: " + (stats.size() - stats.sizeOnDisk()));
      * System.out.println("Entries on disk: " + stats.sizeOnDisk());
      * System.out.println("Hits: " + stats.hitCount() + "/" + stats.getCount());
      * System.out.println("Data size (memory + disk): " + stats.dataSize() + ", allocated memory: " + stats.allocatedMemory());
@@ -1547,6 +1672,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * off-heap memory, and closes the configured {@link OffHeapStore}, if any. This method is
      * idempotent: invoking it on an already-closed cache returns immediately. It is
      * also invoked automatically by the registered shutdown hook during JVM shutdown.
+     *
+     * @throws SecurityException if the runtime denies removal of the registered shutdown hook;
+     *                           pool, native-memory, and store cleanup is still attempted
      */
     @Override
     public synchronized void close() {
@@ -2195,7 +2323,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                                 "Failed to retrieve value: fetched size (" + bytes.length + " bytes) does not match expected size (" + size + " bytes)");
                     }
 
-                    return bytes;
+                    // The OffHeapStore contract permits get() to return its own retained array.
+                    // Never expose that array to a byte[] caller or a custom deserializer: either
+                    // could mutate it and silently change all future cache reads. Memory-backed
+                    // wrappers already return a fresh array, so this also keeps both tiers consistent.
+                    return bytes.clone();
                 }
             }
         }

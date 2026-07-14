@@ -29,9 +29,10 @@ import com.landawn.abacus.util.N;
  * providing server URL management, default implementations for optional bulk
  * operations and flush functionality, and utility methods for time conversion.
  *
- * <p><b>Thread Safety:</b> This class is thread-safe. The {@code serverUrl} field is
- * immutable after construction. Subclasses must ensure their implementations of abstract
- * methods are thread-safe to maintain the overall thread safety guarantee.
+ * <p><b>Thread Safety:</b> The state implemented by this base class is thread-safe: its
+ * {@code serverUrl} field is immutable after construction and its remaining concrete methods are
+ * stateless. A concrete client is thread-safe only if its overrides and backend client are also
+ * thread-safe.
  *
  * <p>Key features:
  * <ul>
@@ -41,11 +42,12 @@ import com.landawn.abacus.util.N;
  * <li>Shared validation and conversion utilities for consistent behavior across implementations</li>
  * </ul>
  *
- * <p>Subclasses must implement the following abstract methods:
+ * <p>Subclasses must implement the following operations (for writes/removals, override at least
+ * one name in each compatibility pair):
  * <ul>
  * <li>{@link #get(String)} - retrieves a single value from cache</li>
- * <li>{@link #put(String, Object, long)} - stores a value with TTL</li>
- * <li>{@link #remove(String)} - removes a key from cache</li>
+ * <li>{@link #put(String, Object, long)} (or legacy {@link #set(String, Object, long)}) - stores a value with TTL</li>
+ * <li>{@link #remove(String)} (or legacy {@link #delete(String)}) - removes a key from cache</li>
  * <li>{@link #incr(String)} and {@link #incr(String, long)} - atomic increment operations</li>
  * <li>{@link #decr(String)} and {@link #decr(String, long)} - atomic decrement operations</li>
  * <li>{@link #disconnect()} - releases resources and closes connections</li>
@@ -75,13 +77,13 @@ import com.landawn.abacus.util.N;
  *     }
  *
  *     @Override
- *     public boolean set(String key, T obj, long liveTime) {
+ *     public boolean put(String key, T obj, long liveTime) {
  *         int ttl = toSeconds(liveTime);   // Use utility method
  *         return client.store(key, obj, ttl);
  *     }
  *
  *     @Override
- *     public boolean delete(String key) {
+ *     public boolean remove(String key) {
  *         return client.remove(key);
  *     }
  *
@@ -146,7 +148,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      *
      * // Multiple servers (format depends on implementation)
-     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("server1:11211,server2:11211");
+     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("server1:11211 server2:11211");
      * }</pre>
      *
      * @param serverUrl the server URL(s) for connecting to the distributed cache, must not be {@code null},
@@ -158,7 +160,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
     }
 
     /**
-     * Returns the server URL(s) this client is connected to.
+     * Returns the server URL(s) this client is configured to use.
      * The format is implementation-specific and may include multiple servers.
      * For multiple servers, the format depends on the implementation
      * (e.g., comma-separated for some implementations).
@@ -292,9 +294,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
     }
 
     /**
-     * Removes all keys from all connected cache servers.
-     * This is a destructive operation that affects all data across all servers.
-     * Use with extreme caution in production environments.
+     * Requests removal of cached data in the scope defined by the concrete implementation.
+     * A supporting implementation may affect every configured server, database, or namespace,
+     * including data shared with other applications. Use with extreme caution in production.
      *
      * <p><b>Default Implementation:</b> This default implementation throws {@code UnsupportedOperationException}.
      * Subclasses should override this method if the underlying cache system supports flush/clear operations
@@ -308,9 +310,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <li>Administrative operations require the ability to clear all cached data</li>
      * </ul>
      *
-     * <p><b>Implementation Note:</b> Implementations should ensure this operation affects all
-     * connected servers when using a multi-server configuration. The operation should be idempotent
-     * (safe to call multiple times).
+     * <p><b>Implementation Note:</b> An override must document its backend-specific scope. The
+     * operation should be idempotent (safe to call multiple times).
      *
      * <p><b>Thread Safety:</b> Implementations must be thread-safe. However, note that
      * once executed, all cached data will be permanently lost and the effects are
@@ -371,7 +372,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <pre>{@code
      * // In a subclass implementation
      * @Override
-     * public boolean set(String key, T obj, long liveTime) {
+     * public boolean put(String key, T obj, long liveTime) {
      *     int ttlSeconds = toSeconds(liveTime);
      *     // Use ttlSeconds with cache system
      *     return cacheClient.set(key, obj, ttlSeconds);

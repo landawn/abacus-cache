@@ -13,15 +13,24 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.logging.LoggerFactory;
+import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.AsyncExecutor;
@@ -245,6 +254,14 @@ public class AbstractOffHeapCacheTest {
         };
     }
 
+    @SuppressWarnings("unchecked")
+    private static <K, V> KeyedObjectPool<K, AbstractOffHeapCache.Wrapper<V>> poolOf(final AbstractOffHeapCache<K, V> cache)
+            throws ReflectiveOperationException {
+        final Field poolField = AbstractOffHeapCache.class.getDeclaredField("_pool");
+        poolField.setAccessible(true);
+        return (KeyedObjectPool<K, AbstractOffHeapCache.Wrapper<V>>) poolField.get(cache);
+    }
+
     private static final class GuardedOffHeapCache extends AbstractOffHeapCache<String, byte[]> {
         private final AtomicBoolean deallocated = new AtomicBoolean();
         private final AtomicBoolean copiedAfterDeallocate = new AtomicBoolean();
@@ -328,6 +345,32 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
+    /**
+     * {@code ByteBufferType.byteArrayOf} temporarily moves its argument's position to zero, which
+     * invalidates the argument's mark. A cache put is a read-only operation from the caller's point
+     * of view, so the cache now extracts bytes from a duplicate and preserves position, limit, and
+     * mark on the supplied buffer.
+     */
+    @Test
+    public void testByteBufferPutPreservesCallerStateAndMark() {
+        final byte[] data = "marked-byte-buffer".getBytes();
+        final ByteBuffer input = ByteBuffer.allocate(data.length);
+        input.put(data);
+        input.position(3);
+        input.mark();
+        input.position(data.length);
+
+        try (OffHeapCache<String, ByteBuffer> cache = OffHeapCache.<String, ByteBuffer> builder().capacityInMB(1).evictDelay(0).build()) {
+            assertTrue(cache.put("k", input));
+            assertEquals(data.length, input.position(), "put must preserve the caller's position");
+            assertEquals(data.length, input.limit(), "put must preserve the caller's limit");
+
+            input.reset(); // Before the fix this threw InvalidMarkException.
+            assertEquals(3, input.position(), "put must preserve the caller's mark");
+            assertArrayEquals(data, ByteBufferType.byteArrayOf(cache.getOrNull("k")));
+        }
+    }
+
     /** Large ByteBuffer value (> maxBlockSize): split across slots and read back through MultiSlotsWrapper. */
     @Test
     public void testByteBufferValue_MultiSlot_roundtrip() {
@@ -368,6 +411,53 @@ public class AbstractOffHeapCacheTest {
             final ByteBuffer out = cache.getOrNull("k");
             assertNotNull(out);
             assertArrayEquals(data, ByteBufferType.byteArrayOf(out));
+        }
+    }
+
+    /** A store may retain and return its own array; disk reads must never expose that mutable array. */
+    @Test
+    public void testDiskReadReturnsDefensiveCopy() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final byte[] expected = { 1, 2, 3, 4 };
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2)
+                .build()) {
+            assertTrue(cache.put("k", expected));
+
+            final byte[] firstRead = cache.getOrNull("k");
+            firstRead[0] = 99;
+
+            assertArrayEquals(expected, cache.getOrNull("k"), "mutating a returned value must not alter the disk-resident cache entry");
+            assertArrayEquals(expected, backing.get("k"), "the store's retained array must remain private");
+        }
+    }
+
+    /** A failed custom deserialization is not a successful disk hit. */
+    @Test
+    public void testThrowingDeserializerDoesNotIncrementDiskHitCount() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+
+        try (OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2)
+                .statsTimeOnDisk(true)
+                .serializer((value, output) -> {
+                    final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    output.write(bytes, 0, bytes.length);
+                })
+                .deserializer((bytes, type) -> {
+                    throw new IllegalStateException("cannot deserialize");
+                })
+                .build()) {
+            assertTrue(cache.put("k", "value"));
+            assertThrows(IllegalStateException.class, () -> cache.getOrNull("k"));
+            assertEquals(0L, cache.stats().hitCountFromDisk());
         }
     }
 
@@ -431,6 +521,327 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
+    /** Promotion must carry forward the original entry's remaining TTL, not reset or collapse it. */
+    @Test
+    public void testDiskToMemoryPromotionPreservesRemainingLiveTime() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final long configuredLiveTime = 5_000L;
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2)
+                .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> true)
+                .build()) {
+            assertTrue(cache.put("k", new byte[] { 1, 2, 3 }, configuredLiveTime, 10_000L));
+            Thread.sleep(75L);
+            assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("k"));
+            assertEquals(0L, cache.stats().sizeOnDisk(), "the entry should have been promoted");
+
+            final AbstractOffHeapCache.Wrapper<byte[]> promoted = poolOf(cache).get("k");
+            final long promotedLiveTime = promoted.activityPrint().getMaxLiveTime();
+            assertTrue(promotedLiveTime > 0 && promotedLiveTime < configuredLiveTime,
+                    "promotion should install the positive remaining TTL, not a fresh/full or elapsed lifetime: " + promotedLiveTime);
+        }
+    }
+
+    /**
+     * A same-key disk replacement spans both the store and the pool. Without a mutation lock around
+     * that whole transition, a second put can overwrite the bytes while the first put is paused
+     * retiring its prior wrapper, leaving the final pool wrapper owned by different store bytes.
+     */
+    @Test
+    public void testConcurrentSameKeyDiskPutsAreAtomicAcrossStoreAndPool() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final AtomicBoolean routeToDisk = new AtomicBoolean(false);
+        final AtomicInteger diskWriteCount = new AtomicInteger();
+        final CountDownLatch firstDiskWrite = new CountDownLatch(1);
+        final CountDownLatch secondDiskWrite = new CountDownLatch(1);
+        final CountDownLatch priorWrapperLocked = new CountDownLatch(1);
+        final CountDownLatch releasePriorWrapper = new CountDownLatch(1);
+        final CountDownLatch secondPutStarted = new CountDownLatch(1);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                backing.put(key, value);
+                if (diskWriteCount.incrementAndGet() == 1) {
+                    firstDiskWrite.countDown();
+                } else {
+                    secondDiskWrite.countDown();
+                }
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return backing.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return backing.remove(key) != null;
+            }
+        };
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(store)
+                .storeSelector((k, v, size) -> routeToDisk.get() ? 2 : 1)
+                .build()) {
+            assertTrue(cache.put("k", new byte[] { 0 }));
+            final AbstractOffHeapCache.Wrapper<byte[]> priorWrapper = poolOf(cache).get("k");
+
+            final Thread monitorHolder = new Thread(() -> {
+                synchronized (priorWrapper) {
+                    priorWrapperLocked.countDown();
+                    try {
+                        releasePriorWrapper.await();
+                    } catch (final InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }, "offheap-test-prior-wrapper-holder");
+            monitorHolder.start();
+            assertTrue(priorWrapperLocked.await(5, TimeUnit.SECONDS));
+            routeToDisk.set(true);
+
+            final byte[] first = { 1, 1, 1 };
+            final byte[] second = { 2, 2, 2, 2 };
+            final Future<Boolean> firstResult = executor.submit(() -> cache.put("k", first));
+            assertTrue(firstDiskWrite.await(5, TimeUnit.SECONDS));
+            final Future<Boolean> secondResult = executor.submit(() -> {
+                secondPutStarted.countDown();
+                return cache.put("k", second);
+            });
+            assertTrue(secondPutStarted.await(5, TimeUnit.SECONDS));
+
+            final boolean secondWriteOverlappedFirst;
+            try {
+                secondWriteOverlappedFirst = secondDiskWrite.await(750, TimeUnit.MILLISECONDS);
+            } finally {
+                releasePriorWrapper.countDown();
+            }
+
+            assertTrue(firstResult.get(5, TimeUnit.SECONDS));
+            assertTrue(secondResult.get(5, TimeUnit.SECONDS));
+            monitorHolder.join(5_000L);
+            assertFalse(secondWriteOverlappedFirst, "same-key disk puts must not interleave their store/pool transitions");
+            assertArrayEquals(second, cache.getOrNull("k"));
+        } finally {
+            releasePriorWrapper.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    /** A stale disk miss must not detach and reinsert a concurrently installed replacement. */
+    @Test
+    public void testStaleDiskReadDoesNotReinsertConcurrentReplacement() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final AtomicBoolean blockFirstRead = new AtomicBoolean(true);
+        final CountDownLatch firstReadEntered = new CountDownLatch(1);
+        final CountDownLatch releaseFirstRead = new CountDownLatch(1);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                backing.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                if (blockFirstRead.compareAndSet(true, false)) {
+                    firstReadEntered.countDown();
+                    try {
+                        releaseFirstRead.await();
+                    } catch (final InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                }
+
+                return backing.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return backing.remove(key) != null;
+            }
+        };
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(store)
+                .storeSelector((k, v, size) -> 2)
+                .build()) {
+            assertTrue(cache.put("k", new byte[] { 1 }));
+            final Future<byte[]> staleRead = executor.submit(() -> cache.getOrNull("k"));
+            assertTrue(firstReadEntered.await(5, TimeUnit.SECONDS));
+
+            final byte[] replacement = { 2, 2 };
+            final Future<Boolean> replacementPut = executor.submit(() -> cache.put("k", replacement));
+            // The replacement removes the old pool mapping before waiting for the first read's
+            // per-store-key lock. Seeing size == 0 guarantees it owns the mutation lock already.
+            for (int i = 0; i < 500 && cache.size() != 0; i++) {
+                Thread.sleep(10L);
+            }
+            assertEquals(0, cache.size());
+            releaseFirstRead.countDown();
+
+            assertEquals(null, staleRead.get(5, TimeUnit.SECONDS));
+            assertTrue(replacementPut.get(5, TimeUnit.SECONDS));
+            assertEquals(2L, cache.stats().putCount(), "stale cleanup must not count a remove/reinsert of the replacement as another put");
+            assertArrayEquals(replacement, cache.getOrNull("k"));
+        } finally {
+            releaseFirstRead.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    /** A stale promotion attempt must likewise leave a concurrent replacement continuously installed. */
+    @Test
+    public void testStalePromotionDoesNotReinsertConcurrentReplacement() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final AtomicBoolean blockFirstPromotion = new AtomicBoolean(true);
+        final CountDownLatch firstPromotionEntered = new CountDownLatch(1);
+        final CountDownLatch releaseFirstPromotion = new CountDownLatch(1);
+        final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2)
+                .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> {
+                    if (blockFirstPromotion.compareAndSet(true, false)) {
+                        firstPromotionEntered.countDown();
+                        try {
+                            releaseFirstPromotion.await();
+                        } catch (final InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return true;
+                    }
+
+                    return false;
+                })
+                .build()) {
+            final byte[] oldValue = { 1 };
+            final byte[] replacement = { 2, 2 };
+            assertTrue(cache.put("k", oldValue));
+
+            final Future<byte[]> staleRead = executor.submit(() -> cache.getOrNull("k"));
+            assertTrue(firstPromotionEntered.await(5, TimeUnit.SECONDS));
+            assertTrue(cache.put("k", replacement));
+            releaseFirstPromotion.countDown();
+
+            assertArrayEquals(oldValue, staleRead.get(5, TimeUnit.SECONDS));
+            assertEquals(2L, cache.stats().putCount(), "stale promotion must not count a remove/reinsert of the replacement as another put");
+            assertArrayEquals(replacement, cache.getOrNull("k"));
+        } finally {
+            releaseFirstPromotion.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * Removing a disk entry detaches its wrapper before invoking {@code OffHeapStore.remove}. Close
+     * must wait for that detached wrapper's cleanup; otherwise it can close the store in the gap and
+     * make the in-flight remove call into an already-closed resource.
+     */
+    @Test
+    public void testRemoveFinishesDiskCleanupBeforeStoreClose() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final AtomicBoolean storeClosed = new AtomicBoolean();
+        final AtomicBoolean removeCalledAfterClose = new AtomicBoolean();
+        final CountDownLatch wrapperLocked = new CountDownLatch(1);
+        final CountDownLatch releaseWrapper = new CountDownLatch(1);
+        final CountDownLatch closeFinished = new CountDownLatch(1);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                backing.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return backing.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                removeCalledAfterClose.compareAndSet(false, storeClosed.get());
+                return backing.remove(key) != null;
+            }
+
+            @Override
+            public void close() {
+                storeClosed.set(true);
+            }
+        };
+
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(store)
+                .storeSelector((k, v, size) -> 2)
+                .build();
+
+        try {
+            assertTrue(cache.put("k", new byte[] { 1 }));
+            final AbstractOffHeapCache.Wrapper<byte[]> wrapper = poolOf(cache).get("k");
+            final Thread monitorHolder = new Thread(() -> {
+                synchronized (wrapper) {
+                    wrapperLocked.countDown();
+                    try {
+                        releaseWrapper.await();
+                    } catch (final InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }, "offheap-test-remove-wrapper-holder");
+            monitorHolder.start();
+            assertTrue(wrapperLocked.await(5, TimeUnit.SECONDS));
+
+            final Future<?> removeResult = executor.submit(() -> cache.remove("k"));
+            for (int i = 0; i < 500 && cache.size() != 0; i++) {
+                Thread.sleep(10L);
+            }
+            assertEquals(0, cache.size(), "remove should have detached the wrapper before blocking in store cleanup");
+
+            final Future<?> closeResult = executor.submit(() -> {
+                cache.close();
+                closeFinished.countDown();
+            });
+
+            final boolean closeOvertookRemove;
+            try {
+                closeOvertookRemove = closeFinished.await(500, TimeUnit.MILLISECONDS);
+            } finally {
+                releaseWrapper.countDown();
+            }
+
+            removeResult.get(5, TimeUnit.SECONDS);
+            closeResult.get(5, TimeUnit.SECONDS);
+            monitorHolder.join(5_000L);
+            assertFalse(closeOvertookRemove, "close must wait for a detached disk wrapper to finish store cleanup");
+            assertFalse(removeCalledAfterClose.get(), "OffHeapStore.remove must not run after OffHeapStore.close");
+        } finally {
+            releaseWrapper.countDown();
+            cache.close();
+            executor.shutdownNow();
+        }
+    }
+
     /**
      * A failed in-memory put of a brand-new (non-replacing) oversized key schedules the asynchronous
      * vacating task. Exercises the {@code vacate()} scheduling path and keeps the cache usable.
@@ -476,6 +887,50 @@ public class AbstractOffHeapCacheTest {
             assertTrue(executor.isTerminated(), "close() must terminate the vacation executor and release its shutdown hook");
         } finally {
             cache.close();
+        }
+    }
+
+    /**
+     * An asynchronous vacation can finish pool eviction and still be reclaiming segment metadata.
+     * Close must wait for that entire maintenance pass; otherwise it can deallocate the cache while
+     * the task is still traversing cache-owned structures. The segment-bit-set monitor provides a
+     * deterministic pause after {@code evict()} while the lifecycle read lock remains held.
+     */
+    @Test
+    public void testCloseWaitsForInFlightVacationTask() throws Exception {
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
+        final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        final Field segmentBitSetField = AbstractOffHeapCache.class.getDeclaredField("_segmentBitSet");
+        segmentBitSetField.setAccessible(true);
+        final Object segmentBitSet = segmentBitSetField.get(cache);
+
+        final Field lifecycleLockField = AbstractOffHeapCache.class.getDeclaredField("lifecycleLock");
+        lifecycleLockField.setAccessible(true);
+        final ReentrantReadWriteLock lifecycleLock = (ReentrantReadWriteLock) lifecycleLockField.get(cache);
+
+        final Method vacateMethod = AbstractOffHeapCache.class.getDeclaredMethod("vacate");
+        vacateMethod.setAccessible(true);
+
+        Future<?> closeResult = null;
+        try {
+            synchronized (segmentBitSet) {
+                vacateMethod.invoke(cache);
+
+                for (int i = 0; i < 500 && lifecycleLock.getReadLockCount() == 0; i++) {
+                    Thread.sleep(10L);
+                }
+                assertTrue(lifecycleLock.getReadLockCount() > 0, "vacation task should reach segment reclamation while holding the lifecycle lock");
+
+                closeResult = executor.submit(cache::close);
+                Thread.sleep(300L);
+                assertFalse(closeResult.isDone(), "close must wait for the in-flight vacation task");
+            }
+
+            closeResult.get(5, TimeUnit.SECONDS);
+        } finally {
+            cache.close();
+            executor.shutdownNow();
         }
     }
 

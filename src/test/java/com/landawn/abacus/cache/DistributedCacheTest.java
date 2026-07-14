@@ -9,6 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -37,8 +40,10 @@ import com.landawn.abacus.TestBase;
  * to a Memcached server reachable at {@code localhost:11211}
  * (e.g. {@code docker run --name memcached -p 11211:11211 -d memcached:latest}).
  *
- * <p>No mock client and no in-memory fake is used. Storage, lifecycle and key-handling are exercised
- * end-to-end against the live server. The circuit-breaker tests still need <em>failures</em> from the
+ * <p>Storage and most lifecycle/key-handling behavior is exercised end-to-end against the live
+ * server. A narrowly scoped mock is used for the close-idempotence regression where a deliberately
+ * overridden lifecycle accessor must not influence the wrapper's private state. The circuit-breaker
+ * tests still need <em>failures</em> from the
  * backend; rather than fake them, they drive a <b>real</b> client that has been shut down — its
  * {@code get} then throws an {@link IllegalStateException} instantly and deterministically — and/or
  * set the breaker's internal counters by reflection while reading a genuinely-present value back from
@@ -167,6 +172,27 @@ public class DistributedCacheTest extends TestBase {
         assertTrue(cache.isClosed());
     }
 
+    /**
+     * Internal lifecycle decisions must read the private field, not dispatch through an overridable
+     * accessor. A subclass that decorates {@code isClosed()} must not make {@code close()} disconnect
+     * the same client repeatedly.
+     */
+    @Test
+    public void testClose_IdempotenceCannotBeDefeatedByIsClosedOverride() {
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client) {
+            @Override
+            public boolean isClosed() {
+                return false;
+            }
+        };
+
+        cache.close();
+        cache.close();
+
+        verify(client, times(1)).disconnect();
+    }
+
     @Test
     public void testOperations_AfterClose_Throw() {
         final DistributedCache<String, String> cache = new DistributedCache<>(newClient());
@@ -195,6 +221,29 @@ public class DistributedCacheTest extends TestBase {
         final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> cache.generateKey(Optional.empty()));
         assertTrue(ex.getMessage() != null && ex.getMessage().contains("Key string representation cannot be null"),
                 "expected the null-string-representation message but was: " + ex.getMessage());
+    }
+
+    /**
+     * Base64 encodes an empty byte sequence as an empty string, but Memcached rejects an empty key.
+     * The wrapper must therefore use a non-empty marker that cannot collide with standard Base64.
+     */
+    @Test
+    public void testGenerateKey_EmptyStringUsesMemcachedSafeMarker() {
+        final DistributedCache<String, String> cache = new DistributedCache<>(flushClient);
+
+        assertEquals("-", cache.generateKey(""));
+    }
+
+    /**
+     * Local key conversion is deterministic validation and must not be bypassed by an unrelated open
+     * backend circuit. Otherwise the same invalid key alternates between throwing and looking absent.
+     */
+    @Test
+    public void testGenerateKey_NullStringRepresentationThrowsEvenWhenCircuitOpen() throws Exception {
+        final DistributedCache<Optional<Object>, String> cache = new DistributedCache<>(flushClient, "", 1, 60_000);
+        setBreakerState(cache, 1, System.nanoTime());
+
+        assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(Optional.empty()));
     }
 
     // --- circuit breaker -----------------------------------------------------------------------

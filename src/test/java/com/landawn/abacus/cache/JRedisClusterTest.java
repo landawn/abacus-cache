@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -246,6 +247,20 @@ public class JRedisClusterTest {
         cache.disconnect(); // safe to call again
 
         verify(mockCluster, times(1)).close();
+    }
+
+    @Test
+    public void test_disconnect_publishesShutdownBeforeClosingClusterClient() {
+        doAnswer(invocation -> {
+            assertThrows(IllegalStateException.class, cache::flushAll);
+            assertThrows(IllegalStateException.class, () -> cache.get("during-close"));
+            return null;
+        }).when(mockCluster).close();
+
+        cache.disconnect();
+
+        verify(mockCluster, never()).flushAll();
+        verify(mockCluster, never()).get(utf8("during-close"));
     }
 
     @Test
