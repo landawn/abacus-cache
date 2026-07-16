@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.LongSupplier;
 
 import com.landawn.abacus.cache.OffHeapCacheStats.MinMaxAvg;
 import com.landawn.abacus.logging.Logger;
@@ -227,10 +228,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     // owns worker threads and a JVM shutdown hook, so close() must shut it down explicitly.
     private final AsyncExecutor _asyncExecutor = new AsyncExecutor();
     private final AtomicInteger _activeVacationTaskCount = new AtomicInteger();
-    // Wall-clock time the most recent vacate task finished. Used to debounce
-    // repeated vacate requests without pinning a pool thread in a sleep.
-    private volatile long _lastVacateFinishedTime = 0;
-    private static final long VACATE_DEBOUNCE_MILLIS = 3000;
+    // Monotonic time the most recent vacate task finished. A separate completion flag avoids
+    // reserving a nanoTime value as a sentinel (nanoTime may legitimately return any long).
+    private volatile long _lastVacateFinishedNanos;
+    private volatile boolean _vacateHasFinished;
+    private static final long VACATE_DEBOUNCE_NANOS = TimeUnit.MILLISECONDS.toNanos(3000);
     private final KeyedObjectPool<K, Wrapper<V>> _pool;
 
     private ScheduledFuture<?> scheduleFuture;
@@ -243,6 +245,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final boolean statsTimeOnDisk;
     final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
     final TriFunction<K, V, Integer, Integer> storeSelector;
+    private final LongSupplier nanoTimeSource;
     final LongSummaryStatistics totalWriteToDiskTimeStats = new LongSummaryStatistics();
     final LongSummaryStatistics totalReadFromDiskTimeStats = new LongSummaryStatistics();
 
@@ -250,7 +253,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     // share one store entry. This map records which StoreWrapper currently owns the bytes in
     // the store for a key; a replaced wrapper's destroy() must not delete bytes that belong
     // to a newer wrapper. Store writes and ownership claims are serialized per key via
-    // storeKeyLocks so the (write bytes, claim ownership) pair is atomic.
+    // storeKeyLocks so the (claim ownership, write bytes) pair is atomic.
     final ConcurrentHashMap<K, StoreWrapper> storeOwners = new ConcurrentHashMap<>();
     // Must be a power of two so that (hash & (length - 1)) below is a valid, uniformly distributed index.
     private static final int STORE_KEY_LOCK_COUNT = 64;
@@ -400,20 +403,32 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final Logger logger) {
         this(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, arrayOffset, serializer, deserializer, offHeapStore,
                 statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger, DEFAULT_MAINTENANCE_TASK_SCHEDULER,
-                DEFAULT_SHUTDOWN_HOOK_REGISTRAR);
+                DEFAULT_SHUTDOWN_HOOK_REGISTRAR, System::nanoTime);
     }
 
     /** Package-private construction seams for deterministic scheduler/hook failure testing. */
-    @SuppressWarnings("rawtypes")
     AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
             final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
             final Logger logger, final MaintenanceTaskScheduler maintenanceTaskScheduler, final ShutdownHookRegistrar shutdownHookRegistrar) {
+        this(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, arrayOffset, serializer, deserializer, offHeapStore,
+                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger, maintenanceTaskScheduler, shutdownHookRegistrar, System::nanoTime);
+    }
+
+    /** Package-private clock seam for deterministic duration and debounce testing. */
+    @SuppressWarnings("rawtypes")
+    AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
+            final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
+            final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
+            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
+            final Logger logger, final MaintenanceTaskScheduler maintenanceTaskScheduler, final ShutdownHookRegistrar shutdownHookRegistrar,
+            final LongSupplier nanoTimeSource) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         N.checkArgNotNull(maintenanceTaskScheduler, "maintenanceTaskScheduler");
         N.checkArgNotNull(shutdownHookRegistrar, "shutdownHookRegistrar");
+        this.nanoTimeSource = N.checkArgNotNull(nanoTimeSource, "nanoTimeSource");
         N.checkArgPositive(capacityInMB, "capacityInMB");
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "maxBlockSize must be in the range [1024, {}]: {}", SEGMENT_SIZE, maxBlockSize);
         N.checkArgument(vacatingFactor >= 0f && vacatingFactor <= 1f, "vacatingFactor must be in the range [0.0, 1.0]: {}", vacatingFactor);
@@ -675,7 +690,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final StoreWrapper storeWrapper = (StoreWrapper) w;
 
             if (statsTimeOnDisk || testerForLoadingItemFromDiskToMemory != null) {
-                final long startTime = System.currentTimeMillis();
+                final long startTime = nanoTimeSource.getAsLong();
 
                 // Read the serialized bytes from disk exactly once. The same bytes are
                 // reused both to produce the return value and (when promotion is enabled)
@@ -686,11 +701,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 try {
                     diskBytes = storeWrapper.readBytes();
                 } finally {
-                    // Clamp to >= 0: a backward wall-clock adjustment (NTP/manual) mid-read can make
-                    // the elapsed time negative, which would both feed a nonsensical value to the
-                    // promotion tester below and, via LongSummaryStatistics, make stats() throw from
-                    // the non-negative MinMaxAvg constructor.
-                    elapsedTime = Math.max(0L, System.currentTimeMillis() - startTime);
+                    // A duration must use a monotonic source: wall-clock corrections must not turn a
+                    // short read into zero or an arbitrarily large observation. Clamp only as a
+                    // defensive measure for a broken custom test/source; System.nanoTime subtraction
+                    // remains correct across its normal wraparound for practical elapsed intervals.
+                    elapsedTime = elapsedMillisSince(startTime);
 
                     if (statsTimeOnDisk) {
                         synchronized (totalReadFromDiskTimeStats) {
@@ -1063,7 +1078,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         Wrapper<V> w = null;
 
         // final byte[] bytes = PARSER.serialize(value).getBytes();
-        final long startTime = statsTimeOnDisk ? System.currentTimeMillis() : 0;
         ByteArrayOutputStream os = null;
         byte[] bytes = null;
         int size = 0;
@@ -1233,16 +1247,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 if (statsTimeOnDisk) {
                     synchronized (totalWriteToDiskTimeStats) {
-                        // Clamp to >= 0: a backward wall-clock adjustment (NTP/manual) mid-write can
-                        // make the elapsed time negative, which LongSummaryStatistics would carry into
-                        // stats() and make the non-negative MinMaxAvg constructor throw.
-                        totalWriteToDiskTimeStats.accept(Math.max(0L, System.currentTimeMillis() - startTime));
+                        // putToDisk measures only OffHeapStore.put(), excluding serialization and
+                        // unsuccessful in-memory placement work that happened before disk fallback.
+                        totalWriteToDiskTimeStats.accept(((StoreWrapper) w).writeToDiskTimeMillis);
                     }
                 }
             }
         }
 
         return result;
+    }
+
+    private long elapsedMillisSince(final long startNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(Math.max(0L, nanoTimeSource.getAsLong() - startNanos));
     }
 
     /**
@@ -1252,9 +1269,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * stored on disk. Delegates to {@code offHeapStore} for actual disk persistence and
      * creates a {@code StoreWrapper} to track the disk-stored value within the cache.
      *
-     * <p>Protocol: any existing wrapper at this key is first removed from the pool. The byte
-     * write and the ownership claim (registration in {@code storeOwners}) then happen atomically
-     * under the per-key store lock, so a prior {@code StoreWrapper}'s later {@code destroy()}
+     * <p>Protocol: any existing wrapper at this key is first removed from the pool. The replacement
+     * wrapper is created and registered in {@code storeOwners} <em>before</em> the backing bytes are
+     * overwritten; both the ownership claim and byte write happen under the per-key store lock. This
+     * ordering ensures a cache-owned allocation/map failure cannot occur after a successful store
+     * mutation and leave untracked bytes behind. A prior {@code StoreWrapper}'s later {@code destroy()}
      * cannot delete the new bytes — it only removes store bytes while it is still the registered
      * owner. On a successful write, a prior disk-backed wrapper has its metadata discarded
      * without touching the store ({@code discardReplacedStoreMetadata()}), while a prior
@@ -1291,7 +1310,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // silently delete the existing cache entry.
         final Wrapper<V> prior = _pool.remove(k);
 
-        final StoreWrapper storeWrapper;
+        StoreWrapper storeWrapper = null;
+        boolean stored = false;
 
         try {
             // Always hand the store a private copy: `bytes` may alias a pooled serialization
@@ -1300,20 +1320,42 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             // copying implementation-specific, so a store that retains the array would otherwise
             // see its contents silently change later.
             final byte[] bytesToStore = N.copyOfRange(bytes, 0, size);
+            storeWrapper = new StoreWrapper(type, liveTime, maxIdleTime, size, k);
 
-            // The store is keyed by the cache key alone, so the byte write and the ownership
-            // claim must be atomic per key: otherwise two concurrent spills of the same key can
-            // interleave such that the surviving wrapper points at bytes that the other thread's
-            // (later-destroyed) wrapper deletes, silently losing the entry.
+            // Claim ownership before mutating the key-only store. Both operations remain under the
+            // same lock, so readers cannot observe the intermediate claim. Besides serializing
+            // same-key spills, this order guarantees that a StoreWrapper allocation or
+            // ConcurrentHashMap failure happens while the prior backing bytes are still intact.
             synchronized (storeKeyLockFor(k)) {
-                if (offHeapStore.put(k, bytesToStore)) {
-                    storeWrapper = new StoreWrapper(type, liveTime, maxIdleTime, size, k);
-                    storeOwners.put(k, storeWrapper);
-                } else {
-                    storeWrapper = null;
+                final StoreWrapper previousOwner = storeOwners.put(k, storeWrapper);
+                final long writeStartedAt = statsTimeOnDisk ? nanoTimeSource.getAsLong() : 0L;
+
+                try {
+                    stored = offHeapStore.put(k, bytesToStore);
+                } catch (final RuntimeException | Error storeFailure) {
+                    try {
+                        restorePreviousStoreOwner(k, storeWrapper, previousOwner);
+                    } catch (final RuntimeException | Error rollbackFailure) {
+                        addSuppressedIfDistinct(storeFailure, rollbackFailure);
+                    }
+
+                    throw storeFailure;
+                }
+
+                if (statsTimeOnDisk) {
+                    storeWrapper.writeToDiskTimeMillis = elapsedMillisSince(writeStartedAt);
+                }
+
+                if (!stored) {
+                    restorePreviousStoreOwner(k, storeWrapper, previousOwner);
+                    storeWrapper.discardReplacedStoreMetadata();
                 }
             }
         } catch (final RuntimeException | Error e) {
+            if (storeWrapper != null) {
+                storeWrapper.discardReplacedStoreMetadata();
+            }
+
             try {
                 restorePriorAfterDiskWriteFailure(k, prior);
             } catch (final RuntimeException | Error restoreFailure) {
@@ -1323,7 +1365,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             throw e;
         }
 
-        if (storeWrapper != null) {
+        if (stored) {
             if (prior != null) {
                 if (prior.kind == Wrapper.KIND_STORE) {
                     ((StoreWrapper) prior).discardReplacedStoreMetadata();
@@ -1335,9 +1377,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return storeWrapper;
         }
 
+        storeWrapper.discardReplacedStoreMetadata();
         restorePriorAfterDiskWriteFailure(k, prior);
 
         return null;
+    }
+
+    private void restorePreviousStoreOwner(final K key, final StoreWrapper replacement, final StoreWrapper previousOwner) {
+        final boolean restored = previousOwner == null ? storeOwners.remove(key, replacement) : storeOwners.replace(key, replacement, previousOwner);
+
+        if (!restored) {
+            throw new IllegalStateException("Failed to roll back disk-store ownership after the backing write did not complete");
+        }
     }
 
     /** Adds cleanup context without allowing a reused throwable to trigger self-suppression. */
@@ -1502,8 +1553,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>Vacating process:
      * <ol>
-     * <li>Debounce gate: if a vacate completed within the last {@code VACATE_DEBOUNCE_MILLIS}
-     *     (3000 ms), returns immediately without scheduling another one.</li>
+     * <li>Debounce gate: if a vacate completed within the last 3000 ms, measured with a
+     *     monotonic clock, returns immediately without scheduling another one.</li>
      * <li>Otherwise, checks if a vacating task is already in flight using an atomic counter;
      *     if so, returns immediately to avoid redundant work.</li>
      * <li>Otherwise, schedules an asynchronous task that:
@@ -1529,9 +1580,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * checks the closed state after acquiring that lock and safely becomes a no-op.
      */
     private void vacate() {
-        // Debounce: skip if a vacate finished very recently, so a burst of failing
-        // puts doesn't schedule redundant vacations while memory is still settling.
-        if (System.currentTimeMillis() - _lastVacateFinishedTime < VACATE_DEBOUNCE_MILLIS) {
+        // A debounce interval is elapsed time, not civil time. Using currentTimeMillis here made a
+        // backward NTP/manual adjustment suppress memory reclamation for the size of the rollback.
+        if (_vacateHasFinished && nanoTimeSource.getAsLong() - _lastVacateFinishedNanos < VACATE_DEBOUNCE_NANOS) {
             return;
         }
 
@@ -1557,7 +1608,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         // Record completion and release the gate immediately. The debounce
                         // window above (not a thread-pinning sleep) prevents an immediate
                         // re-vacation, so a fresh vacate can start as soon as it is needed.
-                        _lastVacateFinishedTime = System.currentTimeMillis();
+                        _lastVacateFinishedNanos = nanoTimeSource.getAsLong();
+                        // Publish completion after the timestamp; the volatile write makes the
+                        // matching timestamp visible to a thread entering the debounce check.
+                        _vacateHasFinished = true;
                         _activeVacationTaskCount.decrementAndGet();
                     }
                 }
@@ -1849,9 +1903,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Releases the configured {@link OffHeapStore}, if any, when the cache is closed. A failure to
-     * close the store is logged at warn level rather than propagated, so it cannot leave the cache in
-     * a half-closed state (native memory has already been released by {@link #deallocate()}).
+     * Releases the configured {@link OffHeapStore}, if any, when the cache is closed. An
+     * {@link Exception} raised while closing the store is logged at warn level rather than propagated,
+     * so it cannot leave the cache in a half-closed state (native memory has already been released by
+     * {@link #deallocate()}). An {@link Error} is deliberately not swallowed.
      */
     private void closeOffHeapStore() {
         if (offHeapStore != null) {
@@ -2361,6 +2416,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     final class StoreWrapper extends Wrapper<V> {
         private K permanentKey;
+        // Set before publication to the pool. It measures OffHeapStore.put() only.
+        private long writeToDiskTimeMillis;
 
         /**
          * Constructs a new StoreWrapper for a disk-stored value.
@@ -2408,7 +2465,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 // or throwing a spurious "data corruption" error on the size mismatch.
                 //
                 // The owner check and the store fetch must be atomic with respect to a concurrent
-                // same-key re-spill (putToDisk overwrites the bytes and claims ownership under this
+                // same-key re-spill (putToDisk claims ownership and overwrites the bytes under this
                 // same per-key lock): without it, the bytes could be replaced between the check and
                 // the fetch, surfacing to a plain get() as a spurious "data corruption" exception -
                 // or, on a coincidental size match, as bytes of the wrong value. The lock order
@@ -2499,7 +2556,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     // Delete the disk bytes only while this wrapper still owns them: a wrapper
                     // replaced by a concurrent same-key spill must not delete bytes that now
                     // belong to the replacing wrapper. The per-key lock keeps the owner check
-                    // and the removal atomic with respect to a concurrent write+claim.
+                    // and the removal atomic with respect to a concurrent claim+write.
                     synchronized (storeKeyLockFor(k)) {
                         if (storeOwners.remove(k, this)) {
                             offHeapStore.remove(k);

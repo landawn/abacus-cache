@@ -158,6 +158,13 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * Implementations should consider making a defensive copy of the byte array
      * to prevent external modifications, though this behavior is implementation-specific.
      *
+     * <p><b>Failure atomicity:</b> Returning {@code false} or throwing must leave any value that
+     * was previously associated with {@code key} unchanged. The owning cache temporarily removes
+     * the old metadata while attempting a replacement and restores that metadata on failure; a
+     * store that partially overwrites the bytes before reporting failure would therefore make the
+     * restored metadata describe the wrong payload. Implementations should write to temporary
+     * storage and atomically publish/rename it, or otherwise roll back a failed replacement.
+     *
      * <p><b>Thread Safety:</b>
      * Implementations of this method must be thread-safe and support concurrent
      * access from multiple threads.
@@ -177,7 +184,8 @@ public interface OffHeapStore<K> extends AutoCloseable {
      *
      * @param key the key with which the specified value is to be associated; must not be {@code null}
      * @param value the byte array value to store; must not be {@code null}
-     * @return {@code true} if the value was successfully stored, {@code false} otherwise
+     * @return {@code true} if the value was successfully stored, {@code false} if it was not stored
+     *         and any previous mapping remains unchanged
      */
     boolean put(K key, byte[] value);
 
@@ -216,9 +224,10 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * <p>This {@code default} implementation does nothing, which is appropriate for stores that hold
      * no resources requiring explicit release. Implementations that open files, mmap regions, or
      * connections should override it. The method is expected to be idempotent (safe to call more
-     * than once). It may propagate an unexpected runtime failure; the owning cache attempts all
-     * remaining cleanup and attaches a close failure as a suppressed exception when another failure
-     * is already being propagated.
+     * than once). During normal cache shutdown an {@link Exception} raised here is logged after the
+     * cache has attempted its other cleanup; an {@link Error} is allowed to propagate. If cache
+     * construction fails after acquiring the store, a store-close failure is attached to the
+     * construction failure as a suppressed exception.
      */
     @Override
     default void close() {

@@ -26,6 +26,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -138,10 +139,10 @@ public class AbstractOffHeapCacheTest {
 
     /**
      * Regression coverage for {@code stats()} being crash-safe against a negative disk-I/O timing
-     * observation. Disk read/write elapsed times are measured with wall-clock
-     * {@code System.currentTimeMillis()}; a backward clock adjustment (NTP correction, manual change,
-     * VM migration) during an in-flight I/O op can yield a negative duration. That negative would
-     * flow through {@link java.util.LongSummaryStatistics} into {@code stats()}, whose
+     * observation. Production elapsed times use a monotonic clock, but the mutable package-private
+     * accumulators can still contain invalid data after reflective instrumentation, test injection,
+     * or a faulty custom clock supplied through the package-private construction seam. A negative
+     * observation would flow through {@link java.util.LongSummaryStatistics} into {@code stats()}, whose
      * {@code OffHeapCacheStats.MinMaxAvg} canonical constructor rejects negatives with
      * {@code IllegalArgumentException} — turning a monitoring call into a failure.
      *
@@ -424,6 +425,128 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
+    /**
+     * All cache-owned bookkeeping for a disk spill must finish before OffHeapStore.put mutates the
+     * key-only backing store. A key with an exceptional hashCode makes the ownership-map claim fail
+     * deterministically; the prior memory entry must survive and the store must remain untouched.
+     */
+    @Test
+    public void testDiskOwnershipFailurePrecedesBackingStoreMutation() {
+        final ExceptionalHashKey key = new ExceptionalHashKey();
+        final AtomicBoolean storePutCalled = new AtomicBoolean();
+        final OffHeapStore<ExceptionalHashKey> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final ExceptionalHashKey ignored) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final ExceptionalHashKey ignored, final byte[] value) {
+                storePutCalled.set(true);
+                return true;
+            }
+
+            @Override
+            public boolean remove(final ExceptionalHashKey ignored) {
+                return false;
+            }
+        };
+
+        try (OffHeapCache<ExceptionalHashKey, byte[]> cache = OffHeapCache.<ExceptionalHashKey, byte[]> builder()
+                .capacityInMB(1)
+                .offHeapStore(store)
+                .storeSelector((ignored, value, size) -> value.length == 1 ? 1 : 2)
+                .build()) {
+            final byte[] prior = { 1 };
+            assertTrue(cache.put(key, prior));
+
+            // put() hashes once for the mutation stripe, pool.remove hashes once, and the store-lock
+            // stripe hashes once. The fourth call is the storeOwners.put ownership claim.
+            key.throwOnHashCall(4);
+            final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 2, 3 }));
+
+            assertTrue(failure.getMessage().contains("forced hash failure"));
+            assertFalse(storePutCalled.get(), "the backing bytes must not be mutated when ownership registration fails");
+            assertArrayEquals(prior, cache.getOrNull(key), "the previous memory entry must be restored");
+            assertEquals(0L, cache.stats().sizeOnDisk());
+        }
+    }
+
+    /** Disk timing is monotonic and covers only the OffHeapStore call, not serialization. */
+    @Test
+    public void testDiskTimingMeasuresOnlyStoreIoWithMonotonicClock() {
+        final AtomicLong ticker = new AtomicLong();
+        final AtomicReference<byte[]> stored = new AtomicReference<>();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                ticker.addAndGet(TimeUnit.MILLISECONDS.toNanos(11));
+                final byte[] value = stored.get();
+                return value == null ? null : value.clone();
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                ticker.addAndGet(TimeUnit.MILLISECONDS.toNanos(7));
+                stored.set(value.clone());
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return stored.getAndSet(null) != null;
+            }
+        };
+
+        try (ControlledTimeOffHeapCache cache = new ControlledTimeOffHeapCache(ticker, store)) {
+            assertTrue(cache.put("key", "value"));
+
+            final OffHeapCacheStats afterWrite = cache.stats();
+            assertEquals(7.0D, afterWrite.writeToDiskTimeStats().min());
+            assertEquals(7.0D, afterWrite.writeToDiskTimeStats().max());
+            assertEquals(7.0D, afterWrite.writeToDiskTimeStats().avg());
+
+            assertEquals("value", cache.getOrNull("key"));
+            final OffHeapCacheStats afterRead = cache.stats();
+            assertEquals(11.0D, afterRead.readFromDiskTimeStats().min());
+            assertEquals(11.0D, afterRead.readFromDiskTimeStats().max());
+            assertEquals(11.0D, afterRead.readFromDiskTimeStats().avg());
+        }
+    }
+
+    /** Vacate debounce uses the monotonic source, including when its first valid reading is zero. */
+    @Test
+    public void testVacateDebounceUsesMonotonicClock() throws Exception {
+        final AtomicLong ticker = new AtomicLong();
+        try (ControlledTimeOffHeapCache cache = new ControlledTimeOffHeapCache(ticker, newInMemoryStore(new ConcurrentHashMap<>()))) {
+            final Method vacateMethod = AbstractOffHeapCache.class.getDeclaredMethod("vacate");
+            vacateMethod.setAccessible(true);
+            final Field completedField = AbstractOffHeapCache.class.getDeclaredField("_vacateHasFinished");
+            completedField.setAccessible(true);
+            final Field finishedAtField = AbstractOffHeapCache.class.getDeclaredField("_lastVacateFinishedNanos");
+            finishedAtField.setAccessible(true);
+
+            vacateMethod.invoke(cache);
+            for (int i = 0; i < 500 && !completedField.getBoolean(cache); i++) {
+                Thread.sleep(10L);
+            }
+            assertTrue(completedField.getBoolean(cache));
+            assertEquals(0L, finishedAtField.getLong(cache));
+
+            ticker.set(TimeUnit.SECONDS.toNanos(2));
+            vacateMethod.invoke(cache);
+            Thread.sleep(50L);
+            assertEquals(0L, finishedAtField.getLong(cache), "a request inside the three-second debounce window must be skipped");
+
+            ticker.set(TimeUnit.SECONDS.toNanos(4));
+            vacateMethod.invoke(cache);
+            for (int i = 0; i < 500 && finishedAtField.getLong(cache) != ticker.get(); i++) {
+                Thread.sleep(10L);
+            }
+            assertEquals(ticker.get(), finishedAtField.getLong(cache), "a request after the debounce window must run");
+        }
+    }
+
     // ByteBufferType.byteArrayOf() reads bytes [0, position); build a buffer whose written content
     // (position advanced to the end) is exactly the supplied data so it round-trips through the cache.
     private static ByteBuffer bufferOf(final byte[] data) {
@@ -490,6 +613,61 @@ public class AbstractOffHeapCacheTest {
         @Override
         protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class ExceptionalHashKey {
+        private final AtomicInteger hashCalls = new AtomicInteger();
+        private volatile int exceptionalCall = Integer.MAX_VALUE;
+
+        void throwOnHashCall(final int call) {
+            hashCalls.set(0);
+            exceptionalCall = call;
+        }
+
+        @Override
+        public int hashCode() {
+            if (hashCalls.incrementAndGet() == exceptionalCall) {
+                exceptionalCall = Integer.MAX_VALUE;
+                throw new IllegalStateException("forced hash failure");
+            }
+
+            return 17;
+        }
+    }
+
+    private static final class ControlledTimeOffHeapCache extends AbstractOffHeapCache<String, String> {
+        ControlledTimeOffHeapCache(final AtomicLong ticker, final OffHeapStore<String> store) {
+            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, (value, output) -> {
+                // Deliberately expensive serialization according to the controlled clock. It must
+                // not be included in writeToDiskTimeStats.
+                ticker.addAndGet(TimeUnit.SECONDS.toNanos(5));
+                final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                output.write(bytes, 0, bytes.length);
+            }, (bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8), store, true, null, (key, value, size) -> 2,
+                    LoggerFactory.getLogger(ControlledTimeOffHeapCache.class), (pool, task, delay) -> null, (pool, hook) -> {
+                        // Avoid installing a real hook for this deterministic clock fixture.
+                    }, ticker::get);
+        }
+
+        @Override
+        protected long allocate(final long capacityInBytes) {
+            return 0L;
+        }
+
+        @Override
+        protected void deallocate() {
+            // No native memory is allocated by this test fixture.
+        }
+
+        @Override
+        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
+            throw new AssertionError("disk-only fixture must not copy to memory");
+        }
+
+        @Override
+        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+            throw new AssertionError("disk-only fixture must not copy from memory");
         }
     }
 
