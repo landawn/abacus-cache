@@ -15,6 +15,7 @@
 package com.landawn.abacus.cache;
 
 import java.util.Collection;
+import java.util.IdentityHashMap;
 import java.util.Map;
 
 /**
@@ -207,9 +208,10 @@ public interface DistributedCacheClient<T> {
      * When multiple clients set the same key concurrently, the last write wins.
      *
      * <p><b>Implementation compatibility:</b> the default implementation delegates to the legacy
-     * {@link #set(String, Object, long)} name. A concrete client must override either this method
-     * (recommended) or {@code set}; overriding neither causes the two compatibility defaults to
-     * call one another recursively.
+     * {@link #set(String, Object, long)} name when the concrete client overrides it. A concrete
+     * client must provide a non-recursive implementation of either this method (recommended) or
+     * {@code set}. Omitting both methods, or routing both names back through these defaults, fails
+     * fast with {@link UnsupportedOperationException}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -240,9 +242,24 @@ public interface DistributedCacheClient<T> {
      * @return {@code true} if the operation was successful, {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
+     * @throws UnsupportedOperationException if the concrete client supplies neither a
+     *         non-recursive {@code put} nor a non-recursive {@code set} implementation
      */
+    @SuppressWarnings("deprecation")
     default boolean put(final String key, final T value, final long liveTime) {
-        return set(key, value, liveTime);
+        if (!isOverridden(this, "set")) {
+            throw missingCompatibilityImplementation("put", "set");
+        }
+
+        if (!DistributedCacheClientCompatibilitySupport.tryEnter(this, DistributedCacheClientCompatibilitySupport.WRITE_PAIR)) {
+            throw missingCompatibilityImplementation("put", "set");
+        }
+
+        try {
+            return set(key, value, liveTime);
+        } finally {
+            DistributedCacheClientCompatibilitySupport.exit(this, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
+        }
     }
 
     /**
@@ -251,7 +268,9 @@ public interface DistributedCacheClient<T> {
      * <p>This compatibility bridge is deliberately a default method. Implementations compiled
      * against versions through 2.8.4 may override only {@code set}, while newer implementations
      * override {@code put}; the two defaults let either implementation style serve callers using
-     * the other name. Every concrete client must override at least one of the pair.
+     * the other name. Every concrete client must provide a non-recursive implementation of at
+     * least one member of the pair; otherwise this method fails fast with
+     * {@link UnsupportedOperationException}.
      *
      * @param key the cache key, must not be {@code null}
      * @param value the value to cache, may be {@code null} if supported by the implementation
@@ -259,12 +278,26 @@ public interface DistributedCacheClient<T> {
      * @return {@code true} if the operation was successful, {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
+     * @throws UnsupportedOperationException if the concrete client supplies neither a
+     *         non-recursive {@code put} nor a non-recursive {@code set} implementation
      * @deprecated Use {@link #put(String, Object, long)}. Retained for source and binary
      *             compatibility with clients compiled against version 2.8.4 and earlier.
      */
     @Deprecated(since = "2.8.5", forRemoval = false)
     default boolean set(final String key, final T value, final long liveTime) {
-        return put(key, value, liveTime);
+        if (!isOverridden(this, "put")) {
+            throw missingCompatibilityImplementation("put", "set");
+        }
+
+        if (!DistributedCacheClientCompatibilitySupport.tryEnter(this, DistributedCacheClientCompatibilitySupport.WRITE_PAIR)) {
+            throw missingCompatibilityImplementation("put", "set");
+        }
+
+        try {
+            return put(key, value, liveTime);
+        } finally {
+            DistributedCacheClientCompatibilitySupport.exit(this, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
+        }
     }
 
     /**
@@ -281,9 +314,10 @@ public interface DistributedCacheClient<T> {
      * The implementation handles concurrent access safely across distributed cache clients.
      *
      * <p><b>Implementation compatibility:</b> the default implementation delegates to the legacy
-     * {@link #delete(String)} name. A concrete client must override either this method
-     * (recommended) or {@code delete}; overriding neither causes the two compatibility defaults to
-     * call one another recursively.
+     * {@link #delete(String)} name when the concrete client overrides it. A concrete client must
+     * provide a non-recursive implementation of either this method (recommended) or
+     * {@code delete}. Omitting both methods, or routing both names back through these defaults,
+     * fails fast with {@link UnsupportedOperationException}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -314,9 +348,24 @@ public interface DistributedCacheClient<T> {
      *         A network error or timeout is thrown rather than reported as a {@code false} return.
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
+     * @throws UnsupportedOperationException if the concrete client supplies neither a
+     *         non-recursive {@code remove} nor a non-recursive {@code delete} implementation
      */
+    @SuppressWarnings("deprecation")
     default boolean remove(final String key) {
-        return delete(key);
+        if (!isOverridden(this, "delete")) {
+            throw missingCompatibilityImplementation("remove", "delete");
+        }
+
+        if (!DistributedCacheClientCompatibilitySupport.tryEnter(this, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR)) {
+            throw missingCompatibilityImplementation("remove", "delete");
+        }
+
+        try {
+            return delete(key);
+        } finally {
+            DistributedCacheClientCompatibilitySupport.exit(this, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
+        }
     }
 
     /**
@@ -324,18 +373,48 @@ public interface DistributedCacheClient<T> {
      *
      * <p>As with {@link #set(String, Object, long)}, this default bridge supports both legacy
      * implementations that override {@code delete} and current implementations that override
-     * {@code remove}. Every concrete client must override at least one of the pair.
+     * {@code remove}. Every concrete client must provide a non-recursive implementation of at
+     * least one member of the pair; otherwise this method fails fast with
+     * {@link UnsupportedOperationException}.
      *
      * @param key the cache key, must not be {@code null}
      * @return {@code true} if the key existed and was removed; {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws RuntimeException if a network error or timeout occurs
+     * @throws UnsupportedOperationException if the concrete client supplies neither a
+     *         non-recursive {@code remove} nor a non-recursive {@code delete} implementation
      * @deprecated Use {@link #remove(String)}. Retained for source and binary compatibility with
      *             clients compiled against version 2.8.4 and earlier.
      */
     @Deprecated(since = "2.8.5", forRemoval = false)
     default boolean delete(final String key) {
-        return remove(key);
+        if (!isOverridden(this, "remove")) {
+            throw missingCompatibilityImplementation("remove", "delete");
+        }
+
+        if (!DistributedCacheClientCompatibilitySupport.tryEnter(this, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR)) {
+            throw missingCompatibilityImplementation("remove", "delete");
+        }
+
+        try {
+            return remove(key);
+        } finally {
+            DistributedCacheClientCompatibilitySupport.exit(this, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
+        }
+    }
+
+    /**
+     * Returns whether the runtime implementation supplies a method outside this interface. This
+     * check is paid only when a compatibility default is invoked; concrete clients that override
+     * the called method dispatch directly and incur no reflection.
+     */
+    private static boolean isOverridden(final DistributedCacheClient<?> client, final String methodName) {
+        return DistributedCacheClientCompatibilitySupport.isOverridden(client.getClass(), methodName);
+    }
+
+    private static UnsupportedOperationException missingCompatibilityImplementation(final String currentName, final String legacyName) {
+        return new UnsupportedOperationException("A DistributedCacheClient implementation must provide a non-recursive implementation of either " + currentName
+                + "(...) or " + legacyName + "(...)");
     }
 
     /**
@@ -646,4 +725,109 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      */
     void disconnect();
+}
+
+/**
+ * Support for the current/legacy compatibility bridges. Per-runtime-class metadata keeps
+ * reflection off repeated calls, while a per-thread, per-client guard catches delegation cycles
+ * that runtime-generated proxies and subinterface defaults can otherwise make look like genuine
+ * overrides.
+ */
+final class DistributedCacheClientCompatibilitySupport {
+
+    static final int WRITE_PAIR = 1;
+    static final int REMOVE_PAIR = 1 << 1;
+
+    private static final int PUT = 1;
+    private static final int SET = 1 << 1;
+    private static final int REMOVE = 1 << 2;
+    private static final int DELETE = 1 << 3;
+
+    private static final ClassValue<Integer> OVERRIDE_MASK = new ClassValue<>() {
+        @Override
+        protected Integer computeValue(final Class<?> type) {
+            int mask = 0;
+
+            if (isDeclaredOutsideInterface(type, "put", String.class, Object.class, long.class)) {
+                mask |= PUT;
+            }
+
+            if (isDeclaredOutsideInterface(type, "set", String.class, Object.class, long.class)) {
+                mask |= SET;
+            }
+
+            if (isDeclaredOutsideInterface(type, "remove", String.class)) {
+                mask |= REMOVE;
+            }
+
+            if (isDeclaredOutsideInterface(type, "delete", String.class)) {
+                mask |= DELETE;
+            }
+
+            return mask;
+        }
+    };
+
+    /**
+     * Active default bridges for the current thread, keyed by client identity rather than
+     * {@code equals}. Entries exist only for the duration of a default-method delegation and the
+     * empty map is retained so repeated compatibility calls on the same thread do not allocate.
+     * Client references themselves are always removed when their delegation finishes.
+     */
+    private static final ThreadLocal<IdentityHashMap<DistributedCacheClient<?>, Integer>> ACTIVE_BRIDGES = ThreadLocal.withInitial(IdentityHashMap::new);
+
+    private DistributedCacheClientCompatibilitySupport() {
+        // Utility class.
+    }
+
+    static boolean isOverridden(final Class<?> type, final String methodName) {
+        final int methodMask = switch (methodName) {
+            case "put" -> PUT;
+            case "set" -> SET;
+            case "remove" -> REMOVE;
+            case "delete" -> DELETE;
+            default -> 0;
+        };
+
+        return methodMask != 0 && (OVERRIDE_MASK.get(type) & methodMask) != 0;
+    }
+
+    static boolean tryEnter(final DistributedCacheClient<?> client, final int pairMask) {
+        final IdentityHashMap<DistributedCacheClient<?>, Integer> activeBridges = ACTIVE_BRIDGES.get();
+        final int activeMask = activeBridges.getOrDefault(client, 0);
+
+        if ((activeMask & pairMask) != 0) {
+            return false;
+        }
+
+        activeBridges.put(client, activeMask | pairMask);
+        return true;
+    }
+
+    static void exit(final DistributedCacheClient<?> client, final int pairMask) {
+        final IdentityHashMap<DistributedCacheClient<?>, Integer> activeBridges = ACTIVE_BRIDGES.get();
+        final Integer activeMask = activeBridges.get(client);
+
+        if (activeMask == null) {
+            return;
+        }
+
+        final int remainingMask = activeMask & ~pairMask;
+
+        if (remainingMask == 0) {
+            activeBridges.remove(client);
+        } else {
+            activeBridges.put(client, remainingMask);
+        }
+    }
+
+    private static boolean isDeclaredOutsideInterface(final Class<?> type, final String methodName, final Class<?>... parameterTypes) {
+        try {
+            return type.getMethod(methodName, parameterTypes).getDeclaringClass() != DistributedCacheClient.class;
+        } catch (final NoSuchMethodException | SecurityException e) {
+            // All four methods are declared by the interface. Treat an unusual proxy/class-loader
+            // lookup failure as missing so callers receive the documented bounded failure.
+            return false;
+        }
+    }
 }

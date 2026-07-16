@@ -18,12 +18,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
+import java.util.AbstractCollection;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.landawn.abacus.util.ContinuableFuture;
 
@@ -474,6 +477,35 @@ public class SpyMemcachedTest {
         assertThrows(IllegalArgumentException.class, () -> cache.getBulk(Arrays.asList("a", null)));
     }
 
+    /**
+     * Validation and request dispatch must consume the caller's collection only once. Iterating the
+     * live collection a second time creates a time-of-check/time-of-use gap in which a custom or
+     * concurrently changing collection can supply keys that were never validated.
+     */
+    @Test
+    public void test_getBulk_collection_isValidatedAndSnapshottedInOnePass() {
+        cache.put("snapshot-key", "value", 60_000);
+        final AtomicInteger iteratorCalls = new AtomicInteger();
+        final Collection<String> oneShotView = new AbstractCollection<>() {
+            @Override
+            public Iterator<String> iterator() {
+                if (iteratorCalls.incrementAndGet() > 1) {
+                    throw new AssertionError("the caller's collection was iterated more than once");
+                }
+
+                return List.of("snapshot-key").iterator();
+            }
+
+            @Override
+            public int size() {
+                return 1;
+            }
+        };
+
+        assertEquals("value", cache.getBulk(oneShotView).get("snapshot-key"));
+        assertEquals(1, iteratorCalls.get());
+    }
+
     @Test
     public void test_asyncGetBulk_varargs_forwards() throws Exception {
         cache.put("a", 1, 60_000);
@@ -572,8 +604,14 @@ public class SpyMemcachedTest {
         local.disconnect();
         local.disconnect(); // safe to call again
 
-        // After shutdown the client is unusable: a further operation fails fast.
+        // After shutdown every operation fails in the wrapper, before argument validation or
+        // dispatch into spymemcached. This gives all operation families one lifecycle contract.
         assertThrows(IllegalStateException.class, () -> local.get("k"));
+        assertThrows(IllegalStateException.class, () -> local.get(null));
+        assertThrows(IllegalStateException.class, () -> local.getBulk((String[]) null));
+        assertThrows(IllegalStateException.class, () -> local.asyncPut("k", "v", 60_000));
+        assertThrows(IllegalStateException.class, () -> local.incr("counter", -1));
+        assertThrows(IllegalStateException.class, local::flushAll);
     }
 
     @Test

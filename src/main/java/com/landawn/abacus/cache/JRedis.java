@@ -208,7 +208,12 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
                 } catch (final RuntimeException | Error suppressed) {
                     // Attach any cleanup failure (including an Error) as suppressed so it neither masks
                     // the original construction failure nor aborts closing the remaining shards.
-                    e.addSuppressed(suppressed);
+                    // Throwable.addSuppressed rejects self-suppression. It is unusual but legal for
+                    // two collaborators to throw the same reusable exception/error instance; never
+                    // let that edge case replace the construction failure with IllegalArgumentException.
+                    if (suppressed != e) {
+                        e.addSuppressed(suppressed);
+                    }
                 }
             }
 
@@ -301,7 +306,9 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * being closed. An {@link Error} thrown by a close is rethrown only after every shard has been
      * attempted (later failures attached as suppressed) — aborting on the first shard would leave the
      * remaining pools permanently unclosable, because {@code disconnect()} marks the client shut down
-     * even on failure. Invoked once by the idempotent {@link #disconnect()} template.
+     * even on failure. Reuse of the same {@code Error} instance by multiple clients is tolerated
+     * without attempting illegal self-suppression. Invoked once by the idempotent
+     * {@link #disconnect()} template.
      */
     @Override
     protected void closeClients() {
@@ -320,7 +327,9 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
             } catch (final Error e) {
                 if (firstError == null) {
                     firstError = e;
-                } else {
+                } else if (e != firstError) {
+                    // addSuppressed forbids self-suppression. A shared/reused Error instance must
+                    // not abort the cleanup loop and strand the remaining shard pools.
                     firstError.addSuppressed(e);
                 }
             }

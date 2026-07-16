@@ -86,12 +86,13 @@ import com.landawn.abacus.logging.LoggerFactory;
  * }
  * }</pre>
  *
- * <p>Thread Safety: This class is thread-safe. Multiple threads can safely call methods
- * on the same instance. However, the lock itself is not reentrant. {@link #close()} publishes
- * the closed state before shutting down the client, so ordinary operations begun after close starts
- * fail with {@link IllegalStateException} ({@link #unlockQuietly(Object)} instead reports
- * {@code false}); an already in-flight operation may still surface the underlying client's shutdown
- * exception.
+ * <p><b>Thread Safety:</b> The base implementation is thread-safe and multiple threads can safely
+ * call methods on the same instance. A subclass must keep any {@link #toKey(Object)} override
+ * thread-safe and deterministic for that guarantee to hold. The lock itself is not reentrant.
+ * {@link #close()} publishes the closed state before shutting down the client, so ordinary
+ * operations begun after close starts fail with {@link IllegalStateException}
+ * ({@link #unlockQuietly(Object)} instead reports {@code false}); an already in-flight operation
+ * may still surface the underlying client's shutdown exception.
  *
  * @param <K> the type of lock identifiers used as keys (typically String)
  * @param <V> the type of optional metadata values associated with locks
@@ -783,6 +784,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p>Warning: Direct use of the client bypasses the lock abstraction. Be careful not to:
      * <ul>
+     * <li>Call {@link SpyMemcached#disconnect()} directly. It bypasses this wrapper's closed-state
+     *     publication; close the {@code MemcachedLock} instead</li>
      * <li>Delete lock keys using the client directly (use {@link #tryUnlock(Object)} instead)</li>
      * <li>Modify lock keys in ways that could break the locking protocol</li>
      * <li>Use {@code touch}/{@code replace} as lease renewal; neither operation proves ownership and

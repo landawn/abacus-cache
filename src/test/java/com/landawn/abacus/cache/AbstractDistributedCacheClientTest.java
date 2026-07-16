@@ -9,10 +9,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -149,6 +152,42 @@ public class AbstractDistributedCacheClientTest extends TestBase {
         }
     }
 
+    /** Deliberately omits both members of each current/legacy compatibility pair. */
+    private static final class MissingWriteNamesClient<T> extends AbstractDistributedCacheClient<T> {
+        MissingWriteNamesClient() {
+            super("missing.test:1");
+        }
+
+        @Override
+        public T get(final String key) {
+            return null;
+        }
+
+        @Override
+        public long incr(final String key) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long incr(final String key, final long delta) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long decr(final String key) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long decr(final String key, final long delta) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void disconnect() {
+        }
+    }
+
     private static MemcachedBackedClient<Object> client;
 
     @BeforeAll
@@ -204,6 +243,87 @@ public class AbstractDistributedCacheClientTest extends TestBase {
         assertEquals("v", legacy.get("k"));
         assertTrue(legacy.remove("k"));
         assertNull(legacy.get("k"));
+    }
+
+    /**
+     * A client that implements neither name in a compatibility pair is malformed, but the failure
+     * must still be bounded and diagnosable. The old mutually recursive defaults overflowed the
+     * thread stack before a caller could identify the missing method.
+     */
+    @SuppressWarnings("deprecation")
+    @Test
+    public void testMissingCompatibilityPairImplementations_FailFast() {
+        final MissingWriteNamesClient<String> incomplete = new MissingWriteNamesClient<>();
+
+        final UnsupportedOperationException putFailure = assertThrows(UnsupportedOperationException.class, () -> incomplete.put("k", "v", 0));
+        final UnsupportedOperationException setFailure = assertThrows(UnsupportedOperationException.class, () -> incomplete.set("k", "v", 0));
+        final UnsupportedOperationException removeFailure = assertThrows(UnsupportedOperationException.class, () -> incomplete.remove("k"));
+        final UnsupportedOperationException deleteFailure = assertThrows(UnsupportedOperationException.class, () -> incomplete.delete("k"));
+
+        assertEquals("A DistributedCacheClient implementation must provide a non-recursive implementation of either put(...) or set(...)",
+                putFailure.getMessage());
+        assertEquals(putFailure.getMessage(), setFailure.getMessage());
+        assertEquals("A DistributedCacheClient implementation must provide a non-recursive implementation of either remove(...) or delete(...)",
+                removeFailure.getMessage());
+        assertEquals(removeFailure.getMessage(), deleteFailure.getMessage());
+    }
+
+    /**
+     * A generated proxy declares methods for every interface member, so reflection alone cannot
+     * distinguish a real counterpart implementation from a handler that invokes both defaults.
+     * Such a cycle must fail predictably instead of overflowing the thread stack.
+     */
+    @SuppressWarnings("deprecation")
+    @Test
+    public void testCompatibilityDefaults_RecursiveProxyFailsFast() {
+        final DistributedCacheClient<String> recursive = newProxy((proxy, method, args) -> InvocationHandler.invokeDefault(proxy, method, args));
+
+        final UnsupportedOperationException putFailure = assertThrows(UnsupportedOperationException.class, () -> recursive.put("k", "v", 0));
+        final UnsupportedOperationException setFailure = assertThrows(UnsupportedOperationException.class, () -> recursive.set("k", "v", 0));
+        final UnsupportedOperationException removeFailure = assertThrows(UnsupportedOperationException.class, () -> recursive.remove("k"));
+        final UnsupportedOperationException deleteFailure = assertThrows(UnsupportedOperationException.class, () -> recursive.delete("k"));
+
+        assertEquals("A DistributedCacheClient implementation must provide a non-recursive implementation of either put(...) or set(...)",
+                putFailure.getMessage());
+        assertEquals(putFailure.getMessage(), setFailure.getMessage());
+        assertEquals("A DistributedCacheClient implementation must provide a non-recursive implementation of either remove(...) or delete(...)",
+                removeFailure.getMessage());
+        assertEquals(removeFailure.getMessage(), deleteFailure.getMessage());
+    }
+
+    /** A proxy handler that genuinely implements the legacy counterpart still uses the defaults. */
+    @Test
+    public void testCompatibilityDefaults_ProxyWithConcreteCounterpartsStillWorks() {
+        final AtomicInteger setCalls = new AtomicInteger();
+        final AtomicInteger deleteCalls = new AtomicInteger();
+        final DistributedCacheClient<String> legacyProxy = newProxy((proxy, method, args) -> {
+            if ("set".equals(method.getName())) {
+                setCalls.incrementAndGet();
+                return true;
+            }
+
+            if ("delete".equals(method.getName())) {
+                deleteCalls.incrementAndGet();
+                return true;
+            }
+
+            if (method.isDefault()) {
+                return InvocationHandler.invokeDefault(proxy, method, args);
+            }
+
+            throw new AssertionError("Unexpected proxy method: " + method);
+        });
+
+        assertTrue(legacyProxy.put("k", "v", 0));
+        assertTrue(legacyProxy.remove("k"));
+        assertEquals(1, setCalls.get());
+        assertEquals(1, deleteCalls.get());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> DistributedCacheClient<T> newProxy(final InvocationHandler handler) {
+        return (DistributedCacheClient<T>) Proxy.newProxyInstance(DistributedCacheClient.class.getClassLoader(),
+                new Class<?>[] { DistributedCacheClient.class }, handler);
     }
 
     // --- base-class default operations (not overridden by the concrete client) -----------------

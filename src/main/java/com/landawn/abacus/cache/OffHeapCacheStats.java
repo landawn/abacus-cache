@@ -42,7 +42,11 @@ import java.util.Objects;
  *     typically smaller than {@code occupiedMemory} because the slot allocator rounds each entry up
  *     to the next multiple of the minimum block size (64 bytes).</li>
  * <li>Hit metrics: conceptually, {@code hitCount + missCount = getCount}. {@code hitCountFromDisk}
- *     normally represents the subset of {@code hitCount} served from disk.</li>
+ *     normally represents the subset of {@code hitCount} served from disk. If the pool finds a
+ *     disk wrapper but its backing bytes are missing, that completed lookup is reclassified from
+ *     the pool-level hit to a cache miss. A lookup that finds a wrapper but then throws while
+ *     copying or deserializing remains a lookup-level hit because exceptional reconstruction is
+ *     not tracked by a separate counter.</li>
  * <li>Put metrics: {@code putCount} counts successful wrapper installations in the pool (both
  *     memory- and disk-resident wrappers go through the same pool). This normally corresponds to
  *     successful cache puts, but an internal disk-to-memory promotion or recovery reinsertion also
@@ -105,17 +109,17 @@ import java.util.Objects;
  *                       {@link OffHeapStore}, or when the {@code storeSelector} explicitly routes the value to disk.
  * @param getCount the total number of get operations performed since cache creation. Conceptually,
  *                 {@code getCount = hitCount + missCount}; a concurrent snapshot may temporarily differ.
- * @param hitCount the number of successful get operations, including those that ultimately served the value
- *                 from disk. To compute the number of hits served purely from off-heap memory, subtract
- *                 {@code hitCountFromDisk} from {@code hitCount}. Note that this counter is maintained at the
- *                 pool-lookup level: a disk-backed entry whose bytes turn out to be missing from the
- *                 {@link OffHeapStore} (the degraded path where {@code get} returns {@code null}) is still
- *                 counted as a hit, so a flaky store can slightly inflate the hit rate.
+ * @param hitCount the number of pool lookups that found an entry wrapper, adjusted so a disk wrapper whose
+ *                 backing bytes are confirmed missing is reclassified as a miss. To approximate hits served
+ *                 purely from off-heap memory, subtract {@code hitCountFromDisk} from {@code hitCount}.
+ *                 A lookup that finds a wrapper but then throws during copy or deserialization remains counted
+ *                 here because exceptional reconstruction is not tracked separately.
  * @param hitCountFromDisk the number of successful get operations where the entry was read from disk via the
  *                       configured {@link OffHeapStore}. It normally forms a subset of {@code hitCount},
  *                       but independently sampled counters can be transiently inconsistent.
  * @param missCount the number of failed get operations where the entry was not found in either memory or
- *                  disk. This can occur when the key never existed, was explicitly removed, or has expired.
+ *                  disk. This can occur when the key never existed, was explicitly removed, has expired, or
+ *                  still had pool metadata but its backing-store bytes were missing.
  * @param evictionCount the total number of entries removed by the eviction / vacate paths (i.e., entries
  *                      reclaimed because the cache reached capacity, or because the periodic eviction sweep
  *                      noticed they had expired). Explicit {@code remove()} / {@code clear()} calls and
@@ -201,7 +205,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
     /**
      * Returns the cache hit rate as a fraction in {@code [0.0, 1.0]}.
      * The rate is computed as {@code hitCount / (hitCount + missCount)} and includes hits served
-     * from disk (see {@link #hitCountFromDisk()} for the disk-only subset).
+     * from disk (see {@link #hitCountFromDisk()} for the disk-only subset). See {@link #hitCount()}
+     * for the treatment of exceptional reconstruction failures.
      *
      * @return the ratio of hits to total get requests, or {@code 0.0} when no get requests have been
      *         recorded (i.e. {@code hitCount + missCount == 0})

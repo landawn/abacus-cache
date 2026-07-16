@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -218,6 +219,106 @@ public class CaffeineCacheTest extends TestBase {
             cache.clear();
             assertNull(cache.getOrNull("k"));
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void testClear_RacingClose_FinishesBeforeCloseReturns() throws InterruptedException {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final AtomicInteger invalidateAllCalls = new AtomicInteger();
+        final CountDownLatch clearStarted = new CountDownLatch(1);
+        final CountDownLatch allowClearToFinish = new CountDownLatch(1);
+        final CountDownLatch closeStarted = new CountDownLatch(1);
+        final CountDownLatch closeFinished = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            if (invalidateAllCalls.incrementAndGet() == 1) {
+                clearStarted.countDown();
+                assertTrue(allowClearToFinish.await(5, TimeUnit.SECONDS));
+            }
+
+            return null;
+        }).when(delegate).invalidateAll();
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final Thread clearThread = new Thread(cache::clear);
+        final Thread closeThread = new Thread(() -> {
+            closeStarted.countDown();
+            cache.close();
+            closeFinished.countDown();
+        });
+
+        try {
+            clearThread.start();
+            assertTrue(clearStarted.await(5, TimeUnit.SECONDS));
+            closeThread.start();
+
+            assertTrue(closeStarted.await(5, TimeUnit.SECONDS));
+            assertFalse(closeFinished.await(200, TimeUnit.MILLISECONDS), "close must wait for an in-flight clear of the shared delegate");
+            allowClearToFinish.countDown();
+
+            clearThread.join(5_000L);
+            closeThread.join(5_000L);
+            assertFalse(clearThread.isAlive());
+            assertFalse(closeThread.isAlive());
+            assertEquals(2, invalidateAllCalls.get(), "close must perform the final delegate invalidation after clear finishes");
+        } finally {
+            allowClearToFinish.countDown();
+            clearThread.join(5_000L);
+            closeThread.join(5_000L);
+            cache.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void testClose_DoesNotDeadlockWithReentrantDelegateCallback() throws InterruptedException {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final AtomicInteger invalidateAllCalls = new AtomicInteger();
+        final AtomicReference<CaffeineCache<String, String>> cacheRef = new AtomicReference<>();
+        final CountDownLatch outerClearEnteredDelegate = new CountDownLatch(1);
+        final CountDownLatch allowReentrantClose = new CountDownLatch(1);
+        final CountDownLatch reentrantCloseReturned = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            if (invalidateAllCalls.incrementAndGet() == 1) {
+                outerClearEnteredDelegate.countDown();
+                assertTrue(allowReentrantClose.await(5, TimeUnit.SECONDS));
+                cacheRef.get().close();
+                reentrantCloseReturned.countDown();
+            }
+
+            return null;
+        }).when(delegate).invalidateAll();
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        cacheRef.set(cache);
+        final Thread clearThread = new Thread(cache::clear);
+        final Thread competingCloseThread = new Thread(cache::close);
+        // If the regression reappears these two threads form an unbreakable monitor/lock cycle;
+        // daemon threads let the failing test fork terminate instead of hanging the whole suite.
+        clearThread.setDaemon(true);
+        competingCloseThread.setDaemon(true);
+
+        clearThread.start();
+        assertTrue(outerClearEnteredDelegate.await(5, TimeUnit.SECONDS));
+        competingCloseThread.start();
+
+        final long stateDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (competingCloseThread.getState() != Thread.State.WAITING && System.nanoTime() < stateDeadline) {
+            Thread.onSpinWait();
+        }
+        assertEquals(Thread.State.WAITING, competingCloseThread.getState(), "the competing close must be queued on the lifecycle lock");
+
+        allowReentrantClose.countDown();
+        assertTrue(reentrantCloseReturned.await(5, TimeUnit.SECONDS), "delegate callback must be able to reenter close without lock inversion");
+
+        clearThread.join(5_000L);
+        competingCloseThread.join(5_000L);
+        assertFalse(clearThread.isAlive());
+        assertFalse(competingCloseThread.isAlive());
+        assertTrue(cache.isClosed());
+        assertEquals(2, invalidateAllCalls.get());
     }
 
     @Test

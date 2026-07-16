@@ -51,7 +51,7 @@ import com.landawn.abacus.util.N;
  *
  * // Get cache statistics
  * CacheStats stats = cache.stats();
- * System.out.println("Hit rate: " + (double) stats.hitCount() / (stats.hitCount() + stats.missCount()));
+ * System.out.println("Hit rate: " + stats.hitRate());
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries

@@ -592,6 +592,10 @@ public interface Cache<K, V> extends Closeable {
      * Returns the mutable property bag for this cache instance. Properties are independent of
      * cache entries: they live only in memory and are useful for custom configuration or
      * metadata attached to the cache. The same instance is returned for the lifetime of the cache.
+     * Thread-safety of the bag and its collection-view iterators is implementation-defined.
+     * Implementations based on {@link AbstractCache} synchronize individual map operations and
+     * provide {@link Properties#copy()} for stable traversal, but their live-view iterators still
+     * must not race with mutation.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

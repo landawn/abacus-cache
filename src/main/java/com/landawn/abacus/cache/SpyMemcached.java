@@ -16,7 +16,9 @@ package com.landawn.abacus.cache;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -80,6 +82,21 @@ interface LegacySpyMemcachedAsyncApi<T> {
  * threads. The wrapper delegates to a single shared {@link MemcachedClient}, which performs
  * network I/O on a dedicated selector thread and serializes commands through its internal
  * operation queue; concurrent calls from application threads enqueue operations safely.
+ * Disconnect publishes a terminal lifecycle flag before delegate shutdown starts. Cache
+ * operations begun afterward fail deterministically with {@link IllegalStateException}; an
+ * operation already past its lifecycle check can still race with shutdown and surface the
+ * delegate's own shutdown exception.
+ *
+ * <p><b>Lifecycle contract for all operations:</b> every public cache operation in this class
+ * ({@code get}, bulk gets, {@code put}/{@code add}/{@code replace}/{@code remove}, counters and
+ * flushes, including their asynchronous and compatibility aliases) checks the terminal flag before
+ * argument validation, TTL conversion, value serialization, or delegate dispatch. Once either
+ * {@code disconnect} overload begins, each of those methods throws {@link IllegalStateException}.
+ * This common lifecycle exception is stated here instead of repeated in every operation's
+ * {@code @throws} list. {@link #serverUrl()} remains an immutable configuration accessor and can be
+ * queried after disconnect. Repeated no-argument disconnects, and repeated timed disconnects with
+ * a non-negative timeout, are no-ops; {@link #disconnect(long)} always validates its argument, so a
+ * negative timeout is rejected even after shutdown.
  *
  * <p><b>Counter encoding:</b> Memcached's native increment/decrement commands operate only on raw
  * ASCII decimal values. Ordinary values written by {@link #put(String, Object, long)} use the
@@ -316,6 +333,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @SuppressWarnings("unchecked")
     @Override
     public T get(final String key) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         // Route through resultOf (rather than the client's synchronous get) so an interrupt
         // restores the thread's interrupt flag: spymemcached's sync methods wrap
@@ -359,6 +377,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @SuppressWarnings("unchecked")
     @Override
     public ContinuableFuture<T> asyncGet(final String key) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap((Future<T>) mc.asyncGet(key));
     }
@@ -368,7 +387,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * to each server owning at least one requested key, reducing round-trips versus individual gets.
      * Keys not found in the cache or that have expired
      * will not be present in the returned map. This is a synchronous operation that blocks until
-     * complete or timeout.
+     * complete or timeout. The caller's array is copied before validation and dispatch, so later
+     * mutation cannot change the in-flight request.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -404,16 +424,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @SuppressWarnings("unchecked")
     @Override
     public final Map<String, T> getBulk(final String... keys) {
-        checkBulkKeys(keys);
+        assertNotShutdown();
+        final String[] keySnapshot = snapshotBulkKeys(keys);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
-        return (Map<String, T>) resultOf(mc.asyncGetBulk(keys));
+        return (Map<String, T>) resultOf(mc.asyncGetBulk(keySnapshot));
     }
 
     /**
      * Asynchronously retrieves multiple objects from the cache.
      * This method returns immediately without blocking. The returned Future contains a map of
      * found key-value pairs. Keys not found in the cache or that have expired will not be present
-     * in the returned map. The client generally sends one operation to each involved server.
+     * in the returned map. The client generally sends one operation to each involved server. The
+     * caller's array is copied before validation and dispatch.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
@@ -446,8 +468,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @SuppressWarnings({ "unchecked", "rawtypes" })
     @Override
     public final ContinuableFuture<Map<String, T>> asyncGetBulk(final String... keys) {
-        checkBulkKeys(keys);
-        return ContinuableFuture.wrap((Future) mc.asyncGetBulk(keys));
+        assertNotShutdown();
+        final String[] keySnapshot = snapshotBulkKeys(keys);
+        return ContinuableFuture.wrap((Future) mc.asyncGetBulk(keySnapshot));
     }
 
     /**
@@ -455,7 +478,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * generally sends one operation to each server owning at least one requested key. Keys not
      * found in the cache or that have expired
      * will not be present in the returned map. This is a synchronous operation that blocks until
-     * complete or timeout.
+     * complete or timeout. The collection is copied and validated in one pass before dispatch;
+     * later caller mutation cannot affect the request.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -491,16 +515,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @SuppressWarnings("unchecked")
     @Override
     public Map<String, T> getBulk(final Collection<String> keys) {
-        checkBulkKeys(keys);
+        assertNotShutdown();
+        final List<String> keySnapshot = snapshotBulkKeys(keys);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
-        return (Map<String, T>) resultOf(mc.asyncGetBulk(keys));
+        return (Map<String, T>) resultOf(mc.asyncGetBulk(keySnapshot));
     }
 
     /**
      * Asynchronously retrieves multiple objects using a collection of keys.
      * This method returns immediately without blocking. The returned Future contains a map of
      * found key-value pairs. Keys not found in the cache or that have expired will not be present
-     * in the returned map. The client generally sends one operation to each involved server.
+     * in the returned map. The client generally sends one operation to each involved server. The
+     * collection is copied and validated in one pass before dispatch.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
@@ -530,8 +556,47 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @SuppressWarnings({ "rawtypes", "unchecked" })
     @Override
     public ContinuableFuture<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
-        checkBulkKeys(keys);
-        return ContinuableFuture.wrap((Future) mc.asyncGetBulk(keys));
+        assertNotShutdown();
+        final List<String> keySnapshot = snapshotBulkKeys(keys);
+        return ContinuableFuture.wrap((Future) mc.asyncGetBulk(keySnapshot));
+    }
+
+    /**
+     * Takes ownership of a stable key-array view before validation and dispatch. A caller retains
+     * ownership of a varargs array and may mutate it as soon as this method starts; dispatching the
+     * live array after validation would create a time-of-check/time-of-use gap.
+     */
+    private static String[] snapshotBulkKeys(final String... keys) {
+        N.checkArgNotNull(keys, "keys");
+
+        final String[] keySnapshot = keys.clone();
+        checkBulkKeys(keySnapshot);
+        return keySnapshot;
+    }
+
+    /**
+     * Copies and validates a collection in one pass. This both insulates the asynchronous request
+     * from later caller mutations and avoids iterating a custom/concurrent collection once for
+     * validation and a second time for dispatch, where the two views may differ.
+     */
+    private static List<String> snapshotBulkKeys(final Collection<String> keys) {
+        N.checkArgNotNull(keys, "keys");
+
+        // Do not trust size() for preallocation: custom/concurrent collections may report a stale
+        // or adversarial value. Grow according to the elements actually observed.
+        final List<String> keySnapshot = new ArrayList<>();
+        int index = 0;
+
+        for (final String key : keys) {
+            if (key == null) {
+                throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + index);
+            }
+
+            keySnapshot.add(key);
+            index++;
+        }
+
+        return keySnapshot;
     }
 
     /**
@@ -591,6 +656,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public boolean put(final String key, final T value, final long liveTime) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return Boolean.TRUE.equals(resultOf(mc.set(key, toMemcachedExpiration(liveTime), value)));
     }
@@ -640,6 +706,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation fails to initiate
      */
     public ContinuableFuture<Boolean> asyncPut(final String key, final T value, final long liveTime) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap(mc.set(key, toMemcachedExpiration(liveTime), value));
     }
@@ -711,6 +778,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean add(final String key, final T value, final long liveTime) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return Boolean.TRUE.equals(resultOf(mc.add(key, toMemcachedExpiration(liveTime), value)));
     }
@@ -764,6 +832,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public ContinuableFuture<Boolean> asyncAdd(final String key, final T value, final long liveTime) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap(mc.add(key, toMemcachedExpiration(liveTime), value));
     }
@@ -815,6 +884,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean replace(final String key, final T value, final long liveTime) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return Boolean.TRUE.equals(resultOf(mc.replace(key, toMemcachedExpiration(liveTime), value)));
     }
@@ -867,6 +937,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public ContinuableFuture<Boolean> asyncReplace(final String key, final T value, final long liveTime) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap(mc.replace(key, toMemcachedExpiration(liveTime), value));
     }
@@ -912,6 +983,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public boolean remove(final String key) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return Boolean.TRUE.equals(resultOf(mc.delete(key)));
     }
@@ -952,6 +1024,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation fails to initiate
      */
     public ContinuableFuture<Boolean> asyncRemove(final String key) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         return ContinuableFuture.wrap(mc.delete(key));
     }
@@ -1016,6 +1089,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public long incr(final String key) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
         // It also surfaces errored/cancelled operations as RuntimeException instead of the
@@ -1076,6 +1150,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public long incr(final String key, final long delta) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
@@ -1130,6 +1205,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final long delta, final long defaultValue) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         // Memcached's "no expiration" sentinel is 0, NOT -1: memcached treats a negative seed
@@ -1193,6 +1269,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long incr(final String key, final long delta, final long defaultValue, final long liveTime) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         return mutateWithAsciiSeed(true, key, delta, defaultValue, toMemcachedExpiration(liveTime));
@@ -1242,6 +1319,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public long decr(final String key) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncDecr(key, 1));
@@ -1300,6 +1378,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public long decr(final String key, final long delta) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
@@ -1357,6 +1436,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final long delta, final long defaultValue) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         // See incr(String, long, long): Memcached's "no expiration" sentinel is 0, not -1. A -1 seed
@@ -1421,6 +1501,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public long decr(final String key, final long delta, final long defaultValue, final long liveTime) {
+        assertNotShutdown();
         N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
         return mutateWithAsciiSeed(false, key, delta, defaultValue, toMemcachedExpiration(liveTime));
@@ -1514,7 +1595,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * }
      * }</pre>
      *
-     * @throws IllegalStateException if the flush is not reported successful. Note that with multiple
+     * @throws IllegalStateException if this client has been disconnected/is being disconnected, or
+     *         if the flush is not reported successful. Note that with multiple
      *         servers, spymemcached aggregates the per-server outcomes into a single last-writer-wins
      *         flag, so one server's failure can be masked by a later server's success; the exception is
      *         therefore guaranteed only for single-server configurations
@@ -1522,6 +1604,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public void flushAll() {
+        assertNotShutdown();
         if (!Boolean.TRUE.equals(resultOf(mc.flush()))) {
             throw new IllegalStateException("Failed to flush all Memcached servers");
         }
@@ -1562,6 +1645,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public ContinuableFuture<Boolean> asyncFlushAll() {
+        assertNotShutdown();
         return ContinuableFuture.wrap(mc.flush());
     }
 
@@ -1604,6 +1688,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the operation times out or encounters a network error
      */
     public boolean flushAll(final long delay) {
+        assertNotShutdown();
         // The memcached `flush_all <delay>` argument goes through the server's realtime()
         // conversion just like storage expirations: values above 30 days are interpreted as
         // ABSOLUTE Unix timestamps, not relative seconds. Sending a raw 40-day delay (3456000s)
@@ -1654,6 +1739,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @Override
     public ContinuableFuture<Boolean> asyncFlushAll(final long delay) {
+        assertNotShutdown();
         // See flushAll(long): flush_all's delay is subject to the server's 30-day absolute-vs-
         // relative rule, so it must be converted exactly like storage expirations.
         return ContinuableFuture.wrap(mc.flush(toMemcachedExpiration(delay)));
@@ -1668,8 +1754,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * operations complete. This method is idempotent: calling it multiple times has no additional effect.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and uses synchronization to ensure only
-     * one disconnect occurs. Once called, no other operations should be attempted on this client
-     * instance.
+     * one disconnect occurs. It publishes the terminal state before delegate shutdown begins, so
+     * new cache operations fail with {@link IllegalStateException} while teardown is in progress.
+     * Once called, no other operations should be attempted on this client instance.
      *
      * <p>Call this method when the client is no longer needed to ensure proper cleanup of network
      * connections, thread pools, and other resources. It is safe to call multiple times; subsequent
@@ -1706,14 +1793,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public synchronized void disconnect() {
         if (!isShutdown) {
-            try {
-                mc.shutdown();
-            } finally {
-                // MemcachedClient marks itself as shutting down before releasing its resources.
-                // Mirror that terminal state even if an unexpected unchecked failure escapes, so
-                // a second call does not attempt to shut the same client down again.
-                isShutdown = true;
-            }
+            // Publish the terminal state before entering a potentially slow or failing shutdown.
+            // Operations beginning after this write fail locally instead of serializing values or
+            // allocating delegate futures against a client whose IO thread is being torn down.
+            isShutdown = true;
+            mc.shutdown();
         }
     }
 
@@ -1722,16 +1806,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * operations to complete.
      * After the timeout elapses, any remaining operations are abandoned and connections are
      * closed. After this method returns, the cache client must not be used again; any subsequent
-     * operations will fail. This method is idempotent: calling it multiple times has no additional
-     * effect.
+     * operations will fail. For a non-negative timeout this method is idempotent: calling it
+     * multiple times has no additional effect.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and uses synchronization to ensure only
-     * one disconnect occurs. Once called, no other operations should be attempted on this client
-     * instance.
+     * one disconnect occurs. It publishes the terminal state before the graceful queue wait begins,
+     * so new cache operations fail with {@link IllegalStateException} during teardown. Once called,
+     * no other operations should be attempted on this client instance.
      *
      * <p>Call this method when the client is no longer needed to ensure proper cleanup of network
      * connections, thread pools, and other resources. The timeout allows pending operations to
-     * complete gracefully.
+     * complete gracefully. Repeated calls with a valid timeout are no-ops after the first shutdown;
+     * the timeout argument is still validated on every call, so a negative value always throws.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1764,6 +1850,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         N.checkArgNotNegative(timeout, "timeout");
 
         if (!isShutdown) {
+            // See disconnect(): publish first so new operations cannot enter during the graceful
+            // queue wait. The delegate's shutdown sequence is terminal even if it later throws.
+            isShutdown = true;
+
             try {
                 mc.shutdown(timeout, TimeUnit.MILLISECONDS);
             } catch (final RuntimeException e) {
@@ -1774,11 +1864,21 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
                 }
 
                 throw e;
-            } finally {
-                // shutdown(timeout, unit) always enters its terminal shutdown sequence in a
-                // finally block, including timeout/interruption/error paths.
-                isShutdown = true;
             }
+        }
+    }
+
+    /**
+     * Rejects cache operations once either disconnect overload has begun. The explicit wrapper
+     * check is intentionally performed before key/TTL validation and value serialization, giving
+     * every operation the same deterministic lifecycle failure instead of relying on where the
+     * underlying client happens to check its connection state.
+     *
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     */
+    private void assertNotShutdown() {
+        if (isShutdown) {
+            throw new IllegalStateException("This Memcached client has been disconnected");
         }
     }
 

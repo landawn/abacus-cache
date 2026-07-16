@@ -400,7 +400,7 @@ public final class CacheFactory {
      * <li>After {@code retryDelay} milliseconds since the last failure, ALL subsequent reads
      *     attempt the cache again (there is no half-open single-probe gate; size the delay
      *     accordingly if the backend is sensitive to retry bursts)</li>
-     * <li>Successful operations reset the failure counter and close the circuit</li>
+     * <li>Successful reads reset the failure counter and close the circuit; writes do not alter it</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -474,14 +474,15 @@ public final class CacheFactory {
      *
      * <p><b>RedisCluster seed-node vs. key-prefix disambiguation:</b> because the cluster seed list may itself
      * be comma-separated (e.g. {@code RedisCluster(host1:7000,host2:7000,myPrefix:,3000)}), consecutive
-     * parameters after the first are treated as additional seed nodes as long as they look like network
-     * endpoints: {@code host:port} with a port in 1-65535 and a host that is {@code localhost}, contains a dot,
-     * is a bracketed IPv6 literal, or contains a digit (e.g. {@code redis-0:7000}). The first parameter that
-     * does not look like an endpoint becomes the key prefix. A purely alphabetic bare hostname such as
-     * {@code valkey:7000} is therefore classified as a key prefix, and a digit-bearing prefix such as
-     * {@code v2:1} as a seed node - when in doubt, put ALL seed nodes space-separated in the FIRST parameter
-     * (like the Memcached/Redis forms), e.g. {@code RedisCluster(redis:7000 valkey:7000,myPrefix:,3000)},
-     * which is always parsed as a single seed list and is never ambiguous.
+     * parameters after the first are treated as additional seed nodes while they are syntactically valid
+     * {@code host:port} endpoints. This includes ordinary alphabetic DNS names such as {@code primary:7000},
+     * IPv4/FQDN hosts, and bracketed IPv6 literals. The first non-endpoint parameter is the key prefix.
+     * A prefix that is itself a valid endpoint is inherently ambiguous in a two-parameter specification;
+     * supply an explicit numeric timeout to disambiguate it, for example
+     * {@code RedisCluster(host:7000,tenant:1,1000)}. In a specification with at least three parameters,
+     * a final token consisting of an optional sign followed entirely by decimal digits is treated as the
+     * timeout. To use such a token as the prefix, put all seed nodes space-separated in the first parameter,
+     * e.g. {@code RedisCluster(redis:7000 valkey:7000,123)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -651,7 +652,11 @@ public final class CacheFactory {
             try {
                 return Class.forName(className, false, contextClassLoader);
             } catch (final ClassNotFoundException contextFailure) {
-                primaryFailure.addSuppressed(contextFailure);
+                // Custom/layered class loaders are allowed to reuse exception instances.
+                // Guard against Throwable's illegal self-suppression edge case.
+                if (contextFailure != primaryFailure) {
+                    primaryFailure.addSuppressed(contextFailure);
+                }
             }
         }
 
@@ -673,7 +678,12 @@ public final class CacheFactory {
             try {
                 client.disconnect();
             } catch (final RuntimeException | Error disconnectFailure) {
-                e.addSuppressed(disconnectFailure);
+                // Throwable.addSuppressed rejects self-suppression. A VM under severe resource
+                // pressure may reuse an Error instance, so cleanup must never replace the
+                // construction failure with IllegalArgumentException.
+                if (disconnectFailure != e) {
+                    e.addSuppressed(disconnectFailure);
+                }
             }
 
             throw e;
@@ -683,32 +693,58 @@ public final class CacheFactory {
     /**
      * RedisCluster serverUrl itself is a comma-separated host:port seed list, so split provider
      * parameters that still look like Redis cluster nodes are treated as part of serverUrl rather
-     * than as the keyPrefix.
+     * than as the keyPrefix. A final numeric token is recognized as the timeout first; this makes
+     * an endpoint-shaped prefix unambiguous in {@code (seedNodes...,keyPrefix,timeout)}.
      */
     private static RedisClusterParameters parseRedisClusterParameters(final String[] parameters) {
+        final int parameterCount = parameters.length;
         int keyPrefixIndex = -1;
+        int seedParameterCount = parameterCount;
+        long timeout = DEFAULT_TIMEOUT;
+        boolean hasExplicitTimeout = false;
 
-        for (int i = 1; i < parameters.length; i++) {
-            if (!isRedisClusterSeedNodeParameter(parameters[i])) {
-                keyPrefixIndex = i;
-                break;
+        // If the penultimate token is not an endpoint, the final token can only be its timeout.
+        // A numeric-looking final token also explicitly disambiguates an endpoint-shaped prefix
+        // such as "tenant:1" from an additional seed node.
+        if (parameterCount >= 3
+                && (!isRedisClusterSeedNodeParameter(parameters[parameterCount - 2]) || looksLikeTimeoutParameter(parameters[parameterCount - 1]))) {
+            keyPrefixIndex = parameterCount - 2;
+            seedParameterCount = keyPrefixIndex;
+            timeout = parseTimeoutParameter(parameters[parameterCount - 1]);
+            hasExplicitTimeout = true;
+        }
+
+        if (keyPrefixIndex < 0) {
+            for (int i = 1; i < parameterCount; i++) {
+                if (!isRedisClusterSeedNodeParameter(parameters[i])) {
+                    keyPrefixIndex = i;
+                    seedParameterCount = i;
+                    break;
+                }
             }
         }
 
         if (keyPrefixIndex < 0) {
-            return new RedisClusterParameters(joinRedisClusterServerUrl(parameters, parameters.length), null, DEFAULT_TIMEOUT);
+            return new RedisClusterParameters(joinRedisClusterServerUrl(parameters, parameterCount), null, DEFAULT_TIMEOUT);
         }
 
-        if (keyPrefixIndex < parameters.length - 2) {
+        final int expectedLastIndex = hasExplicitTimeout ? parameterCount - 2 : parameterCount - 1;
+
+        if (keyPrefixIndex != expectedLastIndex) {
             throw new IllegalArgumentException("Unsupported parameters for RedisCluster: " + Strings.join(parameters)
                     + ". For RedisCluster the layout is (seedNodes...,keyPrefix,timeout): the first parameter that does not look like a host:port endpoint"
                     + " ends the seed list and is taken as the key prefix. To avoid ambiguity, put all seed nodes space-separated in the first parameter,"
                     + " e.g. RedisCluster(host1:7000 host2:7000,myPrefix:,3000)");
         }
 
-        final long timeout = keyPrefixIndex == parameters.length - 2 ? parseTimeoutParameter(parameters[keyPrefixIndex + 1]) : DEFAULT_TIMEOUT;
+        for (int i = 1; i < seedParameterCount; i++) {
+            if (!isRedisClusterSeedNodeParameter(parameters[i])) {
+                throw new IllegalArgumentException(
+                        "Invalid RedisCluster seed node: " + parameters[i] + ". Additional comma-separated seed nodes must use host:port syntax");
+            }
+        }
 
-        return new RedisClusterParameters(joinRedisClusterServerUrl(parameters, keyPrefixIndex), parameters[keyPrefixIndex], timeout);
+        return new RedisClusterParameters(joinRedisClusterServerUrl(parameters, seedParameterCount), parameters[keyPrefixIndex], timeout);
     }
 
     private static boolean isRedisClusterSeedNodeParameter(final String parameter) {
@@ -716,16 +752,17 @@ public final class CacheFactory {
             return false;
         }
 
-        final int portSeparatorIndex = parameter.lastIndexOf(':');
+        final String endpoint = parameter.trim();
+        final int portSeparatorIndex = endpoint.lastIndexOf(':');
 
-        if (portSeparatorIndex <= 0 || portSeparatorIndex == parameter.length() - 1) {
+        if (portSeparatorIndex <= 0 || portSeparatorIndex == endpoint.length() - 1) {
             return false;
         }
 
         long port = 0;
 
-        for (int i = portSeparatorIndex + 1; i < parameter.length(); i++) {
-            final char ch = parameter.charAt(i);
+        for (int i = portSeparatorIndex + 1; i < endpoint.length(); i++) {
+            final char ch = endpoint.charAt(i);
 
             if (ch < '0' || ch > '9') {
                 return false;
@@ -744,27 +781,72 @@ public final class CacheFactory {
             return false;
         }
 
-        // The host part must look like a network endpoint, not a common key-prefix form such as
-        // "tenant:1" or "db:2". Without this filter, such a prefix was absorbed into serverUrl and
-        // the intended key prefix was silently dropped.
-        final String host = parameter.substring(0, portSeparatorIndex);
+        final String host = endpoint.substring(0, portSeparatorIndex);
 
-        if ("localhost".equalsIgnoreCase(host) || host.indexOf('.') >= 0 || host.startsWith("[")) {
-            // IPv4 / FQDN / localhost / IPv6 literal
+        if (host.startsWith("[") || host.endsWith("]")) {
+            if (host.length() < 3 || !host.startsWith("[") || !host.endsWith("]")) {
+                return false;
+            }
+
+            for (int i = 1; i < host.length() - 1; i++) {
+                final char ch = host.charAt(i);
+
+                if (Character.isWhitespace(ch) || ch == ',' || ch == '[' || ch == ']') {
+                    return false;
+                }
+            }
+
             return true;
         }
 
-        // Bare hostnames used in clusters often include a digit (redis-0, node1). Short alphabetic
-        // tokens (tenant, app, db, cache) are far more often key prefixes than seed hosts.
+        // Unbracketed IPv6 is deliberately rejected because its final colon cannot be
+        // distinguished reliably from the host/port separator.
+        if (host.indexOf(':') >= 0) {
+            return false;
+        }
+
         for (int i = 0; i < host.length(); i++) {
             final char ch = host.charAt(i);
 
-            if (ch >= '0' && ch <= '9') {
-                return true;
+            if (!Character.isLetterOrDigit(ch) && ch != '.' && ch != '-' && ch != '_') {
+                return false;
             }
         }
 
-        return false;
+        return true;
+    }
+
+    private static boolean looksLikeTimeoutParameter(final String parameter) {
+        if (Strings.isEmpty(parameter)) {
+            return false;
+        }
+
+        final String value = parameter.trim();
+
+        if (value.isEmpty()) {
+            return false;
+        }
+
+        int index = 0;
+        final char first = value.charAt(0);
+
+        if (first == '+' || first == '-') {
+            if (value.length() == 1) {
+                return false;
+            }
+
+            index = 1;
+        }
+
+        for (; index < value.length(); index++) {
+            final char ch = value.charAt(index);
+
+            if (ch < '0' || ch > '9') {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static String joinRedisClusterServerUrl(final String[] parameters, final int length) {

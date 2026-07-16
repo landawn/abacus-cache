@@ -16,6 +16,7 @@ package com.landawn.abacus.cache;
 
 import java.util.Set;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.ReentrantLock;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.landawn.abacus.util.N;
@@ -86,6 +87,12 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /** Flag indicating whether this cache wrapper has been closed via {@link #close()}. */
     private volatile boolean isClosed = false;
+
+    // remove()/clear() mutate a delegate that the caller may also retain. Coordinate those
+    // destructive operations with close() so neither can run after close has returned and erase
+    // a delegate entry written by another owner after this wrapper's lifetime. put() uses its
+    // value-conditional late-write cleanup instead, keeping concurrent writes lock-free.
+    private final ReentrantLock destructiveOperationLock = new ReentrantLock();
 
     /**
      * Creates a new CaffeineCache wrapper instance.
@@ -200,6 +207,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
      * @throws IllegalStateException if the cache has been closed
      */
+    @SuppressWarnings("unused")
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
@@ -237,7 +245,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * silently without throwing an exception.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
-     * from multiple threads.
+     * from multiple threads. If it overlaps {@link #close()}, either the removal completes
+     * before close invalidates the delegate or it observes the closed state and throws; it cannot
+     * remove a caller-owned delegate mapping after close has returned.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -257,11 +267,16 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public void remove(final K key) {
-        assertNotClosed();
+        destructiveOperationLock.lock();
+        try {
+            assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
+            N.checkArgNotNull(key, "key");
 
-        cacheImpl.invalidate(key);
+            cacheImpl.invalidate(key);
+        } finally {
+            destructiveOperationLock.unlock();
+        }
     }
 
     /**
@@ -370,8 +385,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * may be performed asynchronously by Caffeine's cleanup process, but all entries
      * are logically invalidated by the time this method returns.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe. However, concurrent put operations
-     * may add new entries while the clear is in progress.
+     * <p><b>Thread Safety:</b> This method is thread-safe. Concurrent put operations may add new
+     * entries while the clear is in progress. If clear overlaps {@link #close()}, close waits for
+     * the clear to finish before performing its final invalidation; a clear cannot reach the
+     * caller-owned delegate after close has returned.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -388,9 +405,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      */
     @Override
     public void clear() {
-        assertNotClosed();
+        destructiveOperationLock.lock();
+        try {
+            assertNotClosed();
 
-        cacheImpl.invalidateAll();
+            cacheImpl.invalidateAll();
+        } finally {
+            destructiveOperationLock.unlock();
+        }
     }
 
     /**
@@ -407,8 +429,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * Caffeine cache, not only this wrapper. Entries written directly to the delegate after that
      * invalidation are outside the closed wrapper's ownership and may remain present.
      *
-     * <p><b>Thread Safety:</b> This method is {@code synchronized}, thread-safe, and idempotent.
-     * Calling it again has no additional effect and does not throw.
+     * <p><b>Thread Safety:</b> This method is thread-safe and idempotent. Calling it again has no
+     * additional effect and does not throw. The same reentrant lifecycle lock used by
+     * {@link #remove(Object)} and {@link #clear()} serializes the state transition and invalidation;
+     * close therefore waits for an in-flight destructive operation without holding a second,
+     * inversion-prone monitor.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -441,16 +466,21 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      */
     @Override
-    public synchronized void close() {
-        if (isClosed) {
-            return;
-        }
+    public void close() {
+        destructiveOperationLock.lock();
+        try {
+            if (isClosed) {
+                return;
+            }
 
-        // Flip the flag BEFORE invalidating so a concurrent put that has not yet passed
-        // assertNotClosed() fails fast instead of inserting an entry after the invalidation
-        // (which would leave a "closed" wrapper still strongly referencing that entry).
-        isClosed = true;
-        cacheImpl.invalidateAll();
+            // Flip the flag BEFORE invalidating so a concurrent put that has not yet passed
+            // assertNotClosed() fails fast instead of inserting an entry after the invalidation
+            // (which would leave a "closed" wrapper still strongly referencing that entry).
+            isClosed = true;
+            cacheImpl.invalidateAll();
+        } finally {
+            destructiveOperationLock.unlock();
+        }
     }
 
     /**

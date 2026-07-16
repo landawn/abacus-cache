@@ -580,6 +580,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Thread Safety:</b> This method is synchronized, thread-safe, and idempotent.
      * Calling it multiple times has no additional effect beyond the first invocation and will not throw exceptions.
+     * Closing is a wrapper-state transition, not a quiescence barrier for the caller-owned Ehcache:
+     * an operation that passed its open-state check before a concurrent close may finish afterward.
+     * Calls that start after close returns observe the volatile closed state and are rejected.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

@@ -174,6 +174,22 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         SCHEDULED_EXECUTOR = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
 
+    /** Internal construction strategy used to make scheduler rejection deterministic in tests. */
+    @FunctionalInterface
+    interface MaintenanceTaskScheduler {
+        ScheduledFuture<?> schedule(KeyedObjectPool<?, ?> pool, Runnable task, long delayMillis);
+    }
+
+    /** Internal construction strategy used to make shutdown-hook registration failures testable. */
+    @FunctionalInterface
+    interface ShutdownHookRegistrar {
+        void register(KeyedObjectPool<?, ?> pool, Thread hook);
+    }
+
+    private static final MaintenanceTaskScheduler DEFAULT_MAINTENANCE_TASK_SCHEDULER = (_, task, delayMillis) -> SCHEDULED_EXECUTOR.scheduleWithFixedDelay(task,
+            delayMillis, delayMillis, TimeUnit.MILLISECONDS);
+    private static final ShutdownHookRegistrar DEFAULT_SHUTDOWN_HOOK_REGISTRAR = (_, hook) -> Runtime.getRuntime().addShutdownHook(hook);
+
     // Statistics tracking. LongAdder (rather than AtomicLong) is used because these
     // counters are write-heavy on the hot get/put/evict paths and only read in stats();
     // LongAdder spreads contention across cells, avoiding the single contended CAS.
@@ -183,6 +199,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final LongAdder sizeOnDisk = new LongAdder();
     final LongAdder writeCountToDisk = new LongAdder();
     final LongAdder readCountFromDisk = new LongAdder();
+    // The pool records a hit as soon as it finds a StoreWrapper. If the backing store then
+    // reports that the bytes are missing, the public get still returns null and must be
+    // classified as a miss in stats(). This counter reclassifies those completed lookups
+    // without changing the pool's total get count.
+    final LongAdder missingReadCountFromDisk = new LongAdder();
     final LongAdder evictionCountFromDisk = new LongAdder();
 
     final Logger logger;
@@ -301,7 +322,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * stores may be invoked concurrently and therefore must be thread-safe.
      *
      * <p><b>&#9888;&#65039; Store ownership:</b> When an {@code offHeapStore} is supplied, this cache
-     * assumes ownership and closes it from {@link #close()}.
+     * assumes ownership and closes it from {@link #close()}. Ownership is accepted once the native
+     * allocation and object pool have been created; if a later construction step fails (for example,
+     * because the maintenance scheduler rejects its task), the store is closed before the failure
+     * is propagated.
      *
      * @param capacityInMB the total off-heap memory capacity in megabytes. Determines the total
      *                     number of segments ({@code capacityInMB} MB / 1 MB per segment). Must be positive.
@@ -336,7 +360,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                   {@link ByteArrayOutputStream}.
      * @param deserializer the custom deserializer function for converting byte arrays back to values,
      *                     or {@code null} to use the default deserializer. The function receives the byte
-     *                     array and type information and must return the deserialized value.
+     *                     array and type information and must return a non-null deserialized value.
      * @param offHeapStore the optional disk-based store for spillover storage when memory is full, or
      *                     {@code null} to disable disk spillover. When configured, values that do not fit
      *                     in memory may be automatically stored to disk instead of being rejected.
@@ -359,21 +383,37 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                                  is less than 1024 or greater than {@link #SEGMENT_SIZE} (1048576), or if
      *                                  {@code vacatingFactor} is not in the range [0.0, 1.0], or if
      *                                  {@code logger} is {@code null}
-     * @throws OutOfMemoryError if the underlying call to {@link #allocate(long)} fails because the host
-     *                          cannot reserve {@code capacityInMB} MB of native memory
+     * @throws OutOfMemoryError if native allocation fails or the JVM cannot create the shutdown-hook
+     *                          thread (resources accepted before the failure are released)
      * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is
      *                               registered (the off-heap allocation is released before this propagates)
      * @throws SecurityException if the runtime denies shutdown-hook registration (all cache-owned
      *                           resources are released before this propagates)
+     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive and
+     *                           the maintenance scheduler rejects its task (all cache-owned resources
+     *                           are released before this propagates)
      */
-    @SuppressWarnings("rawtypes")
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime, final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
             final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
             final Logger logger) {
+        this(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, arrayOffset, serializer, deserializer, offHeapStore,
+                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger, DEFAULT_MAINTENANCE_TASK_SCHEDULER,
+                DEFAULT_SHUTDOWN_HOOK_REGISTRAR);
+    }
+
+    /** Package-private construction seams for deterministic scheduler/hook failure testing. */
+    @SuppressWarnings("rawtypes")
+    AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
+            final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
+            final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
+            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
+            final Logger logger, final MaintenanceTaskScheduler maintenanceTaskScheduler, final ShutdownHookRegistrar shutdownHookRegistrar) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
+        N.checkArgNotNull(maintenanceTaskScheduler, "maintenanceTaskScheduler");
+        N.checkArgNotNull(shutdownHookRegistrar, "shutdownHookRegistrar");
         N.checkArgPositive(capacityInMB, "capacityInMB");
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "maxBlockSize must be in the range [1024, {}]: {}", SEGMENT_SIZE, maxBlockSize);
         N.checkArgument(vacatingFactor >= 0f && vacatingFactor <= 1f, "vacatingFactor must be in the range [0.0, 1.0]: {}", vacatingFactor);
@@ -399,7 +439,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         // From this point on, a failing initialization step would leak the native allocation
         // (it is released only by close()/the shutdown hook, neither of which is reachable for
-        // a half-constructed instance). Deallocate before rethrowing.
+        // a half-constructed instance). Keep local ownership markers because the corresponding
+        // final fields are not definitely assigned on every exceptional path through this block.
+        KeyedObjectPool<K, Wrapper<V>> createdPool = null;
+        boolean storeOwnershipAccepted = false;
         try {
             _segments = new Segment[(int) (_capacityInBytes / SEGMENT_SIZE)];
 
@@ -416,12 +459,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             // The documented contract is "0 or negative disables automatic eviction", but the
             // underlying pool rejects a negative evictDelay with IllegalArgumentException - so
             // clamp before handing it over.
-            _pool = PoolFactory.createKeyedObjectPool(poolCapacity, N.max(0L, evictDelay), EvictionPolicy.LAST_ACCESS_TIME, true,
+            createdPool = PoolFactory.createKeyedObjectPool(poolCapacity, N.max(0L, evictDelay), EvictionPolicy.LAST_ACCESS_TIME, true,
                     vacatingFactor == 0f ? DEFAULT_VACATING_FACTOR : vacatingFactor);
+            _pool = createdPool;
 
             this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
             this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
             this.offHeapStore = offHeapStore;
+            storeOwnershipAccepted = true;
             this.statsTimeOnDisk = statsTimeOnDisk;
             this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
             this.storeSelector = storeSelector;
@@ -450,48 +495,63 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     }
                 };
 
-                scheduleFuture = SCHEDULED_EXECUTOR.scheduleWithFixedDelay(evictTask, evictDelay, evictDelay, TimeUnit.MILLISECONDS);
+                scheduleFuture = N.checkArgNotNull(maintenanceTaskScheduler.schedule(createdPool, evictTask, evictDelay), "scheduleFuture");
             }
         } catch (final RuntimeException | Error initFailure) {
-            try {
-                if (scheduleFuture != null) {
-                    scheduleFuture.cancel(true);
-                }
-            } finally {
+            if (scheduleFuture != null) {
                 try {
-                    deallocate();
-                } catch (final RuntimeException | Error deallocateFailure) {
-                    initFailure.addSuppressed(deallocateFailure);
+                    scheduleFuture.cancel(true);
+                } catch (final RuntimeException | Error cleanupFailure) {
+                    addSuppressedIfDistinct(initFailure, cleanupFailure);
+                }
+            }
+
+            if (createdPool != null) {
+                try {
+                    createdPool.close();
+                } catch (final RuntimeException | Error cleanupFailure) {
+                    addSuppressedIfDistinct(initFailure, cleanupFailure);
+                }
+            }
+
+            try {
+                deallocate();
+            } catch (final RuntimeException | Error cleanupFailure) {
+                addSuppressedIfDistinct(initFailure, cleanupFailure);
+            }
+
+            if (storeOwnershipAccepted && offHeapStore != null) {
+                try {
+                    offHeapStore.close();
+                } catch (final RuntimeException | Error cleanupFailure) {
+                    addSuppressedIfDistinct(initFailure, cleanupFailure);
                 }
             }
 
             throw initFailure;
         }
 
-        shutdownHook = new Thread(() -> {
-            logger.info("Initiating OffHeapCache shutdown");
-
-            close();
-            logger.info("OffHeapCache shutdown completed");
-        });
-
-        // Adding a shutdown hook can fail with IllegalStateException if the JVM is already
-        // shutting down. If it does, we still have a fully-initialised off-heap allocation that
-        // would leak. Best-effort: log, ensure the scheduled eviction task is cancelled, and
-        // release the off-heap memory before rethrowing so the constructor doesn't leave the
-        // OS-allocated buffer dangling for the lifetime of the process.
+        // Thread construction itself can fail (most notably with OutOfMemoryError), and hook
+        // registration may throw any RuntimeException/Error from runtime policy/instrumentation.
+        // Both occur after every cache-owned resource has been accepted, so keep them in the same
+        // cleanup boundary.
         try {
-            Runtime.getRuntime().addShutdownHook(shutdownHook);
-        } catch (final IllegalStateException | SecurityException hookFailure) {
-            // Registration can fail either because shutdown has started or because the runtime
-            // denies hook management. close() performs the complete ownership cleanup (scheduled
-            // task, pool, native allocation, and OffHeapStore); the former hand-written path freed
-            // only native memory and leaked the already-created pool/store resources. Preserve the
-            // registration failure as the primary exception if cleanup itself also fails.
+            shutdownHook = new Thread(() -> {
+                logger.info("Initiating OffHeapCache shutdown");
+
+                close();
+                logger.info("OffHeapCache shutdown completed");
+            });
+
+            shutdownHookRegistrar.register(_pool, shutdownHook);
+        } catch (final RuntimeException | Error hookFailure) {
+            // close() handles a null hook (thread creation failure) and an unregistered hook
+            // (registration failure), and performs complete pool/native/store cleanup. Preserve
+            // the construction/registration failure as primary if cleanup also fails.
             try {
                 close();
             } catch (final RuntimeException | Error cleanupFailure) {
-                hookFailure.addSuppressed(cleanupFailure);
+                addSuppressedIfDistinct(hookFailure, cleanupFailure);
             }
 
             throw hookFailure;
@@ -529,9 +589,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * block of {@link #close()}, to ensure that memory is always released even if errors
      * occur during cleanup.
      *
-     * <p>Thread safety: this method is called only from the synchronized {@link #close()}
-     * operation, or from the constructor's own failure-cleanup path before the instance is
-     * published, so thread-safety is not required for the implementation.
+     * <p>Thread safety: this method is called only from the lifecycle-write-locked
+     * {@link #close()} operation, or from the constructor's own failure-cleanup path before the
+     * instance is published, so thread-safety is not required for the implementation.
      */
     protected abstract void deallocate();
 
@@ -600,7 +660,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws IllegalStateException if the cache has been closed, or if a value cannot be
      *                               reconstructed because the retrieved size no longer matches
-     *                               the recorded size (data corruption detected)
+     *                               the recorded size (data corruption detected), or because a
+     *                               configured deserializer returns {@code null}
      */
     @Override
     public V getOrNull(final K key) {
@@ -639,6 +700,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
 
                 if (diskBytes == null) {
+                    missingReadCountFromDisk.increment();
                     removeStaleStoreWrapperIfCurrent(key, storeWrapper);
                     return null;
                 }
@@ -682,6 +744,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 final V value = w.read();
 
                 if (value == null) {
+                    missingReadCountFromDisk.increment();
                     removeStaleStoreWrapperIfCurrent(key, storeWrapper);
                 } else {
                     readCountFromDisk.increment();
@@ -946,8 +1009,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * stored; the supplied buffer's position, limit, and mark are left unchanged.
      *
      * <p><b>&#9888;&#65039; Replacement failure:</b> A failed replacement of a disk-spilled entry
-     * may leave the key without either value when the old store bytes have already been
-     * overwritten and cannot be restored.
+     * may leave the key without either value if the store overwrite succeeds but the new wrapper
+     * cannot subsequently be installed in the pool. The prior bytes are no longer recoverable
+     * through the key-only {@link OffHeapStore} API, which provides no transactional or versioned
+     * replace operation. In the normal path, removing the prior wrapper frees the pool slot needed
+     * by the replacement; the residual loss path is limited to an exceptional pool rejection/failure.
      *
      * @param key the key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to be cached; must not be {@code null}
@@ -1251,7 +1317,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             try {
                 restorePriorAfterDiskWriteFailure(k, prior);
             } catch (final RuntimeException | Error restoreFailure) {
-                e.addSuppressed(restoreFailure);
+                addSuppressedIfDistinct(e, restoreFailure);
             }
 
             throw e;
@@ -1272,6 +1338,33 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         restorePriorAfterDiskWriteFailure(k, prior);
 
         return null;
+    }
+
+    /** Adds cleanup context without allowing a reused throwable to trigger self-suppression. */
+    private static void addSuppressedIfDistinct(final Throwable primary, final Throwable secondary) {
+        if (primary != secondary) {
+            primary.addSuppressed(secondary);
+        }
+    }
+
+    /** Reconstructs a non-null cache value consistently for every storage tier. */
+    @SuppressWarnings("unchecked")
+    private V deserializeValue(final byte[] bytes, final Type<V> type) {
+        final V value;
+
+        if (type.isPrimitiveByteArray()) {
+            value = (V) bytes;
+        } else if (type.isByteBuffer()) {
+            value = (V) ByteBufferType.valueOf(bytes);
+        } else {
+            value = deserializer.apply(bytes, type);
+        }
+
+        if (value == null) {
+            throw new IllegalStateException("Failed to reconstruct cache value: the configured deserializer returned null");
+        }
+
+        return value;
     }
 
     private void restorePriorAfterDiskWriteFailure(final K k, final Wrapper<V> prior) {
@@ -1607,6 +1700,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public OffHeapCacheStats stats() {
         final PoolStats poolStats = _pool.stats();
 
+        // A disk-backed wrapper is a pool hit before its bytes are fetched. Reclassify confirmed
+        // missing backing bytes from a pool-level hit to a miss, while preserving getCount. Other
+        // exceptional failures after lookup (for example, copy or deserialization failures) remain
+        // lookup-level hits. Since the pool snapshot and LongAdder are sampled independently, a
+        // miss that completes just after poolStats was captured may not have its corresponding pool
+        // hit in this snapshot yet; cap the correction at the sampled hit count to keep both values
+        // non-negative. A later snapshot will include the remaining correction.
+        final long missingDiskReads = Math.min(poolStats.hitCount(), N.max(0L, missingReadCountFromDisk.sum()));
+        final long hitCount = poolStats.hitCount() - missingDiskReads;
+        final long missCount = poolStats.missCount() + missingDiskReads;
+
         // Iterate the unique per-size-class queues directly. _segmentQueueMap maps many segment
         // indices to the same queue instance, so its values contain duplicates; _segmentQueues holds
         // each queue exactly once (size classes with no allocated segment simply contribute an empty
@@ -1660,9 +1764,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // different-cell) increment, yielding a transiently negative value that the
         // OffHeapCacheStats constructor would reject - turning a monitoring call into a failure.
         return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), N.max(0L, sizeOnDisk.sum()), poolStats.putCount(), writeCountToDisk.sum(),
-                poolStats.getCount(), poolStats.hitCount(), readCountFromDisk.sum(), poolStats.missCount(), poolStats.evictionCount(),
-                evictionCountFromDisk.sum(), _capacityInBytes, N.max(0L, totalOccupiedMemorySize.sum()), N.max(0L, totalDataSize.sum()),
-                N.max(0L, dataSizeOnDisk.sum()), writeToDiskTimeStats, readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
+                poolStats.getCount(), hitCount, readCountFromDisk.sum(), missCount, poolStats.evictionCount(), evictionCountFromDisk.sum(), _capacityInBytes,
+                N.max(0L, totalOccupiedMemorySize.sum()), N.max(0L, totalDataSize.sum()), N.max(0L, dataSizeOnDisk.sum()), writeToDiskTimeStats,
+                readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
     }
 
     /**
@@ -1673,11 +1777,26 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * idempotent: invoking it on an already-closed cache returns immediately. It is
      * also invoked automatically by the registered shutdown hook during JVM shutdown.
      *
+     * <p><b>Reentrant callback restriction:</b> A serializer, store selector, or other callback
+     * invoked from an operation holding this cache's lifecycle read lock must not close the cache
+     * synchronously. A read-to-write lock upgrade is unsupported; such a call fails immediately
+     * with {@link IllegalStateException}. Close the cache after the callback/operation returns.
+     *
+     * @throws IllegalStateException if the current thread attempts to close the cache while it
+     *                               holds the cache lifecycle read lock
      * @throws SecurityException if the runtime denies removal of the registered shutdown hook;
      *                           pool, native-memory, and store cleanup is still attempted
      */
     @Override
-    public synchronized void close() {
+    public void close() {
+        // ReentrantReadWriteLock does not support upgrading a held read lock to its write lock.
+        // Check before acquiring any other lifecycle monitor/lock so a user callback invoked from
+        // put() fails fast instead of permanently waiting on itself (or forming a two-thread lock
+        // cycle with a concurrent close).
+        if (lifecycleLock.getReadHoldCount() > 0) {
+            throw new IllegalStateException("Cannot close this off-heap cache reentrantly while the current thread is executing a cache operation or callback");
+        }
+
         // The lifecycle write lock excludes in-flight writers of native memory (put() and the
         // disk-to-memory promotion hold the read lock across their copyToMemory calls), so
         // deallocate() below can never free the region under a thread that is mid-copy.
@@ -2116,13 +2235,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 copyFromMemory(slotStartPtr, bytes, _arrayOffset, size);
 
-                if (type.isPrimitiveByteArray()) {
-                    return (V) bytes;
-                } else if (type.isByteBuffer()) {
-                    return (V) ByteBufferType.valueOf(bytes);
-                } else {
-                    return deserializer.apply(bytes, type);
-                }
+                return deserializeValue(bytes, type);
             }
         }
 
@@ -2207,13 +2320,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 // `bytes` is a freshly read private copy of the value: expose it directly for raw
                 // byte[]/ByteBuffer types, otherwise hand it to the deserializer.
-                if (type.isPrimitiveByteArray()) {
-                    return (V) bytes;
-                } else if (type.isByteBuffer()) {
-                    return (V) ByteBufferType.valueOf(bytes);
-                } else {
-                    return deserializer.apply(bytes, type);
-                }
+                return deserializeValue(bytes, type);
             }
         }
 
@@ -2338,16 +2445,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * deserializer), so it is safe to invoke outside the wrapper lock.
          *
          * @param bytes the serialized bytes; must not be {@code null}
-         * @return the deserialized value
+         * @return the non-null deserialized value
+         * @throws IllegalStateException if a configured deserializer returns {@code null}
          */
         V deserialize(final byte[] bytes) {
-            if (type.isPrimitiveByteArray()) {
-                return (V) bytes;
-            } else if (type.isByteBuffer()) {
-                return (V) ByteBufferType.valueOf(bytes);
-            } else {
-                return deserializer.apply(bytes, type);
-            }
+            return deserializeValue(bytes, type);
         }
 
         @Override

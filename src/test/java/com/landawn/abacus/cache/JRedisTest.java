@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -454,6 +455,27 @@ public class JRedisTest {
         verify(mockJedis, never()).get(utf8("during-close"));
         assertThrows(IllegalStateException.class, () -> cache.getBulk());
         assertThrows(IllegalStateException.class, cache::flushAll);
+    }
+
+    /**
+     * {@link Throwable#addSuppressed(Throwable)} rejects self-suppression. If two shard clients
+     * happen to throw the same reusable {@link Error} instance, cleanup must still attempt every
+     * remaining shard and eventually rethrow that original error.
+     */
+    @Test
+    public void test_disconnect_reusedErrorDoesNotAbortRemainingShardCleanup() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379,h3:6379");
+        final AssertionError sharedFailure = new AssertionError("shared close failure");
+        doThrow(sharedFailure).when(shards.get(0)).close();
+        doThrow(sharedFailure).when(shards.get(1)).close();
+
+        final Error thrown = assertThrows(Error.class, sharded::disconnect);
+
+        assertTrue(thrown == sharedFailure);
+        assertEquals(0, thrown.getSuppressed().length, "the same Error instance cannot be suppressed onto itself");
+        verify(shards.get(0)).close();
+        verify(shards.get(1)).close();
+        verify(shards.get(2)).close();
     }
 
     @Test

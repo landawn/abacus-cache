@@ -39,7 +39,9 @@ package com.landawn.abacus.cache;
  * <li>Persistence - data should survive JVM restarts if required.</li>
  * <li>Performance - optimize for cache access patterns (frequent reads).</li>
  * <li>Resource management - handle file handles and disk space efficiently.</li>
- * <li>Error handling - return {@code null} or {@code false} on failures rather than throwing exceptions.</li>
+ * <li>Error handling - use {@code null} / {@code false} for an ordinary miss or inability to
+ *     complete an operation. Implementations may propagate unexpected runtime failures; the owning
+ *     cache does not silently translate such exceptions into misses.</li>
  * <li>Argument validation - the cache always passes non-null, already-validated keys and values, so
  *     implementations need not null-check arguments; behavior on a {@code null} key or value is left
  *     to the implementation.</li>
@@ -117,7 +119,8 @@ public interface OffHeapStore<K> extends AutoCloseable {
 
     /**
      * Retrieves the byte array associated with the specified key.
-     * Returns {@code null} if the key is not found or if an error occurs during retrieval.
+     * Returns {@code null} if the key is not found or the implementation cannot complete an ordinary
+     * retrieval. Unexpected runtime failures may be propagated to the caller.
      * Implementations may return either a defensive copy or an internally retained array. The
      * owning cache treats the returned array as store-owned and makes its own copy before exposing
      * bytes to a caller or custom deserializer.
@@ -145,7 +148,7 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * corruption and fails the read with an exception rather than a cache miss.
      *
      * @param key the key whose associated value is to be retrieved; must not be {@code null}
-     * @return the stored byte array, or {@code null} if not found or an error occurs
+     * @return the stored byte array, or {@code null} if not found or the retrieval cannot be completed normally
      */
     byte[] get(K key);
 
@@ -181,7 +184,8 @@ public interface OffHeapStore<K> extends AutoCloseable {
     /**
      * Removes the value associated with the specified key.
      * Returns {@code true} if a value was removed, {@code false} if the key was not found
-     * or if an error occurred during removal. It is safe to call this method for a
+     * or if the implementation cannot complete an ordinary removal. Unexpected runtime failures
+     * may be propagated to the caller. It is safe to call this method for a
      * non-existent key.
      *
      * <p><b>Thread Safety:</b>
@@ -212,7 +216,9 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * <p>This {@code default} implementation does nothing, which is appropriate for stores that hold
      * no resources requiring explicit release. Implementations that open files, mmap regions, or
      * connections should override it. The method is expected to be idempotent (safe to call more
-     * than once) and, like the other store operations, should not throw on ordinary failures.
+     * than once). It may propagate an unexpected runtime failure; the owning cache attempts all
+     * remaining cleanup and attaches a close failure as a suppressed exception when another failure
+     * is already being propagated.
      */
     @Override
     default void close() {

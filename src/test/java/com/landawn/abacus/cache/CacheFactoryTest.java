@@ -277,6 +277,49 @@ public class CacheFactoryTest extends TestBase {
         }
     }
 
+    /**
+     * Regression: a later Redis Cluster seed may be an ordinary alphabetic DNS hostname. The
+     * parser previously required a dot, digit, {@code localhost}, or bracketed IPv6 address in
+     * later seed tokens, so {@code primary:6379} was silently treated as the cache key prefix.
+     */
+    @Test
+    public void testCreateCache_RedisClusterWithAlphabeticSeedHostname() throws ReflectiveOperationException {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+             MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379)")) {
+                assertEquals("10.0.0.1:7000,primary:6379", distributedClient(cache).serverUrl());
+            }
+        }
+    }
+
+    @Test
+    public void testCreateCache_RedisClusterWithAlphabeticSeedHostnameAndPrefix() throws ReflectiveOperationException {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+             MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379,prefix:)")) {
+                assertEquals("10.0.0.1:7000,primary:6379", distributedClient(cache).serverUrl());
+
+                final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
+                prefixField.setAccessible(true);
+                assertEquals("prefix:", prefixField.get(cache));
+            }
+        }
+    }
+
+    @Test
+    public void testCreateCache_RedisClusterWithNumericLeadingPrefix() throws ReflectiveOperationException {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+             MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379,123prefix)")) {
+                assertEquals("10.0.0.1:7000,primary:6379", distributedClient(cache).serverUrl());
+
+                final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
+                prefixField.setAccessible(true);
+                assertEquals("123prefix", prefixField.get(cache));
+            }
+        }
+    }
+
     @Test
     public void testCreateCache_RedisClusterWithMultipleSeedNodesPrefixAndTimeout() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
@@ -351,7 +394,9 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisCluster_keyPrefixLookingLikeHostPort_notAbsorbedAsSeed() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1,5000)")) {
+            // An explicitly supplied timeout equal to DEFAULT_TIMEOUT must still count as an
+            // explicit disambiguator; value equality with the default must not erase its presence.
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1,1000)")) {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);
                 assertEquals("10.0.0.1:7000", distributedClient(cache).serverUrl());

@@ -118,9 +118,10 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * returned by {@link #getProperties()} are serialized. The custom wrapper below also delegates
      * compound {@link java.util.Map} operations such as {@code putIfAbsent}, {@code compute}, and
      * {@code merge} directly to that synchronized map; inheriting {@link Properties}' multi-step
-     * implementations would make those operations non-atomic. Iterators and collection views are
-     * not safe while another thread mutates the properties because the backing map's mutex is
-     * internal. Use {@link Properties#copy()} to obtain a stable snapshot for traversal.
+     * implementations would make those operations non-atomic. Individual operations on the live
+     * collection views are synchronized too, but iterators obtained from those views are not safe
+     * while another thread mutates the properties because the backing map's mutex is internal.
+     * Use {@link Properties#copy()} to obtain a stable snapshot for traversal.
      */
     protected final Properties<String, Object> properties = new SynchronizedProperties<>();
 
@@ -447,6 +448,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation returns the {@link #properties} instance held by this cache.
+     * Individual map operations, including compound operations such as {@code compute} and
+     * {@code merge}, are synchronized. Iteration over {@code keySet()}, {@code values()}, or
+     * {@code entrySet()} is not safe during concurrent mutation because the synchronized backing
+     * map's mutex is not exposed; call {@link Properties#copy()} first when a stable traversal is
+     * required.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

@@ -21,9 +21,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.junit.jupiter.api.Tag;
@@ -212,6 +215,201 @@ public class AbstractOffHeapCacheTest {
         assertFalse(cache.copiedAfterDeallocate.get(), "put after close must not copy into deallocated memory");
     }
 
+    /** A user callback cannot upgrade the operation's lifecycle read lock into close's write lock. */
+    @Test
+    public void testReentrantCloseFromSerializerFailsFastAndCacheRemainsOpen() {
+        final AtomicReference<OffHeapCache<String, String>> cacheRef = new AtomicReference<>();
+        final AtomicReference<IllegalStateException> closeFailure = new AtomicReference<>();
+        final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder().capacityInMB(1).evictDelay(0).serializer((value, output) -> {
+            try {
+                cacheRef.get().close();
+                throw new AssertionError("reentrant close must fail instead of attempting a read-to-write lock upgrade");
+            } catch (final IllegalStateException e) {
+                closeFailure.set(e);
+            }
+
+            final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            output.write(bytes, 0, bytes.length);
+        }).deserializer((bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8)).build();
+        cacheRef.set(cache);
+
+        try {
+            assertTrue(cache.put("key", "value"));
+            assertNotNull(closeFailure.get());
+            assertTrue(closeFailure.get().getMessage().contains("Cannot close this off-heap cache reentrantly"));
+            assertFalse(cache.isClosed(), "the rejected reentrant close must leave the cache open");
+            assertEquals("value", cache.getOrNull("key"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** A scheduler rejection after pool/store initialization must release every accepted resource. */
+    @Test
+    public void testConstructorSchedulerFailureClosesAcceptedResources() {
+        final AtomicBoolean storeClosed = new AtomicBoolean();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                storeClosed.set(true);
+            }
+        };
+
+        ScheduleFailingOffHeapCache.deallocated.set(false);
+        ScheduleFailingOffHeapCache.failedPool = null;
+        ScheduleFailingOffHeapCache.returnNull = false;
+        ScheduleFailingOffHeapCache.reusedFailure = null;
+
+        assertThrows(RejectedExecutionException.class, () -> new ScheduleFailingOffHeapCache(store));
+        assertNotNull(ScheduleFailingOffHeapCache.failedPool, "the scheduling strategy must have observed the constructed pool");
+        assertTrue(ScheduleFailingOffHeapCache.failedPool.isClosed(), "the pool created before scheduler rejection must be closed");
+        assertTrue(ScheduleFailingOffHeapCache.deallocated.get(), "native memory must be released when scheduling fails during construction");
+        assertTrue(storeClosed.get(), "the store whose ownership was accepted by the constructor must be closed on failure");
+    }
+
+    /** A broken scheduling hook cannot silently disable requested maintenance or leak resources. */
+    @Test
+    public void testConstructorRejectsNullSchedulerHandleAndCleansUp() {
+        final AtomicBoolean storeClosed = new AtomicBoolean();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                storeClosed.set(true);
+            }
+        };
+
+        ScheduleFailingOffHeapCache.deallocated.set(false);
+        ScheduleFailingOffHeapCache.failedPool = null;
+        ScheduleFailingOffHeapCache.returnNull = true;
+        ScheduleFailingOffHeapCache.reusedFailure = null;
+
+        try {
+            assertThrows(IllegalArgumentException.class, () -> new ScheduleFailingOffHeapCache(store));
+            assertNotNull(ScheduleFailingOffHeapCache.failedPool);
+            assertTrue(ScheduleFailingOffHeapCache.failedPool.isClosed());
+            assertTrue(ScheduleFailingOffHeapCache.deallocated.get());
+            assertTrue(storeClosed.get());
+        } finally {
+            ScheduleFailingOffHeapCache.returnNull = false;
+        }
+    }
+
+    /** Any RuntimeException/Error while registering the shutdown hook must release all owned resources. */
+    @Test
+    public void testConstructorShutdownHookRegistrationFailureCleansUp() {
+        final AtomicBoolean storeClosed = new AtomicBoolean();
+        final OutOfMemoryError registrationFailure = new OutOfMemoryError("forced hook registration failure");
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                storeClosed.set(true);
+            }
+        };
+
+        HookRegistrationFailingOffHeapCache.deallocated.set(false);
+        HookRegistrationFailingOffHeapCache.failedPool = null;
+        HookRegistrationFailingOffHeapCache.registrationFailure = registrationFailure;
+
+        try {
+            assertSame(registrationFailure, assertThrows(OutOfMemoryError.class, () -> new HookRegistrationFailingOffHeapCache(store)));
+            assertNotNull(HookRegistrationFailingOffHeapCache.failedPool);
+            assertTrue(HookRegistrationFailingOffHeapCache.failedPool.isClosed());
+            assertTrue(HookRegistrationFailingOffHeapCache.deallocated.get());
+            assertTrue(storeClosed.get());
+        } finally {
+            HookRegistrationFailingOffHeapCache.registrationFailure = null;
+        }
+    }
+
+    /** Cleanup must continue when multiple hooks reuse the same throwable instance. */
+    @Test
+    public void testConstructorCleanupDoesNotSelfSuppressReusedFailure() {
+        final AtomicBoolean storeCloseAttempted = new AtomicBoolean();
+        final RejectedExecutionException reused = new RejectedExecutionException("reused by scheduler and cleanup hooks");
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                storeCloseAttempted.set(true);
+                throw reused;
+            }
+        };
+
+        ScheduleFailingOffHeapCache.deallocated.set(false);
+        ScheduleFailingOffHeapCache.failedPool = null;
+        ScheduleFailingOffHeapCache.returnNull = false;
+        ScheduleFailingOffHeapCache.reusedFailure = reused;
+
+        try {
+            assertSame(reused, assertThrows(RejectedExecutionException.class, () -> new ScheduleFailingOffHeapCache(store)));
+            assertNotNull(ScheduleFailingOffHeapCache.failedPool);
+            assertTrue(ScheduleFailingOffHeapCache.failedPool.isClosed(), "pool cleanup must precede the failing native/store cleanup hooks");
+            assertTrue(ScheduleFailingOffHeapCache.deallocated.get(), "native cleanup must still be attempted");
+            assertTrue(storeCloseAttempted.get(), "self-suppression must not abort the remaining store cleanup");
+        } finally {
+            ScheduleFailingOffHeapCache.reusedFailure = null;
+        }
+    }
+
     /** Invalid custom routing results are programming errors, not undocumented aliases. */
     @Test
     public void testStoreSelectorRejectsUnknownAndNullResults() {
@@ -292,6 +490,95 @@ public class AbstractOffHeapCacheTest {
         @Override
         protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class ScheduleFailingOffHeapCache extends AbstractOffHeapCache<String, byte[]> {
+        private static final AtomicBoolean deallocated = new AtomicBoolean();
+        private static volatile KeyedObjectPool<?, ?> failedPool;
+        private static volatile boolean returnNull;
+        private static volatile RejectedExecutionException reusedFailure;
+
+        ScheduleFailingOffHeapCache(final OffHeapStore<String> store) {
+            super(1, DEFAULT_MAX_BLOCK_SIZE, 1, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, null, null, store, false, null, null,
+                    LoggerFactory.getLogger(ScheduleFailingOffHeapCache.class), ScheduleFailingOffHeapCache::scheduleMaintenanceTask, (pool, hook) -> {
+                        // Scheduling always fails first in this fixture.
+                    });
+        }
+
+        @Override
+        protected long allocate(final long capacityInBytes) {
+            return 0L;
+        }
+
+        @Override
+        protected void deallocate() {
+            deallocated.set(true);
+
+            if (reusedFailure != null) {
+                throw reusedFailure;
+            }
+        }
+
+        @Override
+        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
+            // Not reached during construction.
+        }
+
+        @Override
+        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+            // Not reached during construction.
+        }
+
+        private static ScheduledFuture<?> scheduleMaintenanceTask(final KeyedObjectPool<?, ?> pool, final Runnable task, final long delayMillis) {
+            failedPool = pool;
+
+            if (returnNull) {
+                return null;
+            }
+
+            if (reusedFailure != null) {
+                throw reusedFailure;
+            }
+
+            throw new RejectedExecutionException("forced scheduler rejection");
+        }
+    }
+
+    private static final class HookRegistrationFailingOffHeapCache extends AbstractOffHeapCache<String, byte[]> {
+        private static final AtomicBoolean deallocated = new AtomicBoolean();
+        private static volatile KeyedObjectPool<?, ?> failedPool;
+        private static volatile OutOfMemoryError registrationFailure;
+
+        HookRegistrationFailingOffHeapCache(final OffHeapStore<String> store) {
+            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, null, null, store, false, null, null,
+                    LoggerFactory.getLogger(HookRegistrationFailingOffHeapCache.class), (pool, task, delay) -> null,
+                    HookRegistrationFailingOffHeapCache::registerHook);
+        }
+
+        private static void registerHook(final KeyedObjectPool<?, ?> pool, final Thread hook) {
+            failedPool = pool;
+            throw registrationFailure;
+        }
+
+        @Override
+        protected long allocate(final long capacityInBytes) {
+            return 0L;
+        }
+
+        @Override
+        protected void deallocate() {
+            deallocated.set(true);
+        }
+
+        @Override
+        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
+            // Not reached during construction.
+        }
+
+        @Override
+        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+            // Not reached during construction.
         }
     }
 

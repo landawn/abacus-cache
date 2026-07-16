@@ -707,12 +707,80 @@ public class OffHeapCacheTest {
             assertNull(diskCache.get(key).orElse(null));
 
             final var stats = diskCache.stats();
+            assertFalse(diskCache.containsKey(key), "the stale pool wrapper must be removed after the store reports missing bytes");
+            assertEquals(1L, stats.getCount());
+            assertEquals(0L, stats.hitCount(), "a get that returned no value must not remain classified as a pool-level hit");
+            assertEquals(1L, stats.missCount(), "a confirmed backing-store miss must be reflected in cache miss statistics");
             assertEquals(0L, stats.hitCountFromDisk());
             assertEquals(0L, stats.sizeOnDisk());
             assertEquals(0L, stats.dataSizeOnDisk());
             assertEquals(0L, stats.dataSize());
         } finally {
             diskCache.close();
+        }
+    }
+
+    @Test
+    public void test_diskDeserializerReturningNullIsReportedAsConfigurationFailure() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, String> diskCache = OffHeapCache.<String, String> builder().capacityInMB(1).evictDelay(0).serializer((value, output) -> {
+            final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            output.write(bytes, 0, bytes.length);
+        }).deserializer((bytes, type) -> null).offHeapStore(inMemoryStore).storeSelector((key, value, size) -> 2).build();
+
+        try {
+            assertTrue(diskCache.put("key", "value"));
+
+            final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> diskCache.getOrNull("key"));
+            assertTrue(failure.getMessage().contains("deserializer returned null"));
+            assertTrue(diskCache.containsKey("key"), "valid stored bytes must not be discarded as though they were missing");
+            assertEquals(0L, diskCache.stats().hitCountFromDisk(), "a value that was not reconstructed is not a successful disk hit");
+        } finally {
+            diskCache.close();
+        }
+    }
+
+    @Test
+    public void test_memoryDeserializerReturningNullFailsForSingleAndMultiSlotValues() {
+        final OffHeapCache<String, String> memoryCache = OffHeapCache.<String, String> builder()
+                .capacityInMB(2)
+                .maxBlockSizeInBytes(1024)
+                .evictDelay(0)
+                .serializer((value, output) -> {
+                    final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    output.write(bytes, 0, bytes.length);
+                })
+                .deserializer((bytes, type) -> null)
+                .build();
+
+        try {
+            assertTrue(memoryCache.put("single", "small"));
+            assertTrue(memoryCache.put("multi", Strings.repeat("x", 2048)));
+
+            final IllegalStateException singleFailure = assertThrows(IllegalStateException.class, () -> memoryCache.getOrNull("single"));
+            final IllegalStateException multiFailure = assertThrows(IllegalStateException.class, () -> memoryCache.getOrNull("multi"));
+            assertTrue(singleFailure.getMessage().contains("deserializer returned null"));
+            assertTrue(multiFailure.getMessage().contains("deserializer returned null"));
+        } finally {
+            memoryCache.close();
         }
     }
 
