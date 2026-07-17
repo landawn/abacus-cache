@@ -23,13 +23,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -37,11 +34,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.logging.LoggerFactory;
-import com.landawn.abacus.pool.KeyedObjectPool;
-import com.landawn.abacus.pool.Poolable.Caller;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
-import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.N;
 
 @Tag("2025")
@@ -142,38 +136,6 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
-     * Regression coverage for {@code stats()} being crash-safe against a negative disk-I/O timing
-     * observation. Production elapsed times use a monotonic clock, but the mutable package-private
-     * accumulators can still contain invalid data after reflective instrumentation, test injection,
-     * or a faulty custom clock supplied through the package-private construction seam. A negative
-     * observation would flow through {@link java.util.LongSummaryStatistics} into {@code stats()}, whose
-     * {@code OffHeapCacheStats.MinMaxAvg} canonical constructor rejects negatives with
-     * {@code IllegalArgumentException} — turning a monitoring call into a failure.
-     *
-     * <p>After the fix {@code stats()} clamps each min/max/avg component to {@code >= 0}, so it
-     * returns a valid, non-negative snapshot regardless of a stray negative observation. The
-     * package-private timing accumulators are written under their own monitor in production;
-     * single-threaded direct injection here simulates the recorded-negative state.
-     */
-    @Test
-    public void testStatsClampsNegativeDiskTimingObservations() {
-        try (OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder().capacityInMB(16).evictDelay(0).build()) {
-            cache.totalReadFromDiskTimeStats.accept(-5L);
-            cache.totalWriteToDiskTimeStats.accept(-7L);
-
-            // Before the fix this threw IllegalArgumentException from the MinMaxAvg constructor.
-            final OffHeapCacheStats stats = cache.stats();
-
-            assertEquals(0.0D, stats.readFromDiskTimeStats().min(), "negative read min must be clamped to 0");
-            assertEquals(0.0D, stats.readFromDiskTimeStats().max(), "negative read max must be clamped to 0");
-            assertEquals(0.0D, stats.readFromDiskTimeStats().avg(), "negative read avg must be clamped to 0");
-            assertEquals(0.0D, stats.writeToDiskTimeStats().min(), "negative write min must be clamped to 0");
-            assertEquals(0.0D, stats.writeToDiskTimeStats().max(), "negative write max must be clamped to 0");
-            assertEquals(0.0D, stats.writeToDiskTimeStats().avg(), "negative write avg must be clamped to 0");
-        }
-    }
-
-    /**
      * Regression coverage for the cancelled-eviction-task GC leak in
      * {@link AbstractOffHeapCache}.
      *
@@ -208,8 +170,8 @@ public class AbstractOffHeapCacheTest {
     /**
      * Regression coverage for the post-close {@code put()} ordering bug. The off-heap cache frees
      * its native allocation in {@code close()}; a later {@code put()} must fail before any slot
-     * allocation or native-copy hook is reached. Previously the closed pool was only consulted after
-     * {@code copyToMemory(...)}, which made {@code OffHeapCache} write to freed native memory.
+     * allocation or native-copy hook is reached. Previously the closed state was only consulted
+     * after {@code copyToMemory(...)}, which made {@code OffHeapCache} write to freed native memory.
      */
     @Test
     public void testPutAfterCloseFailsBeforeNativeCopy() {
@@ -249,172 +211,6 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
-    /** A scheduler rejection after pool/store initialization must release every accepted resource. */
-    @Test
-    public void testConstructorSchedulerFailureClosesAcceptedResources() {
-        final AtomicBoolean storeClosed = new AtomicBoolean();
-        final OffHeapStore<String> store = new OffHeapStore<>() {
-            @Override
-            public byte[] get(final String key) {
-                return null;
-            }
-
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                return true;
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return false;
-            }
-
-            @Override
-            public void close() {
-                storeClosed.set(true);
-            }
-        };
-
-        ScheduleFailingOffHeapCache.deallocated.set(false);
-        ScheduleFailingOffHeapCache.failedPool = null;
-        ScheduleFailingOffHeapCache.returnNull = false;
-        ScheduleFailingOffHeapCache.reusedFailure = null;
-
-        assertThrows(RejectedExecutionException.class, () -> new ScheduleFailingOffHeapCache(store));
-        assertNotNull(ScheduleFailingOffHeapCache.failedPool, "the scheduling strategy must have observed the constructed pool");
-        assertTrue(ScheduleFailingOffHeapCache.failedPool.isClosed(), "the pool created before scheduler rejection must be closed");
-        assertTrue(ScheduleFailingOffHeapCache.deallocated.get(), "native memory must be released when scheduling fails during construction");
-        assertTrue(storeClosed.get(), "the store whose ownership was accepted by the constructor must be closed on failure");
-    }
-
-    /** A broken scheduling hook cannot silently disable requested maintenance or leak resources. */
-    @Test
-    public void testConstructorRejectsNullSchedulerHandleAndCleansUp() {
-        final AtomicBoolean storeClosed = new AtomicBoolean();
-        final OffHeapStore<String> store = new OffHeapStore<>() {
-            @Override
-            public byte[] get(final String key) {
-                return null;
-            }
-
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                return true;
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return false;
-            }
-
-            @Override
-            public void close() {
-                storeClosed.set(true);
-            }
-        };
-
-        ScheduleFailingOffHeapCache.deallocated.set(false);
-        ScheduleFailingOffHeapCache.failedPool = null;
-        ScheduleFailingOffHeapCache.returnNull = true;
-        ScheduleFailingOffHeapCache.reusedFailure = null;
-
-        try {
-            assertThrows(IllegalArgumentException.class, () -> new ScheduleFailingOffHeapCache(store));
-            assertNotNull(ScheduleFailingOffHeapCache.failedPool);
-            assertTrue(ScheduleFailingOffHeapCache.failedPool.isClosed());
-            assertTrue(ScheduleFailingOffHeapCache.deallocated.get());
-            assertTrue(storeClosed.get());
-        } finally {
-            ScheduleFailingOffHeapCache.returnNull = false;
-        }
-    }
-
-    /** Any RuntimeException/Error while registering the shutdown hook must release all owned resources. */
-    @Test
-    public void testConstructorShutdownHookRegistrationFailureCleansUp() {
-        final AtomicBoolean storeClosed = new AtomicBoolean();
-        final OutOfMemoryError registrationFailure = new OutOfMemoryError("forced hook registration failure");
-        final OffHeapStore<String> store = new OffHeapStore<>() {
-            @Override
-            public byte[] get(final String key) {
-                return null;
-            }
-
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                return true;
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return false;
-            }
-
-            @Override
-            public void close() {
-                storeClosed.set(true);
-            }
-        };
-
-        HookRegistrationFailingOffHeapCache.deallocated.set(false);
-        HookRegistrationFailingOffHeapCache.failedPool = null;
-        HookRegistrationFailingOffHeapCache.registrationFailure = registrationFailure;
-
-        try {
-            assertSame(registrationFailure, assertThrows(OutOfMemoryError.class, () -> new HookRegistrationFailingOffHeapCache(store)));
-            assertNotNull(HookRegistrationFailingOffHeapCache.failedPool);
-            assertTrue(HookRegistrationFailingOffHeapCache.failedPool.isClosed());
-            assertTrue(HookRegistrationFailingOffHeapCache.deallocated.get());
-            assertTrue(storeClosed.get());
-        } finally {
-            HookRegistrationFailingOffHeapCache.registrationFailure = null;
-        }
-    }
-
-    /** Cleanup must continue when multiple hooks reuse the same throwable instance. */
-    @Test
-    public void testConstructorCleanupDoesNotSelfSuppressReusedFailure() {
-        final AtomicBoolean storeCloseAttempted = new AtomicBoolean();
-        final RejectedExecutionException reused = new RejectedExecutionException("reused by scheduler and cleanup hooks");
-        final OffHeapStore<String> store = new OffHeapStore<>() {
-            @Override
-            public byte[] get(final String key) {
-                return null;
-            }
-
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                return true;
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return false;
-            }
-
-            @Override
-            public void close() {
-                storeCloseAttempted.set(true);
-                throw reused;
-            }
-        };
-
-        ScheduleFailingOffHeapCache.deallocated.set(false);
-        ScheduleFailingOffHeapCache.failedPool = null;
-        ScheduleFailingOffHeapCache.returnNull = false;
-        ScheduleFailingOffHeapCache.reusedFailure = reused;
-
-        try {
-            assertSame(reused, assertThrows(RejectedExecutionException.class, () -> new ScheduleFailingOffHeapCache(store)));
-            assertNotNull(ScheduleFailingOffHeapCache.failedPool);
-            assertTrue(ScheduleFailingOffHeapCache.failedPool.isClosed(), "pool cleanup must precede the failing native/store cleanup hooks");
-            assertTrue(ScheduleFailingOffHeapCache.deallocated.get(), "native cleanup must still be attempted");
-            assertTrue(storeCloseAttempted.get(), "self-suppression must not abort the remaining store cleanup");
-        } finally {
-            ScheduleFailingOffHeapCache.reusedFailure = null;
-        }
-    }
-
     /** Invalid custom routing results are programming errors, not undocumented aliases. */
     @Test
     public void testStoreSelectorRejectsUnknownAndNullResults() {
@@ -430,9 +226,10 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
-     * All cache-owned bookkeeping for a disk spill must finish before OffHeapStore.put mutates the
-     * key-only backing store. A key with an exceptional hashCode makes the ownership-map claim fail
-     * deterministically; the prior memory entry must survive and the store must remain untouched.
+     * A failure raised before the per-key atomic replacement begins (here: an exceptional
+     * {@code hashCode} thrown by the map lookup itself) must fail the put BEFORE the key-only
+     * backing store is mutated; the prior memory entry must survive and the store must remain
+     * untouched.
      */
     @Test
     public void testDiskOwnershipFailurePrecedesBackingStoreMutation() {
@@ -464,9 +261,10 @@ public class AbstractOffHeapCacheTest {
             final byte[] prior = { 1 };
             assertTrue(cache.put(key, prior));
 
-            // put() hashes once for the mutation stripe, pool.remove hashes once, and the store-lock
-            // stripe hashes once. The fourth call is the storeOwners.put ownership claim.
-            key.throwOnHashCall(4);
+            // The disk-routed replacement's first (and only) hashCode call is the entry map's
+            // atomic compute; a throwing hashCode fails the put before its lambda - and therefore
+            // before any store mutation - runs.
+            key.throwOnHashCall(1);
             final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 2, 3 }));
 
             assertTrue(failure.getMessage().contains("forced hash failure"));
@@ -476,110 +274,138 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
-    /** Disk timing is monotonic and covers only the OffHeapStore call, not serialization. */
-    @Test
-    public void testDiskTimingMeasuresOnlyStoreIoWithMonotonicClock() {
-        final AtomicLong ticker = new AtomicLong();
-        final AtomicReference<byte[]> stored = new AtomicReference<>();
-        final OffHeapStore<String> store = new OffHeapStore<>() {
-            @Override
-            public byte[] get(final String key) {
-                ticker.addAndGet(TimeUnit.MILLISECONDS.toNanos(11));
-                final byte[] value = stored.get();
-                return value == null ? null : value.clone();
-            }
-
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                ticker.addAndGet(TimeUnit.MILLISECONDS.toNanos(7));
-                stored.set(value.clone());
-                return true;
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return stored.getAndSet(null) != null;
-            }
-        };
-
-        try (ControlledTimeOffHeapCache cache = new ControlledTimeOffHeapCache(ticker, store)) {
-            assertTrue(cache.put("key", "value"));
-
-            final OffHeapCacheStats afterWrite = cache.stats();
-            assertEquals(7.0D, afterWrite.writeToDiskTimeStats().min());
-            assertEquals(7.0D, afterWrite.writeToDiskTimeStats().max());
-            assertEquals(7.0D, afterWrite.writeToDiskTimeStats().avg());
-
-            assertEquals("value", cache.getOrNull("key"));
-            final OffHeapCacheStats afterRead = cache.stats();
-            assertEquals(11.0D, afterRead.readFromDiskTimeStats().min());
-            assertEquals(11.0D, afterRead.readFromDiskTimeStats().max());
-            assertEquals(11.0D, afterRead.readFromDiskTimeStats().avg());
-        }
-    }
-
     /**
-     * A disk lookup that returns early without touching the store (here: the wrapper was already
-     * destroyed by a concurrent eviction while the pool still mapped it) must not contribute an
-     * observation to {@code readFromDiskTimeStats}: recording the ~0 ms non-I/O path would
-     * permanently drag {@code min()} to 0 and skew the average of the real store-read timings.
+     * With {@code statsTimeOnDisk} enabled, the disk timing statistics cover the
+     * {@link OffHeapStore} call. A store whose operations take a known minimum time must produce
+     * observations at least that large (only a lower bound is asserted, so the test is robust to
+     * scheduling delays), with {@code min <= avg <= max} holding.
      */
     @Test
-    public void testStaleDiskLookupRecordsNoReadTimingObservation() throws Exception {
-        final AtomicLong ticker = new AtomicLong();
-        final AtomicReference<byte[]> stored = new AtomicReference<>();
-        final OffHeapStore<String> store = new OffHeapStore<>() {
+    public void testDiskTimingStatsReflectStoreIo() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final OffHeapStore<String> slowStore = new OffHeapStore<>() {
+            private void sleep() {
+                try {
+                    Thread.sleep(15L);
+                } catch (final InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+
             @Override
             public byte[] get(final String key) {
-                ticker.addAndGet(TimeUnit.MILLISECONDS.toNanos(11));
-                final byte[] value = stored.get();
-                return value == null ? null : value.clone();
+                sleep();
+                return backing.get(key);
             }
 
             @Override
             public boolean put(final String key, final byte[] value) {
-                stored.set(value.clone());
+                sleep();
+                backing.put(key, value);
                 return true;
             }
 
             @Override
             public boolean remove(final String key) {
-                return stored.getAndSet(null) != null;
+                return backing.remove(key) != null;
             }
         };
 
-        try (ControlledTimeOffHeapCache cache = new ControlledTimeOffHeapCache(ticker, store)) {
-            assertTrue(cache.put("key", "value"));
-            assertEquals("value", cache.getOrNull("key"));
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(slowStore)
+                .storeSelector((k, v, size) -> 2)
+                .statsTimeOnDisk(true)
+                .build()) {
+            assertTrue(cache.put("key", new byte[] { 1, 2, 3 }));
+            assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("key"));
 
-            final OffHeapCacheStats beforeStaleLookup = cache.stats();
-            assertEquals(11.0D, beforeStaleLookup.readFromDiskTimeStats().min());
-
-            // Destroy the disk wrapper in place while the pool still maps it - the state a getOrNull
-            // racing an eviction observes just after its pool lookup.
-            final KeyedObjectPool<String, AbstractOffHeapCache.Wrapper<String>> pool = poolOf(cache);
-            final AbstractOffHeapCache.Wrapper<String> wrapper = pool.peek("key");
-            assertNotNull(wrapper);
-            wrapper.destroy(Caller.REMOVE_REPLACE_CLEAR);
-
-            assertNull(cache.getOrNull("key"), "a destroyed disk entry must read as a miss");
-
-            final OffHeapCacheStats afterStaleLookup = cache.stats();
-            assertEquals(11.0D, afterStaleLookup.readFromDiskTimeStats().min(),
-                    "the store-less early return must not record a ~0 ms disk-read observation");
-            assertEquals(11.0D, afterStaleLookup.readFromDiskTimeStats().max());
-            assertEquals(11.0D, afterStaleLookup.readFromDiskTimeStats().avg());
+            final OffHeapCacheStats stats = cache.stats();
+            assertTrue(stats.writeToDiskTimeStats().min() >= 10.0D, "write timing must cover the store write: " + stats.writeToDiskTimeStats());
+            assertTrue(stats.readFromDiskTimeStats().min() >= 10.0D, "read timing must cover the store read: " + stats.readFromDiskTimeStats());
+            assertTrue(stats.writeToDiskTimeStats().min() <= stats.writeToDiskTimeStats().avg()
+                    && stats.writeToDiskTimeStats().avg() <= stats.writeToDiskTimeStats().max());
         }
     }
 
     /**
-     * Memory-tier reads must participate in the lifecycle exclusion. The pool's internal expiry
-     * sweep detaches expired wrappers from the map before destroying them outside the pool lock, so
-     * {@code _pool.close()} never synchronizes on a detached wrapper's monitor - the wrapper-monitor
-     * protocol alone cannot order an in-flight {@code read()} before {@code deallocate()}. This test
-     * simulates the detach (a bare {@code pool.remove}), parks a reader inside {@code copyFromMemory},
-     * and verifies {@code close()} cannot complete - and native memory cannot be poisoned - until the
-     * read finishes.
+     * A disk lookup that finds an already-freed entry (the state a getOrNull racing an eviction
+     * observes just after its map lookup) must read as a miss WITHOUT touching the store: the
+     * freed entry's store bytes may already belong to nobody (or, under a same-key replacement,
+     * to a newer entry).
+     */
+    @Test
+    public void testFreedDiskEntryReadsAsMissWithoutTouchingStore() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final AtomicInteger storeReads = new AtomicInteger();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                storeReads.incrementAndGet();
+                return backing.get(key);
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                backing.put(key, value);
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return backing.remove(key) != null;
+            }
+        };
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(store)
+                .storeSelector((k, v, size) -> 2)
+                .build()) {
+            assertTrue(cache.put("key", new byte[] { 1 }));
+            assertArrayEquals(new byte[] { 1 }, cache.getOrNull("key"));
+            assertEquals(1, storeReads.get());
+
+            // Mark the disk entry freed in place while the map still holds it.
+            final AbstractOffHeapCache.Entry<byte[]> entry = entriesOf(cache).get("key");
+            assertNotNull(entry);
+            entry.freed = true;
+
+            assertNull(cache.getOrNull("key"), "a freed disk entry must read as a miss");
+            assertEquals(1, storeReads.get(), "the store-less early return must not touch the store");
+        }
+    }
+
+    /**
+     * The chunk-count arithmetic must not overflow int for serialized sizes near
+     * {@code Integer.MAX_VALUE} (legal in a sufficiently large cache): computing
+     * {@code size + maxBlockSize - 1} in int arithmetic wraps negative, which made {@code put}
+     * fail with {@code NegativeArraySizeException} instead of storing the value.
+     */
+    @Test
+    public void testChunkCountDoesNotOverflowForHugeSizes() throws Exception {
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build()) {
+            final Method chunkCountOf = AbstractOffHeapCache.class.getDeclaredMethod("chunkCountOf", int.class);
+            chunkCountOf.setAccessible(true);
+
+            final int hugeSize = Integer.MAX_VALUE - 2;
+            final int expectedChunks = (int) (((long) hugeSize + AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE - 1)
+                    / AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE);
+
+            assertEquals(expectedChunks, chunkCountOf.invoke(cache, hugeSize));
+        }
+    }
+
+    /**
+     * Memory-tier reads must participate in the lifecycle exclusion: a reader holds the lifecycle
+     * read lock across its native copy, so {@code close()} (which deallocates under the write
+     * lock) can never free the region underneath it - even when the entry has been detached from
+     * the map by a concurrent removal and close's own entry sweep therefore never sees it. This
+     * test simulates the detach (a bare map remove), parks a reader inside {@code copyFromMemory},
+     * and verifies {@code close()} cannot complete - and native memory cannot be poisoned - until
+     * the read finishes.
      */
     @Test
     public void testMemoryReadBlocksCloseUntilReadCompletes() throws Exception {
@@ -593,9 +419,9 @@ public class AbstractOffHeapCacheTest {
             final Future<String> reader = executor.submit(() -> cache.getOrNull("key"));
             assertTrue(cache.readEntered.await(5, TimeUnit.SECONDS), "reader must reach copyFromMemory");
 
-            // Simulate the sweep's phase-1 detach: the wrapper leaves the map undestroyed, so
-            // _pool.close() below cannot see it and will not block on its monitor.
-            poolOf(cache).remove("key");
+            // Simulate a concurrent detach: the entry leaves the map unfreed, so close()'s own
+            // entry sweep below cannot see it and will not block on its monitor.
+            entriesOf(cache).remove("key");
 
             final Future<?> closer = executor.submit(cache::close);
             assertThrows(TimeoutException.class, () -> closer.get(300, TimeUnit.MILLISECONDS),
@@ -609,39 +435,6 @@ public class AbstractOffHeapCacheTest {
             cache.releaseReads.countDown();
             executor.shutdownNow();
             cache.close();
-        }
-    }
-
-    /** Vacate debounce uses the monotonic source, including when its first valid reading is zero. */
-    @Test
-    public void testVacateDebounceUsesMonotonicClock() throws Exception {
-        final AtomicLong ticker = new AtomicLong();
-        try (ControlledTimeOffHeapCache cache = new ControlledTimeOffHeapCache(ticker, newInMemoryStore(new ConcurrentHashMap<>()))) {
-            final Method vacateMethod = AbstractOffHeapCache.class.getDeclaredMethod("vacate");
-            vacateMethod.setAccessible(true);
-            final Field completedField = AbstractOffHeapCache.class.getDeclaredField("_vacateHasFinished");
-            completedField.setAccessible(true);
-            final Field finishedAtField = AbstractOffHeapCache.class.getDeclaredField("_lastVacateFinishedNanos");
-            finishedAtField.setAccessible(true);
-
-            vacateMethod.invoke(cache);
-            for (int i = 0; i < 500 && !completedField.getBoolean(cache); i++) {
-                Thread.sleep(10L);
-            }
-            assertTrue(completedField.getBoolean(cache));
-            assertEquals(0L, finishedAtField.getLong(cache));
-
-            ticker.set(TimeUnit.SECONDS.toNanos(2));
-            vacateMethod.invoke(cache);
-            Thread.sleep(50L);
-            assertEquals(0L, finishedAtField.getLong(cache), "a request inside the three-second debounce window must be skipped");
-
-            ticker.set(TimeUnit.SECONDS.toNanos(4));
-            vacateMethod.invoke(cache);
-            for (int i = 0; i < 500 && finishedAtField.getLong(cache) != ticker.get(); i++) {
-                Thread.sleep(10L);
-            }
-            assertEquals(ticker.get(), finishedAtField.getLong(cache), "a request after the debounce window must run");
         }
     }
 
@@ -674,11 +467,11 @@ public class AbstractOffHeapCacheTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static <K, V> KeyedObjectPool<K, AbstractOffHeapCache.Wrapper<V>> poolOf(final AbstractOffHeapCache<K, V> cache)
+    private static <K, V> ConcurrentHashMap<K, AbstractOffHeapCache.Entry<V>> entriesOf(final AbstractOffHeapCache<K, V> cache)
             throws ReflectiveOperationException {
-        final Field poolField = AbstractOffHeapCache.class.getDeclaredField("_pool");
-        poolField.setAccessible(true);
-        return (KeyedObjectPool<K, AbstractOffHeapCache.Wrapper<V>>) poolField.get(cache);
+        final Field entriesField = AbstractOffHeapCache.class.getDeclaredField("entries");
+        entriesField.setAccessible(true);
+        return (ConcurrentHashMap<K, AbstractOffHeapCache.Entry<V>>) entriesField.get(cache);
     }
 
     private static final class GuardedOffHeapCache extends AbstractOffHeapCache<String, byte[]> {
@@ -784,130 +577,6 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
-    private static final class ControlledTimeOffHeapCache extends AbstractOffHeapCache<String, String> {
-        ControlledTimeOffHeapCache(final AtomicLong ticker, final OffHeapStore<String> store) {
-            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, (value, output) -> {
-                // Deliberately expensive serialization according to the controlled clock. It must
-                // not be included in writeToDiskTimeStats.
-                ticker.addAndGet(TimeUnit.SECONDS.toNanos(5));
-                final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                output.write(bytes, 0, bytes.length);
-            }, (bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8), store, true, null, (key, value, size) -> 2,
-                    LoggerFactory.getLogger(ControlledTimeOffHeapCache.class), (pool, task, delay) -> null, (pool, hook) -> {
-                        // Avoid installing a real hook for this deterministic clock fixture.
-                    }, ticker::get);
-        }
-
-        @Override
-        protected long allocate(final long capacityInBytes) {
-            return 0L;
-        }
-
-        @Override
-        protected void deallocate() {
-            // No native memory is allocated by this test fixture.
-        }
-
-        @Override
-        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
-            throw new AssertionError("disk-only fixture must not copy to memory");
-        }
-
-        @Override
-        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
-            throw new AssertionError("disk-only fixture must not copy from memory");
-        }
-    }
-
-    private static final class ScheduleFailingOffHeapCache extends AbstractOffHeapCache<String, byte[]> {
-        private static final AtomicBoolean deallocated = new AtomicBoolean();
-        private static volatile KeyedObjectPool<?, ?> failedPool;
-        private static volatile boolean returnNull;
-        private static volatile RejectedExecutionException reusedFailure;
-
-        ScheduleFailingOffHeapCache(final OffHeapStore<String> store) {
-            super(1, DEFAULT_MAX_BLOCK_SIZE, 1, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, null, null, store, false, null, null,
-                    LoggerFactory.getLogger(ScheduleFailingOffHeapCache.class), ScheduleFailingOffHeapCache::scheduleMaintenanceTask, (pool, hook) -> {
-                        // Scheduling always fails first in this fixture.
-                    });
-        }
-
-        @Override
-        protected long allocate(final long capacityInBytes) {
-            return 0L;
-        }
-
-        @Override
-        protected void deallocate() {
-            deallocated.set(true);
-
-            if (reusedFailure != null) {
-                throw reusedFailure;
-            }
-        }
-
-        @Override
-        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
-            // Not reached during construction.
-        }
-
-        @Override
-        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
-            // Not reached during construction.
-        }
-
-        private static ScheduledFuture<?> scheduleMaintenanceTask(final KeyedObjectPool<?, ?> pool, final Runnable task, final long delayMillis) {
-            failedPool = pool;
-
-            if (returnNull) {
-                return null;
-            }
-
-            if (reusedFailure != null) {
-                throw reusedFailure;
-            }
-
-            throw new RejectedExecutionException("forced scheduler rejection");
-        }
-    }
-
-    private static final class HookRegistrationFailingOffHeapCache extends AbstractOffHeapCache<String, byte[]> {
-        private static final AtomicBoolean deallocated = new AtomicBoolean();
-        private static volatile KeyedObjectPool<?, ?> failedPool;
-        private static volatile OutOfMemoryError registrationFailure;
-
-        HookRegistrationFailingOffHeapCache(final OffHeapStore<String> store) {
-            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, null, null, store, false, null, null,
-                    LoggerFactory.getLogger(HookRegistrationFailingOffHeapCache.class), (pool, task, delay) -> null,
-                    HookRegistrationFailingOffHeapCache::registerHook);
-        }
-
-        private static void registerHook(final KeyedObjectPool<?, ?> pool, final Thread hook) {
-            failedPool = pool;
-            throw registrationFailure;
-        }
-
-        @Override
-        protected long allocate(final long capacityInBytes) {
-            return 0L;
-        }
-
-        @Override
-        protected void deallocate() {
-            deallocated.set(true);
-        }
-
-        @Override
-        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
-            // Not reached during construction.
-        }
-
-        @Override
-        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
-            // Not reached during construction.
-        }
-    }
-
     // --- Default DESERIALIZER raw-type branches -------------------------------------------------
     // The memory/disk wrappers special-case byte[] and ByteBuffer values before ever calling the
     // configured deserializer, so the raw-type branches of the package-private default DESERIALIZER
@@ -936,11 +605,11 @@ public class AbstractOffHeapCacheTest {
         assertArrayEquals(raw, ByteBufferType.byteArrayOf((ByteBuffer) result));
     }
 
-    // --- ByteBuffer value round-trips through each wrapper kind ---------------------------------
-    // Exercise the ByteBuffer serialization branch in put() and the ByteBuffer read branch in each
-    // wrapper (single-slot, multi-slot, and disk-backed StoreWrapper).
+    // --- ByteBuffer value round-trips through each storage form ---------------------------------
+    // Exercise the ByteBuffer serialization branch in put() and the ByteBuffer read branch for
+    // each entry form (single-slot, multi-slot, and disk-backed).
 
-    /** Small ByteBuffer value: stored in a single slot and read back through SlotWrapper. */
+    /** Small ByteBuffer value: stored in a single slot and read back from memory. */
     @Test
     public void testByteBufferValue_SingleSlot_roundtrip() {
         final byte[] data = "hello-single-slot-byte-buffer".getBytes();
@@ -984,7 +653,7 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
-    /** Large ByteBuffer value (> maxBlockSize): split across slots and read back through MultiSlotsWrapper. */
+    /** Large ByteBuffer value (> maxBlockSize): split across slots and reassembled on read. */
     @Test
     public void testByteBufferValue_MultiSlot_roundtrip() {
         final byte[] data = new byte[20_000];
@@ -1005,7 +674,7 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
-    /** Disk-routed ByteBuffer value: read back through StoreWrapper.deserialize. */
+    /** Disk-routed ByteBuffer value: read back from the store and deserialized. */
     @Test
     public void testByteBufferValue_DiskStore_roundtrip() {
         final Map<String, byte[]> backing = new ConcurrentHashMap<>();
@@ -1152,17 +821,18 @@ public class AbstractOffHeapCacheTest {
             assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("k"));
             assertEquals(0L, cache.stats().sizeOnDisk(), "the entry should have been promoted");
 
-            final AbstractOffHeapCache.Wrapper<byte[]> promoted = poolOf(cache).get("k");
-            final long promotedLiveTime = promoted.activityPrint().getMaxLiveTime();
+            final AbstractOffHeapCache.Entry<byte[]> promoted = entriesOf(cache).get("k");
+            final long promotedLiveTime = promoted.activityPrint.getMaxLiveTime();
             assertTrue(promotedLiveTime > 0 && promotedLiveTime < configuredLiveTime,
                     "promotion should install the positive remaining TTL, not a fresh/full or elapsed lifetime: " + promotedLiveTime);
         }
     }
 
     /**
-     * A same-key disk replacement spans both the store and the pool. Without a mutation lock around
-     * that whole transition, a second put can overwrite the bytes while the first put is paused
-     * retiring its prior wrapper, leaving the final pool wrapper owned by different store bytes.
+     * A same-key disk replacement spans both the store and the entry map. The whole transition
+     * runs inside the map's per-key atomic compute, so a second put cannot overwrite the bytes
+     * while the first put is paused retiring its prior entry - the final mapping and the store
+     * bytes always belong to the same put.
      */
     @Test
     public void testConcurrentSameKeyDiskPutsAreAtomicAcrossStoreAndPool() throws Exception {
@@ -1206,7 +876,7 @@ public class AbstractOffHeapCacheTest {
                 .storeSelector((k, v, size) -> routeToDisk.get() ? 2 : 1)
                 .build()) {
             assertTrue(cache.put("k", new byte[] { 0 }));
-            final AbstractOffHeapCache.Wrapper<byte[]> priorWrapper = poolOf(cache).get("k");
+            final AbstractOffHeapCache.Entry<byte[]> priorWrapper = entriesOf(cache).get("k");
 
             final Thread monitorHolder = new Thread(() -> {
                 synchronized (priorWrapper) {
@@ -1299,12 +969,11 @@ public class AbstractOffHeapCacheTest {
 
             final byte[] replacement = { 2, 2 };
             final Future<Boolean> replacementPut = executor.submit(() -> cache.put("k", replacement));
-            // The replacement removes the old pool mapping before waiting for the first read's
-            // per-store-key lock. Seeing size == 0 guarantees it owns the mutation lock already.
-            for (int i = 0; i < 500 && cache.size() != 0; i++) {
-                Thread.sleep(10L);
-            }
-            assertEquals(0, cache.size());
+            // The replacement blocks retiring the prior entry (the stale reader holds its monitor
+            // during the store fetch), so the bytes cannot be overwritten underneath the reader.
+            // Give the put a moment to reach that blocking point; the assertions below must hold
+            // in every interleaving either way.
+            Thread.sleep(100L);
             releaseFirstRead.countDown();
 
             assertEquals(null, staleRead.get(5, TimeUnit.SECONDS));
@@ -1411,7 +1080,7 @@ public class AbstractOffHeapCacheTest {
 
         try {
             assertTrue(cache.put("k", new byte[] { 1 }));
-            final AbstractOffHeapCache.Wrapper<byte[]> wrapper = poolOf(cache).get("k");
+            final AbstractOffHeapCache.Entry<byte[]> wrapper = entriesOf(cache).get("k");
             final Thread monitorHolder = new Thread(() -> {
                 synchronized (wrapper) {
                     wrapperLocked.countDown();
@@ -1488,49 +1157,20 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
-    @Test
-    public void testCloseShutsDownVacationExecutor() throws Exception {
-        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
-
-        try {
-            // A memory-pressure write (a value that could fit an empty cache, arriving when the
-            // segment is already occupied) activates the otherwise-lazy per-cache vacation
-            // executor. Sizes are exact multiples of the 8192-byte max block size so both puts
-            // compete for the single segment's one 8192 slot class (see
-            // testVacateScheduledWhenMemoryFullForNewKey).
-            assertTrue(cache.put("occupant", new byte[100 * 8192]));
-            assertFalse(cache.put("crowded-out", new byte[100 * 8192]));
-
-            final Field field = AbstractOffHeapCache.class.getDeclaredField("_asyncExecutor");
-            field.setAccessible(true);
-            final AsyncExecutor executor = (AsyncExecutor) field.get(cache);
-
-            cache.close();
-
-            for (int i = 0; i < 100 && !executor.isTerminated(); i++) {
-                Thread.sleep(10L);
-            }
-
-            assertTrue(executor.isTerminated(), "close() must terminate the vacation executor and release its shutdown hook");
-        } finally {
-            cache.close();
-        }
-    }
-
     /**
-     * An asynchronous vacation can finish pool eviction and still be reclaiming segment metadata.
-     * Close must wait for that entire maintenance pass; otherwise it can deallocate the cache while
-     * the task is still traversing cache-owned structures. The segment-bit-set monitor provides a
-     * deterministic pause after {@code evict()} while the lifecycle read lock remains held.
+     * An asynchronous vacate can finish evicting entries and still be reclaiming segment metadata.
+     * Close must wait for that entire pass; otherwise it can deallocate the cache while the task
+     * is still traversing cache-owned structures. The allocator lock provides a deterministic
+     * pause after the eviction while the lifecycle read lock remains held.
      */
     @Test
     public void testCloseWaitsForInFlightVacationTask() throws Exception {
         final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
         final ExecutorService executor = Executors.newSingleThreadExecutor();
 
-        final Field segmentBitSetField = AbstractOffHeapCache.class.getDeclaredField("_segmentBitSet");
-        segmentBitSetField.setAccessible(true);
-        final Object segmentBitSet = segmentBitSetField.get(cache);
+        final Field allocatorLockField = AbstractOffHeapCache.class.getDeclaredField("allocatorLock");
+        allocatorLockField.setAccessible(true);
+        final Object allocatorLock = allocatorLockField.get(cache);
 
         final Field lifecycleLockField = AbstractOffHeapCache.class.getDeclaredField("lifecycleLock");
         lifecycleLockField.setAccessible(true);
@@ -1541,7 +1181,7 @@ public class AbstractOffHeapCacheTest {
 
         Future<?> closeResult = null;
         try {
-            synchronized (segmentBitSet) {
+            synchronized (allocatorLock) {
                 vacateMethod.invoke(cache);
 
                 for (int i = 0; i < 500 && lifecycleLock.getReadLockCount() == 0; i++) {
@@ -1584,7 +1224,7 @@ public class AbstractOffHeapCacheTest {
             for (int i = 0; i < large.length; i++) {
                 large[i] = (byte) (i % 251);
             }
-            // Replace the same key with a disk-routed value: prior memory wrapper is destroyed.
+            // Replace the same key with a disk-routed value: the prior memory entry is retired.
             assertTrue(cache.put("k", large));
             assertEquals(1L, cache.stats().sizeOnDisk());
             assertArrayEquals(large, cache.getOrNull("k"));

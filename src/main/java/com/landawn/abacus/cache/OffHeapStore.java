@@ -162,11 +162,11 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * to prevent external modifications, though this behavior is implementation-specific.
      *
      * <p><b>Failure atomicity:</b> Returning {@code false} or throwing must leave any value that
-     * was previously associated with {@code key} unchanged. The owning cache temporarily removes
-     * the old metadata while attempting a replacement and restores that metadata on failure; a
-     * store that partially overwrites the bytes before reporting failure would therefore make the
-     * restored metadata describe the wrong payload. Implementations should write to temporary
-     * storage and atomically publish/rename it, or otherwise roll back a failed replacement.
+     * was previously associated with {@code key} unchanged. The owning cache keeps the prior
+     * entry's metadata installed across a failed replacement; a store that partially overwrites
+     * the bytes before reporting failure would therefore make that metadata describe the wrong
+     * payload. Implementations should write to temporary storage and atomically publish/rename
+     * it, or otherwise roll back a failed replacement.
      *
      * <p><b>Thread Safety:</b>
      * Implementations of this method must be thread-safe and support concurrent

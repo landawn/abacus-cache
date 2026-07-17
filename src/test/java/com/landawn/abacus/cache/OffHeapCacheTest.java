@@ -688,14 +688,14 @@ public class OffHeapCacheTest {
     }
 
     /**
-     * A disk-routed replacement whose wrapper expires during a slow store write is rejected by the
-     * pool install. The prior MEMORY-backed entry's slots were never touched, so the failed
-     * replacement must restore it instead of losing it. (Before the install-first-retire-second
-     * rework, putToDisk destroyed the prior on the successful WRITE, so any subsequent install
-     * rejection silently deleted the entry.)
+     * An entry's expiration clock starts when the entry is installed, i.e. AFTER a slow disk
+     * write completes — not when the put was issued. A short-TTL replacement written through a
+     * slow store therefore still succeeds, is readable for its full TTL afterwards, and expires
+     * (with clean disk state) once the TTL elapses. This holds for both a memory-backed and a
+     * disk-backed prior entry.
      */
     @Test
-    public void test_rejected_disk_replacement_install_restores_memory_backed_prior() {
+    public void test_disk_replacement_ttl_starts_after_store_write() throws Exception {
         final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
 
         final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
@@ -706,48 +706,26 @@ public class OffHeapCacheTest {
                 .build();
 
         try {
-            final byte[] prior = { 1, 2, 3, 4 };
-            assertTrue(c.put("k", prior)); // memory-backed, no expiration
+            // Memory-backed prior replaced by a disk-routed value with a TTL shorter than the
+            // 60 ms store write: the put still succeeds and the value is readable afterwards,
+            // because the TTL starts when the write completes.
+            assertTrue(c.put("k", new byte[] { 1, 2, 3, 4 })); // memory-backed, no expiration
+            final byte[] replacement = new byte[2000];
+            assertTrue(c.put("k", replacement, 500, 0));
+            assertArrayEquals(replacement, c.getOrNull("k"), "the replacement must be readable for its full TTL after the write");
+            assertEquals(1L, c.stats().sizeOnDisk());
 
-            // TTL 20 ms, but the store write takes 60 ms: the StoreWrapper (created before the
-            // write) is already expired when the pool install runs, so the install is rejected.
-            assertFalse(c.put("k", new byte[2000], 20, 0));
+            // Disk-backed prior replaced disk-to-disk: same rule.
+            final byte[] second = new byte[3000];
+            assertTrue(c.put("k", second, 500, 0));
+            assertArrayEquals(second, c.getOrNull("k"));
+            assertEquals(1, memStore.size(), "the store holds exactly the current bytes for the key");
 
-            assertArrayEquals(prior, c.getOrNull("k"), "the memory-backed prior entry must be restored");
-            assertTrue(memStore.isEmpty(), "the rejected replacement's disk bytes must be deleted");
-            assertEquals(0L, c.stats().sizeOnDisk());
-        } finally {
-            c.close();
-        }
-    }
-
-    /**
-     * The documented residual loss: a disk-to-disk replacement whose store write already
-     * OVERWROTE the prior entry's bytes and whose install is then rejected cannot restore the
-     * prior (its data is gone). The failed put must leave the key cleanly absent — no stale pool
-     * mapping, no leftover store bytes, and consistent disk statistics.
-     */
-    @Test
-    public void test_rejected_disk_to_disk_replacement_discards_unrecoverable_prior() {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
-                .capacityInMB(1)
-                .evictDelay(0)
-                .offHeapStore(newSlowInMemoryStore(memStore, 60))
-                .storeSelector((k, v, size) -> 2) // disk-only
-                .build();
-
-        try {
-            final byte[] prior = new byte[1500];
-            assertTrue(c.put("k", prior)); // disk-backed, no expiration
-            assertTrue(memStore.containsKey("k"));
-
-            assertFalse(c.put("k", new byte[2000], 20, 0)); // expires during the 60 ms write
-
-            assertNull(c.getOrNull("k"), "the overwritten prior cannot be restored; the key must be absent");
-            assertFalse(c.containsKey("k"), "no stale pool mapping may remain");
-            assertTrue(memStore.isEmpty(), "the rejected replacement's disk bytes must be deleted");
+            // After the TTL elapses the entry expires: the key reads as absent, the stale
+            // mapping is dropped, and the disk statistics return to zero.
+            Thread.sleep(600);
+            assertNull(c.getOrNull("k"));
+            assertFalse(c.containsKey("k"));
 
             final var stats = c.stats();
             assertEquals(0L, stats.sizeOnDisk());

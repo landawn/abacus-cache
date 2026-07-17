@@ -1,30 +1,29 @@
 /*
- * Copyright (c) 2025, Haiyang Li.
+ * Copyright (C) 2025 HaiYang Li
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
  *
- * https://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
  */
 
 package com.landawn.abacus.cache;
 
 import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.LongSummaryStatistics;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,71 +31,86 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
-import java.util.function.LongSupplier;
 
 import com.landawn.abacus.cache.OffHeapCacheStats.MinMaxAvg;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.parser.Parser;
 import com.landawn.abacus.parser.ParserFactory;
-import com.landawn.abacus.pool.AbstractPoolable;
 import com.landawn.abacus.pool.ActivityPrint;
-import com.landawn.abacus.pool.EvictionPolicy;
-import com.landawn.abacus.pool.KeyedObjectPool;
-import com.landawn.abacus.pool.PoolFactory;
-import com.landawn.abacus.pool.PoolStats;
-import com.landawn.abacus.pool.Poolable.Caller;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
-import com.landawn.abacus.util.AsyncExecutor;
 import com.landawn.abacus.util.ByteArrayOutputStream;
-import com.landawn.abacus.util.Comparators;
 import com.landawn.abacus.util.IOUtil;
 import com.landawn.abacus.util.MoreExecutors;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Numbers;
 import com.landawn.abacus.util.Objectory;
-import com.landawn.abacus.util.Suppliers;
-import com.landawn.abacus.util.Tuple;
-import com.landawn.abacus.util.Tuple.Tuple3;
 import com.landawn.abacus.util.function.TriFunction;
 import com.landawn.abacus.util.function.TriPredicate;
-import com.landawn.abacus.util.stream.Collectors;
-import com.landawn.abacus.util.stream.Stream;
-
-//--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
 
 /**
- * Abstract base class for off-heap cache implementations providing the core
- * memory management logic. Handles memory segmentation, allocation, eviction,
- * and optional disk spillover. Serves as the foundation for both Unsafe-based
- * and Foreign Memory API-based implementations.
+ * Abstract base class for off-heap caches that store serialized values in native memory outside
+ * the JVM heap, with optional spill-over to a disk-backed {@link OffHeapStore}. Concrete
+ * subclasses supply the native-memory primitives: {@link OffHeapCache} uses
+ * {@code sun.misc.Unsafe} and {@link ForeignMemoryOffHeapCache} uses the Foreign Function &amp;
+ * Memory API ({@code java.lang.foreign}).
  *
- * <p>Architecture overview:
+ * <p><b>Memory model.</b> The configured capacity is divided into fixed 1 MB segments
+ * ({@link #SEGMENT_SIZE}). Each segment is dynamically dedicated to one slot size — any multiple
+ * of the 64-byte {@link #MIN_BLOCK_SIZE} up to {@code maxBlockSize} — and carved into equal slots
+ * of that size. A value whose serialized form fits in {@code maxBlockSize} occupies a single slot
+ * of the smallest sufficient size class; a larger value is split into {@code maxBlockSize}-sized
+ * chunks, each in its own slot (the final, possibly smaller chunk uses the smallest sufficient
+ * class). A segment whose slots are all freed is reclaimed &mdash; by the periodic maintenance
+ * pass, a vacate pass, or {@link #clear()} &mdash; and can then be re-dedicated to a different
+ * slot size. A value whose serialized form exceeds the <i>entire</i> capacity never attempts
+ * in-memory placement.
+ *
+ * <p><b>Concurrency.</b> Four mechanisms, with the lock order map bin &rarr; entry monitor
+ * &rarr; allocator lock (no code path acquires them in any other order):
  * <ul>
- * <li>Memory is divided into fixed-size segments ({@value #SEGMENT_SIZE} bytes each).</li>
- * <li>Each segment can be subdivided into slots of various sizes.</li>
- * <li>Slot sizes are multiples of {@link #MIN_BLOCK_SIZE} (64 bytes).</li>
- * <li>Large objects span multiple slots if needed.</li>
- * <li>Empty segments are automatically reclaimed so they can be reused with a different slot size.</li>
- * <li>Optional disk spillover is supported via the {@link OffHeapStore} interface.</li>
+ * <li>Entries live in a {@link ConcurrentHashMap}; every same-key mutation (put, disk spill,
+ *     promotion, removal) runs inside the map's atomic per-key {@code compute}/{@code remove},
+ *     so no two mutations of one key can interleave.</li>
+ * <li>Each entry's monitor guards its resources: readers copy native memory (or fetch store
+ *     bytes) under it, and every path that frees or overwrites those resources holds it first, so
+ *     a read can never observe freed memory or another entry's bytes.</li>
+ * <li>A cache-wide read-write lock makes {@link #close()} (write side) mutually exclusive with
+ *     all in-flight operations (read side), so native memory is never deallocated (and the store
+ *     never closed) underneath one.</li>
+ * <li>A single allocator lock serializes all segment/slot bookkeeping.</li>
  * </ul>
  *
- * <p>Memory management strategy:
- * <ul>
- * <li>Size-segregated segment queues with bidirectional best-fit slot search.</li>
- * <li>Lazy segment allocation - segments are allocated only when needed.</li>
- * <li>Automatic eviction based on last-access time when capacity is reached.</li>
- * <li>Vacating process evicts entries and reclaims now-empty segments.</li>
- * <li>Statistics tracking for monitoring and optimization.</li>
- * </ul>
+ * <p><b>Expiration.</b> Each entry carries an {@link ActivityPrint} with its TTL and idle timeout
+ * ({@code <= 0} means "no limit" per the {@link Cache} contract). Expiry is enforced lazily on
+ * access and, when {@code evictDelay > 0}, by a periodic maintenance pass that also reclaims
+ * empty segments.
  *
- * @param <K> the type of keys used to identify cache entries
- * @param <V> the type of values stored in the cache
+ * <p><b>Memory pressure.</b> When slot allocation fails for a value that could fit, the put
+ * falls back to the disk store when one is configured; otherwise it returns {@code false} and
+ * schedules an asynchronous, debounced vacate pass that evicts the least-recently-accessed
+ * ~{@code vacatingFactor} of entries and reclaims their now-empty segments.
+ *
+ * <p><b>Disk tier.</b> With an {@link OffHeapStore} configured, values that cannot be placed in
+ * memory (or that the {@code storeSelector} routes to disk) are written to the store under the
+ * cache key. The store write and the entry installation happen inside the same per-key atomic
+ * operation; a failed or throwing write leaves the prior mapping and its bytes untouched (the
+ * {@link OffHeapStore#put} contract guarantees the prior bytes are unchanged on failure). Reads
+ * may optionally be promoted back into memory via the configured
+ * {@code testerForLoadingItemFromDiskToMemory}.
+ *
+ * <p><b>Value handling.</b> {@code byte[]} values are stored raw (exactly {@code array.length}
+ * bytes); {@link ByteBuffer} values store the bytes from index 0 up to the current position
+ * (position, limit, and mark are left untouched); all other types go through the configured
+ * serializer/deserializer, defaulting to Kryo when available, otherwise JSON.
+ *
+ * @param <K> the key type
+ * @param <V> the value type
  * @see OffHeapCache
  * @see ForeignMemoryOffHeapCache
  * @see OffHeapCacheStats
@@ -104,10 +118,7 @@ import com.landawn.abacus.util.stream.Stream;
  */
 abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
-    /**
-     * Default vacating factor (0.2) passed to the underlying object pool. Controls the
-     * fraction of entries the pool removes when a vacating cycle is triggered.
-     */
+    /** Default fraction of entries evicted by a vacate pass triggered by memory pressure. */
     static final float DEFAULT_VACATING_FACTOR = 0.2f;
 
     /**
@@ -116,10 +127,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     static final Parser<?, ?> PARSER = ParserFactory.isKryoParserAvailable() ? ParserFactory.createKryoParser() : ParserFactory.createJsonParser();
 
-    /**
-     * Default serializer used when no custom serializer is configured.
-     * Delegates to {@link #PARSER}.
-     */
+    /** Default serializer used when no custom serializer is configured. Delegates to {@link #PARSER}. */
     static final BiConsumer<Object, ByteArrayOutputStream> SERIALIZER = PARSER::serialize;
 
     /**
@@ -137,943 +145,488 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     };
 
-    /**
-     * Size of each memory segment in bytes (1 MB).
-     */
-    static final int SEGMENT_SIZE = 1024 * 1024; // (int) N.ONE_MB;
+    /** Size of each memory segment in bytes (1 MB). */
+    static final int SEGMENT_SIZE = 1024 * 1024;
 
-    /**
-     * Minimum slot size in bytes. All slot sizes are rounded up to a multiple of this value.
-     */
+    /** Minimum slot size in bytes. All slot sizes are rounded up to a multiple of this value. */
     static final int MIN_BLOCK_SIZE = 64;
 
-    /**
-     * Default maximum size for a single memory block (8 KB).
-     */
-    static final int DEFAULT_MAX_BLOCK_SIZE = 8192; // 8K
+    /** Default maximum size for a single memory block (8 KB). */
+    static final int DEFAULT_MAX_BLOCK_SIZE = 8192;
 
     /**
-     * When {@link #getAvailableSlot(int)} locates a non-full segment only after more than this many
-     * scan iterations (each iteration probes one segment from each end of the size-class queue), that
-     * segment is moved to the front so subsequent allocations of the same slot size find it immediately,
-     * keeping the common case fast.
+     * Bits used for the slot index inside a packed slot handle. A segment holds at most
+     * {@code SEGMENT_SIZE / MIN_BLOCK_SIZE} = 16384 = 2^14 slots, so 14 bits always suffice.
      */
-    private static final int SEGMENT_REORDER_THRESHOLD = 3;
+    private static final int SLOT_INDEX_BITS = 14;
+    private static final int SLOT_INDEX_MASK = (1 << SLOT_INDEX_BITS) - 1;
+
+    /** Suppresses a fresh vacate pass for this long after the previous one finished. */
+    private static final long VACATE_DEBOUNCE_NANOS = TimeUnit.MILLISECONDS.toNanos(3000);
+
+    /** {@code storeSelector} results: memory first with disk fallback, memory only, disk only. */
+    private static final int STORE_DEFAULT = 0;
+    private static final int STORE_MEMORY_ONLY = 1;
+    private static final int STORE_DISK_ONLY = 2;
 
     /**
-     * Shared scheduled executor used for the background eviction task of all
-     * off-heap cache instances created from this class.
+     * Shared scheduled executor used for the periodic maintenance task of all off-heap cache
+     * instances created from this class.
      */
     static final ScheduledExecutorService SCHEDULED_EXECUTOR;
 
     static {
         final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(IOUtil.CPU_CORES);
-        // Without this, a cancelled scheduleFuture sits in the executor's task queue until its next
-        // scheduled run, holding a strong reference to the cache instance and preventing GC after
-        // close(). Setting the policy makes cancel() purge the task from the queue immediately.
+        // Without this, a cancelled maintenance task sits in the executor's queue until its next
+        // scheduled run, holding a strong reference to the closed cache and preventing GC.
         executor.setRemoveOnCancelPolicy(true);
         SCHEDULED_EXECUTOR = MoreExecutors.getExitingScheduledExecutorService(executor);
     }
 
-    /** Internal construction strategy used to make scheduler rejection deterministic in tests. */
-    @FunctionalInterface
-    interface MaintenanceTaskScheduler {
-        ScheduledFuture<?> schedule(KeyedObjectPool<?, ?> pool, Runnable task, long delayMillis);
+    /** Why an entry is being freed; determines eviction counting. */
+    private enum FreeCause {
+        /** Superseded by a new same-key entry; never counted as an eviction. */
+        REPLACED,
+        /** Explicit remove()/clear()/close(), or a stale mapping whose store bytes vanished. */
+        REMOVED,
+        /** TTL/idle expiry (lazy on access, or the maintenance sweep). Counted as an eviction. */
+        EXPIRED,
+        /** Reclaimed by the memory-pressure vacate pass. Counted as an eviction. */
+        EVICTED
     }
 
-    /** Internal construction strategy used to make shutdown-hook registration failures testable. */
-    @FunctionalInterface
-    interface ShutdownHookRegistrar {
-        void register(KeyedObjectPool<?, ?> pool, Thread hook);
-    }
-
-    private static final MaintenanceTaskScheduler DEFAULT_MAINTENANCE_TASK_SCHEDULER = (_, task, delayMillis) -> SCHEDULED_EXECUTOR.scheduleWithFixedDelay(task,
-            delayMillis, delayMillis, TimeUnit.MILLISECONDS);
-    private static final ShutdownHookRegistrar DEFAULT_SHUTDOWN_HOOK_REGISTRAR = (_, hook) -> Runtime.getRuntime().addShutdownHook(hook);
-
-    // Statistics tracking. LongAdder (rather than AtomicLong) is used because these
-    // counters are write-heavy on the hot get/put/evict paths and only read in stats();
-    // LongAdder spreads contention across cells, avoiding the single contended CAS.
-    final LongAdder totalOccupiedMemorySize = new LongAdder();
-    final LongAdder totalDataSize = new LongAdder();
-    final LongAdder dataSizeOnDisk = new LongAdder();
-    final LongAdder sizeOnDisk = new LongAdder();
-    final LongAdder writeCountToDisk = new LongAdder();
-    final LongAdder readCountFromDisk = new LongAdder();
-    // The pool records a hit as soon as it finds a StoreWrapper. If the backing store then
-    // reports that the bytes are missing, the public get still returns null and must be
-    // classified as a miss in stats(). This counter reclassifies those completed lookups
-    // without changing the pool's total get count.
-    final LongAdder missingReadCountFromDisk = new LongAdder();
-    final LongAdder evictionCountFromDisk = new LongAdder();
+    // ------------------------------------------------------------------------------------- state
 
     final Logger logger;
 
-    // Core memory management fields
-    final long _capacityInBytes;
-    final long _startPtr;
-    final int _arrayOffset;
-    final int _maxBlockSize;
+    final long capacityInBytes;
+    /** Base address of the native region returned by {@link #allocate(long)}. */
+    final long baseAddress;
+    final int arrayOffset;
+    final int maxBlockSize;
 
-    private final Segment[] _segments;
-    private final BitSet _segmentBitSet = new BitSet();
-    // Lower bound for the next free segment scan. Only ever read/written while holding
-    // the _segmentBitSet monitor, so a plain int suffices. Lets new-segment allocation
-    // start nextClearBit() near the first free index instead of rescanning from 0.
-    private int _nextSegmentIndexHint = 0;
-    private final Map<Integer, Deque<Segment>> _segmentQueueMap = new ConcurrentHashMap<>();
-    private final Deque<Segment>[] _segmentQueues;
+    /** All entries, both memory-backed and disk-backed. Same-key mutations use atomic compute/remove. */
+    private final ConcurrentHashMap<K, Entry<V>> entries = new ConcurrentHashMap<>();
 
-    // Per-cache executor used only for asynchronous vacation. It is lazy, but once initialized it
-    // owns worker threads and a JVM shutdown hook, so close() must shut it down explicitly.
-    private final AsyncExecutor _asyncExecutor = new AsyncExecutor();
-    private final AtomicInteger _activeVacationTaskCount = new AtomicInteger();
-    // Monotonic time the most recent vacate task finished. A separate completion flag avoids
-    // reserving a nanoTime value as a sentinel (nanoTime may legitimately return any long).
-    private volatile long _lastVacateFinishedNanos;
-    private volatile boolean _vacateHasFinished;
-    private static final long VACATE_DEBOUNCE_NANOS = TimeUnit.MILLISECONDS.toNanos(3000);
-    private final KeyedObjectPool<K, Wrapper<V>> _pool;
+    /**
+     * Close() takes the write side while every cache operation holds the read side, so native
+     * memory is never deallocated (and the store never closed) underneath an in-flight operation.
+     */
+    private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
 
-    private ScheduledFuture<?> scheduleFuture;
-    private Thread shutdownHook;
+    private volatile boolean closed;
 
-    // Configuration and extension points
+    // --- allocator (all fields below are guarded by allocatorLock) ------------------------------
+
+    /** The single allocator mutex: segment dedication, slot allocation/release, and reclamation. */
+    private final Object allocatorLock = new Object();
+    /** Marks which segments are currently dedicated to a slot-size class. */
+    private final BitSet dedicatedSegments = new BitSet();
+    private final Segment[] segments;
+    /** Per size class, the segments currently dedicated to it (segments with vacancies near the front). */
+    private final Deque<Segment>[] segmentQueues;
+    /** Lower bound for the next free-segment scan. */
+    private int nextFreeSegmentHint = 0;
+
+    // --- statistics ------------------------------------------------------------------------
+
+    // LongAdder (rather than AtomicLong) because these counters are write-heavy on the hot
+    // get/put/evict paths and only read in stats().
+    private final LongAdder hitCount = new LongAdder();
+    private final LongAdder missCount = new LongAdder();
+    private final LongAdder putCount = new LongAdder();
+    private final LongAdder evictionCount = new LongAdder();
+    private final LongAdder evictionCountFromDisk = new LongAdder();
+    private final LongAdder totalOccupiedMemorySize = new LongAdder();
+    private final LongAdder totalDataSize = new LongAdder();
+    private final LongAdder dataSizeOnDisk = new LongAdder();
+    private final LongAdder sizeOnDisk = new LongAdder();
+    private final LongAdder writeCountToDisk = new LongAdder();
+    private final LongAdder readCountFromDisk = new LongAdder();
+
+    private final TimingStats writeToDiskTimes = new TimingStats();
+    private final TimingStats readFromDiskTimes = new TimingStats();
+
+    // --- vacate ----------------------------------------------------------------------------
+
+    /** Single-flight gate: at most one asynchronous vacate pass runs at a time. */
+    private final AtomicBoolean vacating = new AtomicBoolean();
+    /** Initialized one debounce interval in the past so the first pass is never suppressed. */
+    private volatile long lastVacateFinishedNanos = System.nanoTime() - VACATE_DEBOUNCE_NANOS;
+
+    // --- configuration -----------------------------------------------------------------------
+
+    final float vacatingFactor;
     final BiConsumer<? super V, ByteArrayOutputStream> serializer;
     final BiFunction<byte[], Type<V>, ? extends V> deserializer;
     final OffHeapStore<K> offHeapStore;
     final boolean statsTimeOnDisk;
     final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
     final TriFunction<K, V, Integer, Integer> storeSelector;
-    private final LongSupplier nanoTimeSource;
-    final LongSummaryStatistics totalWriteToDiskTimeStats = new LongSummaryStatistics();
-    final LongSummaryStatistics totalReadFromDiskTimeStats = new LongSummaryStatistics();
 
-    // The offHeapStore is keyed by the cache key alone, so concurrent same-key disk spills
-    // share one store entry. This map records which StoreWrapper currently owns the bytes in
-    // the store for a key; a replaced wrapper's destroy() must not delete bytes that belong
-    // to a newer wrapper. Store writes and ownership claims are serialized per key via
-    // storeKeyLocks so the (claim ownership, write bytes) pair is atomic.
-    final ConcurrentHashMap<K, StoreWrapper> storeOwners = new ConcurrentHashMap<>();
-    // Must be a power of two so that (hash & (length - 1)) below is a valid, uniformly distributed index.
-    private static final int STORE_KEY_LOCK_COUNT = 64;
-    private final Object[] storeKeyLocks = new Object[STORE_KEY_LOCK_COUNT];
+    private ScheduledFuture<?> maintenanceFuture;
+    private Thread shutdownHook;
 
-    // A disk spill is a compound operation: remove the old pool wrapper, replace the bytes in the
-    // key-only OffHeapStore, transfer store ownership, and install the new pool wrapper. The store
-    // lock above protects only the bytes/owner pair because StoreWrapper reads and destruction also
-    // use it while holding the wrapper monitor. A separate striped mutation lock keeps the complete
-    // same-key pool transition atomic without reversing that wrapper -> store-lock order (which
-    // would deadlock). It also coordinates memory replacements, removes, stale-entry cleanup, and
-    // disk-to-memory promotion with a spill of the same key.
-    private static final int KEY_MUTATION_LOCK_COUNT = 256;
-    private final Object[] keyMutationLocks = new Object[KEY_MUTATION_LOCK_COUNT];
-
-    {
-        for (int i = 0; i < storeKeyLocks.length; i++) {
-            storeKeyLocks[i] = new Object();
-        }
-
-        for (int i = 0; i < keyMutationLocks.length; i++) {
-            keyMutationLocks[i] = new Object();
-        }
-    }
-
-    private Object storeKeyLockFor(final K key) {
-        // Spread the hash before masking (same as ConcurrentHashMap): masking keeps only the low
-        // bits, so keys whose hashCodes share them (e.g. numeric IDs with a stride that is a
-        // multiple of the stripe count) would otherwise collapse onto one stripe and serialize
-        // their disk I/O. The power-of-two mask also keeps the index non-negative.
-        final int h = key.hashCode();
-        return storeKeyLocks[(h ^ (h >>> 16)) & (storeKeyLocks.length - 1)];
-    }
-
-    private Object keyMutationLockFor(final K key) {
-        final int h = key.hashCode();
-        return keyMutationLocks[(h ^ (h >>> 16)) & (keyMutationLocks.length - 1)];
-    }
-
-    // Guards native memory against close(): writers of off-heap memory (put(), and the
-    // disk-to-memory promotion in getOrNull()) hold the read lock across their copyToMemory
-    // calls, and close() holds the write lock across deallocate(). Without it, a thread that
-    // passed the isClosed() fail-fast could still be mid-copy when close() frees the region -
-    // a use-after-free (SIGSEGV or silent corruption for the Unsafe-based subclass).
-    //
-    // Readers of native memory (SlotWrapper/MultiSlotsWrapper.read() in getOrNull()) must hold
-    // it too, re-checking isClosed() under the lock. The wrapper monitor alone is NOT enough:
-    // the pool's internal expiry sweep (scheduled when evictDelay > 0) detaches expired
-    // wrappers from the map under the pool lock but destroys them OUTSIDE it, on a scheduler
-    // thread that _pool.close() cancels without joining. A wrapper detached but not yet
-    // destroyed is invisible to _pool.close()'s destroy sweep, so nothing synchronizes on its
-    // monitor before deallocate() - an in-flight read of it would touch freed memory.
-    private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
+    // ------------------------------------------------------------------------------ construction
 
     /**
-     * Constructs an {@code AbstractOffHeapCache} with the specified configuration.
-     * Initializes the memory segments, object pool, and eviction scheduling.
-     * The cache divides the total memory capacity into fixed-size segments (1 MB each)
-     * and manages them using a size-based queuing strategy with best-fit placement.
+     * Constructs an {@code AbstractOffHeapCache} with the specified configuration: allocates the
+     * native region, prepares the segment allocator, schedules the periodic maintenance pass
+     * (expiry sweep + empty-segment reclamation) when {@code evictDelay > 0}, and registers a JVM
+     * shutdown hook that closes the cache. If any initialization step after the native allocation
+     * fails, everything acquired so far (native memory, scheduled task, the supplied store) is
+     * released before the failure propagates.
      *
-     * <p>The constructor performs the following initialization steps:
-     * <ul>
-     * <li>Allocates off-heap memory of the specified capacity.</li>
-     * <li>Creates memory segments and initializes the segment tracking structures.</li>
-     * <li>Sets up the keyed object pool for cache entry management.</li>
-     * <li>Configures serialization/deserialization handlers.</li>
-     * <li>Schedules periodic eviction tasks if {@code evictDelay} is positive.</li>
-     * <li>Registers a shutdown hook for graceful resource cleanup.</li>
-     * </ul>
-     *
-     * <p>The constructor is safe to invoke from a single initializing thread; all data
-     * structures it sets up are designed for concurrent access thereafter.
-     * Custom serializers, deserializers, promotion predicates, storage selectors, and
-     * stores may be invoked concurrently and therefore must be thread-safe.
-     *
-     * <p><b>&#9888;&#65039; Store ownership:</b> When an {@code offHeapStore} is supplied, this cache
-     * assumes ownership and closes it from {@link #close()}. Ownership is accepted once the native
-     * allocation and object pool have been created; if a later construction step fails (for example,
-     * because the maintenance scheduler rejects its task), the store is closed before the failure
-     * is propagated.
-     *
-     * @param capacityInMB the total off-heap memory capacity in megabytes. Determines the total
-     *                     number of segments ({@code capacityInMB} MB / 1 MB per segment). Must be positive.
-     *                     The actual capacity will be exactly {@code capacityInMB * 1048576} bytes. For very
-     *                     large caches ({@code capacityInMB} &ge; ~131072, i.e. 128 GB) the derived pool
-     *                     entry-capacity is clamped to {@link Integer#MAX_VALUE} so the {@code int} cast
-     *                     does not overflow; the off-heap memory itself is still allocated at full size.
-     * @param maxBlockSize the maximum size of a single memory slot in bytes. Values that fit within
-     *                     this size are stored in a single slot; larger values are split across
-     *                     multiple slots. Must be between 1024 and {@link #SEGMENT_SIZE} (1048576). The
-     *                     value is rounded up to the nearest multiple of {@link #MIN_BLOCK_SIZE} (64 bytes).
-     * @param evictDelay the delay between eviction runs in milliseconds. If positive, schedules a
-     *                   background task to periodically evict expired entries and release empty segments.
-     *                   Use 0 or negative to disable automatic eviction (manual eviction via the internal
-     *                   {@code vacate()} mechanism still works).
-     * @param defaultLiveTime the default time-to-live for cache entries in milliseconds. Entries older
-     *                        than this are considered expired. Use 0 or negative for no expiration.
-     *                        Can be overridden per entry when calling {@link #put(Object, Object, long, long)}.
-     * @param defaultMaxIdleTime the default maximum idle time for entries in milliseconds. Entries not
-     *                           accessed within this interval are considered expired. Use 0 or negative
-     *                           for no idle timeout. Can be overridden per entry when calling
-     *                           {@link #put(Object, Object, long, long)}.
-     * @param vacatingFactor the fraction (0.0 to 1.0) of entries the underlying object pool removes
-     *                       during a vacate cycle. A value of {@code 0f} selects the
-     *                       {@link #DEFAULT_VACATING_FACTOR} (0.2). Typical values range from 0.1 to 0.3.
-     * @param arrayOffset the array base offset for memory operations, used to calculate the correct
-     *                    memory address when copying data to/from byte arrays. Implementation-specific
-     *                    (e.g., {@code Unsafe.ARRAY_BYTE_BASE_OFFSET} for Unsafe-based implementations).
-     * @param serializer the custom serializer function for converting values to byte streams, or
-     *                   {@code null} to use the default serializer (Kryo if available, otherwise JSON).
-     *                   The serializer must write the complete serialized form to the provided
-     *                   {@link ByteArrayOutputStream}.
-     * @param deserializer the custom deserializer function for converting byte arrays back to values,
-     *                     or {@code null} to use the default deserializer. The function receives the byte
-     *                     array and type information and must return a non-null deserialized value.
-     * @param offHeapStore the optional disk-based store for spillover storage when memory is full, or
-     *                     {@code null} to disable disk spillover. When configured, values that do not fit
-     *                     in memory may be automatically stored to disk instead of being rejected.
-     * @param statsTimeOnDisk whether to collect detailed timing statistics for disk I/O operations.
-     *                        When {@code true}, tracks min/max/average read and write times to disk.
-     *                        Has minimal performance overhead but provides valuable monitoring data.
-     * @param testerForLoadingItemFromDiskToMemory the predicate that determines whether a disk-stored
-     *                                             value should be promoted to memory based on access patterns.
-     *                                             Receives the {@link ActivityPrint}, size, and I/O elapsed
-     *                                             time, and returns {@code true} to promote the value to
-     *                                             memory. Use {@code null} to disable automatic promotion.
-     * @param storeSelector the function that determines the storage location for each put operation.
-     *                      Receives the key, value, and serialized size and must return: {@code 0} for
-     *                      default (memory with disk fallback when configured), {@code 1} for memory only
-     *                      (never spill to disk), or {@code 2} for disk only (skip memory). Use {@code null}
-     *                      for default behavior on every put.
-     * @param logger the logger instance for this cache, used to log warnings and errors during cache
-     *               operations. Must not be {@code null}.
-     * @throws IllegalArgumentException if {@code capacityInMB} is not positive, or if {@code maxBlockSize}
-     *                                  is less than 1024 or greater than {@link #SEGMENT_SIZE} (1048576), or if
-     *                                  {@code vacatingFactor} is not in the range [0.0, 1.0], or if
-     *                                  {@code logger} is {@code null}
-     * @throws OutOfMemoryError if native allocation fails or the JVM cannot create the shutdown-hook
-     *                          thread (resources accepted before the failure are released)
-     * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is
-     *                               registered (the off-heap allocation is released before this propagates)
-     * @throws SecurityException if the runtime denies shutdown-hook registration (all cache-owned
+     * @param capacityInMB the total off-heap capacity in megabytes; must be positive
+     * @param maxBlockSize the maximum single-slot size in bytes, in {@code [1024, SEGMENT_SIZE]};
+     *                     rounded up to a multiple of {@link #MIN_BLOCK_SIZE}
+     * @param evictDelay the delay in milliseconds between maintenance passes; {@code 0} or a
+     *                   negative value disables the periodic pass (lazy expiry still applies)
+     * @param defaultLiveTime the default TTL in milliseconds for entries added without an explicit one
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without an explicit one
+     * @param vacatingFactor the fraction of entries evicted by a memory-pressure vacate pass, in
+     *                       {@code [0.0, 1.0]}; {@code 0} selects the default (0.2)
+     * @param arrayOffset the heap-array offset convention the subclass's copy primitives expect:
+     *                    an {@code Unsafe}-based implementation passes the array base offset,
+     *                    a {@code MemorySegment}-based implementation passes 0
+     * @param serializer custom serializer, or {@code null} for the default (Kryo/JSON)
+     * @param deserializer custom deserializer, or {@code null} for the default. Must not mutate
+     *                     the supplied byte array (a promoted disk read reuses it)
+     * @param offHeapStore optional disk store for spill-over; {@code null} for memory-only. The
+     *                     cache owns it and closes it in {@link #close()}
+     * @param statsTimeOnDisk whether to record disk I/O timing statistics
+     * @param testerForLoadingItemFromDiskToMemory optional predicate deciding when a disk read is
+     *                                             promoted back into memory; receives the entry's
+     *                                             live {@link ActivityPrint}, its serialized size,
+     *                                             and the store-read time in milliseconds
+     * @param storeSelector optional per-put routing function returning 0 (memory, disk fallback),
+     *                      1 (memory only), or 2 (disk only)
+     * @param logger the concrete subclass logger
+     * @throws IllegalArgumentException if a numeric argument is out of range or a required argument is {@code null}
+     * @throws OutOfMemoryError if the native allocation cannot be reserved
+     * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is registered
+     * @throws SecurityException if runtime policy denies shutdown-hook registration
+     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive
+     *                           and the maintenance scheduler rejects its task (all cache-owned
      *                           resources are released before this propagates)
-     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive and
-     *                           the maintenance scheduler rejects its task (all cache-owned resources
-     *                           are released before this propagates)
      */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
             final long defaultMaxIdleTime, final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
             final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
             final Logger logger) {
-        this(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, arrayOffset, serializer, deserializer, offHeapStore,
-                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger, DEFAULT_MAINTENANCE_TASK_SCHEDULER,
-                DEFAULT_SHUTDOWN_HOOK_REGISTRAR, System::nanoTime);
-    }
-
-    /** Package-private construction seams for deterministic scheduler/hook failure testing. */
-    AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
-            final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
-            final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
-            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
-            final Logger logger, final MaintenanceTaskScheduler maintenanceTaskScheduler, final ShutdownHookRegistrar shutdownHookRegistrar) {
-        this(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, arrayOffset, serializer, deserializer, offHeapStore,
-                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger, maintenanceTaskScheduler, shutdownHookRegistrar,
-                System::nanoTime);
-    }
-
-    /** Package-private clock seam for deterministic duration and debounce testing. */
-    @SuppressWarnings("rawtypes")
-    AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
-            final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
-            final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
-            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
-            final Logger logger, final MaintenanceTaskScheduler maintenanceTaskScheduler, final ShutdownHookRegistrar shutdownHookRegistrar,
-            final LongSupplier nanoTimeSource) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
-        N.checkArgNotNull(maintenanceTaskScheduler, "maintenanceTaskScheduler");
-        N.checkArgNotNull(shutdownHookRegistrar, "shutdownHookRegistrar");
-        this.nanoTimeSource = N.checkArgNotNull(nanoTimeSource, "nanoTimeSource");
         N.checkArgPositive(capacityInMB, "capacityInMB");
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "maxBlockSize must be in the range [1024, {}]: {}", SEGMENT_SIZE, maxBlockSize);
         N.checkArgument(vacatingFactor >= 0f && vacatingFactor <= 1f, "vacatingFactor must be in the range [0.0, 1.0]: {}", vacatingFactor);
 
         this.logger = N.checkArgNotNull(logger, "logger");
+        this.arrayOffset = arrayOffset;
+        capacityInBytes = capacityInMB * (1024L * 1024L);
+        this.maxBlockSize = roundUpToMinBlock(maxBlockSize);
+        this.vacatingFactor = vacatingFactor == 0f ? DEFAULT_VACATING_FACTOR : vacatingFactor;
+        this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
+        this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
+        this.offHeapStore = offHeapStore;
+        this.statsTimeOnDisk = statsTimeOnDisk;
+        this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
+        this.storeSelector = storeSelector;
 
-        _arrayOffset = arrayOffset;
+        segments = new Segment[(int) (capacityInBytes / SEGMENT_SIZE)];
 
-        _capacityInBytes = capacityInMB * (1024L * 1024L); // N.ONE_MB;
-        _maxBlockSize = maxBlockSize % MIN_BLOCK_SIZE == 0 ? maxBlockSize : (maxBlockSize / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
-        _segmentQueues = new Deque[_maxBlockSize / MIN_BLOCK_SIZE];
-
-        // Populate every size-class queue eagerly (the array is small and fixed) so the queue
-        // references are safely published by the constructor. Lazily creating them with
-        // double-checked locking on a non-volatile array element risked another thread reading a
-        // non-null LinkedList reference whose internal (non-final) fields were not yet visible.
-        for (int i = 0, len = _segmentQueues.length; i < len; i++) {
-            _segmentQueues[i] = new LinkedList<>();
+        for (int i = 0, len = segments.length; i < len; i++) {
+            segments[i] = new Segment(i);
         }
 
-        // ByteBuffer.allocateDirect((int) capacity);
-        _startPtr = allocate(_capacityInBytes);
+        segmentQueues = new Deque[this.maxBlockSize / MIN_BLOCK_SIZE];
 
-        // From this point on, a failing initialization step would leak the native allocation
-        // (it is released only by close()/the shutdown hook, neither of which is reachable for
-        // a half-constructed instance). Keep local ownership markers because the corresponding
-        // final fields are not definitely assigned on every exceptional path through this block.
-        KeyedObjectPool<K, Wrapper<V>> createdPool = null;
-        boolean storeOwnershipAccepted = false;
+        for (int i = 0, len = segmentQueues.length; i < len; i++) {
+            segmentQueues[i] = new ArrayDeque<>();
+        }
+
+        baseAddress = allocate(capacityInBytes);
+
+        // From this point on a failing initialization step would leak the native allocation
+        // (close() is not reachable for a half-constructed instance), so release everything
+        // acquired so far before propagating.
         try {
-            _segments = new Segment[(int) (_capacityInBytes / SEGMENT_SIZE)];
-
-            for (int i = 0, len = _segments.length; i < len; i++) {
-                _segments[i] = new Segment(_startPtr + (long) i * SEGMENT_SIZE, i);
-            }
-
-            // Pool capacity is the maximum number of MIN_BLOCK_SIZE slots that fit in the cache. For
-            // very large caches (capacityInMB >= ~131_072 i.e. 128 GB) the slot count can exceed
-            // Integer.MAX_VALUE; cap at Integer.MAX_VALUE so the int cast does not wrap to a
-            // negative or near-zero value and make every put fail with "pool full".
-            final long maxSlots = _capacityInBytes / MIN_BLOCK_SIZE;
-            final int poolCapacity = maxSlots > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) maxSlots;
-            // The documented contract is "0 or negative disables automatic eviction", but the
-            // underlying pool rejects a negative evictDelay with IllegalArgumentException - so
-            // clamp before handing it over.
-            createdPool = PoolFactory.createKeyedObjectPool(poolCapacity, N.max(0L, evictDelay), EvictionPolicy.LAST_ACCESS_TIME, true,
-                    vacatingFactor == 0f ? DEFAULT_VACATING_FACTOR : vacatingFactor);
-            _pool = createdPool;
-
-            this.serializer = serializer == null ? (BiConsumer<V, ByteArrayOutputStream>) SERIALIZER : serializer;
-            this.deserializer = deserializer == null ? (BiFunction) DESERIALIZER : deserializer;
-            this.offHeapStore = offHeapStore;
-            storeOwnershipAccepted = true;
-            this.statsTimeOnDisk = statsTimeOnDisk;
-            this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
-            this.storeSelector = storeSelector;
-
             if (evictDelay > 0) {
-                final Runnable evictTask = () -> {
-                    // Keep close() from deallocating/closing the cache while a scheduled
-                    // maintenance pass is still traversing its segment metadata. A task that was
-                    // queued just before cancellation may start after close() has acquired the
-                    // write lock; once admitted, it observes the closed pool and becomes a no-op.
-                    lifecycleLock.readLock().lock();
-                    try {
-                        if (!_pool.isClosed()) {
-                            try {
-                                reclaimEmptySegments();
-                            } catch (final Exception e) {
-                                // Swallowed so the scheduled task keeps running; eviction retries on the next cycle.
-                                // Pass the exception (not just its message) so the stack trace is preserved.
-                                if (logger.isWarnEnabled()) {
-                                    logger.warn("Background empty-segment reclamation failed; will retry on the next scheduled run", e);
-                                }
-                            }
-                        }
-                    } finally {
-                        lifecycleLock.readLock().unlock();
-                    }
-                };
-
-                scheduleFuture = N.checkArgNotNull(maintenanceTaskScheduler.schedule(createdPool, evictTask, evictDelay), "scheduleFuture");
+                maintenanceFuture = SCHEDULED_EXECUTOR.scheduleWithFixedDelay(this::runMaintenance, evictDelay, evictDelay, TimeUnit.MILLISECONDS);
             }
+
+            shutdownHook = new Thread(() -> {
+                logger.info("Closing off-heap cache on JVM shutdown");
+                close();
+            }, "abacus-offheap-cache-shutdown");
+
+            Runtime.getRuntime().addShutdownHook(shutdownHook);
         } catch (final RuntimeException | Error initFailure) {
-            if (scheduleFuture != null) {
-                try {
-                    scheduleFuture.cancel(true);
-                } catch (final RuntimeException | Error cleanupFailure) {
-                    addSuppressedIfDistinct(initFailure, cleanupFailure);
+            Throwable failure = initFailure;
+            failure = runCleanupStep(failure, () -> {
+                if (maintenanceFuture != null) {
+                    maintenanceFuture.cancel(true);
                 }
-            }
-
-            if (createdPool != null) {
-                try {
-                    createdPool.close();
-                } catch (final RuntimeException | Error cleanupFailure) {
-                    addSuppressedIfDistinct(initFailure, cleanupFailure);
-                }
-            }
-
-            try {
-                deallocate();
-            } catch (final RuntimeException | Error cleanupFailure) {
-                addSuppressedIfDistinct(initFailure, cleanupFailure);
-            }
-
-            if (storeOwnershipAccepted && offHeapStore != null) {
-                try {
+            });
+            failure = runCleanupStep(failure, this::deallocate);
+            runCleanupStep(failure, () -> {
+                if (offHeapStore != null) {
                     offHeapStore.close();
-                } catch (final RuntimeException | Error cleanupFailure) {
-                    addSuppressedIfDistinct(initFailure, cleanupFailure);
                 }
-            }
+            });
 
             throw initFailure;
         }
-
-        // Thread construction itself can fail (most notably with OutOfMemoryError), and hook
-        // registration may throw any RuntimeException/Error from runtime policy/instrumentation.
-        // Both occur after every cache-owned resource has been accepted, so keep them in the same
-        // cleanup boundary.
-        try {
-            shutdownHook = new Thread(() -> {
-                logger.info("Initiating OffHeapCache shutdown");
-
-                close();
-                logger.info("OffHeapCache shutdown completed");
-            });
-
-            shutdownHookRegistrar.register(_pool, shutdownHook);
-        } catch (final RuntimeException | Error hookFailure) {
-            // close() handles a null hook (thread creation failure) and an unregistered hook
-            // (registration failure), and performs complete pool/native/store cleanup. Preserve
-            // the construction/registration failure as primary if cleanup also fails.
-            try {
-                close();
-            } catch (final RuntimeException | Error cleanupFailure) {
-                addSuppressedIfDistinct(hookFailure, cleanupFailure);
-            }
-
-            throw hookFailure;
-        }
     }
 
-    /**
-     * Allocates the specified amount of off-heap memory.
-     * Concrete subclasses implement this method using their specific memory management
-     * approach (e.g., the Unsafe API or the Foreign Memory API). The allocated memory
-     * must remain valid until {@link #deallocate()} is called.
-     *
-     * <p>Thread safety: this method is called only once during constructor initialization,
-     * so thread-safety is not required for the implementation.
-     *
-     * @param capacityInBytes the number of bytes to allocate in off-heap memory. Must be positive.
-     *                        Typically a multiple of {@link #SEGMENT_SIZE} (1048576 bytes).
-     * @return the base memory address (pointer) of the allocated off-heap memory region.
-     *         This address is used for all subsequent memory access operations.
-     * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
-     * @throws IllegalArgumentException if {@code capacityInBytes} is not positive (some backends, such as
-     *         the Foreign Memory API, reject a non-positive size this way). This is unreachable through
-     *         normal construction because {@code capacityInMB} is validated to be positive first.
-     */
-    protected abstract long allocate(long capacityInBytes);
-
-    /**
-     * Deallocates all off-heap memory used by this cache.
-     * Concrete subclasses implement this method to release the native memory resources
-     * previously reserved by {@link #allocate(long)}. After this method is called, the
-     * memory address returned by {@link #allocate(long)} becomes invalid and must not be
-     * accessed.
-     *
-     * <p>This method is called during cache shutdown, specifically in the {@code finally}
-     * block of {@link #close()}, to ensure that memory is always released even if errors
-     * occur during cleanup.
-     *
-     * <p>Thread safety: this method is called only from the lifecycle-write-locked
-     * {@link #close()} operation, or from the constructor's own failure-cleanup path before the
-     * instance is published, so thread-safety is not required for the implementation.
-     */
-    protected abstract void deallocate();
-
-    /**
-     * Copies data from a byte array to off-heap memory.
-     * Concrete subclasses implement this method to perform the low-level memory copy
-     * operation using the appropriate API (e.g., {@code Unsafe.copyMemory()} or
-     * {@code MemorySegment} operations).
-     *
-     * <p>Thread safety: this method may be called concurrently from multiple threads
-     * during put operations. Implementations must ensure that concurrent copies
-     * to different memory regions are safe.
-     *
-     * <p>The parameter order mirrors {@link #copyFromMemory(long, byte[], int, int)}: the off-heap
-     * pointer comes first, then the byte array, its offset, and the length.
-     *
-     * @param startPtr the destination memory address in off-heap memory. Must be a valid
-     *                 address within the allocated off-heap memory region.
-     * @param srcBytes the source byte array containing the data to copy. Must not be {@code null}.
-     * @param srcOffset the offset into the source array, expressed in the convention supplied to the
-     *                  base class as {@code arrayOffset}: an {@code Unsafe}-based implementation receives
-     *                  an address-style offset that already includes the array base offset, whereas a
-     *                  {@code MemorySegment}-based implementation receives a plain zero-based index.
-     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the
-     *            available space at the destination address.
-     */
-    protected abstract void copyToMemory(long startPtr, byte[] srcBytes, int srcOffset, int len);
-
-    /**
-     * Copies data from off-heap memory to a byte array.
-     * Concrete subclasses implement this method to perform the low-level memory copy
-     * operation using the appropriate API (e.g., {@code Unsafe.copyMemory()} or
-     * {@code MemorySegment} operations).
-     *
-     * <p>Thread safety: this method may be called concurrently from multiple threads
-     * during get operations. Implementations must ensure that concurrent copies
-     * from different memory regions are safe.
-     *
-     * <p>The parameter order mirrors {@link #copyToMemory(long, byte[], int, int)}: the off-heap
-     * pointer comes first, then the byte array, its offset, and the length.
-     *
-     * @param startPtr the source memory address in off-heap memory. Must be a valid
-     *                 address within the allocated off-heap memory region.
-     * @param bytes the destination byte array to copy data into. Must not be {@code null} and
-     *              must have sufficient capacity to hold the copied data.
-     * @param destOffset the offset into the destination array, expressed in the convention supplied to the
-     *                   base class as {@code arrayOffset}: an {@code Unsafe}-based implementation receives
-     *                   an address-style offset that already includes the array base offset, whereas a
-     *                   {@code MemorySegment}-based implementation receives a plain zero-based index.
-     * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the
-     *            available space in the destination array starting from {@code destOffset}.
-     */
-    protected abstract void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len);
-
-    /**
-     * Retrieves the value associated with the specified key, or {@code null} if no mapping exists.
-     * The lookup first consults the in-memory object pool. If the entry is stored on disk (via a
-     * {@code StoreWrapper}), the value is read back from the configured {@link OffHeapStore}, the
-     * disk-read counter (and read-time statistics, if enabled) are updated, and the entry may be
-     * promoted back into memory when {@code testerForLoadingItemFromDiskToMemory} is configured
-     * and returns {@code true} for it.
-     *
-     * @param key the key whose associated value is to be returned; must not be {@code null}
-     * @return the cached value, or {@code null} if the key is not present, the entry has expired,
-     *         the disk-backed entry has been removed from the store, or the entry was destroyed
-     *         by a concurrent eviction/removal between the pool lookup and the value read
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws IllegalStateException if the cache has been closed, or if a value cannot be
-     *                               reconstructed because the retrieved size no longer matches
-     *                               the recorded size (data corruption detected), or because a
-     *                               configured deserializer returns {@code null}
-     */
-    @Override
-    public V getOrNull(final K key) {
-        N.checkArgNotNull(key, "key");
-
-        final Wrapper<V> w = _pool.get(key);
-
-        // Dispatch on the int kind tag rather than instanceof: the wrapper types are generic
-        // inner classes, so instanceof/cast-based dispatch would need raw types and unchecked casts.
-        if (w != null && w.kind == Wrapper.KIND_STORE) {
-            final StoreWrapper storeWrapper = (StoreWrapper) w;
-
-            if (statsTimeOnDisk || testerForLoadingItemFromDiskToMemory != null) {
-                // Read the serialized bytes from disk exactly once. The same bytes are
-                // reused both to produce the return value and (when promotion is enabled)
-                // to copy the value back into off-heap memory, avoiding a second disk read.
-                //
-                // readBytes reports how long the OffHeapStore.get() call itself took through the
-                // out-parameter, and leaves the -1 sentinel in place when it returned without
-                // touching the store (wrapper already destroyed, or ownership lost to a same-key
-                // re-spill). Recording those non-I/O early returns as ~0 ms "disk reads" would
-                // permanently drag readFromDiskTimeStats().min() to 0 and skew the average; only
-                // observations that correspond to actual store I/O may be accepted. This also
-                // keeps the measured window symmetric with the write side, which times only
-                // OffHeapStore.put().
-                final long[] storeReadElapsedMillis = { -1L };
-                final byte[] diskBytes;
-
-                try {
-                    diskBytes = storeWrapper.readBytes(storeReadElapsedMillis);
-                } finally {
-                    if (statsTimeOnDisk && storeReadElapsedMillis[0] >= 0) {
-                        synchronized (totalReadFromDiskTimeStats) {
-                            totalReadFromDiskTimeStats.accept(storeReadElapsedMillis[0]);
-                        }
-                    }
-                }
-
-                if (diskBytes == null) {
-                    missingReadCountFromDisk.increment();
-                    removeStaleStoreWrapperIfCurrent(key, storeWrapper);
-                    return null;
-                }
-
-                // Non-null bytes imply the store was actually read, so the elapsed time is a real
-                // observation (never the -1 sentinel) by the time the promotion tester sees it.
-                final long elapsedTime = storeReadElapsedMillis[0];
-
-                final V value = storeWrapper.deserialize(diskBytes);
-
-                // Count only a value that was successfully reconstructed. Incrementing before the
-                // custom deserializer ran made a throwing deserializer look like a successful disk
-                // hit and differed from the non-timing branch below.
-                readCountFromDisk.increment();
-
-                if (testerForLoadingItemFromDiskToMemory != null
-                        && testerForLoadingItemFromDiskToMemory.test(storeWrapper.activityPrint(), storeWrapper.size, elapsedTime)) {
-
-                    final ActivityPrint activityPrint = storeWrapper.activityPrint();
-                    final long maxIdleTime = activityPrint.getMaxIdleTime();
-                    final long liveTime = activityPrint.getMaxLiveTime() - (System.currentTimeMillis() - activityPrint.getCreatedTime());
-
-                    final int size = storeWrapper.size;
-                    final byte[] bytes = liveTime > 0 ? diskBytes : null;
-
-                    if (bytes != null && bytes.length == size) {
-                        // The promotion copies into native memory (copyToMemory below), so it must
-                        // hold the lifecycle read lock like put() does - close() could otherwise
-                        // deallocate the region mid-copy. Promotion is an optimization: on a closed
-                        // (or closing) cache it is simply skipped and the value read from disk is
-                        // still returned.
-                        lifecycleLock.readLock().lock();
-                        try {
-                            if (!_pool.isClosed()) {
-                                promoteToMemory(key, storeWrapper, bytes, size, liveTime, maxIdleTime);
-                            }
-                        } finally {
-                            lifecycleLock.readLock().unlock();
-                        }
-                    }
-                }
-
-                return value;
-            } else {
-                final V value = w.read();
-
-                if (value == null) {
-                    missingReadCountFromDisk.increment();
-                    removeStaleStoreWrapperIfCurrent(key, storeWrapper);
-                } else {
-                    readCountFromDisk.increment();
-                }
-
-                return value;
-            }
-        } else {
-            if (w == null) {
-                return null;
-            }
-
-            // Reading a memory-tier wrapper copies from native memory, so it must participate in
-            // the lifecycle exclusion like the writers do (see the lifecycleLock comment): a
-            // wrapper detached by the pool's expiry sweep but not yet destroyed escapes
-            // _pool.close()'s destroy pass, so without this lock (and the closed re-check under
-            // it) the copy could race close()'s deallocate() and read freed memory.
-            lifecycleLock.readLock().lock();
-
-            try {
-                if (_pool.isClosed()) {
-                    throw new IllegalStateException(getClass().getSimpleName() + " has been closed");
-                }
-
-                return w.read();
-            } finally {
-                lifecycleLock.readLock().unlock();
-            }
-        }
-    }
-
-    /**
-     * Copies a value just read from disk into off-heap memory and, if the disk-backed wrapper is
-     * still the current pool mapping, replaces it with the in-memory copy. Called from
-     * {@link #getOrNull(Object)} under the lifecycle read lock. Ordinary inability to allocate
-     * enough slots is best-effort: any partial allocation is released and the disk-backed entry is
-     * left in place. Exceptions from native copying or pool operations still propagate.
-     */
-    private void promoteToMemory(final K key, final StoreWrapper storeWrapper, final byte[] bytes, final int size, final long liveTime,
-            final long maxIdleTime) {
-        synchronized (keyMutationLockFor(key)) {
-            doPromoteToMemory(key, storeWrapper, bytes, size, liveTime, maxIdleTime);
-        }
-    }
-
-    private void doPromoteToMemory(final K key, final StoreWrapper storeWrapper, final byte[] bytes, final int size, final long liveTime,
-            final long maxIdleTime) {
-        Slot slot = null;
-        List<Slot> slots = null;
-        // Must be long (not int): for a multi-slot promotion of a near-2GB value this
-        // accumulates ceil(size/maxBlockSize) slot sizes and would overflow int to a
-        // negative number, corrupting totalOccupiedMemorySize. Matches the put() path.
-        long occupiedMemory = 0;
-        Wrapper<V> slotWrapper = null;
-
-        try {
-            if (size <= _maxBlockSize) {
-                slot = getAvailableSlot(size);
-
-                if (slot != null) {
-                    final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-
-                    copyToMemory(slotStartPtr, bytes, _arrayOffset, size);
-
-                    occupiedMemory = slot.segment.sizeOfSlot;
-
-                    slotWrapper = new SlotWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slot, slotStartPtr);
-                }
-            } else {
-                slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
-                int copiedSize = 0;
-                int srcOffset = _arrayOffset;
-
-                while (copiedSize < size) {
-                    final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
-                    slot = getAvailableSlot(sizeToCopy);
-
-                    if (slot == null) {
-                        break;
-                    }
-
-                    final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-
-                    copyToMemory(startPtr, bytes, srcOffset, sizeToCopy);
-
-                    srcOffset += sizeToCopy;
-                    copiedSize += sizeToCopy;
-
-                    occupiedMemory += slot.segment.sizeOfSlot;
-                    slots.add(slot);
-                    // The slot now belongs to the list; null the loop variable so the
-                    // cleanup below can never release the same slot twice (once via
-                    // `slot`, once via `slots`) if a later step throws.
-                    slot = null;
-                }
-
-                if (copiedSize == size) {
-                    slotWrapper = new MultiSlotsWrapper(storeWrapper.type, liveTime, maxIdleTime, size, slots);
-                }
-            }
-        } finally {
-            if (slotWrapper == null) {
-                if (slot != null) {
-                    slot.release();
-                }
-
-                if (slots != null) {
-                    for (final Slot e : slots) {
-                        e.release();
-                    }
-                }
-            }
-        }
-
-        if (slotWrapper != null) {
-            // Account for the promoted in-memory copy up front: every wrapper
-            // destroy() unconditionally subtracts these amounts, so they must be
-            // added on every path that may destroy the wrapper - including the
-            // concurrent-replacement branch below, which previously subtracted
-            // without a matching add and permanently skewed the accounting
-            // (eventually driving the sums negative and making stats() throw).
-            totalOccupiedMemorySize.add(occupiedMemory);
-            totalDataSize.add(size);
-
-            // Only promote when the disk-backed entry we read is still the current
-            // mapping. A concurrent put()/remove() may have replaced it between the
-            // _pool.get(key) at the top of getOrNull and now; an unconditional
-            // remove(key) here would destroy that newer entry and resurrect the
-            // (older) value we just read from disk - a lost update. This mirrors the
-            // "only if current" pattern in removeStaleStoreWrapperIfCurrent().
-            // Same-key cache mutations are excluded by keyMutationLock, so a peek is sufficient to
-            // avoid detaching a newer mapping merely to discover that it is not the wrapper read
-            // above. The old remove-and-restore approach created a transient false miss for other
-            // readers and incorrectly incremented the pool's successful-put counter on restoration.
-            if (_pool.peek(key) != storeWrapper) {
-                slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
-                return;
-            }
-
-            final Wrapper<V> removed = _pool.remove(key);
-
-            if (removed == storeWrapper) {
-                // Current entry is still the disk wrapper we promoted from. Install the
-                // in-memory copy FIRST, then retire the disk wrapper (which deletes the
-                // now-redundant on-disk bytes). Destroying the disk wrapper before a
-                // successful install used to permanently drop the entry whenever the
-                // subsequent pool put failed: the disk bytes were already gone and the
-                // promoted slots were discarded, so a stored-and-acknowledged value
-                // vanished without any operation reporting a failure.
-                boolean result = false;
-
-                try {
-                    result = _pool.put(key, slotWrapper);
-                } finally {
-                    if (result) {
-                        storeWrapper.destroy(Caller.REMOVE_REPLACE_CLEAR);
-                    } else {
-                        // Could not install the memory copy; put the disk wrapper back so
-                        // the entry survives, and discard the promoted slots.
-                        final boolean restored = _pool.put(key, storeWrapper);
-
-                        if (!restored) {
-                            storeWrapper.destroy(Caller.PUT_ADD_FAILURE);
-
-                            if (logger.isWarnEnabled()) {
-                                logger.warn("Failed to restore an off-heap cache entry after disk-to-memory promotion failed; the entry was discarded");
-                            }
-                        }
-
-                        slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
-                    }
-                }
-            } else {
-                // The mapping changed concurrently. Restore whatever is now current
-                // and discard the promoted slots instead of clobbering the newer entry.
-                if (removed != null) {
-                    final boolean restored = _pool.put(key, removed);
-
-                    if (!restored) {
-                        removed.destroy(Caller.PUT_ADD_FAILURE);
-                    }
-                }
-
-                slotWrapper.destroy(Caller.PUT_ADD_FAILURE);
-            }
-        }
-    }
-
-    private void removeStaleStoreWrapperIfCurrent(final K key, final StoreWrapper storeWrapper) {
+    /** Periodic maintenance: removes expired entries and reclaims empty segments. */
+    private void runMaintenance() {
+        // Keep close() from deallocating while this pass is traversing cache structures. A pass
+        // admitted just before cancellation observes the closed flag and becomes a no-op.
         lifecycleLock.readLock().lock();
         try {
-            if (!_pool.isClosed()) {
-                synchronized (keyMutationLockFor(key)) {
-                    doRemoveStaleStoreWrapperIfCurrent(key, storeWrapper);
-                }
+            if (!closed) {
+                sweepExpiredEntries();
+                reclaimEmptySegments();
             }
+        } catch (final Exception e) {
+            // Swallowed so the scheduled task keeps running; the pass retries on the next cycle.
+            logger.warn("Off-heap cache maintenance pass failed; will retry on the next scheduled run", e);
         } finally {
             lifecycleLock.readLock().unlock();
         }
     }
 
-    private void doRemoveStaleStoreWrapperIfCurrent(final K key, final StoreWrapper storeWrapper) {
-        // Called with both the lifecycle read lock and this key's mutation lock held. The closed-pool
-        // checks below are defensive against an unexpected external/internal pool shutdown; normal
-        // cache close cannot overtake this cleanup.
-        final Wrapper<V> current;
+    // ------------------------------------------------------------------------- subclass hooks
 
+    /**
+     * Allocates the specified amount of off-heap memory. Called exactly once, during construction.
+     *
+     * @param capacityInBytes the number of bytes to allocate; always positive and a multiple of
+     *                        {@link #SEGMENT_SIZE}
+     * @return the base address of the allocated region, used for all subsequent memory access
+     * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
+     * @throws IllegalArgumentException if {@code capacityInBytes} is not positive (some backends,
+     *         such as the Foreign Memory API, reject a non-positive size this way; unreachable
+     *         through normal construction because {@code capacityInMB} is validated first)
+     */
+    protected abstract long allocate(long capacityInBytes);
+
+    /**
+     * Releases the off-heap memory reserved by {@link #allocate(long)}. Called at most once, from
+     * the lifecycle-write-locked {@link #close()} or from the constructor's failure-cleanup path
+     * before the instance is published, so implementations need not be thread-safe.
+     */
+    protected abstract void deallocate();
+
+    /**
+     * Copies bytes from a heap array into off-heap memory. May be called concurrently for
+     * different (disjoint) destination regions.
+     *
+     * @param startPtr the destination address in off-heap memory
+     * @param bytes the source array
+     * @param srcOffset the source offset, expressed in the convention supplied to the base class
+     *                  as {@code arrayOffset}: an {@code Unsafe}-based implementation receives an
+     *                  address-style offset that already includes the array base offset, whereas a
+     *                  {@code MemorySegment}-based implementation receives a plain zero-based index
+     * @param len the number of bytes to copy
+     */
+    protected abstract void copyToMemory(long startPtr, byte[] bytes, int srcOffset, int len);
+
+    /**
+     * Copies bytes from off-heap memory into a heap array. May be called concurrently for
+     * different source regions.
+     *
+     * @param startPtr the source address in off-heap memory
+     * @param bytes the destination array
+     * @param destOffset the destination offset, in the same convention as
+     *                   {@link #copyToMemory(long, byte[], int, int)}'s {@code srcOffset}
+     * @param len the number of bytes to copy
+     */
+    protected abstract void copyFromMemory(long startPtr, byte[] bytes, int destOffset, int len);
+
+    // ------------------------------------------------------------------------------------- get
+
+    /**
+     * Retrieves the value associated with the specified key, or {@code null} if no live mapping
+     * exists. An expired entry encountered here is removed (and counted as an eviction). For a
+     * disk-backed entry, the serialized bytes are fetched from the {@link OffHeapStore} and the
+     * entry may be promoted back into memory when the configured promotion predicate accepts it.
+     *
+     * @param key the key whose associated value is to be returned; must not be {@code null}
+     * @return the cached value, or {@code null} if the key is not present, the entry has expired,
+     *         the disk-backed entry's bytes are missing from the store, or the entry was removed
+     *         concurrently
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalStateException if the cache has been closed, or if a value cannot be
+     *                               reconstructed because the fetched size no longer matches the
+     *                               recorded size (data corruption), or because a configured
+     *                               deserializer returned {@code null}
+     */
+    @Override
+    public V getOrNull(final K key) {
+        N.checkArgNotNull(key, "key");
+
+        lifecycleLock.readLock().lock();
         try {
-            current = _pool.peek(key);
-        } catch (final IllegalStateException e) {
-            if (_pool.isClosed()) {
-                return;
+            assertNotClosed();
+
+            final Entry<V> entry = entries.get(key);
+
+            if (entry == null) {
+                missCount.increment();
+                return null;
             }
 
-            throw e;
-        }
+            // Outcome flags resolved under the entry monitor; map updates that would acquire a
+            // map bin lock are deferred until after the monitor is released (lock order: bin ->
+            // entry monitor, never the reverse).
+            boolean expired = false;
+            boolean missingBytes = false;
+            byte[] bytes = null;
+            long storeReadMillis = -1L;
 
-        // Do not temporarily remove and re-put a newer mapping. Besides exposing a false miss to
-        // lock-free readers, that restoration is counted by the pool as another successful put.
-        if (current != storeWrapper) {
-            return;
-        }
+            synchronized (entry) {
+                if (entry.freed) {
+                    // Concurrently removed/replaced between the map lookup and here: a miss.
+                } else if (entry.activityPrint.isExpired()) {
+                    expired = true;
+                } else if (entry.isMemory()) {
+                    bytes = new byte[entry.size];
+                    copyEntryFromMemory(entry, bytes);
+                    entry.touch();
+                } else {
+                    // The store fetch must stay inside the monitor: every path that overwrites or
+                    // removes this entry's bytes holds this monitor first, so bytes read here are
+                    // guaranteed to be this entry's own.
+                    final long startedAt = statsTimeOnDisk ? System.nanoTime() : 0L;
+                    final byte[] storeBytes = offHeapStore.get(key);
 
-        final Wrapper<V> removed;
+                    if (statsTimeOnDisk) {
+                        storeReadMillis = elapsedMillisSince(startedAt);
+                    }
 
-        try {
-            removed = _pool.remove(key);
-        } catch (final IllegalStateException e) {
-            if (_pool.isClosed()) {
-                return;
+                    if (storeBytes == null) {
+                        missingBytes = true;
+                    } else if (storeBytes.length != entry.size) {
+                        // Cannot be an internal race (see the ordering argument above); the store
+                        // itself returned bytes inconsistent with what was written.
+                        throw new IllegalStateException("Failed to retrieve value: fetched size (" + storeBytes.length
+                                + " bytes) does not match expected size (" + entry.size + " bytes)");
+                    } else {
+                        // The OffHeapStore contract permits get() to return its own retained
+                        // array; never expose it to the caller or a custom deserializer.
+                        bytes = storeBytes.clone();
+                        entry.touch();
+                    }
+                }
             }
 
-            throw e;
-        }
-
-        if (removed == null) {
-            return;
-        }
-
-        if (removed == storeWrapper) {
-            removed.destroy(Caller.REMOVE_REPLACE_CLEAR);
-            return;
-        }
-
-        final boolean restored;
-
-        try {
-            restored = _pool.put(key, removed);
-        } catch (final IllegalStateException e) {
-            if (_pool.isClosed()) {
-                // The wrapper removed above escaped _pool.close()'s destroy sweep, but destroying
-                // it here would touch the already-closed OffHeapStore; skip it (inert post-close).
-                return;
+            if (storeReadMillis >= 0) {
+                readFromDiskTimes.record(storeReadMillis);
             }
 
-            throw e;
-        }
+            if (bytes == null) {
+                if (expired) {
+                    removeIfCurrent(key, entry, FreeCause.EXPIRED);
+                } else if (missingBytes) {
+                    // The backing bytes vanished from the store; drop the stale mapping. Not an
+                    // eviction: nothing expired, the data is simply gone.
+                    removeIfCurrent(key, entry, FreeCause.REMOVED);
+                }
 
-        if (!restored) {
-            removed.destroy(Caller.PUT_ADD_FAILURE);
-
-            if (logger.isWarnEnabled()) {
-                logger.warn("Failed to restore an off-heap cache entry after removing a stale disk wrapper; the entry was discarded");
+                missCount.increment();
+                return null;
             }
+
+            hitCount.increment();
+
+            final V value = deserializeValue(bytes, entry.type);
+
+            if (!entry.isMemory()) {
+                // Counted only once the value has actually been reconstructed; a throwing
+                // deserializer is not a successful disk read.
+                readCountFromDisk.increment();
+                maybePromoteToMemory(key, entry, bytes, storeReadMillis);
+            }
+
+            return value;
+        } finally {
+            lifecycleLock.readLock().unlock();
         }
     }
 
     /**
-     * Stores a key-value pair in the cache with the specified expiration settings.
-     * The value is serialized and copied into off-heap memory. Values that fit within
-     * {@code maxBlockSize} are stored in a single slot; larger values are split across
-     * multiple slots. When memory cannot be allocated (or when directed by the configured
-     * {@code storeSelector}), the value may be written to the configured {@link OffHeapStore}
-     * instead. If neither memory nor disk storage succeeds, the method returns {@code false}; an
-     * asynchronous vacating task to reclaim space is also scheduled, unless in-memory storage was
-     * disabled for this entry (disk-only mode) or the serialized value is larger than the entire
-     * off-heap capacity (no amount of vacating could make it fit; the in-memory attempt is skipped
-     * entirely) - in those cases no vacating task is scheduled, and such a doomed put leaves the
-     * in-memory cache contents untouched.
+     * Promotes a just-read disk entry back into memory when the configured predicate accepts it.
+     * Best-effort: if no memory can be allocated or the mapping changed concurrently, the disk
+     * entry simply stays in place.
+     */
+    private void maybePromoteToMemory(final K key, final Entry<V> diskEntry, final byte[] bytes, final long storeReadMillis) {
+        if (testerForLoadingItemFromDiskToMemory == null
+                || !testerForLoadingItemFromDiskToMemory.test(diskEntry.activityPrint, diskEntry.size, Math.max(0L, storeReadMillis))) {
+            return;
+        }
+
+        final ActivityPrint print = diskEntry.activityPrint;
+        final long remainingLiveTime = print.getMaxLiveTime() - (System.currentTimeMillis() - print.getCreatedTime());
+
+        if (remainingLiveTime <= 0) {
+            return;
+        }
+
+        final long[] slots = allocateSlots(diskEntry.size);
+
+        if (slots == null) {
+            return; // No memory available; promotion is an optimization only.
+        }
+
+        final Entry<V> memoryEntry = new Entry<>(diskEntry.type, diskEntry.size, remainingLiveTime, print.getMaxIdleTime(), slots);
+        copyEntryToMemory(memoryEntry, bytes);
+
+        entries.compute(key, (k, current) -> {
+            if (current != diskEntry) {
+                // The mapping changed concurrently; discard the promoted copy, keep the current one.
+                releaseSlots(memoryEntry);
+                return current;
+            }
+
+            free(k, diskEntry, FreeCause.REPLACED, true);
+            install(memoryEntry);
+            return memoryEntry;
+        });
+    }
+
+    // ------------------------------------------------------------------------------------- put
+
+    /**
+     * Stores a key-value pair with the specified expiration settings. The value is serialized and
+     * placed in off-heap memory; when memory is unavailable (or the {@code storeSelector} directs
+     * it), the value is written to the configured {@link OffHeapStore} instead.
      *
-     * <p>Non-positive {@code liveTime} or {@code maxIdleTime} values are interpreted as
-     * "no expiration" and internally translated to {@code Long.MAX_VALUE}.
-     * For a {@link ByteBuffer} value, the bytes from index {@code 0} up to its current position are
-     * stored; the supplied buffer's position, limit, and mark are left unchanged.
+     * <p>Values whose serialized form exceeds the entire off-heap capacity never attempt the
+     * in-memory placement (no amount of vacating could make them fit) and go straight to the disk
+     * fallback, if any; such a doomed put schedules no vacate pass and leaves the in-memory cache
+     * contents untouched.
      *
-     * <p><b>&#9888;&#65039; Replacement failure:</b> a failed replacement restores the prior entry
-     * whenever its backing data is still intact: the prior mapping is detached (never handed to the
-     * pool as an internal replacement) and retired only after the new wrapper is successfully
-     * installed, so a rejected install reinstates it. The one residual loss is a disk-to-disk
-     * replacement whose store write already overwrote the prior entry's bytes and whose pool
-     * install then fails (e.g. the new entry expired during a slow store write): the prior bytes
-     * are unrecoverable through the key-only {@link OffHeapStore} API, so the method returns
-     * {@code false} with the key absent, and the discard is logged at warn level.
+     * <p><b>Replacement failure:</b> a failed replacement never loses the prior entry. The new
+     * entry is installed atomically with the retirement of the old one, and a failed or throwing
+     * disk write leaves the prior mapping and its bytes unchanged per the {@link OffHeapStore#put}
+     * contract.
      *
-     * @param key the key with which the specified value is to be associated; must not be {@code null}
-     * @param value the value to be cached; must not be {@code null}
-     * @param liveTime the time-to-live for this entry in milliseconds; values {@code <= 0} mean no expiration
-     * @param maxIdleTime the maximum idle time for this entry in milliseconds; values {@code <= 0} mean no idle timeout
-     * @return {@code true} if the value was successfully cached (in memory or on disk);
-     *         {@code false} otherwise
+     * <p>Non-positive {@code liveTime}/{@code maxIdleTime} values mean "no expiration"/"no idle
+     * limit". For a {@link ByteBuffer} value, the bytes from index 0 up to the current position
+     * are stored; the buffer's position, limit, and mark are left unchanged. An entry's expiration
+     * clock starts when the entry is installed (for a disk-routed value: after the store write
+     * completes).
+     *
+     * @param key the key; must not be {@code null}
+     * @param value the value; must not be {@code null}
+     * @param liveTime the TTL in milliseconds; {@code <= 0} means no expiration
+     * @param maxIdleTime the maximum idle time in milliseconds; {@code <= 0} means no idle limit
+     * @return {@code true} if the value was stored (in memory or on disk); {@code false} otherwise
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or if
-     *                                  {@code storeSelector} returns {@code null} or a value outside 0, 1, and 2
+     *                                  {@code storeSelector} returns {@code null} or a value outside 0..2
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
@@ -1081,270 +634,706 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         N.checkArgNotNull(key, "key");
         N.checkArgNotNull(value, "value");
 
-        // The lifecycle read lock (held for the whole put) keeps close() from deallocating the
-        // off-heap region while this put is mid-copy; the isClosed() check inside the lock is
-        // then a reliable fail-fast rather than a racy check-then-act.
         lifecycleLock.readLock().lock();
         try {
-            if (_pool.isClosed()) {
-                throw new IllegalStateException("This cache has been closed");
-            }
+            assertNotClosed();
 
-            // In particular, serialize the remove/write/owner-transfer/pool-install sequence of a
-            // disk spill with every other mutation of this key. The lower-level store lock cannot
-            // cover that whole sequence because StoreWrapper uses the opposite (wrapper -> store)
-            // lock order for reads and destruction.
-            synchronized (keyMutationLockFor(key)) {
-                return doPut(key, value, liveTime, maxIdleTime);
-            }
+            return doPut(key, value, liveTime, maxIdleTime);
         } finally {
             lifecycleLock.readLock().unlock();
         }
     }
 
     private boolean doPut(final K key, final V value, final long liveTime, final long maxIdleTime) {
-        // A non-positive liveTime/maxIdleTime means "no expiration" per the documented contract
-        // (see Cache#put and the OffHeapCache/ForeignMemoryOffHeapCache Builder javadoc). The underlying
-        // ActivityPrint rejects values <= 0 with IllegalArgumentException, so translate them to
-        // Long.MAX_VALUE here, which is the same value the library uses internally for "no expiration".
+        // A non-positive liveTime/maxIdleTime means "no expiration" per the documented contract;
+        // ActivityPrint rejects values <= 0, so translate to Long.MAX_VALUE.
         final long effectiveLiveTime = liveTime > 0 ? liveTime : Long.MAX_VALUE;
         final long effectiveMaxIdleTime = maxIdleTime > 0 ? maxIdleTime : Long.MAX_VALUE;
 
+        @SuppressWarnings("unchecked")
         final Type<V> type = N.typeOf(value.getClass());
-        Wrapper<V> w = null;
 
-        // final byte[] bytes = PARSER.serialize(value).getBytes();
         ByteArrayOutputStream os = null;
-        byte[] bytes = null;
-        int size = 0;
-        long occupiedMemory = 0;
 
-        if (type.isPrimitiveByteArray()) {
-            bytes = (byte[]) value;
-            size = bytes.length;
-        } else if (type.isByteBuffer()) {
-            // ByteBufferType.byteArrayOf temporarily moves the supplied buffer's position to zero,
-            // which invalidates its mark even though the position is restored. Operate on a
-            // duplicate so put() is observationally read-only with respect to the caller's buffer.
-            bytes = ByteBufferType.byteArrayOf(((ByteBuffer) value).duplicate());
-            size = bytes.length;
-        } else {
-            os = Objectory.createByteArrayOutputStream();
-            // Recycle the pooled buffer if serialization fails. os cannot be recycled in the main
-            // finally only — it is created here, outside that try — so a throwing serializer would
-            // otherwise leak the pooled ByteArrayOutputStream on every failure. Null it out on the
-            // failure path so the main finally's Objectory.recycle(os) does not double-recycle it.
-            boolean serialized = false;
-            try {
+        try {
+            final byte[] bytes;
+            final int size;
+
+            if (type.isPrimitiveByteArray()) {
+                bytes = (byte[]) value;
+                size = bytes.length;
+            } else if (type.isByteBuffer()) {
+                // ByteBufferType.byteArrayOf temporarily moves the supplied buffer's position to
+                // zero, which invalidates its mark even though the position is restored. Operate
+                // on a duplicate so put() is observationally read-only for the caller's buffer.
+                bytes = ByteBufferType.byteArrayOf(((ByteBuffer) value).duplicate());
+                size = bytes.length;
+            } else {
+                os = Objectory.createByteArrayOutputStream();
                 serializer.accept(value, os);
                 bytes = os.array();
                 size = os.size();
-                serialized = true;
-            } finally {
-                if (!serialized) {
-                    Objectory.recycle(os);
-                    os = null;
-                }
-            }
-        }
-
-        Slot slot = null;
-        List<Slot> slots = null;
-
-        // Track whether memory allocation was attempted, so the vacate() decision after the
-        // try block can distinguish memory-pressure failures (where vacating makes sense) from
-        // failures where vacating is pointless and only destructive: disk-only mode (it would
-        // evict the prior entry that putToDisk just restored) and values larger than the whole
-        // off-heap region (they can never fit, so memory is not even attempted; see below).
-        boolean vacateOnNull = true;
-
-        // Holder for a prior same-key wrapper that putToDisk detached from the pool before
-        // overwriting the backing bytes. A non-null element means the prior mapping is currently
-        // out of the pool and NOT yet retired: the install block below owns it and must either
-        // retire it (successful install) or restore/discard it (failed install). putToDisk leaves
-        // the element null on its own failure paths, where it restores the prior itself.
-        @SuppressWarnings("unchecked")
-        final Wrapper<V>[] detachedPrior = new Wrapper[1];
-
-        try {
-            // Inside the try so a throwing storeSelector still reaches the finally below,
-            // which recycles the pooled serialization buffer.
-            final Integer selectedStore = storeSelector == null ? Integer.valueOf(0) : storeSelector.apply(key, value, size);
-
-            if (selectedStore == null || selectedStore < 0 || selectedStore > 2) {
-                throw new IllegalArgumentException("storeSelector must return 0 (default), 1 (memory only), or 2 (disk only), but returned: " + selectedStore);
             }
 
-            final int storeSelection = selectedStore;
-            // A value larger than the entire off-heap region can never fit no matter how many
-            // entries a vacate frees, so do not even attempt the in-memory placement: the attempt
-            // would pointlessly claim segments for its slot-size class (fragmentation another
-            // maintenance pass must repair), copy megabytes into native memory, and then schedule
-            // a vacate that evicts ~20% of a healthy cache per attempt - and, for a replacement,
-            // asynchronously destroy the key's prior mapping - all for zero benefit. Such a doomed
-            // put goes straight to the disk fallback (if any) and never schedules a vacate.
-            final boolean canBeStoredInMemory = storeSelection < 2 && size <= _capacityInBytes;
-            final boolean canBeStoredToDisk = storeSelection != 1;
-            vacateOnNull = canBeStoredInMemory;
+            final int selectedStore = selectedStoreOf(key, value, size);
 
-            if (size <= _maxBlockSize) {
-                slot = canBeStoredInMemory ? getAvailableSlot(size) : null;
+            // A value larger than the entire off-heap region can never fit, no matter how many
+            // entries a vacate pass frees; skip the memory attempt entirely for it.
+            final boolean canBeStoredInMemory = selectedStore != STORE_DISK_ONLY && size <= capacityInBytes;
+            final boolean canBeStoredToDisk = selectedStore != STORE_MEMORY_ONLY && offHeapStore != null;
 
-                if (slot != null) {
-                    final long slotStartPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-
-                    copyToMemory(slotStartPtr, bytes, _arrayOffset, size);
-
-                    occupiedMemory = slot.segment.sizeOfSlot;
-
-                    w = new SlotWrapper(type, effectiveLiveTime, effectiveMaxIdleTime, size, slot, slotStartPtr);
-                } else if (canBeStoredToDisk && offHeapStore != null) {
-                    w = putToDisk(key, effectiveLiveTime, effectiveMaxIdleTime, type, bytes, size, detachedPrior);
-                }
-            } else {
-                int copiedSize = 0;
-
-                if (canBeStoredInMemory) {
-                    slots = new ArrayList<>(size / _maxBlockSize + (size % _maxBlockSize == 0 ? 0 : 1));
-                    int srcOffset = _arrayOffset;
-
-                    while (copiedSize < size) {
-                        final int sizeToCopy = Math.min(size - copiedSize, _maxBlockSize);
-                        slot = getAvailableSlot(sizeToCopy);
-
-                        if (slot == null) {
-                            break;
-                        }
-
-                        final long startPtr = slot.segment.segmentStartPtr + (long) slot.indexOfSlot * slot.segment.sizeOfSlot;
-
-                        copyToMemory(startPtr, bytes, srcOffset, sizeToCopy);
-
-                        srcOffset += sizeToCopy;
-                        copiedSize += sizeToCopy;
-
-                        occupiedMemory += slot.segment.sizeOfSlot;
-                        slots.add(slot);
-                        // The slot now belongs to the list; null the loop variable so the finally
-                        // below can never release the same slot twice (once via `slot`, once via
-                        // `slots`) if a later step throws.
-                        slot = null;
-                    }
-                }
-
-                if (copiedSize == size) {
-                    w = new MultiSlotsWrapper(type, effectiveLiveTime, effectiveMaxIdleTime, size, slots);
-                } else if (canBeStoredToDisk && offHeapStore != null) {
-                    w = putToDisk(key, effectiveLiveTime, effectiveMaxIdleTime, type, bytes, size, detachedPrior);
-                }
-            }
-        } finally {
-            Objectory.recycle(os);
-
-            // Dispatch on the int kind tag rather than instanceof (see Wrapper.kind).
-            if (w == null || w.kind == Wrapper.KIND_STORE) {
-                if (slot != null) {
-                    slot.release();
-                }
+            if (canBeStoredInMemory) {
+                final long[] slots = allocateSlots(size);
 
                 if (slots != null) {
-                    for (final Slot e : slots) {
-                        e.release();
-                    }
+                    final Entry<V> entry = new Entry<>(type, size, effectiveLiveTime, effectiveMaxIdleTime, slots);
+                    copyEntryToMemory(entry, bytes);
+
+                    entries.compute(key, (k, old) -> {
+                        if (old != null) {
+                            free(k, old, FreeCause.REPLACED, true);
+                        }
+
+                        install(entry);
+                        return entry;
+                    });
+
+                    putCount.increment();
+                    return true;
                 }
             }
-        }
 
-        // Handle the "could not store" outcome AFTER the try/finally. Doing this inside the finally
-        // with a `return false` would silently discard any exception propagating out of the try
-        // (e.g. an OutOfMemoryError while growing a slot, a copyToMemory failure, or a RuntimeException
-        // thrown by a custom offHeapStore.put) — the classic "return in finally swallows the exception"
-        // trap. The finally above still releases any allocated slots on every exit, including the
-        // exceptional one, so cleanup is unchanged; only the silent swallowing is removed.
-        // Schedule a vacate only when memory was attempted and not available (i.e. the failure is
-        // due to memory pressure). When the storeSelector forbids in-memory storage (disk-only mode)
-        // and the disk write fails, vacating memory is pointless and would evict the prior entry
-        // that putToDisk just restored, silently losing data on a transient disk error.
-        if (w == null) {
-            if (vacateOnNull) {
+            if (canBeStoredToDisk && putToDisk(key, type, bytes, size, effectiveLiveTime, effectiveMaxIdleTime)) {
+                return true;
+            }
+
+            if (canBeStoredInMemory) {
+                // The put failed under genuine memory pressure (the value could fit an empty
+                // cache, and no disk store absorbed it): reclaim space asynchronously so
+                // subsequent puts can succeed.
                 vacate();
             }
 
             return false;
+        } finally {
+            Objectory.recycle(os);
+        }
+    }
+
+    /** Validates and returns the storage routing for one put: 0 (default), 1 (memory only), or 2 (disk only). */
+    private int selectedStoreOf(final K key, final V value, final int size) {
+        if (storeSelector == null) {
+            return STORE_DEFAULT;
         }
 
-        boolean result = false;
-        final int wkind = w.kind;
+        final Integer selected = storeSelector.apply(key, value, size);
 
-        // Install-first-retire-second, mirroring doPromoteToMemory: the prior same-key mapping is
-        // detached (never handed to _pool.put as a replacement) and retired only AFTER a successful
-        // install. Installing via a bare _pool.put would let the pool destroy the replaced mapping
-        // internally even when its in-lock insert then fails (expiry re-check), silently deleting
-        // the existing entry on a failed replacement. For a disk-routed wrapper, putToDisk already
-        // detached the prior before overwriting the backing bytes.
-        Wrapper<V> prior = detachedPrior[0];
+        if (selected == null || selected < STORE_DEFAULT || selected > STORE_DISK_ONLY) {
+            throw new IllegalArgumentException("storeSelector must return 0 (default), 1 (memory only), or 2 (disk only), but returned: " + selected);
+        }
 
-        try {
-            if (wkind == Wrapper.KIND_SLOT || wkind == Wrapper.KIND_MULTI_SLOTS) {
-                totalOccupiedMemorySize.add(occupiedMemory);
+        return selected;
+    }
 
-                // StoreWrapper already accounts for totalDataSize in its constructor; only memory
-                // wrappers need it added here (and their destroy() subtracts the matching amount).
-                totalDataSize.add(size);
+    /**
+     * Writes a value to the disk store and installs its entry, atomically with the retirement of
+     * any prior same-key entry. The whole protocol runs inside the map's per-key {@code compute},
+     * which serializes concurrent same-key spills. When the prior entry is disk-backed, its
+     * monitor is held across the overwriting store write and its retirement, so no reader can
+     * fetch the new bytes against the prior entry's metadata. A failed or throwing write leaves
+     * the prior mapping (and, per the {@link OffHeapStore#put} contract, the prior bytes)
+     * completely untouched.
+     *
+     * @return {@code true} if the value was stored and installed
+     */
+    private boolean putToDisk(final K key, final Type<V> type, final byte[] bytes, final int size, final long liveTime, final long maxIdleTime) {
+        // Always hand the store a private copy: `bytes` may alias a pooled serialization buffer
+        // that is recycled (and reused by other threads) right after this put, or the caller's
+        // own byte[]/ByteBuffer contents.
+        final byte[] bytesToStore = N.copyOfRange(bytes, 0, size);
 
-                prior = _pool.remove(key);
-            }
+        final boolean[] stored = { false };
+        final long[] writeMillis = { -1L };
 
-            result = _pool.put(key, w);
-        } finally {
-            if (!result) {
-                try {
-                    // The pool rejected the wrapper; for a StoreWrapper this also removes the disk bytes
-                    // that putToDisk just wrote. Since nothing was retained, do NOT count it toward the
-                    // disk write stats (writeCountToDisk) — that keeps the disk-write count consistent
-                    // with putCount, which by contract excludes puts that fail before the wrapper is
-                    // installed in the pool.
-                    w.destroy(Caller.PUT_ADD_FAILURE);
-                } finally {
-                    if (prior != null) {
-                        if (wkind == Wrapper.KIND_STORE && prior.kind == Wrapper.KIND_STORE) {
-                            // A disk->disk replacement already overwrote the prior wrapper's backing
-                            // bytes (and the rejected wrapper's destroy above just deleted them), so
-                            // the prior entry's data is unrecoverable: discard its metadata instead of
-                            // resurrecting a mapping whose reads could only miss.
-                            ((StoreWrapper) prior).discardReplacedStoreMetadata();
+        entries.compute(key, (k, old) -> {
+            final boolean ok;
 
-                            if (logger.isWarnEnabled()) {
-                                logger.warn(
-                                        "A disk-backed replacement overwrote the previous entry's bytes but could not be installed; the entry was discarded");
-                            }
-                        } else {
-                            // The prior wrapper's backing data (memory slots, or disk bytes that a
-                            // memory-routed replacement never touched) is intact: restore the mapping
-                            // so a failed replacement does not delete the existing entry.
-                            restoreDetachedPrior(key, prior);
-                        }
+            if (old != null && !old.isMemory()) {
+                // The write overwrites the prior entry's bytes under the same store key: exclude
+                // the prior's readers for the write AND the retirement, so they either complete
+                // before the overwrite or observe the entry as freed.
+                synchronized (old) {
+                    ok = timedStorePut(k, bytesToStore, writeMillis);
+
+                    if (ok) {
+                        // The bytes now belong to the new entry; do not remove them.
+                        free(k, old, FreeCause.REPLACED, false);
                     }
                 }
             } else {
-                if (prior != null) {
-                    // destroy() is ownership-guarded: a disk-backed prior superseded by a disk write
-                    // (store ownership already transferred to the new wrapper) only clears its
-                    // metadata, while a still-owning prior also releases its memory slots or removes
-                    // its disk bytes.
-                    prior.destroy(Caller.REMOVE_REPLACE_CLEAR);
+                ok = timedStorePut(k, bytesToStore, writeMillis);
+
+                if (ok && old != null) {
+                    free(k, old, FreeCause.REPLACED, true);
+                }
+            }
+
+            if (!ok) {
+                return old; // The prior mapping and its bytes are untouched.
+            }
+
+            final Entry<V> entry = new Entry<>(type, size, liveTime, maxIdleTime, null);
+            install(entry);
+            stored[0] = true;
+            return entry;
+        });
+
+        if (!stored[0]) {
+            return false;
+        }
+
+        writeCountToDisk.increment();
+
+        if (writeMillis[0] >= 0) {
+            writeToDiskTimes.record(writeMillis[0]);
+        }
+
+        putCount.increment();
+        return true;
+    }
+
+    /**
+     * Performs one store write, recording the elapsed milliseconds of the successful call into
+     * {@code elapsedOut[0]} when disk timing is enabled. Measures only {@link OffHeapStore#put},
+     * excluding serialization and the unsuccessful in-memory placement work that preceded the
+     * disk fallback.
+     */
+    private boolean timedStorePut(final K key, final byte[] bytes, final long[] elapsedOut) {
+        final long startedAt = statsTimeOnDisk ? System.nanoTime() : 0L;
+
+        final boolean ok = offHeapStore.put(key, bytes);
+
+        if (statsTimeOnDisk && ok) {
+            elapsedOut[0] = elapsedMillisSince(startedAt);
+        }
+
+        return ok;
+    }
+
+    // -------------------------------------------------------------------------- other Cache ops
+
+    /**
+     * Removes the cache entry associated with the specified key, if present, releasing its memory
+     * slots or disk bytes.
+     *
+     * @param key the key whose mapping is to be removed; must not be {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalStateException if the cache has been closed
+     */
+    @Override
+    public void remove(final K key) {
+        N.checkArgNotNull(key, "key");
+
+        lifecycleLock.readLock().lock();
+        try {
+            assertNotClosed();
+
+            final Entry<V> entry = entries.remove(key);
+
+            if (entry != null) {
+                free(key, entry, FreeCause.REMOVED, true);
+            }
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Returns whether the cache contains a live (non-expired) mapping for the specified key.
+     * This is a read-only probe: an expired entry encountered here is reported as absent but is
+     * left for the maintenance pass or the next {@code get} to remove.
+     *
+     * @param key the key to test; must not be {@code null}
+     * @return {@code true} if a live mapping exists
+     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalStateException if the cache has been closed
+     */
+    @Override
+    public boolean containsKey(final K key) {
+        N.checkArgNotNull(key, "key");
+
+        assertNotClosed();
+
+        final Entry<V> entry = entries.get(key);
+
+        return entry != null && !entry.freed && !entry.activityPrint.isExpired();
+    }
+
+    /**
+     * Returns a snapshot of all keys currently held in the cache, including keys of entries
+     * spilled to disk. The returned set is a copy: subsequent cache changes are not reflected in
+     * it, and it may include keys of entries that have expired but not yet been swept.
+     *
+     * @return a snapshot of the cache keys; never {@code null}
+     * @throws IllegalStateException if the cache has been closed
+     */
+    @Override
+    public Set<K> keySet() {
+        assertNotClosed();
+
+        return new HashSet<>(entries.keySet());
+    }
+
+    /**
+     * Returns the number of entries currently held in the cache (including disk-backed entries,
+     * and entries that have expired but not yet been swept).
+     *
+     * @return the current entry count
+     * @throws IllegalStateException if the cache has been closed
+     */
+    @Override
+    public int size() {
+        assertNotClosed();
+
+        return entries.size();
+    }
+
+    /**
+     * Removes all entries, releasing their memory slots and disk bytes, and reclaims the
+     * now-empty segments for reuse by any slot size.
+     *
+     * @throws IllegalStateException if the cache has been closed
+     */
+    @Override
+    public void clear() {
+        lifecycleLock.readLock().lock();
+        try {
+            assertNotClosed();
+
+            removeAllEntries(FreeCause.REMOVED);
+            reclaimEmptySegments();
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Returns whether this cache has been closed.
+     *
+     * @return {@code true} if {@link #close()} has been called
+     */
+    @Override
+    public boolean isClosed() {
+        return closed;
+    }
+
+    /**
+     * Closes the cache and releases all resources: cancels the maintenance task, removes the JVM
+     * shutdown hook, frees every entry (removing disk-backed entries' bytes from the store),
+     * deallocates the native region, and closes the configured {@link OffHeapStore}, if any.
+     * Every step runs even when an earlier one fails; the first failure propagates with any
+     * later ones attached as suppressed exceptions. Idempotent; also invoked automatically by the
+     * registered shutdown hook during JVM shutdown.
+     *
+     * <p><b>Reentrant callback restriction:</b> a serializer, store selector, or other callback
+     * invoked from an operation holding this cache's lifecycle read lock must not close the cache
+     * synchronously (a read-to-write lock upgrade is unsupported); such a call fails immediately
+     * with {@link IllegalStateException}.
+     *
+     * @throws IllegalStateException if the current thread attempts to close the cache while it is
+     *                               executing a cache operation or callback
+     * @throws SecurityException if the runtime denies removal of the registered shutdown hook;
+     *                           native-memory and store cleanup is still attempted
+     */
+    @Override
+    public void close() {
+        // ReentrantReadWriteLock does not support upgrading a held read lock to its write lock;
+        // fail fast instead of deadlocking on ourselves.
+        if (lifecycleLock.getReadHoldCount() > 0) {
+            throw new IllegalStateException("Cannot close this off-heap cache reentrantly while the current thread is executing a cache operation or callback");
+        }
+
+        lifecycleLock.writeLock().lock();
+        try {
+            if (closed) {
+                return;
+            }
+
+            closed = true;
+
+            Throwable failure = null;
+            failure = runCleanupStep(failure, () -> {
+                if (maintenanceFuture != null) {
+                    maintenanceFuture.cancel(true);
+                }
+            });
+            failure = runCleanupStep(failure, this::removeShutdownHook);
+            failure = runCleanupStep(failure, () -> removeAllEntries(FreeCause.REMOVED));
+            failure = runCleanupStep(failure, this::deallocate);
+            failure = runCleanupStep(failure, () -> {
+                if (offHeapStore != null) {
+                    offHeapStore.close();
+                }
+            });
+
+            if (failure instanceof final RuntimeException runtimeException) {
+                throw runtimeException;
+            } else if (failure instanceof final Error error) {
+                throw error;
+            }
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
+    }
+
+    private void removeShutdownHook() {
+        if (shutdownHook != null) {
+            try {
+                Runtime.getRuntime().removeShutdownHook(shutdownHook);
+            } catch (final IllegalStateException e) {
+                // The JVM is already shutting down (we are likely running INSIDE the hook).
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
+                }
+            } finally {
+                shutdownHook = null;
+            }
+        }
+    }
+
+    /**
+     * Runs one cleanup step, keeping the first failure as primary and attaching any later ones as
+     * suppressed (guarding against self-suppression of a reused throwable instance).
+     *
+     * @return the primary failure so far, or {@code null} if none
+     */
+    private static Throwable runCleanupStep(final Throwable earlierFailure, final Runnable step) {
+        try {
+            step.run();
+        } catch (final RuntimeException | Error e) {
+            if (earlierFailure == null) {
+                return e;
+            }
+
+            if (earlierFailure != e) {
+                earlierFailure.addSuppressed(e);
+            }
+        }
+
+        return earlierFailure;
+    }
+
+    // ------------------------------------------------------------------------------------ stats
+
+    /**
+     * Returns a sampled, point-in-time snapshot of cache statistics: entry counts, hit/miss and
+     * eviction counters, memory and disk usage, disk I/O timing aggregates, and per-segment slot
+     * occupancy.
+     *
+     * <p><b>&#9888;&#65039; Non-atomic snapshot:</b> counters are sampled independently, so
+     * relationships between fields are conceptual invariants that may not hold exactly while the
+     * cache is being updated concurrently.
+     *
+     * @return the statistics snapshot; never {@code null}
+     * @throws IllegalStateException if the cache has been closed
+     */
+    public OffHeapCacheStats stats() {
+        assertNotClosed();
+
+        final long hits = hitCount.sum();
+        final long misses = missCount.sum();
+
+        // Capacity reports the maximum number of MIN_BLOCK_SIZE slots that fit in the region
+        // (clamped to Integer.MAX_VALUE for very large caches) - an upper bound on entry count.
+        final int capacity = (int) Math.min(capacityInBytes / MIN_BLOCK_SIZE, Integer.MAX_VALUE);
+
+        // LongAdder.sum() is not an atomic snapshot; clamp the up-and-down gauges to >= 0 so a
+        // transiently observed decrement-without-increment cannot make the stats record throw.
+        return new OffHeapCacheStats(capacity, entries.size(), Math.max(0L, sizeOnDisk.sum()), putCount.sum(), writeCountToDisk.sum(), hits + misses, hits,
+                readCountFromDisk.sum(), misses, evictionCount.sum(), Math.max(0L, evictionCountFromDisk.sum()), capacityInBytes,
+                Math.max(0L, totalOccupiedMemorySize.sum()), Math.max(0L, totalDataSize.sum()), Math.max(0L, dataSizeOnDisk.sum()), writeToDiskTimes.snapshot(),
+                readFromDiskTimes.snapshot(), SEGMENT_SIZE, snapshotOccupiedSlots());
+    }
+
+    // -------------------------------------------------------------------------- entry lifecycle
+
+    /**
+     * Single accounting site for an entry entering the cache. Called only inside the map's
+     * per-key compute, immediately before the entry is returned as the new mapping.
+     */
+    private void install(final Entry<V> entry) {
+        if (entry.isMemory()) {
+            totalOccupiedMemorySize.add(occupiedMemoryOf(entry.size));
+        } else {
+            sizeOnDisk.increment();
+            dataSizeOnDisk.add(entry.size);
+        }
+
+        totalDataSize.add(entry.size);
+    }
+
+    /**
+     * Single accounting-and-release site for an entry leaving the cache. Marks the entry freed
+     * under its monitor (excluding in-flight readers), releases its memory slots or disk bytes,
+     * and reverses the counters that {@link #install(Entry)} updated.
+     *
+     * @param removeDiskBytes for a disk-backed entry, whether its store bytes are removed; a
+     *                        caller that has just overwritten the bytes under the same key
+     *                        passes {@code false}
+     */
+    private void free(final K key, final Entry<V> entry, final FreeCause cause, final boolean removeDiskBytes) {
+        synchronized (entry) {
+            if (entry.freed) {
+                return;
+            }
+
+            entry.freed = true;
+
+            if (entry.isMemory()) {
+                releaseSlots(entry);
+            } else if (removeDiskBytes) {
+                try {
+                    offHeapStore.remove(key);
+                } catch (final RuntimeException e) {
+                    // The mapping is gone either way; a failed byte removal only leaks store space.
+                    logger.warn("Failed to remove the backing bytes of an off-heap cache entry from the OffHeapStore", e);
+                }
+            }
+        }
+
+        if (entry.isMemory()) {
+            totalOccupiedMemorySize.add(-occupiedMemoryOf(entry.size));
+        } else {
+            sizeOnDisk.decrement();
+            dataSizeOnDisk.add(-entry.size);
+        }
+
+        totalDataSize.add(-entry.size);
+
+        if (cause == FreeCause.EXPIRED || cause == FreeCause.EVICTED) {
+            evictionCount.increment();
+
+            if (!entry.isMemory()) {
+                evictionCountFromDisk.increment();
+            }
+        }
+    }
+
+    /** Atomically removes the mapping if it still points at {@code entry}, then frees it. */
+    private void removeIfCurrent(final K key, final Entry<V> entry, final FreeCause cause) {
+        if (entries.remove(key, entry)) {
+            free(key, entry, cause, true);
+        }
+    }
+
+    private void removeAllEntries(final FreeCause cause) {
+        for (final Map.Entry<K, Entry<V>> mapEntry : entries.entrySet()) {
+            if (entries.remove(mapEntry.getKey(), mapEntry.getValue())) {
+                free(mapEntry.getKey(), mapEntry.getValue(), cause, true);
+            }
+        }
+    }
+
+    /** Removes and frees every expired entry. Called by the periodic maintenance pass. */
+    private void sweepExpiredEntries() {
+        for (final Map.Entry<K, Entry<V>> mapEntry : entries.entrySet()) {
+            final Entry<V> entry = mapEntry.getValue();
+
+            if (!entry.freed && entry.activityPrint.isExpired()) {
+                removeIfCurrent(mapEntry.getKey(), entry, FreeCause.EXPIRED);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------- vacate
+
+    /**
+     * Schedules an asynchronous vacate pass that evicts the least-recently-accessed
+     * ~{@code vacatingFactor} of entries and reclaims their now-empty segments. Debounced (a pass
+     * that finished within the last 3 s suppresses a new one) and single-flight (at most one pass
+     * runs at a time). The pass holds the lifecycle read lock, so {@link #close()} waits for it.
+     */
+    private void vacate() {
+        if (System.nanoTime() - lastVacateFinishedNanos < VACATE_DEBOUNCE_NANOS || !vacating.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            asyncExecutor.execute(() -> {
+                lifecycleLock.readLock().lock();
+                try {
+                    if (!closed) {
+                        evictLeastRecentlyAccessed();
+                        reclaimEmptySegments();
+                    }
+                } finally {
+                    lifecycleLock.readLock().unlock();
+                    lastVacateFinishedNanos = System.nanoTime();
+                    vacating.set(false);
+                }
+            });
+        } catch (final RuntimeException | Error e) {
+            // The task could not be submitted; release the gate so a later put can retry.
+            vacating.set(false);
+            throw e;
+        }
+    }
+
+    private void evictLeastRecentlyAccessed() {
+        final List<Map.Entry<K, Entry<V>>> candidates = new ArrayList<>(entries.size());
+
+        for (final Map.Entry<K, Entry<V>> mapEntry : entries.entrySet()) {
+            if (!mapEntry.getValue().freed) {
+                candidates.add(mapEntry);
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            return;
+        }
+
+        candidates.sort((a, b) -> Long.compare(a.getValue().activityPrint.getLastAccessTime(), b.getValue().activityPrint.getLastAccessTime()));
+
+        final int evictTargetCount = Math.max(1, (int) (candidates.size() * vacatingFactor));
+
+        for (int i = 0; i < evictTargetCount; i++) {
+            removeIfCurrent(candidates.get(i).getKey(), candidates.get(i).getValue(), FreeCause.EVICTED);
+        }
+    }
+
+    // -------------------------------------------------------------------------------- allocator
+
+    /**
+     * Allocates the slots needed for a value of the given serialized size: one slot of the
+     * smallest sufficient class when {@code size <= maxBlockSize}, otherwise one
+     * {@code maxBlockSize} slot per full chunk plus a smaller-class slot for the final partial
+     * chunk. Returns {@code null} (with any partial allocation released) when the region cannot
+     * currently satisfy the request.
+     */
+    private long[] allocateSlots(final int size) {
+        final int chunkCount = chunkCountOf(size);
+        final long[] slots = new long[chunkCount];
+
+        synchronized (allocatorLock) {
+            for (int i = 0; i < chunkCount; i++) {
+                final long slot = allocateSlotLocked(slotSizeOfChunk(size, i));
+
+                if (slot < 0) {
+                    for (int j = 0; j < i; j++) {
+                        releaseSlotLocked(slots[j]);
+                    }
+
+                    return null;
                 }
 
-                if (wkind == Wrapper.KIND_STORE) {
-                    writeCountToDisk.increment();
+                slots[i] = slot;
+            }
+        }
 
-                    if (statsTimeOnDisk) {
-                        synchronized (totalWriteToDiskTimeStats) {
-                            // putToDisk measures only OffHeapStore.put(), excluding serialization and
-                            // unsuccessful in-memory placement work that happened before disk fallback.
-                            totalWriteToDiskTimeStats.accept(((StoreWrapper) w).writeToDiskTimeMillis);
+        return slots;
+    }
+
+    /** Allocates one slot of the given class. Caller holds the allocator lock. */
+    private long allocateSlotLocked(final int slotSize) {
+        final Deque<Segment> queue = segmentQueues[slotSize / MIN_BLOCK_SIZE - 1];
+        final int slotsPerSegment = SEGMENT_SIZE / slotSize;
+
+        int scanned = 0;
+
+        for (final Iterator<Segment> it = queue.iterator(); it.hasNext();) {
+            final Segment segment = it.next();
+            scanned++;
+
+            if (segment.used < slotsPerSegment) {
+                final int slotIndex = segment.slotBits.nextClearBit(0);
+                segment.slotBits.set(slotIndex);
+                segment.used++;
+
+                // Keep segments with vacancies near the front so later allocations find them fast;
+                // full segments naturally drift toward the back.
+                if (scanned > 1) {
+                    it.remove();
+                    queue.addFirst(segment);
+                }
+
+                return packSlot(segment.index, slotIndex);
+            }
+        }
+
+        // Every dedicated segment of this class is full; dedicate a fresh segment if one is free.
+        final int segmentIndex = dedicatedSegments.nextClearBit(nextFreeSegmentHint);
+
+        if (segmentIndex >= segments.length) {
+            return -1;
+        }
+
+        dedicatedSegments.set(segmentIndex);
+        nextFreeSegmentHint = segmentIndex + 1;
+
+        final Segment segment = segments[segmentIndex];
+        segment.slotSize = slotSize;
+        segment.slotBits.set(0);
+        segment.used = 1;
+        queue.addFirst(segment);
+
+        return packSlot(segmentIndex, 0);
+    }
+
+    /** Releases every slot held by a memory entry. Safe to call at most once per entry. */
+    private void releaseSlots(final Entry<V> entry) {
+        synchronized (allocatorLock) {
+            for (final long slot : entry.slots) {
+                releaseSlotLocked(slot);
+            }
+        }
+    }
+
+    private void releaseSlotLocked(final long slot) {
+        final Segment segment = segments[segmentIndexOf(slot)];
+        segment.slotBits.clear(slotIndexOf(slot));
+        segment.used--;
+    }
+
+    /**
+     * Returns fully empty segments to the free pool so they can be re-dedicated to any slot size.
+     * Called by the maintenance pass, the vacate pass, and {@link #clear()}.
+     */
+    private void reclaimEmptySegments() {
+        synchronized (allocatorLock) {
+            for (final Deque<Segment> queue : segmentQueues) {
+                for (final Iterator<Segment> it = queue.iterator(); it.hasNext();) {
+                    final Segment segment = it.next();
+
+                    if (segment.used == 0) {
+                        it.remove();
+                        dedicatedSegments.clear(segment.index);
+
+                        if (segment.index < nextFreeSegmentHint) {
+                            nextFreeSegmentHint = segment.index;
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /** Builds the per-class, per-segment occupied-slot detail for {@link #stats()}. */
+    @SuppressWarnings("unused")
+    private Map<Integer, Map<Integer, Integer>> snapshotOccupiedSlots() {
+        final Map<Integer, Map<Integer, Integer>> result = new LinkedHashMap<>();
+
+        synchronized (allocatorLock) {
+            for (final Deque<Segment> queue : segmentQueues) {
+                if (queue.isEmpty()) {
+                    continue;
+                }
+
+                // Order segments by index within the class for a stable, readable snapshot.
+                final List<Segment> ordered = new ArrayList<>(queue);
+                ordered.sort((a, b) -> Integer.compare(a.index, b.index));
+
+                for (final Segment segment : ordered) {
+                    result.computeIfAbsent(segment.slotSize, k -> new LinkedHashMap<>()).put(segment.index, segment.used);
                 }
             }
         }
@@ -1352,144 +1341,75 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return result;
     }
 
-    private long elapsedMillisSince(final long startNanos) {
-        return TimeUnit.NANOSECONDS.toMillis(Math.max(0L, nanoTimeSource.getAsLong() - startNanos));
+    // ------------------------------------------------------------------------- copy and helpers
+
+    /** The number of slots a value of the given serialized size occupies. */
+    private int chunkCountOf(final int size) {
+        // Long arithmetic: for a size close to Integer.MAX_VALUE (legal when the capacity is
+        // large enough), `size + maxBlockSize - 1` would overflow int and go negative.
+        return size <= maxBlockSize ? 1 : (int) (((long) size + maxBlockSize - 1) / maxBlockSize);
     }
 
-    /**
-     * Stores a value to disk when memory is unavailable or directed by the storage policy.
-     * Internal helper called by {@link #put(Object, Object, long, long)} when memory
-     * allocation fails or when the {@code storeSelector} determines the value should be
-     * stored on disk. Delegates to {@code offHeapStore} for actual disk persistence and
-     * creates a {@code StoreWrapper} to track the disk-stored value within the cache.
-     *
-     * <p>Protocol: any existing wrapper at this key is first removed from the pool. The replacement
-     * wrapper is created and registered in {@code storeOwners} <em>before</em> the backing bytes are
-     * overwritten; both the ownership claim and byte write happen under the per-key store lock. This
-     * ordering ensures a cache-owned allocation/map failure cannot occur after a successful store
-     * mutation and leave untracked bytes behind. A prior {@code StoreWrapper}'s later {@code destroy()}
-     * cannot delete the new bytes — it only removes store bytes while it is still the registered
-     * owner. On a successful write, the detached prior wrapper is handed back to the caller
-     * (un-retired) through {@code detachedPriorOut} so it can be retired only after the returned
-     * wrapper is successfully installed in the pool — or restored/discarded if the install fails.
-     * On a failed write or an exception, this method restores the prior wrapper to the pool itself
-     * (a failed replacement does not silently delete the existing entry) and leaves
-     * {@code detachedPriorOut} untouched. The caller is responsible for installing the returned
-     * wrapper in the pool.
-     *
-     * <p>The new {@code StoreWrapper} maintains metadata about the disk-stored value including
-     * its type, size, expiration settings, and the key needed to retrieve it from the
-     * {@code offHeapStore}. Disk-related statistics are automatically updated when the wrapper
-     * is constructed ({@code sizeOnDisk}, {@code dataSizeOnDisk}, {@code totalDataSize}).
-     *
-     * <p>Thread safety: the caller holds this cache's striped key-mutation lock. Consequently, the
-     * complete replacement protocol is serialized with other mutations of the same key, while
-     * different keys can still reach the {@code offHeapStore} concurrently. The store implementation
-     * must therefore be thread-safe across different keys.
-     *
-     * @param k the cache key to associate with the disk-stored value. Must not be {@code null}.
-     *          This key is stored in the {@code StoreWrapper} for later retrieval and removal.
-     * @param liveTime the time-to-live in milliseconds for the disk-stored entry
-     * @param maxIdleTime the maximum idle time in milliseconds for the disk-stored entry
-     * @param type the value type information needed for deserialization when reading from disk
-     * @param bytes the serialized value bytes to store on disk. The array may be larger than
-     *              the actual data size, so only the first {@code size} bytes are stored.
-     * @param size the actual size of the serialized data in bytes. Must be non-negative and
-     *             must not exceed the length of the {@code bytes} array.
-     * @param detachedPriorOut single-element holder through which, on success only, the detached
-     *        and not-yet-retired prior same-key wrapper (possibly {@code null}) is handed back to
-     *        the caller, which then owns its retirement or restoration
-     * @return a {@code StoreWrapper} for the disk-stored value if storage was successful,
-     *         or {@code null} if the {@code offHeapStore.put()} operation failed
-     */
-    Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size,
-            final Wrapper<V>[] detachedPriorOut) {
-        // Temporarily remove any prior wrapper at this key before writing disk bytes (the write
-        // overwrites the shared key-addressed store slot). On a successful disk write, the prior
-        // is handed back un-retired so the caller can retire it only after a successful pool
-        // install. On a failed disk write, the prior wrapper is restored here so a failed
-        // replacement does not silently delete the existing cache entry.
-        final Wrapper<V> prior = _pool.remove(k);
-
-        StoreWrapper storeWrapper = null;
-        boolean stored = false;
-
-        try {
-            // Always hand the store a private copy: `bytes` may alias a pooled serialization
-            // buffer that is recycled (and reused by other threads) right after this put, or the
-            // caller's own byte[]/ByteBuffer contents. The OffHeapStore contract leaves defensive
-            // copying implementation-specific, so a store that retains the array would otherwise
-            // see its contents silently change later.
-            final byte[] bytesToStore = N.copyOfRange(bytes, 0, size);
-            storeWrapper = new StoreWrapper(type, liveTime, maxIdleTime, size, k);
-
-            // Claim ownership before mutating the key-only store. Both operations remain under the
-            // same lock, so readers cannot observe the intermediate claim. Besides serializing
-            // same-key spills, this order guarantees that a StoreWrapper allocation or
-            // ConcurrentHashMap failure happens while the prior backing bytes are still intact.
-            synchronized (storeKeyLockFor(k)) {
-                final StoreWrapper previousOwner = storeOwners.put(k, storeWrapper);
-                final long writeStartedAt = statsTimeOnDisk ? nanoTimeSource.getAsLong() : 0L;
-
-                try {
-                    stored = offHeapStore.put(k, bytesToStore);
-                } catch (final RuntimeException | Error storeFailure) {
-                    try {
-                        restorePreviousStoreOwner(k, storeWrapper, previousOwner);
-                    } catch (final RuntimeException | Error rollbackFailure) {
-                        addSuppressedIfDistinct(storeFailure, rollbackFailure);
-                    }
-
-                    throw storeFailure;
-                }
-
-                if (statsTimeOnDisk) {
-                    storeWrapper.writeToDiskTimeMillis = elapsedMillisSince(writeStartedAt);
-                }
-
-                if (!stored) {
-                    restorePreviousStoreOwner(k, storeWrapper, previousOwner);
-                    storeWrapper.discardReplacedStoreMetadata();
-                }
-            }
-        } catch (final RuntimeException | Error e) {
-            if (storeWrapper != null) {
-                storeWrapper.discardReplacedStoreMetadata();
-            }
-
-            try {
-                restoreDetachedPrior(k, prior);
-            } catch (final RuntimeException | Error restoreFailure) {
-                addSuppressedIfDistinct(e, restoreFailure);
-            }
-
-            throw e;
-        }
-
-        if (stored) {
-            detachedPriorOut[0] = prior;
-
-            return storeWrapper;
-        }
-
-        storeWrapper.discardReplacedStoreMetadata();
-        restoreDetachedPrior(k, prior);
-
-        return null;
+    /** The payload size of one chunk: {@code maxBlockSize} for all but the final, possibly smaller chunk. */
+    private int chunkSizeOfChunk(final int size, final int chunkIndex) {
+        final int count = chunkCountOf(size);
+        return chunkIndex < count - 1 ? maxBlockSize : size - (count - 1) * maxBlockSize;
     }
 
-    private void restorePreviousStoreOwner(final K key, final StoreWrapper replacement, final StoreWrapper previousOwner) {
-        final boolean restored = previousOwner == null ? storeOwners.remove(key, replacement) : storeOwners.replace(key, replacement, previousOwner);
+    /** The slot-size class of a chunk: its size rounded up to a multiple of {@link #MIN_BLOCK_SIZE}. */
+    private int slotSizeOfChunk(final int size, final int chunkIndex) {
+        final int chunkSize = chunkSizeOfChunk(size, chunkIndex);
 
-        if (!restored) {
-            throw new IllegalStateException("Failed to roll back disk-store ownership after the backing write did not complete");
+        return chunkSize <= 0 ? MIN_BLOCK_SIZE : roundUpToMinBlock(chunkSize);
+    }
+
+    /** The slot-rounded native memory a value of the given serialized size occupies. */
+    private long occupiedMemoryOf(final int size) {
+        final int chunkCount = chunkCountOf(size);
+
+        // All full chunks use maxBlockSize slots (maxBlockSize is a MIN_BLOCK_SIZE multiple).
+        return (long) (chunkCount - 1) * maxBlockSize + slotSizeOfChunk(size, chunkCount - 1);
+    }
+
+    private static int roundUpToMinBlock(final int size) {
+        return size % MIN_BLOCK_SIZE == 0 ? size : (size / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
+    }
+
+    private static long packSlot(final int segmentIndex, final int slotIndex) {
+        return ((long) segmentIndex << SLOT_INDEX_BITS) | slotIndex;
+    }
+
+    private static int segmentIndexOf(final long slot) {
+        return (int) (slot >>> SLOT_INDEX_BITS);
+    }
+
+    private static int slotIndexOf(final long slot) {
+        return (int) (slot & SLOT_INDEX_MASK);
+    }
+
+    private long addressOf(final long slot, final int slotSize) {
+        return baseAddress + (long) segmentIndexOf(slot) * SEGMENT_SIZE + (long) slotIndexOf(slot) * slotSize;
+    }
+
+    /** Copies a value's serialized bytes into the entry's freshly allocated (private) slots. */
+    private void copyEntryToMemory(final Entry<V> entry, final byte[] bytes) {
+        int copied = 0;
+
+        for (int i = 0; i < entry.slots.length; i++) {
+            final int chunkSize = chunkSizeOfChunk(entry.size, i);
+            copyToMemory(addressOf(entry.slots[i], slotSizeOfChunk(entry.size, i)), bytes, arrayOffset + copied, chunkSize);
+            copied += chunkSize;
         }
     }
 
-    /** Adds cleanup context without allowing a reused throwable to trigger self-suppression. */
-    private static void addSuppressedIfDistinct(final Throwable primary, final Throwable secondary) {
-        if (primary != secondary) {
-            primary.addSuppressed(secondary);
+    /** Reassembles an entry's serialized bytes from its slots. Caller holds the entry monitor. */
+    private void copyEntryFromMemory(final Entry<V> entry, final byte[] bytes) {
+        int copied = 0;
+
+        for (int i = 0; i < entry.slots.length; i++) {
+            final int chunkSize = chunkSizeOfChunk(entry.size, i);
+            copyFromMemory(addressOf(entry.slots[i], slotSizeOfChunk(entry.size, i)), bytes, arrayOffset + copied, chunkSize);
+            copied += chunkSize;
         }
     }
 
@@ -1513,1178 +1433,91 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return value;
     }
 
-    /**
-     * Reinstalls a same-key wrapper that a replacement attempt detached from the pool, after the
-     * replacement failed (disk write failure, exception, or a rejected pool install). Called under
-     * the key's mutation lock, so no competing same-key mapping can have appeared. If the pool
-     * rejects the reinstall (e.g. the entry expired meanwhile), the wrapper is destroyed and the
-     * discard is logged.
-     */
-    private void restoreDetachedPrior(final K k, final Wrapper<V> prior) {
-        if (prior != null) {
-            final boolean restored = _pool.put(k, prior);
+    private static long elapsedMillisSince(final long startNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+    }
 
-            if (!restored) {
-                prior.destroy(Caller.PUT_ADD_FAILURE);
-
-                if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to restore the previous off-heap cache entry after a failed replacement; the previous entry was discarded");
-                }
-            }
+    private void assertNotClosed() {
+        if (closed) {
+            throw new IllegalStateException("This off-heap cache has been closed");
         }
     }
 
-    /**
-     * Finds and allocates an available memory slot of the specified size.
-     * Uses size-segregated segment queues and a best-fit search pattern. The algorithm
-     * minimizes fragmentation while maintaining good performance through bidirectional
-     * searching and queue reordering.
-     *
-     * <p>Allocation algorithm:
-     * <ol>
-     * <li>Rounds the requested size up to the nearest multiple of {@link #MIN_BLOCK_SIZE}
-     *     (64 bytes), capped at {@code maxBlockSize}.</li>
-     * <li>Determines the segment queue index based on the rounded slot size.</li>
-     * <li>Searches the queue bidirectionally (from both ends toward the middle) for a segment
-     *     with an available slot.</li>
-     * <li>If a slot is found after more than 3 scan iterations (each probing both ends of the queue),
-     *     moves that segment to the front for faster future access.</li>
-     * <li>If no slot is found in existing segments, allocates a new segment from the pool
-     *     (if capacity allows) and adds it to the queue.</li>
-     * </ol>
-     *
-     * <p>Thread safety: this method is thread-safe. The fast path uses per-queue locks scoped to a
-     * single slot size, so threads allocating slots of different sizes do not contend. When a new
-     * segment must be allocated from the global pool, a global lock on {@code _segmentBitSet} is
-     * briefly held to assign a fresh segment index.
-     *
-     * @param size the required slot size in bytes. Non-positive values are treated as
-     *             {@link #MIN_BLOCK_SIZE}; otherwise the value is rounded up to the nearest
-     *             multiple of {@link #MIN_BLOCK_SIZE} (64 bytes) and capped at {@code maxBlockSize}.
-     * @return the allocated {@link Slot} containing the slot index and parent segment reference,
-     *         or {@code null} if no space is available in the cache (all segments are full)
-     */
-    private Slot getAvailableSlot(final int size) {
-        int slotSize = 0;
-
-        if (size <= 0) {
-            slotSize = MIN_BLOCK_SIZE;
-        } else if (size >= _maxBlockSize) {
-            slotSize = _maxBlockSize;
-        } else {
-            slotSize = size % MIN_BLOCK_SIZE == 0 ? size : (size / MIN_BLOCK_SIZE + 1) * MIN_BLOCK_SIZE;
-        }
-
-        final int idx = slotSize / MIN_BLOCK_SIZE - 1;
-        // Queues are created eagerly in the constructor, so this element is always non-null and
-        // safely published; no lazy initialization / double-checked locking is required here.
-        final Deque<Segment> queue = _segmentQueues[idx];
-
-        Segment segment = null;
-        int indexOfAvailableSlot = -1;
-
-        synchronized (queue) {
-            final Iterator<Segment> iterator = queue.iterator();
-            final Iterator<Segment> descendingIterator = queue.descendingIterator();
-            // Scan from both ends toward the middle: each loop iteration consumes one segment from the
-            // front and one from the back, so the two iterators together cover the whole queue in about
-            // half as many iterations as its length (the slack guarantees the odd/middle element is reached).
-            int half = queue.size() / 2 + 1;
-            int cnt = 0;
-            while (iterator.hasNext() && half-- >= 0) {
-                cnt++;
-                segment = iterator.next();
-
-                if ((indexOfAvailableSlot = segment.allocateSlot()) >= 0) {
-                    if (cnt > SEGMENT_REORDER_THRESHOLD) {
-                        iterator.remove();
-                        queue.addFirst(segment);
-                    }
-
-                    break;
-                }
-
-                if (descendingIterator.hasNext()) {
-                    segment = descendingIterator.next();
-
-                    if ((indexOfAvailableSlot = segment.allocateSlot()) >= 0) {
-                        if (cnt > SEGMENT_REORDER_THRESHOLD) {
-                            descendingIterator.remove();
-                            queue.addFirst(segment);
-                        }
-
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (indexOfAvailableSlot < 0) {
-            synchronized (_segmentBitSet) {
-                // Start the scan from the hint rather than rescanning the whole bitset
-                // from index 0 on every new-segment allocation.
-                final int nextSegmentIndex = _segmentBitSet.nextClearBit(_nextSegmentIndexHint);
-
-                if (nextSegmentIndex >= _segments.length) {
-                    return null; // No space available;
-                }
-
-                _segmentBitSet.set(nextSegmentIndex);
-                _nextSegmentIndexHint = nextSegmentIndex + 1;
-                _segmentQueueMap.put(nextSegmentIndex, queue);
-
-                segment = _segments[nextSegmentIndex];
-                segment.sizeOfSlot = slotSize;
-
-                indexOfAvailableSlot = segment.allocateSlot();
-
-                synchronized (queue) {
-                    queue.addFirst(segment);
-                }
-            }
-        }
-
-        return new Slot(indexOfAvailableSlot, segment);
-    }
+    // -------------------------------------------------------------------------- nested types
 
     /**
-     * Triggers asynchronous vacating to free up memory space.
-     * Called when memory allocation fails during a put operation, indicating
-     * that the cache has reached capacity. Initiates a background cleanup process to evict
-     * least-recently-used entries and release empty memory segments.
+     * A cache entry: immutable identity (type, size, storage) plus a mutable, monitor-guarded
+     * lifecycle. Memory-backed entries hold packed slot handles; disk-backed entries hold
+     * {@code null} slots and their bytes live in the {@link OffHeapStore} under the cache key.
      *
-     * <p>Vacating process:
-     * <ol>
-     * <li>Debounce gate: if a vacate completed within the last 3000 ms, measured with a
-     *     monotonic clock, returns immediately without scheduling another one.</li>
-     * <li>Otherwise, checks if a vacating task is already in flight using an atomic counter;
-     *     if so, returns immediately to avoid redundant work.</li>
-     * <li>Otherwise, schedules an asynchronous task that:
-     *     <ul>
-     *     <li>Calls {@code _pool.evict()} to evict LRU entries based on the {@code vacatingFactor} threshold.</li>
-     *     <li>Calls {@link #reclaimEmptySegments()} to release now-empty segments back to the pool.</li>
-     *     <li>Records its completion time so that the debounce window suppresses immediately
-     *         re-triggered vacations (without pinning a pool thread in a sleep).</li>
-     *     </ul>
-     * </li>
-     * </ol>
-     * If the asynchronous executor rejects the scheduling, the in-flight counter is released so
-     * subsequent {@code vacate()} calls are not permanently silenced.
-     *
-     * <p>This method returns immediately after scheduling the vacating task, allowing the calling
-     * thread to continue. This non-blocking behavior ensures that put operations do not hang
-     * waiting for cleanup to complete.
-     *
-     * <p>Thread safety: this method is thread-safe and uses an atomic counter to ensure only
-     * one vacating task runs at a time, even when called concurrently from multiple threads.
-     * The task holds the lifecycle read lock while touching the pool and segment metadata, so
-     * {@link #close()} waits for an in-flight task. A task queued immediately before shutdown
-     * checks the closed state after acquiring that lock and safely becomes a no-op.
+     * <p>Lifecycle protocol: {@code freed} is set exactly once, under {@code synchronized(this)},
+     * by {@link AbstractOffHeapCache#free}; readers copy native memory / fetch store bytes under
+     * the same monitor after checking the flag, so a read can never observe released memory or
+     * bytes belonging to a newer same-key entry.
      */
-    private void vacate() {
-        // A debounce interval is elapsed time, not civil time. Using currentTimeMillis here made a
-        // backward NTP/manual adjustment suppress memory reclamation for the size of the rollback.
-        if (_vacateHasFinished && nanoTimeSource.getAsLong() - _lastVacateFinishedNanos < VACATE_DEBOUNCE_NANOS) {
-            return;
-        }
-
-        if (_activeVacationTaskCount.incrementAndGet() > 1) {
-            _activeVacationTaskCount.decrementAndGet();
-            return;
-        }
-
-        boolean scheduled = false;
-        try {
-            _asyncExecutor.execute(() -> {
-                lifecycleLock.readLock().lock();
-                try {
-                    if (!_pool.isClosed()) {
-                        _pool.evict();
-
-                        reclaimEmptySegments();
-                    }
-                } finally {
-                    try {
-                        lifecycleLock.readLock().unlock();
-                    } finally {
-                        // Record completion and release the gate immediately. The debounce
-                        // window above (not a thread-pinning sleep) prevents an immediate
-                        // re-vacation, so a fresh vacate can start as soon as it is needed.
-                        _lastVacateFinishedNanos = nanoTimeSource.getAsLong();
-                        // Publish completion after the timestamp; the volatile write makes the
-                        // matching timestamp visible to a thread entering the debounce check.
-                        _vacateHasFinished = true;
-                        _activeVacationTaskCount.decrementAndGet();
-                    }
-                }
-            });
-            scheduled = true;
-        } finally {
-            // If the executor rejects the task (e.g., it is shutting down), we must
-            // release the gate here. Otherwise the counter stays > 0 forever and every
-            // subsequent vacate() call sees > 1 and returns without doing any work.
-            if (!scheduled) {
-                _activeVacationTaskCount.decrementAndGet();
-            }
-        }
-    }
-
-    /**
-     * Removes the cache entry associated with the specified key, if present.
-     * The underlying wrapper is destroyed, releasing any off-heap memory slots or
-     * disk storage held by the entry.
-     *
-     * @param key the key whose mapping is to be removed from the cache; must not be {@code null}
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws IllegalStateException if the cache has been closed
-     */
-    @Override
-    public void remove(final K key) {
-        N.checkArgNotNull(key, "key");
-
-        // A disk wrapper's destroy() calls OffHeapStore.remove(). Keep close() from closing the
-        // store after the pool mapping is detached but before that cleanup call completes.
-        lifecycleLock.readLock().lock();
-        try {
-            if (_pool.isClosed()) {
-                throw new IllegalStateException("This cache has been closed");
-            }
-
-            synchronized (keyMutationLockFor(key)) {
-                final Wrapper<V> w = _pool.remove(key);
-
-                if (w != null) {
-                    w.destroy(Caller.REMOVE_REPLACE_CLEAR);
-                }
-            }
-        } finally {
-            lifecycleLock.readLock().unlock();
-        }
-    }
-
-    /**
-     * Returns whether the cache contains a mapping for the specified key.
-     *
-     * @param key the key whose presence in the cache is to be tested; must not be {@code null}
-     * @return {@code true} if the cache contains a mapping for the specified key; {@code false} otherwise
-     * @throws IllegalArgumentException if {@code key} is {@code null}
-     * @throws IllegalStateException if the cache has been closed
-     */
-    @Override
-    public boolean containsKey(final K key) {
-        N.checkArgNotNull(key, "key");
-
-        return _pool.containsKey(key);
-    }
-
-    /**
-     * Returns a set view of all keys currently held in the cache,
-     * including the keys of entries that have been spilled to disk.
-     *
-     * @return the set of cache keys; never {@code null}
-     * @throws IllegalStateException if the cache has been closed
-     */
-    @Override
-    public Set<K> keySet() {
-        return _pool.keySet();
-    }
-
-    /**
-     * Returns the number of entries currently held in the cache (including disk-stored entries).
-     *
-     * @return the current cache size
-     * @throws IllegalStateException if the cache has been closed
-     */
-    @Override
-    public int size() {
-        return _pool.size();
-    }
-
-    /**
-     * Removes all entries from the cache, destroying their wrappers and releasing
-     * any associated off-heap memory and disk storage.
-     *
-     * @throws IllegalStateException if the cache has been closed
-     */
-    @Override
-    public void clear() {
-        // Pool destruction can call the disk store, so exclude close() until all detached wrappers
-        // have completed their cleanup and empty segments have been reclaimed.
-        lifecycleLock.readLock().lock();
-        try {
-            if (_pool.isClosed()) {
-                throw new IllegalStateException("This cache has been closed");
-            }
-
-            _pool.clear();
-            reclaimEmptySegments();
-        } finally {
-            lifecycleLock.readLock().unlock();
-        }
-    }
-
-    /**
-     * Returns a sampled, point-in-time snapshot of cache statistics.
-     * The snapshot includes entry counts, hit/miss counters, eviction counters, memory and disk usage,
-     * disk I/O timing aggregates, and segment-slot occupancy details.
-     *
-     * <p>This method collects statistics from the underlying pool and segment queues, then assembles
-     * an immutable {@link OffHeapCacheStats} view. Each segment queue and each disk-I/O timing
-     * aggregate is captured under the monitor used to mutate that structure. Cross-component
-     * counters use {@link LongAdder} and pool snapshots, however, so the complete result is
-     * intentionally non-atomic and may be transiently inconsistent under concurrent activity.
-     *
-     * <p><b>&#9888;&#65039; Non-atomic snapshot:</b> Relationships between fields are conceptual
-     * invariants and may not hold exactly while the cache is being updated.
-     *
-     * <p><b>Usage Examples:</b>
-     * <pre>{@code
-     * OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]>builder().capacityInMB(100).build();
-     * cache.put("key1", "value1".getBytes());
-     * cache.put("key2", "value2".getBytes());
-     *
-     * OffHeapCacheStats stats = cache.stats();
-     * System.out.println("Entries in memory: " + (stats.size() - stats.sizeOnDisk()));
-     * System.out.println("Entries on disk: " + stats.sizeOnDisk());
-     * System.out.println("Hits: " + stats.hitCount() + "/" + stats.getCount());
-     * System.out.println("Data size (memory + disk): " + stats.dataSize() + ", allocated memory: " + stats.allocatedMemory());
-     * }</pre>
-     *
-     * @return the statistics snapshot for this cache instance; never {@code null}
-     * @throws IllegalStateException if the cache has been closed
-     */
-    public OffHeapCacheStats stats() {
-        final PoolStats poolStats = _pool.stats();
-
-        // A disk-backed wrapper is a pool hit before its bytes are fetched. Reclassify confirmed
-        // missing backing bytes from a pool-level hit to a miss, while preserving getCount. Other
-        // exceptional failures after lookup (for example, copy or deserialization failures) remain
-        // lookup-level hits. Since the pool snapshot and LongAdder are sampled independently, a
-        // miss that completes just after poolStats was captured may not have its corresponding pool
-        // hit in this snapshot yet; cap the correction at the sampled hit count to keep both values
-        // non-negative. A later snapshot will include the remaining correction.
-        final long missingDiskReads = Math.min(poolStats.hitCount(), N.max(0L, missingReadCountFromDisk.sum()));
-        final long hitCount = poolStats.hitCount() - missingDiskReads;
-        final long missCount = poolStats.missCount() + missingDiskReads;
-
-        // Iterate the unique per-size-class queues directly. _segmentQueueMap maps many segment
-        // indices to the same queue instance, so its values contain duplicates; _segmentQueues holds
-        // each queue exactly once (size classes with no allocated segment simply contribute an empty
-        // queue). Reading a queue's contents only under its own monitor avoids the
-        // ConcurrentModificationException/torn read that a content-based distinct() over these
-        // LinkedList queues would risk, because distinct() would hash/compare their elements without
-        // holding the monitor that concurrent puts and reclaimEmptySegments() use to mutate them.
-        final Map<Integer, Map<Integer, Integer>> occupiedSlots = Stream.of(_segmentQueues).flatmap(queue -> {
-            synchronized (queue) {
-                return N.map(queue, it -> Tuple.of(it.sizeOfSlot, it.index, it.cardinality()));
-            }
-        })
-                .sorted(Comparators.<Tuple3<Integer, Integer, Integer>> comparingInt(it -> it._1).thenComparingInt(it -> it._2))
-                .groupTo(it -> it._1, Collectors.toMap(it -> it._2, it -> it._3, Suppliers.ofLinkedHashMap()), Suppliers.ofLinkedHashMap());
-
-        // Snapshot stats under the same monitors writers use (see put() and getOrNull()).
-        // LongSummaryStatistics is not thread-safe; reading count/min/max/average from a
-        // concurrently mutated instance can yield a torn state where, e.g., count > 0 but
-        // min is still Long.MAX_VALUE, or where average's internal sum and count were sampled
-        // at different moments and so represent no real point-in-time average.
-        // Clamp each component to >= 0 so a stray negative observation (e.g. recorded during a
-        // backward wall-clock jump) can never make the non-negative MinMaxAvg constructor throw and
-        // turn a monitoring call into a failure. Clamping all three keeps the snapshot self-consistent.
-        final double writeMin;
-        final double writeMax;
-        final double writeAvg;
-        synchronized (totalWriteToDiskTimeStats) {
-            final long count = totalWriteToDiskTimeStats.getCount();
-            writeMin = count > 0 ? Math.max(0.0D, totalWriteToDiskTimeStats.getMin()) : 0.0D;
-            writeMax = count > 0 ? Math.max(0.0D, totalWriteToDiskTimeStats.getMax()) : 0.0D;
-            writeAvg = count > 0 ? Math.max(0.0D, Numbers.round(totalWriteToDiskTimeStats.getAverage(), 2)) : 0.0D;
-        }
-
-        final MinMaxAvg writeToDiskTimeStats = new MinMaxAvg(writeMin, writeMax, writeAvg);
-
-        final double readMin;
-        final double readMax;
-        final double readAvg;
-        synchronized (totalReadFromDiskTimeStats) {
-            final long count = totalReadFromDiskTimeStats.getCount();
-            readMin = count > 0 ? Math.max(0.0D, totalReadFromDiskTimeStats.getMin()) : 0.0D;
-            readMax = count > 0 ? Math.max(0.0D, totalReadFromDiskTimeStats.getMax()) : 0.0D;
-            readAvg = count > 0 ? Math.max(0.0D, Numbers.round(totalReadFromDiskTimeStats.getAverage(), 2)) : 0.0D;
-        }
-
-        final MinMaxAvg readFromDiskTimeStats = new MinMaxAvg(readMin, readMax, readAvg);
-
-        // Clamp the LongAdder sums to >= 0 for the same reason as the timing stats above:
-        // LongAdder.sum() is not an atomic snapshot, so while cells are being summed a
-        // concurrent destroy's decrement can be observed without its matching (earlier,
-        // different-cell) increment, yielding a transiently negative value that the
-        // OffHeapCacheStats constructor would reject - turning a monitoring call into a failure.
-        return new OffHeapCacheStats(poolStats.capacity(), poolStats.size(), N.max(0L, sizeOnDisk.sum()), poolStats.putCount(), writeCountToDisk.sum(),
-                poolStats.getCount(), hitCount, readCountFromDisk.sum(), missCount, poolStats.evictionCount(), evictionCountFromDisk.sum(), _capacityInBytes,
-                N.max(0L, totalOccupiedMemorySize.sum()), N.max(0L, totalDataSize.sum()), N.max(0L, dataSizeOnDisk.sum()), writeToDiskTimeStats,
-                readFromDiskTimeStats, SEGMENT_SIZE, occupiedSlots);
-    }
-
-    /**
-     * Closes the cache and releases all resources.
-     * Cancels the scheduled eviction task, shuts down the asynchronous vacation executor,
-     * removes JVM shutdown hooks, closes the underlying object pool, deallocates all
-     * off-heap memory, and closes the configured {@link OffHeapStore}, if any. This method is
-     * idempotent: invoking it on an already-closed cache returns immediately. It is
-     * also invoked automatically by the registered shutdown hook during JVM shutdown.
-     *
-     * <p><b>Reentrant callback restriction:</b> A serializer, store selector, or other callback
-     * invoked from an operation holding this cache's lifecycle read lock must not close the cache
-     * synchronously. A read-to-write lock upgrade is unsupported; such a call fails immediately
-     * with {@link IllegalStateException}. Close the cache after the callback/operation returns.
-     *
-     * @throws IllegalStateException if the current thread attempts to close the cache while it
-     *                               holds the cache lifecycle read lock
-     * @throws SecurityException if the runtime denies removal of the registered shutdown hook;
-     *                           pool, native-memory, and store cleanup is still attempted
-     */
-    @Override
-    public void close() {
-        // ReentrantReadWriteLock does not support upgrading a held read lock to its write lock.
-        // Check before acquiring any other lifecycle monitor/lock so a user callback invoked from
-        // put() fails fast instead of permanently waiting on itself (or forming a two-thread lock
-        // cycle with a concurrent close).
-        if (lifecycleLock.getReadHoldCount() > 0) {
-            throw new IllegalStateException("Cannot close this off-heap cache reentrantly while the current thread is executing a cache operation or callback");
-        }
-
-        // The lifecycle write lock excludes in-flight writers of native memory (put() and the
-        // disk-to-memory promotion hold the read lock across their copyToMemory calls), so
-        // deallocate() below can never free the region under a thread that is mid-copy.
-        lifecycleLock.writeLock().lock();
-
-        try {
-            if (_pool.isClosed()) {
-                return;
-            }
-
-            try {
-                if (scheduleFuture != null) {
-                    scheduleFuture.cancel(true);
-                }
-            } finally {
-                try {
-                    // AsyncExecutor installs its own shutdown hook when vacation is first scheduled.
-                    // Shutting it down here releases both that hook and its per-cache worker threads.
-                    _asyncExecutor.shutdown();
-                } finally {
-                    try {
-                        if (shutdownHook != null) {
-                            try {
-                                Runtime.getRuntime().removeShutdownHook(shutdownHook);
-                                shutdownHook = null;
-                            } catch (final IllegalStateException e) {
-                                // Expected when close() is invoked from the shutdown hook itself (JVM already
-                                // shutting down); the hook will run anyway, so this is safe to ignore.
-                                if (logger.isDebugEnabled()) {
-                                    logger.debug("Could not remove shutdown hook because the JVM is already shutting down; ignoring", e);
-                                }
-                            }
-                        }
-                    } finally {
-                        try {
-                            _pool.close();
-                        } finally {
-                            try {
-                                deallocate();
-                            } finally {
-                                closeOffHeapStore();
-                            }
-                        }
-                    }
-                }
-            }
-        } finally {
-            lifecycleLock.writeLock().unlock();
-        }
-    }
-
-    /**
-     * Releases the configured {@link OffHeapStore}, if any, when the cache is closed. An
-     * {@link Exception} raised while closing the store is logged at warn level rather than propagated,
-     * so it cannot leave the cache in a half-closed state (native memory has already been released by
-     * {@link #deallocate()}). An {@link Error} is deliberately not swallowed.
-     */
-    private void closeOffHeapStore() {
-        if (offHeapStore != null) {
-            try {
-                offHeapStore.close();
-            } catch (final Exception e) {
-                if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to close the configured OffHeapStore; off-heap memory is released but store resources may remain allocated", e);
-                }
-            }
-        }
-    }
-
-    /**
-     * Returns whether this cache has been closed.
-     *
-     * @return {@code true} if {@link #close()} has been called; {@code false} if the cache is still operational
-     */
-    @Override
-    public boolean isClosed() {
-        return _pool.isClosed();
-    }
-
-    /**
-     * Performs periodic eviction of empty segments to release them back to the pool.
-     * Internal maintenance method that reclaims memory segments that have become completely
-     * empty (all slots freed) and makes them available for reuse with different slot sizes.
-     * This process is essential for memory management because it allows segments to be
-     * repurposed when workload patterns change.
-     *
-     * <p>Eviction process:
-     * <ol>
-     * <li>Iterates through all segments in the segment array.</li>
-     * <li>For each segment with an empty slot {@link BitSet} (no allocated slots):
-     *     <ul>
-     *     <li>Locates the segment's queue in {@code _segmentQueueMap}.</li>
-     *     <li>Uses double-checked locking to verify the segment is still empty.</li>
-     *     <li>Removes the segment from its queue.</li>
-     *     <li>Removes the segment from {@code _segmentQueueMap}.</li>
-     *     <li>Clears the segment's bit in {@code _segmentBitSet}, marking it as available.</li>
-     *     </ul>
-     * </li>
-     * </ol>
-     *
-     * <p>This method is called:
-     * <ul>
-     * <li>By the scheduled eviction task at regular intervals (if {@code evictDelay} &gt; 0).</li>
-     * <li>By the {@code vacate()} method after evicting entries from the pool.</li>
-     * <li>By {@link #clear()} after the pool is cleared, to release the now-empty segments.</li>
-     * </ul>
-     *
-     * <p>The method uses double-checked locking to minimize lock contention while ensuring thread safety.
-     * It first checks if a segment is empty without holding the queue lock, then re-checks after
-     * acquiring the lock to ensure the segment has not been allocated in the meantime.
-     *
-     * <p>Thread safety: this method is thread-safe and uses fine-grained locking on
-     * {@code _segmentBitSet} and individual segment queues. It can be called concurrently
-     * with allocation operations.
-     */
-    private void reclaimEmptySegments() {
-        synchronized (_segmentBitSet) {
-            for (int i = 0, len = _segments.length; i < len; i++) {
-                if (_segments[i].isEmpty()) {
-                    final Deque<Segment> queue = _segmentQueueMap.get(i);
-
-                    if (queue != null) {
-                        synchronized (queue) {
-                            if (_segments[i].isEmpty()) {
-                                queue.remove(_segments[i]);
-
-                                _segmentQueueMap.remove(i);
-                                _segmentBitSet.clear(i);
-
-                                // A lower index just became free; make sure the
-                                // next-free-segment scan can find it again.
-                                if (i < _nextSegmentIndexHint) {
-                                    _nextSegmentIndexHint = i;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Represents a memory segment that can be divided into fixed-size slots.
-     * Each segment is {@link #SEGMENT_SIZE} bytes (1 MB) and can be configured with a
-     * specific slot size. A segment can be reset and reused with a different slot size
-     * once all of its slots are freed. A {@link BitSet} tracks which slots are allocated,
-     * providing efficient allocation and deallocation operations.
-     *
-     * <p>This is an internal class used by {@link AbstractOffHeapCache} for memory management.
-     * Segments are allocated from the fixed array of segments created during cache initialization.
-     * The {@code sizeOfSlot} field can be reconfigured to any multiple of
-     * {@link #MIN_BLOCK_SIZE} (64, 128, 192, 256, 320, ..., up to {@code maxBlockSize}) when the
-     * segment becomes empty and is reused.
-     *
-     * <p>Thread safety: the slot allocation and deallocation methods ({@link #allocateSlot()} and
-     * {@link #releaseSlot(int)}) are synchronized on the internal slot {@link BitSet} to ensure
-     * thread-safe slot management. {@link #index()} simply returns an immutable field and
-     * requires no synchronization.
-     */
-    static final class Segment {
-
-        private final BitSet slotBitSet = new BitSet();
-        private final long segmentStartPtr;
-        private final int index;
-        // It can be reset/reused by setting sizeOfSlot to any multiple of 64: 64, 128, 192, 256, 320, ... up to maxBlockSize.
-        private int sizeOfSlot;
-
-        /**
-         * Constructs a segment descriptor for the specified native-memory range.
-         *
-         * <p><b>Usage Examples:</b>
-         * <pre>{@code
-         * final long segmentStartPtr = 0L;
-         * final Segment segment = new Segment(segmentStartPtr, 0);
-         * }</pre>
-         *
-         * @param segmentStartPtr the starting address of this segment in off-heap memory
-         * @param index the segment index in the cache segment array
-         */
-        public Segment(final long segmentStartPtr, final int index) {
-            this.segmentStartPtr = segmentStartPtr;
-            this.index = index;
-        }
-
-        /**
-         * Returns this segment's index in the segment array.
-         *
-         * <p><b>Usage Examples:</b>
-         * <pre>{@code
-         * int index = segment.index();
-         * }</pre>
-         *
-         * @return the segment index
-         */
-        public int index() {
-            return index;
-        }
-
-        /**
-         * Allocates one slot from this segment.
-         * The first available slot index is selected, marked as occupied, and returned.
-         * If no slot is available for the current slot size, {@code -1} is returned.
-         *
-         * <p><b>Usage Examples:</b>
-         * <pre>{@code
-         * int slotIndex = segment.allocateSlot();
-         * }</pre>
-         *
-         * @return the allocated slot index, or {@code -1} if the segment is full
-         */
-        public int allocateSlot() {
-            synchronized (slotBitSet) {
-                final int result = slotBitSet.nextClearBit(0);
-
-                if (result >= SEGMENT_SIZE / sizeOfSlot) {
-                    return -1;
-                }
-
-                slotBitSet.set(result);
-
-                return result;
-            }
-        }
-
-        /**
-         * Releases an allocated slot so it can be reused.
-         *
-         * <p><b>Usage Examples:</b>
-         * <pre>{@code
-         * int slotIndex = 0;
-         * segment.releaseSlot(slotIndex);
-         * }</pre>
-         *
-         * @param slotIndex the slot index to release
-         */
-        public void releaseSlot(final int slotIndex) {
-            synchronized (slotBitSet) {
-                slotBitSet.clear(slotIndex);
-            }
-        }
-
-        /**
-         * Returns the number of slots currently allocated in this segment.
-         *
-         * <p>{@link BitSet} is not thread-safe, so this read is performed under the same
-         * {@code slotBitSet} monitor that {@link #allocateSlot()} and {@link #releaseSlot(int)}
-         * use for mutation. Reading {@code cardinality()} without this monitor can observe a torn
-         * state while another thread is in {@code set()}/{@code clear()} (which may resize the
-         * backing word array), yielding a garbage count.
-         *
-         * @return the number of allocated slots
-         */
-        public int cardinality() {
-            synchronized (slotBitSet) {
-                return slotBitSet.cardinality();
-            }
-        }
-
-        /**
-         * Returns whether this segment currently has no allocated slots.
-         *
-         * <p>Like {@link #cardinality()}, this read is performed under the {@code slotBitSet}
-         * monitor because {@link BitSet} is not thread-safe; an unsynchronized {@code isEmpty()}
-         * can race with a concurrent {@code releaseSlot(int)}/{@code allocateSlot()}.
-         *
-         * @return {@code true} if no slots are allocated; {@code false} otherwise
-         */
-        public boolean isEmpty() {
-            synchronized (slotBitSet) {
-                return slotBitSet.isEmpty();
-            }
-        }
-
-        @Override
-        public String toString() {
-            return "Segment [segmentStartPtr=" + segmentStartPtr + ", sizeOfSlot=" + sizeOfSlot + "]";
-        }
-    }
-
-    /**
-     * Represents an allocated memory slot within a segment.
-     * Encapsulates the slot index and its parent segment, providing a convenient way to
-     * release the slot when it is no longer needed.
-     *
-     * <p>This is an internal record used by {@link AbstractOffHeapCache} for memory management.
-     * The slot must be released explicitly by calling {@link #release()} to free the memory
-     * for reuse. If a slot is allocated but not properly released, it will result in a memory
-     * leak within the segment (the slot remains marked as occupied in the segment's
-     * {@link BitSet}).
-     *
-     * <p>Thread safety: {@link #release()} is thread-safe because it delegates to the
-     * thread-safe {@link Segment#releaseSlot(int)} method.
-     *
-     * @param indexOfSlot the slot index within the parent segment
-     *                    (0 to {@code SEGMENT_SIZE/sizeOfSlot - 1})
-     * @param segment the parent {@link Segment} that contains this slot
-     */
-    record Slot(int indexOfSlot, Segment segment) {
-
-        /**
-         * Releases this slot back to its parent segment, making it available for reuse.
-         * Delegates to {@link Segment#releaseSlot(int)} to clear the corresponding bit in
-         * the segment's allocation {@link BitSet}.
-         *
-         * <p>Thread safety: this method is thread-safe. However, it must be called at most once per
-         * allocated slot: releasing the same slot twice can free a slot that has since been reallocated
-         * to a different entry. Callers are responsible for ensuring a single release (the cache nulls
-         * out its slot references after releasing to enforce this).
-         */
-        void release() {
-            segment.releaseSlot(indexOfSlot);
-        }
-    }
-
-    /**
-     * Base wrapper class for cached values with metadata.
-     * Extends {@link AbstractPoolable} to support TTL and idle-time tracking through the
-     * object pool. Each wrapper stores the value's type information and serialized size.
-     *
-     * <p>This is an internal abstract class with three concrete implementations for the
-     * different storage strategies:
-     * <ul>
-     * <li>{@link SlotWrapper} - values stored in a single memory slot ({@code size <= maxBlockSize}).</li>
-     * <li>{@link MultiSlotsWrapper} - values stored across multiple memory slots ({@code size > maxBlockSize}).</li>
-     * <li>{@link StoreWrapper} - values stored on disk via {@link OffHeapStore}.</li>
-     * </ul>
-     *
-     * <p>All wrappers are managed by the {@link KeyedObjectPool}, which handles expiration and
-     * eviction based on {@code liveTime} and {@code maxIdleTime} settings. The
-     * {@link #destroy(Caller)} method is called by the pool when entries are evicted, removed,
-     * or during cache shutdown, to release resources.
-     *
-     * <p>Thread safety: concrete implementations must ensure thread-safe {@link #read()} and
-     * {@link #destroy(Caller)} operations, typically through synchronization.
-     *
-     * @param <T> the value type
-     */
-    abstract static class Wrapper<T> extends AbstractPoolable {
-        /** Discriminator: value stored in a single off-heap slot. */
-        static final int KIND_SLOT = 1;
-        /** Discriminator: value stored across multiple off-heap slots. */
-        static final int KIND_MULTI_SLOTS = 2;
-        /** Discriminator: value stored on disk via {@link OffHeapStore}. */
-        static final int KIND_STORE = 3;
-
-        // Final discriminator set once at construction, used for dispatch on the hot get/put
-        // paths. An int tag is cheaper than getClass() comparisons, and because the wrapper
-        // types are generic inner classes, instanceof/cast-based dispatch would require raw
-        // types and unchecked casts - the tag keeps the dispatch cheap and warning-free.
-        final int kind;
+    static final class Entry<T> {
         final Type<T> type;
         final int size;
+        /** Packed slot handles ({@code segmentIndex << 14 | slotIndex}); {@code null} = disk-backed. */
+        final long[] slots;
+        /** Creation time, TTL/idle limits, last-access time, and access count. Mutated under the entry monitor. */
+        final ActivityPrint activityPrint;
+        /** One-way flag; written under the entry monitor, read either under it or as a racy hint. */
+        volatile boolean freed;
 
-        /**
-         * Constructs a new Wrapper with the specified metadata.
-         *
-         * @param type the value type information for deserialization
-         * @param liveTime the time-to-live in milliseconds; must be positive (callers translate
-         *                 non-positive values to {@code Long.MAX_VALUE})
-         * @param maxIdleTime the maximum idle time in milliseconds; must be positive (callers translate
-         *                    non-positive values to {@code Long.MAX_VALUE})
-         * @param size the serialized size of the value in bytes
-         * @param kind the storage-strategy discriminator ({@link #KIND_SLOT}, {@link #KIND_MULTI_SLOTS} or {@link #KIND_STORE})
-         */
-        Wrapper(final Type<T> type, final long liveTime, final long maxIdleTime, final int size, final int kind) {
-            super(liveTime, maxIdleTime);
-
+        Entry(final Type<T> type, final int size, final long liveTime, final long maxIdleTime, final long[] slots) {
             this.type = type;
             this.size = size;
-            this.kind = kind;
-        }
-
-        /**
-         * Reads and deserializes the cached value.
-         * Concrete implementations retrieve the raw bytes from their storage location
-         * (memory or disk) and deserialize them based on the value type.
-         *
-         * <p>Thread safety: implementations must be thread-safe.
-         *
-         * @return the deserialized value, or {@code null} if the value cannot be retrieved
-         *         (for example, when the entry was already destroyed by concurrent eviction)
-         * @throws IllegalStateException if an implementation detects that the retrieved data size does
-         *                               not match the recorded size (data corruption); single-slot reads
-         *                               perform no such check, while the multi-slot and disk-backed
-         *                               readers do
-         */
-        abstract T read();
-    }
-
-    /**
-     * Wrapper for values stored in a single memory slot.
-     * Used for values that fit within the configured maximum block size ({@code maxBlockSize}).
-     * The slot reference is used to release the memory when the entry is evicted or removed.
-     *
-     * <p>This is an internal class used by {@link AbstractOffHeapCache}. The wrapper is
-     * thread-safe via synchronized access to its read and destroy operations.
-     *
-     * <p>Memory layout: the value's serialized bytes are stored at the memory address
-     * {@code slotStartPtr = segment.segmentStartPtr + slot.indexOfSlot * segment.sizeOfSlot}.
-     * The actual data size may be less than the slot size ({@code segment.sizeOfSlot}), with
-     * the difference being wasted space (internal fragmentation).
-     *
-     * <p>Thread safety: both {@link #read()} and {@link #destroy(Caller)} are synchronized
-     * on the wrapper instance to prevent concurrent access issues.
-     */
-    final class SlotWrapper extends Wrapper<V> {
-
-        private Slot slot;
-        private final long slotStartPtr;
-
-        /**
-         * Constructs a new SlotWrapper for a memory-stored value.
-         *
-         * @param type the value type information for deserialization
-         * @param liveTime the time-to-live in milliseconds
-         * @param maxIdleTime the maximum idle time in milliseconds
-         * @param size the actual serialized size of the value in bytes
-         * @param slot the allocated memory slot
-         * @param slotStartPtr the starting memory address where the value is stored
-         */
-        SlotWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final Slot slot, final long slotStartPtr) {
-            super(type, liveTime, maxIdleTime, size, KIND_SLOT);
-
-            this.slot = slot;
-            this.slotStartPtr = slotStartPtr;
-        }
-
-        @Override
-        V read() {
-            synchronized (this) {
-                if (slot == null) {
-                    return null; // Already destroyed by concurrent eviction
-                }
-
-                final byte[] bytes = new byte[size];
-
-                copyFromMemory(slotStartPtr, bytes, _arrayOffset, size);
-
-                return deserializeValue(bytes, type);
-            }
-        }
-
-        @Override
-        public void destroy(final Caller caller) {
-            synchronized (this) {
-                if (slot != null) {
-                    totalOccupiedMemorySize.add(-slot.segment.sizeOfSlot);
-                    totalDataSize.add(-size);
-                    slot.release();
-                    slot = null;
-                }
-            }
-        }
-    }
-
-    /**
-     * Wrapper for values stored across multiple memory slots.
-     * Used for large values that exceed the configured maximum block size
-     * ({@code maxBlockSize}). The value is split across multiple slots (potentially in
-     * different segments), and all slots are released together when the entry is evicted
-     * or removed.
-     *
-     * <p>This is an internal class used by {@link AbstractOffHeapCache}. The wrapper is
-     * thread-safe via synchronized access to its read and destroy operations.
-     *
-     * <p>Memory layout: the value's serialized bytes are split into chunks of up to
-     * {@code maxBlockSize} each. Each chunk is stored in a separate slot, which may be in
-     * a different segment. The slots list maintains the order of chunks, so during
-     * {@link #read()}, the bytes are reassembled in the correct order.
-     *
-     * <p>Thread safety: both {@link #read()} and {@link #destroy(Caller)} are synchronized
-     * on the wrapper instance to prevent concurrent access issues.
-     */
-    final class MultiSlotsWrapper extends Wrapper<V> {
-
-        private List<Slot> slots;
-
-        /**
-         * Constructs a new MultiSlotsWrapper for a large value stored across multiple slots.
-         *
-         * @param type the value type information for deserialization
-         * @param liveTime the time-to-live in milliseconds
-         * @param maxIdleTime the maximum idle time in milliseconds
-         * @param size the actual serialized size of the value in bytes
-         * @param slots the list of allocated slots holding the value chunks, in order
-         */
-        MultiSlotsWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final List<Slot> slots) {
-            super(type, liveTime, maxIdleTime, size, KIND_MULTI_SLOTS);
-
+            activityPrint = new ActivityPrint(liveTime, maxIdleTime);
             this.slots = slots;
         }
 
-        @Override
-        V read() {
-            synchronized (this) {
-                if (slots == null) {
-                    return null; // Already destroyed by concurrent eviction
-                }
-
-                final byte[] bytes = new byte[size];
-                int remaining = this.size;
-                int destOffset = _arrayOffset;
-                Segment segment = null;
-
-                for (final Slot slot : slots) {
-                    segment = slot.segment;
-                    final long startPtr = segment.segmentStartPtr + (long) slot.indexOfSlot * segment.sizeOfSlot;
-                    final int sizeToCopy = Math.min(remaining, segment.sizeOfSlot);
-
-                    copyFromMemory(startPtr, bytes, destOffset, sizeToCopy);
-
-                    destOffset += sizeToCopy;
-                    remaining -= sizeToCopy;
-                }
-
-                // should never happen.
-                if (remaining != 0) {
-                    throw new IllegalStateException(
-                            "Failed to retrieve value: " + remaining + " bytes remaining after reading all segments (data corruption detected)");
-                }
-
-                // `bytes` is a freshly read private copy of the value: expose it directly for raw
-                // byte[]/ByteBuffer types, otherwise hand it to the deserializer.
-                return deserializeValue(bytes, type);
-            }
+        boolean isMemory() {
+            return slots != null;
         }
 
-        @Override
-        public void destroy(final Caller caller) {
-            synchronized (this) {
-                if (N.notEmpty(slots)) {
-                    for (final Slot slot : slots) {
-                        totalOccupiedMemorySize.add(-slot.segment.sizeOfSlot);
-                        slot.release();
-                    }
-
-                    totalDataSize.add(-size);
-
-                    slots = null;
-                }
-            }
+        /** Records an access. Caller holds the entry monitor. */
+        void touch() {
+            activityPrint.updateLastAccessTime();
+            activityPrint.updateAccessCount();
         }
     }
 
     /**
-     * Wrapper for values stored on disk via {@link OffHeapStore}.
-     * Used when memory is full or when the {@code storeSelector} determines the value
-     * should be stored on disk. The {@code permanentKey} is used to retrieve and remove
-     * the value from the disk store.
-     *
-     * <p>This is an internal class used by {@link AbstractOffHeapCache}. The wrapper is
-     * thread-safe via synchronized access to its read and destroy operations.
-     *
-     * <p>Statistics: upon construction this wrapper increments the {@code sizeOnDisk},
-     * {@code dataSizeOnDisk}, and {@code totalDataSize} counters. Upon destruction these
-     * counters are decremented accordingly.
-     *
-     * <p>Thread safety: {@link #readBytes(long[])} and {@link #destroy(Caller)} are synchronized
-     * on the wrapper instance to prevent concurrent access issues. {@link #deserialize(byte[])}
-     * is intentionally not synchronized so the (potentially expensive) deserialization step
-     * can run outside the lock.
+     * A 1 MB region of the native allocation, dynamically dedicated to one slot-size class.
+     * All fields except {@code index} are guarded by the allocator lock.
      */
-    final class StoreWrapper extends Wrapper<V> {
-        private K permanentKey;
-        // Set before publication to the pool. It measures OffHeapStore.put() only.
-        private long writeToDiskTimeMillis;
+    static final class Segment {
+        final int index;
+        /** Current slot size; meaningful only while the segment is dedicated. */
+        int slotSize;
+        final BitSet slotBits = new BitSet();
+        int used;
 
-        /**
-         * Constructs a new StoreWrapper for a disk-stored value.
-         * Immediately updates disk-related statistics counters upon construction.
-         *
-         * @param type the value type information for deserialization
-         * @param liveTime the time-to-live in milliseconds
-         * @param maxIdleTime the maximum idle time in milliseconds
-         * @param size the actual serialized size of the value in bytes
-         * @param permanentKey the key used to store and retrieve the value from offHeapStore
-         */
-        StoreWrapper(final Type<V> type, final long liveTime, final long maxIdleTime, final int size, final K permanentKey) {
-            super(type, liveTime, maxIdleTime, size, KIND_STORE);
-
-            this.permanentKey = permanentKey;
-
-            sizeOnDisk.increment();
-            dataSizeOnDisk.add(size);
-            totalDataSize.add(size);
-        }
-
-        /**
-         * Reads the raw serialized bytes from disk exactly once. The destroyed-check
-         * and the disk fetch are performed under the wrapper lock; the (potentially
-         * expensive) deserialization is deliberately left to {@link #deserialize(byte[])}
-         * so it can run outside the lock and so callers can reuse the bytes (e.g. to
-         * promote the value back into memory without a second disk read).
-         *
-         * @param storeReadElapsedMillisOut optional single-element out-parameter (may be
-         *        {@code null}). When the {@code OffHeapStore.get()} call actually runs and
-         *        returns, element 0 is set to its elapsed wall time in milliseconds (measured
-         *        with the monotonic time source); on the destroyed/ownership-lost early
-         *        returns - and when the store call throws - the element is left untouched, so
-         *        a caller-initialized {@code -1} sentinel distinguishes real store I/O from a
-         *        read that never reached the store.
-         * @return the serialized bytes, or {@code null} if the entry was already
-         *         destroyed by concurrent eviction or is missing from the store
-         * @throws IllegalStateException if the fetched size does not match the recorded size
-         */
-        byte[] readBytes(final long[] storeReadElapsedMillisOut) {
-            synchronized (this) {
-                if (permanentKey == null) {
-                    return null; // Already destroyed by concurrent eviction
-                }
-
-                final K k = permanentKey;
-
-                // A newer wrapper for the same key may have replaced the bytes in the store (the
-                // store is keyed by the cache key alone). When this wrapper is no longer the
-                // registered owner, its recorded metadata no longer describes what the store
-                // holds: treat the entry as stale (a miss) instead of misreading the new bytes
-                // or throwing a spurious "data corruption" error on the size mismatch.
-                //
-                // The owner check and the store fetch must be atomic with respect to a concurrent
-                // same-key re-spill (putToDisk claims ownership and overwrites the bytes under this
-                // same per-key lock): without it, the bytes could be replaced between the check and
-                // the fetch, surfacing to a plain get() as a spurious "data corruption" exception -
-                // or, on a coincidental size match, as bytes of the wrong value. The lock order
-                // (wrapper monitor -> storeKeyLock) matches destroy(), so this cannot deadlock.
-                synchronized (storeKeyLockFor(k)) {
-                    if (storeOwners.get(k) != this) {
-                        return null;
-                    }
-
-                    // A duration must use a monotonic source: wall-clock corrections must not turn
-                    // a short read into zero or an arbitrarily large observation. The elapsed time
-                    // is reported only after the store call returns, so a throwing store never
-                    // produces an observation - symmetric with the write side, which records
-                    // OffHeapStore.put() timing only on success.
-                    final long storeReadStartedAt = storeReadElapsedMillisOut != null ? nanoTimeSource.getAsLong() : 0L;
-
-                    final byte[] bytes = offHeapStore.get(k);
-
-                    if (storeReadElapsedMillisOut != null) {
-                        storeReadElapsedMillisOut[0] = elapsedMillisSince(storeReadStartedAt);
-                    }
-
-                    if (bytes == null) {
-                        return null;
-                    }
-
-                    // should never happen: ownership is held and re-spills are excluded by the lock.
-                    if (bytes.length != size) {
-                        throw new IllegalStateException(
-                                "Failed to retrieve value: fetched size (" + bytes.length + " bytes) does not match expected size (" + size + " bytes)");
-                    }
-
-                    // The OffHeapStore contract permits get() to return its own retained array.
-                    // Never expose that array to a byte[] caller or a custom deserializer: either
-                    // could mutate it and silently change all future cache reads. Memory-backed
-                    // wrappers already return a fresh array, so this also keeps both tiers consistent.
-                    return bytes.clone();
-                }
-            }
-        }
-
-        /**
-         * Deserializes bytes previously obtained from {@link #readBytes(long[])} into the value.
-         * Operates only on the supplied local array (and the effectively-immutable type /
-         * deserializer), so it is safe to invoke outside the wrapper lock.
-         *
-         * @param bytes the serialized bytes; must not be {@code null}
-         * @return the non-null deserialized value
-         * @throws IllegalStateException if a configured deserializer returns {@code null}
-         */
-        V deserialize(final byte[] bytes) {
-            return deserializeValue(bytes, type);
-        }
-
-        @Override
-        V read() {
-            final byte[] bytes = readBytes(null);
-
-            return bytes == null ? null : deserialize(bytes);
-        }
-
-        void discardReplacedStoreMetadata() {
-            synchronized (this) {
-                if (permanentKey != null) {
-                    sizeOnDisk.decrement();
-                    dataSizeOnDisk.add(-size);
-                    totalDataSize.add(-size);
-                    permanentKey = null;
-                }
-            }
-        }
-
-        /**
-         * Destroys this disk-backed wrapper, releasing its disk bytes and updating statistics.
-         * Only {@link Caller#EVICT} and {@link Caller#VACATE} callers count toward
-         * {@code evictionCountFromDisk}; other callers (remove/replace/clear/put-failure) do not.
-         * The backing disk bytes are deleted only while this wrapper still owns them, so a wrapper
-         * superseded by a concurrent same-key spill never deletes bytes owned by the replacement.
-         *
-         * @param caller the lifecycle event triggering destruction; {@code EVICT}/{@code VACATE}
-         *               increment the disk-eviction statistic, other callers do not
-         */
-        @Override
-        public void destroy(final Caller caller) {
-            synchronized (this) {
-                if (permanentKey != null) {
-                    if (caller == Caller.EVICT || caller == Caller.VACATE) {
-                        evictionCountFromDisk.increment();
-                    }
-
-                    sizeOnDisk.decrement();
-                    dataSizeOnDisk.add(-size);
-
-                    totalDataSize.add(-size);
-
-                    final K k = permanentKey;
-                    permanentKey = null;
-
-                    // Delete the disk bytes only while this wrapper still owns them: a wrapper
-                    // replaced by a concurrent same-key spill must not delete bytes that now
-                    // belong to the replacing wrapper. The per-key lock keeps the owner check
-                    // and the removal atomic with respect to a concurrent claim+write.
-                    synchronized (storeKeyLockFor(k)) {
-                        if (storeOwners.remove(k, this)) {
-                            offHeapStore.remove(k);
-                        }
-                    }
-                }
-            }
+        Segment(final int index) {
+            this.index = index;
         }
     }
 
+    /**
+     * Thread-safe min/max/average accumulator for disk I/O times in milliseconds. Observations
+     * come from monotonic-clock differences and are therefore never negative.
+     */
+    private static final class TimingStats {
+        private long count;
+        private long min;
+        private long max;
+        private long sum;
+
+        synchronized void record(final long millis) {
+            count++;
+            sum += millis;
+            min = count == 1 ? millis : Math.min(min, millis);
+            max = count == 1 ? millis : Math.max(max, millis);
+        }
+
+        synchronized MinMaxAvg snapshot() {
+            return count == 0 ? new MinMaxAvg(0.0D, 0.0D, 0.0D) : new MinMaxAvg(min, max, Numbers.round((double) sum / count, 2));
+        }
+    }
 }

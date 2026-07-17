@@ -197,9 +197,7 @@ public class CaffeineCacheTest extends TestBase {
     }
 
     private void runRealCaffeineCleanupScenario(final boolean directWriteReplacesLateWrite) throws Exception {
-        final com.github.benmanes.caffeine.cache.Cache<String, String> real = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
-                .recordStats()
-                .build();
+        final com.github.benmanes.caffeine.cache.Cache<String, String> real = com.github.benmanes.caffeine.cache.Caffeine.newBuilder().recordStats().build();
         final CountDownLatch putStarted = new CountDownLatch(1);
         final CountDownLatch allowPutToFinish = new CountDownLatch(1);
 

@@ -42,16 +42,15 @@ import java.util.Objects;
  *     typically smaller than {@code occupiedMemory} because the slot allocator rounds each entry up
  *     to the next multiple of the minimum block size (64 bytes).</li>
  * <li>Hit metrics: conceptually, {@code hitCount + missCount = getCount}. {@code hitCountFromDisk}
- *     normally represents the subset of {@code hitCount} served from disk. If the pool finds a
- *     disk wrapper but its backing bytes are missing, that completed lookup is reclassified from
- *     the pool-level hit to a cache miss. A lookup that finds a wrapper but then throws while
- *     copying or deserializing remains a lookup-level hit because exceptional reconstruction is
- *     not tracked by a separate counter.</li>
- * <li>Put metrics: {@code putCount} counts successful wrapper installations in the pool (both
- *     memory- and disk-resident wrappers go through the same pool). This normally corresponds to
- *     successful cache puts, but an internal disk-to-memory promotion or recovery reinsertion also
- *     installs a wrapper and is counted. Failed attempts that never reach or are rejected by the
- *     pool are not included. As an approximate identity,
+ *     is the subset of {@code hitCount} whose value was reconstructed from bytes read from the
+ *     disk store. A lookup that finds a disk-backed entry whose backing bytes are missing counts
+ *     as a miss. A lookup that finds live bytes but then throws while deserializing remains
+ *     counted in {@code hitCount} (there is no separate counter for exceptional reconstruction)
+ *     but is not counted in {@code hitCountFromDisk}.</li>
+ * <li>Put metrics: {@code putCount} counts successful {@code put} operations — those that stored
+ *     the value in off-heap memory or in the disk store. Failed attempts (no memory available and
+ *     no disk fallback, or a rejected/failed store write) are not counted, and internal
+ *     disk-to-memory promotions are not counted either. As an approximate identity,
  *     {@code putCount} &asymp; {@code size + evictionCount + removed/replaced entries}
  *     (note that {@code evictionCountFromDisk} is already included in {@code evictionCount};
  *     it is the disk-resident subset, not an additional count).</li>
@@ -88,38 +87,37 @@ import java.util.Objects;
  * cache.close();
  * }</pre>
  *
- * @param capacity the configured upper bound on the number of in-memory entries the underlying keyed object
- *                 pool will hold before eviction kicks in. It is derived from the off-heap memory budget as
- *                 {@code allocatedMemory / MIN_BLOCK_SIZE} (currently {@code allocatedMemory / 64}), capped at
- *                 {@link Integer#MAX_VALUE} (as computed by the cache). Because each entry consumes a slot whose size is rounded up to
- *                 the per-entry block size, the cache will typically exhaust off-heap memory and start evicting
- *                 long before {@code size} approaches this value.
- * @param size the current number of entries tracked by the underlying keyed object pool. Both
- *             memory-resident wrappers and disk-spilled (store) wrappers live in the same pool, so this
- *             count includes both. To compute the memory-only entry count, use {@code size - sizeOnDisk}.
+ * @param capacity a theoretical upper bound on the number of in-memory entries, derived from the off-heap
+ *                 memory budget as {@code allocatedMemory / MIN_BLOCK_SIZE} (currently
+ *                 {@code allocatedMemory / 64}), capped at {@link Integer#MAX_VALUE}. Because each entry
+ *                 consumes a slot whose size is rounded up to the per-entry block size, the cache will
+ *                 typically exhaust off-heap memory and start evicting long before {@code size} approaches
+ *                 this value.
+ * @param size the current number of entries in the cache, counting both memory-resident and disk-spilled
+ *             entries. To compute the memory-only entry count, use {@code size - sizeOnDisk}.
  * @param sizeOnDisk the current number of entries whose value bytes are stored on disk via the configured
- *                   {@link OffHeapStore}. These entries are still represented as wrappers in the pool (and
- *                   therefore counted in {@code size}); only their payloads live on disk.
- * @param putCount the total number of successful wrapper installations in the underlying pool since
- *                 cache creation, counting memory-backed and disk-spilled wrappers as well as internal
- *                 disk-to-memory promotion/recovery reinsertions. A cache put that fails before its
- *                 wrapper is installed (e.g., neither memory nor disk could accept the value) is not counted.
+ *                   {@link OffHeapStore}. These entries are still counted in {@code size}; only their
+ *                   payloads live on disk.
+ * @param putCount the total number of successful put operations since cache creation, counting values
+ *                 stored in off-heap memory and values written to the disk store. A put that fails
+ *                 (e.g., neither memory nor disk could accept the value) is not counted; internal
+ *                 disk-to-memory promotions are not counted either.
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
  *                       when off-heap memory is full and the value is stored to disk via the configured
  *                       {@link OffHeapStore}, or when the {@code storeSelector} explicitly routes the value to disk.
  * @param getCount the total number of get operations performed since cache creation. Conceptually,
  *                 {@code getCount = hitCount + missCount}; a concurrent snapshot may temporarily differ.
- * @param hitCount the number of pool lookups that found an entry wrapper, adjusted so a disk wrapper whose
- *                 backing bytes are confirmed missing is reclassified as a miss. To approximate hits served
- *                 purely from off-heap memory, subtract {@code hitCountFromDisk} from {@code hitCount}.
- *                 A lookup that finds a wrapper but then throws during copy or deserialization remains counted
- *                 here because exceptional reconstruction is not tracked separately.
- * @param hitCountFromDisk the number of successful get operations where the entry was read from disk via the
- *                       configured {@link OffHeapStore}. It normally forms a subset of {@code hitCount},
- *                       but independently sampled counters can be transiently inconsistent.
+ * @param hitCount the number of get operations that found a live entry and its bytes. A get that finds a
+ *                 disk-backed entry whose backing bytes are confirmed missing counts as a miss, not a hit.
+ *                 To approximate hits served purely from off-heap memory, subtract {@code hitCountFromDisk}
+ *                 from {@code hitCount}. A get that found live bytes but then threw during deserialization
+ *                 remains counted here because exceptional reconstruction is not tracked separately.
+ * @param hitCountFromDisk the number of get operations whose value was successfully reconstructed from
+ *                       bytes read from the configured {@link OffHeapStore}. It normally forms a subset of
+ *                       {@code hitCount}, but independently sampled counters can be transiently inconsistent.
  * @param missCount the number of failed get operations where the entry was not found in either memory or
  *                  disk. This can occur when the key never existed, was explicitly removed, has expired, or
- *                  still had pool metadata but its backing-store bytes were missing.
+ *                  still had a cache mapping whose backing-store bytes were missing.
  * @param evictionCount the total number of entries removed by the eviction / vacate paths (i.e., entries
  *                      reclaimed because the cache reached capacity, or because the periodic eviction sweep
  *                      noticed they had expired). Explicit {@code remove()} / {@code clear()} calls and
@@ -130,7 +128,7 @@ import java.util.Objects;
  * @param allocatedMemory the total allocated off-heap memory in bytes. This represents the maximum memory
  *                        that has been reserved for the cache, typically organized into fixed-size segments.
  * @param occupiedMemory the currently occupied off-heap slot space in bytes. This includes serialized
- *                       data plus slot-rounding/alignment padding, but not the heap-resident wrapper metadata.
+ *                       data plus slot-rounding/alignment padding, but not the heap-resident entry metadata.
  * @param dataSize the total size of actual serialized data tracked by the cache in bytes, across both
  *                 the off-heap memory pool and the disk store, excluding any slot-allocation padding or
  *                 internal overhead. To isolate the in-memory portion, subtract {@code dataSizeOnDisk}
@@ -141,14 +139,14 @@ import java.util.Objects;
  * @param writeToDiskTimeStats statistics for disk-spilled put operations, tracking the minimum, maximum, and
  *                             average time in milliseconds. The measured window is the store write
  *                             ({@code OffHeapStore.put()}) itself, excluding serialization, the preceding
- *                             failed in-memory slot search, and the pool insert - the write counterpart
- *                             of {@code readFromDiskTimeStats}.
+ *                             failed in-memory slot search, and the entry installation - the write
+ *                             counterpart of {@code readFromDiskTimeStats}.
  * @param readFromDiskTimeStats statistics for disk read operations, tracking the minimum, maximum, and
  *                              average time in milliseconds for reading entry bytes from the store. The
  *                              measured window is the store read ({@code OffHeapStore.get()}) itself;
- *                              lookups that never reach the store (entry already destroyed, or ownership
- *                              lost to a concurrent same-key re-spill) are not recorded. This helps
- *                              monitor disk read performance and cache hit efficiency.
+ *                              lookups that never reach the store (entry already removed or replaced
+ *                              concurrently) are not recorded. This helps monitor disk read performance
+ *                              and cache hit efficiency.
  * @param segmentSize the size of each memory segment in bytes. The off-heap memory is organized into
  *                    fixed-size segments (typically 1MB = 1048576 bytes) to manage memory allocation
  *                    and reduce fragmentation.

@@ -106,15 +106,16 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * JRedisCluster<User> blank = new JRedisCluster<>("   ");                  // throws IllegalArgumentException
      * }</pre>
      *
+     * <p><b>Implementation note:</b> if topology discovery fails partway (after Jedis has created
+     * per-node connection pools internally but before the client is fully constructed), the
+     * builder throws and this wrapper receives no handle it could close, so any pools created
+     * during the failed discovery are stranded inside Jedis until they are garbage-collected.
+     * This is internal to Jedis and cannot be remediated from this wrapper; avoid tight
+     * construction-retry loops against a partially unavailable cluster.
+     *
      * @param serverUrl the Redis Cluster seed node(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses
      * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
-     * @implNote if topology discovery fails partway (after Jedis has created per-node connection
-     *           pools internally but before the client is fully constructed), the builder throws and
-     *           this wrapper receives no handle it could close, so any pools created during the
-     *           failed discovery are stranded inside Jedis until they are garbage-collected. This is
-     *           internal to Jedis and cannot be remediated from this wrapper; avoid tight
-     *           construction-retry loops against a partially unavailable cluster.
      * @see #JRedisCluster(String, long)
      */
     public JRedisCluster(final String serverUrl) {
@@ -145,13 +146,14 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * JRedisCluster<Data> tooBig = new JRedisCluster<>("10.0.0.1:7000", Integer.MAX_VALUE + 1L);   // throws IllegalArgumentException
      * }</pre>
      *
+     * <p><b>Implementation note:</b> a partway topology-discovery failure can strand
+     * Jedis-internal connection pools; see {@link #JRedisCluster(String)} for details.
+     *
      * @param serverUrl the Redis Cluster seed node(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
      * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
-     * @implNote a partway topology-discovery failure can strand Jedis-internal connection pools;
-     *           see {@link #JRedisCluster(String)} for details
      * @see #JRedisCluster(String)
      */
     public JRedisCluster(final String serverUrl, final long timeout) {

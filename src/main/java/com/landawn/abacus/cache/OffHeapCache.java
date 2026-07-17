@@ -207,8 +207,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * <p><b>Memory Management:</b>
      * Native memory is allocated immediately. The default max block size (8192 bytes) is used,
-     * and the default vacating factor (0.2) controls how much of the pool is evicted (LRU first)
-     * when capacity is reached.
+     * and the default vacating factor (0.2) controls how much of the cache is evicted (LRU first)
+     * under memory pressure.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -250,7 +250,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * <p><b>Memory Management:</b>
      * Memory is allocated immediately using sun.misc.Unsafe.allocateMemory(). The maxBlockSize parameter
      * controls how values are stored - values larger than maxBlockSize are split across multiple blocks.
-     * The {@code vacatingFactor} controls how much of the pool is evicted (LRU first) once the pool reaches capacity.
+     * The {@code vacatingFactor} controls how much of the cache is evicted (LRU first) when off-heap memory cannot satisfy a put
+     * that no disk store absorbs.
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
      *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
@@ -262,9 +263,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param defaultLiveTime default time-to-live for entries in milliseconds. Use 0 or negative for no TTL expiration.
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
      * @param vacatingFactor factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when
-     *                       the underlying pool reaches capacity; this fraction of the pool's current size is
-     *                       then evicted (LRU first) to free space. It does NOT control when vacating starts.
-     *                       Use 0.0 to apply the DEFAULT_VACATING_FACTOR (0.2). Typical values range from 0.1 to 0.3.
+     *                       off-heap memory cannot satisfy a put and no disk store absorbs the value; this
+     *                       fraction of the current entries is then evicted (LRU first) to free space. It does
+     *                       NOT control when vacating starts. Use 0.0 to apply the DEFAULT_VACATING_FACTOR
+     *                       (0.2). Typical values range from 0.1 to 0.3.
      * @param serializer custom serializer for converting values to byte streams, or null for default serialization
      *                   (Kryo if available, otherwise JSON). The serializer should write the complete serialized
      *                   form to the provided ByteArrayOutputStream.
@@ -337,7 +339,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * This method is automatically invoked by close(). This is an internal method
      * and should not be called directly.
      * 
-     * <p>Once called, the memory address (_startPtr) becomes invalid and must not be accessed.
+     * <p>Once called, the base memory address becomes invalid and must not be accessed.
      * All cache operations should be stopped before calling this method. The method uses
      * sun.misc.Unsafe to free the native memory back to the operating system.
      *
@@ -356,7 +358,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         // The region is intentionally not zeroed before being freed: freeMemory() returns it to the
         // OS, and during normal operation a slot is always fully written before it is ever read, so
         // no stale bytes are exposed. Zeroing here would only add cost.
-        UNSAFE.freeMemory(_startPtr);
+        UNSAFE.freeMemory(baseAddress);
     }
 
     /**
@@ -377,7 +379,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * memory or terminate the JVM.
      *
      * @param startPtr the destination memory address in off-heap memory. Must be a valid address
-     *                 within the allocated memory region (between _startPtr and _startPtr + capacity).
+     *                 within the allocated memory region.
      * @param srcBytes the source byte array from which to copy data. Must not be null.
      * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
      *                  operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
@@ -411,7 +413,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * memory or terminate the JVM.
      *
      * @param startPtr the source memory address in off-heap memory from which to copy data. Must be a
-     *                 valid address within the allocated memory region (between _startPtr and _startPtr + capacity).
+     *                 valid address within the allocated memory region.
      * @param bytes the destination byte array. Must not be null and must satisfy
      *              {@code destOffset - BYTE_ARRAY_BASE + len <= bytes.length}.
      * @param destOffset the byte offset within the destination array object in memory. For Unsafe-based
@@ -453,7 +455,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *     .capacityInMB(200)
      *     .maxBlockSizeInBytes(16384)    // values larger than this are split across multiple slots
      *     .evictDelay(30000)
-     *     .vacatingFactor(0.3f)          // evict 30% of the pool (LRU first) when capacity is reached
+     *     .vacatingFactor(0.3f)          // evict 30% of entries (LRU first) under memory pressure
      *     .offHeapStore(diskStore)       // spill overflow entries to disk
      *     .statsTimeOnDisk(true)
      *     .build();                      // returns an OffHeapCache; remember to close() to free native memory
@@ -610,10 +612,11 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         private long defaultMaxIdleTime;
 
         /**
-         * Factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when the underlying
-         * pool reaches capacity; this fraction of the pool's current size is then evicted (LRU first) to
-         * free space. It does NOT control when vacating starts. Typical values 0.1-0.3. Higher values free
-         * more space per vacate but cause larger pauses in put throughput while the eviction runs.
+         * Factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when off-heap
+         * memory cannot satisfy a put and no disk store absorbs the value; this fraction of the current
+         * entries is then evicted (LRU first) to free space. It does NOT control when vacating starts.
+         * Typical values 0.1-0.3. Higher values free more space per vacate but evict more of the
+         * working set at once.
          *
          * <p>Default: 0.2 (20%)
          */

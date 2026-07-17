@@ -188,8 +188,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *
      * <p><b>Memory Management:</b>
      * Native memory is allocated immediately. The default max block size (8192 bytes) is used,
-     * and the default vacating factor (0.2) controls how much of the pool is evicted (LRU first)
-     * when capacity is reached.
+     * and the default vacating factor (0.2) controls how much of the cache is evicted (LRU first)
+     * under memory pressure.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -236,8 +236,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * <p><b>Memory Management:</b>
      * Memory is allocated immediately using the Foreign Memory API ({@link Arena}). The {@code maxBlockSize}
      * parameter controls how values are stored: values larger than {@code maxBlockSize} are split across
-     * multiple blocks. The {@code vacatingFactor} controls how much of the pool is evicted (LRU first)
-     * once the pool reaches capacity.
+     * multiple blocks. The {@code vacatingFactor} controls how much of the cache is evicted (LRU first)
+     * when off-heap memory cannot satisfy a put that no disk store absorbs.
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
      *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
@@ -249,10 +249,10 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @param defaultLiveTime default time-to-live for entries in milliseconds. Use {@code 0} or negative for no TTL expiration.
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use {@code 0} or negative for no idle timeout.
      * @param vacatingFactor factor in {@code [0.0, 1.0]} controlling how aggressive a vacate is. Vacate is
-     *                       triggered when the underlying pool reaches capacity; this fraction of the pool's
-     *                       current size is then evicted (LRU first) to free space. It does NOT control when
-     *                       vacating starts. Use {@code 0.0} to apply the default factor (0.2). Typical values
-     *                       range from 0.1 to 0.3.
+     *                       triggered when off-heap memory cannot satisfy a put and no disk store absorbs
+     *                       the value; this fraction of the current entries is then evicted (LRU first) to
+     *                       free space. It does NOT control when vacating starts. Use {@code 0.0} to apply
+     *                       the default factor (0.2). Typical values range from 0.1 to 0.3.
      * @param serializer custom serializer for converting values to byte streams, or {@code null} for default
      *                   serialization (Kryo if available, otherwise JSON). The serializer should write the
      *                   complete serialized form to the provided {@link ByteArrayOutputStream}.
@@ -304,8 +304,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @param capacityInBytes the number of bytes to allocate. Must be positive. This is typically a multiple
      *                        of {@code SEGMENT_SIZE} (1,048,576 bytes).
      * @return the base address of the allocated {@link MemorySegment}, as reported by
-     *         {@link MemorySegment#address()}. It is recorded as {@code _startPtr} and serves as the base
-     *         from which {@link #copyToMemory} and {@link #copyFromMemory} derive a relative offset into the segment.
+     *         {@link MemorySegment#address()}. It is recorded as the base address from which
+     *         {@link #copyToMemory} and {@link #copyFromMemory} derive a relative offset into the segment.
      * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
      * @throws IllegalArgumentException if {@code capacityInBytes} is negative ({@link Arena#allocate(long)}
      *         rejects a negative size; a size of {@code 0} yields a zero-length segment). Unreachable through
@@ -344,7 +344,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * This method is automatically invoked by {@link #close()} and is an internal hook
      * that should not be called directly.
      *
-     * <p>Once called, the memory base address ({@code _startPtr}) becomes invalid and must not be
+     * <p>Once called, the memory base address becomes invalid and must not be
      * accessed. All cache operations should be stopped before calling this method. Closing the
      * arena releases all memory associated with it and makes the {@link MemorySegment} inaccessible;
      * any subsequent attempt to access the segment will result in an {@link IllegalStateException}.
@@ -373,8 +373,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * internal hook called automatically during cache get operations and should not be called directly.
      *
      * <p>The method performs a low-level copy via {@link MemorySegment#copy}, which is type-safe and
-     * efficient. The relative offset within the buffer is computed by subtracting {@code _startPtr}
-     * from {@code startPtr} to determine the correct position in the segment.
+     * efficient. The relative offset within the buffer is computed by subtracting the region's base
+     * address from {@code startPtr} to determine the correct position in the segment.
      *
      * <p><b>Memory Management:</b> Unlike the {@code sun.misc.Unsafe}-based variant, {@link MemorySegment#copy}
      * performs bounds checking. An out-of-range offset or length raises {@link IndexOutOfBoundsException},
@@ -383,8 +383,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * unchecked native copy.
      *
      * @param startPtr the source memory address in off-heap memory from which to copy data. Must be a
-     *                 valid address within the allocated memory region (between {@code _startPtr} and
-     *                 {@code _startPtr + capacity}).
+     *                 valid address within the allocated memory region.
      * @param bytes the destination byte array. Must not be {@code null} and must have sufficient capacity
      *              to hold the copied data.
      * @param destOffset the index of the first byte in {@code bytes} to write to (zero-based; no array
@@ -397,7 +396,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      */
     @Override
     protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
-        MemorySegment.copy(buffer, ValueLayout.JAVA_BYTE, startPtr - _startPtr, bytes, destOffset, len);
+        MemorySegment.copy(buffer, ValueLayout.JAVA_BYTE, startPtr - baseAddress, bytes, destOffset, len);
     }
 
     /**
@@ -406,8 +405,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * internal hook called automatically during cache put operations and should not be called directly.
      *
      * <p>The method performs a low-level copy via {@link MemorySegment#copy}, which is type-safe and
-     * efficient. The relative offset within the buffer is computed by subtracting {@code _startPtr}
-     * from {@code startPtr} to determine the correct position in the segment.
+     * efficient. The relative offset within the buffer is computed by subtracting the region's base
+     * address from {@code startPtr} to determine the correct position in the segment.
      *
      * <p><b>Memory Management:</b> Unlike the {@code sun.misc.Unsafe}-based variant, {@link MemorySegment#copy}
      * performs bounds checking. An out-of-range offset or length raises {@link IndexOutOfBoundsException},
@@ -416,8 +415,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * unchecked native copy.
      *
      * @param startPtr the destination memory address in off-heap memory. Must be a valid address
-     *                 within the allocated memory region (between {@code _startPtr} and
-     *                 {@code _startPtr + capacity}).
+     *                 within the allocated memory region.
      * @param srcBytes the source byte array from which to copy data. Must not be {@code null}.
      * @param srcOffset the index of the first byte in {@code srcBytes} to read (zero-based; no array
      *                  header offset is applied by this implementation).
@@ -429,7 +427,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      */
     @Override
     protected void copyToMemory(final long startPtr, final byte[] srcBytes, final int srcOffset, final int len) {
-        MemorySegment.copy(srcBytes, srcOffset, buffer, ValueLayout.JAVA_BYTE, startPtr - _startPtr, len);
+        MemorySegment.copy(srcBytes, srcOffset, buffer, ValueLayout.JAVA_BYTE, startPtr - baseAddress, len);
     }
 
     /**
@@ -454,7 +452,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *     .capacityInMB(200)             // 200MB off-heap
      *     .maxBlockSizeInBytes(16384)    // 16KB max block; larger values split across blocks
      *     .evictDelay(30000)             // scan every 30s
-     *     .vacatingFactor(0.3f)          // evict 30% of the pool (LRU first) when capacity is reached
+     *     .vacatingFactor(0.3f)          // evict 30% of entries (LRU first) under memory pressure
      *     .offHeapStore(diskStore)       // spill to disk when memory is full
      *     .statsTimeOnDisk(true)         // track disk read/write timing
      *     .build();                      // returns a ForeignMemoryOffHeapCache with disk spillover enabled
@@ -606,11 +604,11 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
         private long defaultMaxIdleTime;
 
         /**
-         * Factor in {@code [0.0, 1.0]} controlling how aggressive a vacate is. Vacate is triggered when the
-         * underlying pool reaches capacity; this fraction of the pool's current size is then evicted (LRU
-         * first) to free space. It does NOT control when vacating starts. Typical values are 0.1-0.3.
-         * Higher values free more space per vacate but cause larger pauses in put throughput while the
-         * eviction runs.
+         * Factor in {@code [0.0, 1.0]} controlling how aggressive a vacate is. Vacate is triggered when
+         * off-heap memory cannot satisfy a put and no disk store absorbs the value; this fraction of
+         * the current entries is then evicted (LRU first) to free space. It does NOT control when
+         * vacating starts. Typical values are 0.1-0.3. Higher values free more space per vacate but
+         * evict more of the working set at once.
          *
          * <p>Default: 0.2 (20%)
          */
@@ -703,7 +701,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * ForeignMemoryOffHeapCache<String, Data> cache = ForeignMemoryOffHeapCache.<String, Data>builder()
          *     .capacityInMB(200)         // 200MB off-heap (required, must be positive)
          *     .evictDelay(60000)         // scan for expired entries every 60s
-         *     .vacatingFactor(0.3f)      // evict 30% of the pool (LRU first) when capacity is reached
+         *     .vacatingFactor(0.3f)      // evict 30% of entries (LRU first) under memory pressure
          *     .build();                  // allocates native memory now; returns a ForeignMemoryOffHeapCache
          * try {
          *     cache.put("key", data);                    // serializes + copies the value off-heap; returns true on success
@@ -720,7 +718,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *     .evictDelay(30000)         // scan every 30s
          *     .defaultLiveTime(3600000)  // default 1h TTL
          *     .defaultMaxIdleTime(1800000)   // default 30min idle timeout
-         *     .vacatingFactor(0.25f)     // evict 25% of the pool (LRU first) on vacate
+         *     .vacatingFactor(0.25f)     // evict 25% of entries (LRU first) on vacate
          *     .offHeapStore(store)       // spill to disk when memory is full
          *     .statsTimeOnDisk(true)     // track disk read/write timing
          *     .build();                  // returns a ForeignMemoryOffHeapCache with disk spillover enabled
