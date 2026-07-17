@@ -123,4 +123,22 @@ public class OffHeapCacheStatsTest {
         assertEquals(0.5D, stats.hitRate());
         assertEquals(0.5D, stats.missRate());
     }
+
+    /**
+     * The documented (deliberate) NPE-for-null-components convention: reference components are
+     * rejected with NullPointerException via Objects.requireNonNull, unlike the IAE used for
+     * out-of-range numerics.
+     */
+    @Test
+    public void testRecord_EdgeCase_NullComponents_ThrowNPE() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, z, 1, Map.of()));
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, null, 1, Map.of()));
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, null));
+
+        final Map<Integer, Map<Integer, Integer>> nullNested = new java.util.HashMap<>();
+        nullNested.put(64, null);
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, nullNested));
+    }
 }

@@ -130,6 +130,23 @@ public class DistributedCacheTest extends TestBase {
         }
     }
 
+    /** Null keys are rejected consistently across put/remove, mirroring the getOrNull coverage. */
+    @Test
+    public void testPutAndRemove_EdgeCase_NullKey() {
+        try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {
+            assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 1000, 0));
+            assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        }
+    }
+
+    /** The documented non-String key path: {@code generateKey(12345)} base64-encodes "12345". */
+    @Test
+    public void testGenerateKey_NonStringKey() {
+        try (DistributedCache<Integer, String> cache = new DistributedCache<>(newClient())) {
+            assertEquals("MTIzNDU=", cache.generateKey(12345));
+        }
+    }
+
     @Test
     public void testContainsKey() {
         try (DistributedCache<String, String> cache = new DistributedCache<>(newClient())) {

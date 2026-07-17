@@ -65,4 +65,15 @@ public class ChronicleMapTest extends TestBase {
             assertNull(map.getOrNull("k"));
         }
     }
+
+    /** A negative evictDelay is rejected (documented; unlike the off-heap caches, which treat it as "disabled"). */
+    @Test
+    public void testConstructor_EdgeCase_NegativeEvictDelayRejected() {
+        try {
+            new ChronicleMap<String, String>(1_024, -1L);
+            org.junit.jupiter.api.Assertions.fail("expected IllegalArgumentException");
+        } catch (final IllegalArgumentException expected) {
+            // ok
+        }
+    }
 }

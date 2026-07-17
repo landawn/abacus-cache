@@ -225,6 +225,30 @@ public class EhcacheTest {
         }
     }
 
+    /**
+     * The heavily documented null-inclusion shape: an absent key appears in the result mapped to
+     * {@code null} (so {@code containsKey} on the result is true) rather than being omitted.
+     */
+    @Test
+    public void testGetAll_EdgeCase_AbsentKeyMappedToNull() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            wrapper.put("present", "1", 0, 0);
+
+            final Set<String> keys = new HashSet<>();
+            keys.add("present");
+            keys.add("missing");
+            final Map<String, String> got = wrapper.getAll(keys);
+
+            assertEquals("1", got.get("present"));
+            assertTrue(got.containsKey("missing"), "an absent key must appear in the result");
+            assertNull(got.get("missing"), "an absent key must be mapped to null");
+        } finally {
+            cm.close();
+        }
+    }
+
     @Test
     public void testGetAll_EdgeCase_NullKeys() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);

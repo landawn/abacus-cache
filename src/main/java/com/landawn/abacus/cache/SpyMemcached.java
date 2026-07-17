@@ -15,6 +15,7 @@
 package com.landawn.abacus.cache;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -135,7 +136,7 @@ interface LegacySpyMemcachedAsyncApi<T> {
  */
 public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implements LegacySpyMemcachedAsyncApi<T> {
 
-    static final Logger logger = LoggerFactory.getLogger(SpyMemcached.class);
+    private static final Logger logger = LoggerFactory.getLogger(SpyMemcached.class);
     private static final int MEMCACHED_MAX_RELATIVE_EXPIRATION_SECONDS = 30 * 24 * 60 * 60;
 
     /**
@@ -180,13 +181,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     private final MemcachedClient mc;
 
     /**
-     * Outer bound used by {@link #resultOf(Future)}: a generous multiple of the operation timeout,
-     * precomputed once because the effective operation timeout is fixed at construction time. The
-     * saturation guard protects against a huge configured timeout making both candidate bounds wrap
-     * negative; it is unreachable in practice because the constructor already clamps the operation
-     * timeout to {@code MAX_SAFE_OPERATION_TIMEOUT_MILLIS}, but is kept as cheap one-time defense.
+     * The effective (clamped) operation timeout, used by {@link #resultOf(Future)} as the bound
+     * for synchronous waits. spymemcached enforces its internal per-operation timeout only for
+     * operations still queued for write; once a request has been written to a wedged server, the
+     * caller's wait is the only bound — so this must be the configured timeout itself, matching
+     * both the documented contract and the delegate's own synchronous methods.
      */
-    private final long resultWaitBoundMillis;
+    private final long operationTimeoutMillis;
 
     private volatile boolean isShutdown = false;
 
@@ -256,19 +257,19 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
 
         // The getAddressList call is the load-bearing part: it fails fast with a descriptive
         // IllegalArgumentException on any malformed serverUrl before any client resources exist.
+        // Parsed once (each parse eagerly resolves every hostname) and reused for client creation.
         // The isEmpty branch is currently unreachable (getAddressList throws rather than returning
         // an empty list) and is kept deliberately as a guard against that contract changing in a
         // future abacus-common release.
-        if (N.isEmpty(AddrUtil.getAddressList(serverUrl))) {
+        final List<InetSocketAddress> serverAddresses = AddrUtil.getAddressList(serverUrl);
+
+        if (N.isEmpty(serverAddresses)) {
             throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
         }
 
         // Clamp to the spymemcached-safe maximum: see MAX_SAFE_OPERATION_TIMEOUT_MILLIS.
         final long effectiveTimeout = Math.min(timeout, MAX_SAFE_OPERATION_TIMEOUT_MILLIS);
-
-        this.resultWaitBoundMillis = effectiveTimeout > (Long.MAX_VALUE - 5_000L) / 4 //
-                ? Long.MAX_VALUE
-                : Math.max(effectiveTimeout * 4, effectiveTimeout + 5_000L);
+        operationTimeoutMillis = effectiveTimeout;
 
         MemcachedClient tempMc = null;
         try {
@@ -290,7 +291,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
                 }
             };
 
-            tempMc = createSpyMemcachedClient(serverUrl, connFactory);
+            tempMc = createSpyMemcachedClient(serverUrl, serverAddresses, connFactory);
             this.mc = tempMc;
         } catch (final Exception e) {
             // NOTE: with the current try-block body the shutdown below is unreachable (the only
@@ -539,7 +540,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @SuppressWarnings("unchecked")
     @Override
-    public Map<String, T> getBulk(final Collection<String> keys) {
+    public final Map<String, T> getBulk(final Collection<String> keys) {
         assertNotShutdown();
         final List<String> keySnapshot = snapshotBulkKeys(keys);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
@@ -584,7 +585,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
     @Override
-    public ContinuableFuture<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
+    public final ContinuableFuture<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
         assertNotShutdown();
         final List<String> keySnapshot = snapshotBulkKeys(keys);
         return ContinuableFuture.wrap((Future) mc.asyncGetBulk(keySnapshot));
@@ -604,27 +605,16 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     }
 
     /**
-     * Copies and validates a collection in one pass. This both insulates the asynchronous request
-     * from later caller mutations and avoids iterating a custom/concurrent collection once for
-     * validation and a second time for dispatch, where the two views may differ.
+     * Copies the collection, then validates the stable copy. The copy insulates the asynchronous
+     * request from later caller mutations, and validating the copy (rather than the live
+     * collection) means the validated view is exactly the dispatched view even for
+     * custom/concurrent collections.
      */
     private static List<String> snapshotBulkKeys(final Collection<String> keys) {
         N.checkArgNotNull(keys, "keys");
 
-        // Do not trust size() for preallocation: custom/concurrent collections may report a stale
-        // or adversarial value. Grow according to the elements actually observed.
-        final List<String> keySnapshot = new ArrayList<>();
-        int index = 0;
-
-        for (final String key : keys) {
-            if (key == null) {
-                throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + index);
-            }
-
-            keySnapshot.add(key);
-            index++;
-        }
-
+        final List<String> keySnapshot = new ArrayList<>(keys);
+        checkBulkKeys(keySnapshot);
         return keySnapshot;
     }
 
@@ -1929,11 +1919,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
 
     /**
      * Waits for a {@link Future} to complete and returns its result.
-     * Blocks until the Future completes (subject to a bounded wait derived from the configured
-     * operation timeout) and converts {@link InterruptedException}, {@link TimeoutException}, and
-     * {@link ExecutionException} into runtime exceptions. On both interrupt and timeout the Future
-     * is cancelled; additionally, when an {@link InterruptedException} occurs the thread's
-     * interrupted status is restored before the runtime exception is thrown.
+     * Blocks for at most the configured (clamped) operation timeout and converts
+     * {@link InterruptedException}, {@link TimeoutException}, and {@link ExecutionException} into
+     * runtime exceptions. On both interrupt and timeout the Future is cancelled; additionally,
+     * when an {@link InterruptedException} occurs the thread's interrupted status is restored
+     * before the runtime exception is thrown.
      *
      * <p>This is a utility method used internally to convert asynchronous operations to
      * synchronous ones by blocking on the Future's result.
@@ -1950,19 +1940,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @return the result value produced by the {@link Future}
      * @throws IllegalArgumentException if {@code future} is {@code null}
      * @throws RuntimeException if the {@link Future} execution fails, the calling thread is
-     *         interrupted, or the bounded wait (a generous multiple of the configured operation
-     *         timeout) elapses
+     *         interrupted, or the configured operation timeout elapses
      */
     protected <R> R resultOf(final Future<R> future) {
         N.checkArgNotNull(future, "future");
 
         try {
-            // Defense-in-depth bounded wait so a hung/stalled connection cannot pin the
-            // calling thread indefinitely. spymemcached enforces its own per-operation
-            // timeout internally; this outer bound is intentionally generous (a multiple
-            // of the configured operation timeout, precomputed in the constructor) so
-            // legitimately slower bulk operations are not failed prematurely.
-            return future.get(resultWaitBoundMillis, TimeUnit.MILLISECONDS);
+            // spymemcached enforces its internal per-operation timeout only for operations still
+            // queued for write; once a request has been written to a connected-but-unresponsive
+            // server, this wait is the only bound. Waiting exactly the configured timeout matches
+            // the delegate's own synchronous methods and the documented contract.
+            return future.get(operationTimeoutMillis, TimeUnit.MILLISECONDS);
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt(); // Restore interrupt status
 
@@ -2011,8 +1999,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         not cause this method to fail
      */
     protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory) throws UncheckedIOException {
+        return createSpyMemcachedClient(serverUrl, AddrUtil.getAddressList(serverUrl), connFactory);
+    }
+
+    private static MemcachedClient createSpyMemcachedClient(final String serverUrl, final List<InetSocketAddress> serverAddresses,
+            final ConnectionFactory connFactory) throws UncheckedIOException {
         try {
-            return new MemcachedClient(connFactory, AddrUtil.getAddressList(serverUrl));
+            return new MemcachedClient(connFactory, serverAddresses);
         } catch (final IOException e) {
             throw new UncheckedIOException("Failed to create Memcached client for server(s): " + serverUrl, e);
         }

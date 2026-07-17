@@ -604,6 +604,34 @@ public class CacheFactoryTest extends TestBase {
         }
     }
 
+    /** Factory smoke test: the createOffHeapCache delegation produces a working cache. */
+    @Test
+    public void testCreateOffHeapCache_Smoke() {
+        final OffHeapCache<String, byte[]> cache = CacheFactory.createOffHeapCache(1);
+        try {
+            assertTrue(cache.put("k", new byte[] { 1, 2 }));
+            org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[] { 1, 2 }, cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** Factory smoke test: the createCaffeineCache delegation wraps the supplied Caffeine cache. */
+    @Test
+    public void testCreateCaffeineCache_Smoke() {
+        try (CaffeineCache<String, String> cache = CacheFactory
+                .createCaffeineCache(com.github.benmanes.caffeine.cache.Caffeine.newBuilder().maximumSize(10).build())) {
+            assertTrue(cache.put("k", "v"));
+            assertEquals("v", cache.getOrNull("k"));
+        }
+    }
+
+    /** createEhcache forwards to the Ehcache wrapper constructor, which rejects a null delegate. */
+    @Test
+    public void testCreateEhcache_EdgeCase_NullRejected() {
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createEhcache(null));
+    }
+
     // TypeAttrParser.parse currently never returns null, so createCache's defensive attrResult-null
     // guard is not directly reachable through the dependency's public parser implementation.
 }

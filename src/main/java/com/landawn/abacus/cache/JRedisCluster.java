@@ -21,10 +21,8 @@ import java.util.Set;
 
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
-import com.landawn.abacus.util.AddrUtil;
 import com.landawn.abacus.util.N;
 
-import redis.clients.jedis.DefaultJedisClientConfig;
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisClientConfig;
 import redis.clients.jedis.RedisClusterClient;
@@ -149,6 +147,12 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * <p><b>Implementation note:</b> a partway topology-discovery failure can strand
      * Jedis-internal connection pools; see {@link #JRedisCluster(String)} for details.
      *
+     * <p><b>Cluster retry amplification:</b> the timeout is per attempt. The underlying cluster
+     * client retries an operation across redirects and failures (5 attempts by default, with a
+     * total retry budget of about 5&times; the socket timeout), so a single operation against a
+     * failing cluster can block for several multiples of the configured timeout — unlike
+     * {@link JRedis}, which makes exactly one attempt.
+     *
      * @param serverUrl the Redis Cluster seed node(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
@@ -159,26 +163,8 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
     public JRedisCluster(final String serverUrl, final long timeout) {
         super(serverUrl);
 
-        N.checkArgPositive(timeout, "timeout");
-
-        if (timeout > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("timeout exceeds maximum value: " + timeout + " (max: " + Integer.MAX_VALUE + ")");
-        }
-
-        final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
-
-        // Currently unreachable (getAddressList throws rather than returning an empty list); kept
-        // deliberately as a guard against that contract changing in a future abacus-common release.
-        if (N.isEmpty(addressList)) {
-            throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
-        }
-
-        final int timeoutMillis = (int) timeout;
-
-        final JedisClientConfig clientConfig = DefaultJedisClientConfig.builder()
-                .connectionTimeoutMillis(timeoutMillis)
-                .socketTimeoutMillis(timeoutMillis)
-                .build();
+        final JedisClientConfig clientConfig = buildClientConfig(timeout);
+        final List<InetSocketAddress> addressList = resolveServerAddresses(serverUrl);
 
         final Set<HostAndPort> nodes = new LinkedHashSet<>(addressList.size());
 

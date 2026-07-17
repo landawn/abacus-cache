@@ -52,10 +52,8 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
-     * Regression coverage for the {@code stats()} occupied-slot reporting, which reads each segment's
-     * slot {@link java.util.BitSet} cardinality. The read now goes through the synchronized
-     * {@code Segment.cardinality()} accessor (the {@code BitSet} is mutated under its own monitor and
-     * is not thread-safe). This verifies the reported per-segment occupied-slot total matches the
+     * The {@code stats()} occupied-slot reporting reads each segment's occupied-slot count under
+     * the allocator lock. This verifies the reported per-segment occupied-slot total matches the
      * number of in-memory entries.
      */
     @Test
@@ -77,9 +75,8 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
-     * Regression coverage for {@code evict()} releasing now-empty segments. Emptiness is checked via
-     * the synchronized {@code Segment.isEmpty()} accessor. After {@code clear()} (which evicts every
-     * entry and then reclaims empty segments) no occupied slots should remain.
+     * {@code clear()} removes every entry and then reclaims the now-empty segments; afterwards no
+     * occupied slots may remain in the stats snapshot.
      */
     @Test
     public void testClearReleasesAllSegments() {
@@ -1033,9 +1030,10 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
-     * Removing a disk entry detaches its wrapper before invoking {@code OffHeapStore.remove}. Close
-     * must wait for that detached wrapper's cleanup; otherwise it can close the store in the gap and
-     * make the in-flight remove call into an already-closed resource.
+     * Close must wait for an in-flight {@code remove(key)} of a disk entry (blocked on the
+     * entry's monitor while a reader-style holder pins it) to finish its {@code OffHeapStore}
+     * cleanup; otherwise close could close the store underneath the in-flight
+     * {@code OffHeapStore.remove} call.
      */
     @Test
     public void testRemoveFinishesDiskCleanupBeforeStoreClose() throws Exception {
@@ -1095,10 +1093,10 @@ public class AbstractOffHeapCacheTest {
             assertTrue(wrapperLocked.await(5, TimeUnit.SECONDS));
 
             final Future<?> removeResult = executor.submit(() -> cache.remove("k"));
-            for (int i = 0; i < 500 && cache.size() != 0; i++) {
-                Thread.sleep(10L);
-            }
-            assertEquals(0, cache.size(), "remove should have detached the wrapper before blocking in store cleanup");
+            // The remove frees the entry inside the per-key compute (serialized with same-key disk
+            // writes), so it blocks on the pinned entry monitor with the mapping still installed.
+            Thread.sleep(100L);
+            assertFalse(removeResult.isDone(), "remove should be blocked on the pinned entry monitor");
 
             final Future<?> closeResult = executor.submit(() -> {
                 cache.close();
@@ -1228,6 +1226,144 @@ public class AbstractOffHeapCacheTest {
             assertTrue(cache.put("k", large));
             assertEquals(1L, cache.stats().sizeOnDisk());
             assertArrayEquals(large, cache.getOrNull("k"));
+        }
+    }
+
+    /**
+     * Idle-time expiry (as opposed to TTL expiry, which every other expiry test uses): an entry
+     * whose {@code maxIdleTime} elapses without an access reads as absent, is removed lazily, and
+     * is counted as an eviction.
+     */
+    @Test
+    public void testIdleTimeExpiryLazyOnAccess() throws Exception {
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build()) {
+            assertTrue(cache.put("k", new byte[] { 1, 2, 3 }, 0, 150));
+            Thread.sleep(400L);
+
+            assertNull(cache.getOrNull("k"), "an entry idle past maxIdleTime must read as absent");
+            assertEquals(0, cache.size(), "the lazily expired entry must be removed");
+            assertEquals(1L, cache.stats().evictionCount(), "lazy expiry must be counted as an eviction");
+        }
+    }
+
+    /**
+     * The periodic maintenance sweep (evictDelay &gt; 0) must remove an expired entry, count it as
+     * an eviction, and reclaim its segment — without any intervening {@code get}.
+     */
+    @Test
+    public void testMaintenanceSweepRemovesExpiredEntries() throws Exception {
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(100).build()) {
+            assertTrue(cache.put("k", new byte[] { 1, 2, 3 }, 150, 0));
+
+            for (int i = 0; i < 100 && cache.size() != 0; i++) {
+                Thread.sleep(50L);
+            }
+
+            assertEquals(0, cache.size(), "the maintenance sweep must remove the expired entry without a get");
+            assertEquals(1L, cache.stats().evictionCount());
+            assertEquals(0, totalOccupiedSlots(cache.stats()), "the sweep must reclaim the expired entry's slots");
+        }
+    }
+
+    /**
+     * A value whose serialized form exceeds the ENTIRE capacity skips the in-memory attempt but
+     * still spills to a configured disk store — without scheduling a vacate (nothing could ever
+     * make it fit in memory).
+     */
+    @Test
+    public void testOversizedValueSpillsToDiskWithoutVacate() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newInMemoryStore(backing))
+                .build()) {
+            assertTrue(cache.put("small", new byte[] { 1 }));
+
+            final byte[] oversized = new byte[2 * 1024 * 1024];
+            oversized[0] = 42;
+            assertTrue(cache.put("huge", oversized), "an oversized value must spill to the configured store");
+
+            assertEquals(1L, cache.stats().sizeOnDisk());
+            assertArrayEquals(oversized, cache.getOrNull("huge"));
+            assertArrayEquals(new byte[] { 1 }, cache.getOrNull("small"), "the doomed put must not vacate the in-memory entry");
+            assertEquals(0L, cache.stats().evictionCount(), "a doomed oversized put must not schedule a vacate");
+        }
+    }
+
+    /**
+     * Deterministic regression for the detached-free race: a {@code remove(key)} whose disk
+     * cleanup is delayed (its entry monitor is pinned) must not delete the store bytes a
+     * concurrent same-key disk put writes. The remove now frees inside the per-key compute, so
+     * the racing put serializes behind it and the final state is the put's value — both in the
+     * map and in the store.
+     */
+    @Test
+    public void testRemoveRacingSameKeyDiskPutCannotDeleteNewBytes() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final CountDownLatch entryLocked = new CountDownLatch(1);
+        final CountDownLatch releaseEntry = new CountDownLatch(1);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2)
+                .build()) {
+            assertTrue(cache.put("k", new byte[] { 1 }));
+
+            final AbstractOffHeapCache.Entry<byte[]> priorEntry = entriesOf(cache).get("k");
+            final Thread monitorHolder = new Thread(() -> {
+                synchronized (priorEntry) {
+                    entryLocked.countDown();
+                    try {
+                        releaseEntry.await();
+                    } catch (final InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }, "offheap-test-remove-race-holder");
+            monitorHolder.start();
+            assertTrue(entryLocked.await(5, TimeUnit.SECONDS));
+
+            // The remove enters the per-key compute (owning the bin) and blocks on the pinned
+            // entry monitor; the same-key disk put then queues behind it on the bin.
+            final Future<?> removeResult = executor.submit(() -> cache.remove("k"));
+            Thread.sleep(100L);
+            final byte[] newValue = { 2, 2 };
+            final Future<Boolean> putResult = executor.submit(() -> cache.put("k", newValue));
+            Thread.sleep(100L);
+
+            releaseEntry.countDown();
+            removeResult.get(5, TimeUnit.SECONDS);
+            assertTrue(putResult.get(5, TimeUnit.SECONDS));
+            monitorHolder.join(5_000L);
+
+            assertArrayEquals(newValue, cache.getOrNull("k"), "the put's value must survive the racing remove's disk cleanup");
+            assertArrayEquals(newValue, backing.get("k"), "the put's store bytes must survive the racing remove's disk cleanup");
+        } finally {
+            releaseEntry.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    /** {@code vacatingFactor(1.0f)}: a vacate pass evicts every memory-resident entry. */
+    @Test
+    public void testVacatingFactorOneEvictsEverything() throws Exception {
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).vacatingFactor(1.0f).build()) {
+            assertTrue(cache.put("a", new byte[60 * 8192]));
+            assertTrue(cache.put("b", new byte[40 * 8192]));
+            assertFalse(cache.put("crowded-out", new byte[100 * 8192]), "the segment is full; this put fails and schedules a vacate");
+
+            for (int i = 0; i < 100 && cache.size() != 0; i++) {
+                Thread.sleep(50L);
+            }
+
+            assertEquals(0, cache.size(), "vacatingFactor 1.0 must evict every entry");
+            assertEquals(2L, cache.stats().evictionCount());
+            assertTrue(cache.put("after", new byte[100 * 8192]), "the reclaimed segment must be reusable");
         }
     }
 

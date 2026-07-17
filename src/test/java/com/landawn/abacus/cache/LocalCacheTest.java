@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -241,5 +242,34 @@ public class LocalCacheTest {
             assertEquals(-1, stats.maxMemory());
             assertEquals(-1, stats.dataSize());
         }
+    }
+
+    /** Null values are rejected up-front with IAE, as documented (settled validation policy). */
+    @Test
+    public void testPut_EdgeCase_NullValue() {
+        try (LocalCache<String, String> cache = new LocalCache<>(100, 0)) {
+            assertThrows(IllegalArgumentException.class, () -> cache.put("k", null));
+            assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 1000, 1000));
+        }
+    }
+
+    /**
+     * Every data operation documents {@code @throws IllegalStateException} after close; the
+     * behavior lives entirely in the backing pool, so pin it here against dependency changes.
+     */
+    @Test
+    public void testOperations_AfterClose_ThrowIllegalStateException() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        cache.put("k", "v");
+        cache.close();
+
+        assertThrows(IllegalStateException.class, () -> cache.getOrNull("k"));
+        assertThrows(IllegalStateException.class, () -> cache.put("k", "v2"));
+        assertThrows(IllegalStateException.class, () -> cache.remove("k"));
+        assertThrows(IllegalStateException.class, () -> cache.containsKey("k"));
+        assertThrows(IllegalStateException.class, cache::keySet);
+        assertThrows(IllegalStateException.class, cache::size);
+        assertThrows(IllegalStateException.class, cache::clear);
+        assertThrows(IllegalStateException.class, cache::stats);
     }
 }

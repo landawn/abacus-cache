@@ -128,4 +128,19 @@ public class CacheStatsTest extends TestBase {
         assertEquals(-1L, stats.maxMemory());
         assertEquals(-1L, stats.dataSize());
     }
+
+    @Test
+    public void testRates_EdgeCase_ZeroRequests_ReturnZero() {
+        // Documented zero-safe guard: no requests recorded -> both rates are 0.0, not NaN.
+        final CacheStats stats = new CacheStats(10, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
+        assertEquals(0.0D, stats.hitRate());
+        assertEquals(0.0D, stats.missRate());
+    }
+
+    @Test
+    public void testRates_OrdinaryAsymmetricCounts() {
+        final CacheStats stats = new CacheStats(10, 2, 4L, 4L, 3L, 1L, 0L, 0L, 0L);
+        assertEquals(0.75D, stats.hitRate());
+        assertEquals(0.25D, stats.missRate());
+    }
 }

@@ -20,7 +20,6 @@ import java.lang.reflect.Field;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
-import com.landawn.abacus.annotation.SuppressFBWarnings;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.pool.ActivityPrint;
@@ -105,7 +104,6 @@ import lombok.experimental.Accessors;
  * @see OffHeapStore
  * @see ForeignMemoryOffHeapCache
  */
-@SuppressFBWarnings({ "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "JLM_JSR166_UTILCONCURRENT_MONITORENTER" })
 public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     private static final Logger logger = LoggerFactory.getLogger(OffHeapCache.class);

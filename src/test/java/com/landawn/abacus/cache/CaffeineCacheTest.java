@@ -553,4 +553,32 @@ public class CaffeineCacheTest extends TestBase {
             assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
         }
     }
+
+    /**
+     * Content-level stats mapping (previously only non-nullness was asserted): capacity from the
+     * eviction policy's maximum, wrapper-tracked putCount, Caffeine-tracked hit/miss/request
+     * counts, and the -1 "not tracked" sentinels for maxMemory/dataSize.
+     */
+    @Test
+    public void testStats_ContentReflectsTraffic() {
+        try (CaffeineCache<String, String> cache = newCache()) { // maximumSize(100), recordStats()
+            assertTrue(cache.put("a", "1"));
+            assertEquals("1", cache.getOrNull("a"));
+            assertNull(cache.getOrNull("missing"));
+
+            final CacheStats stats = cache.stats();
+            assertEquals(100, stats.capacity());
+            assertEquals(1, stats.size());
+            assertEquals(1L, stats.putCount());
+            assertEquals(2L, stats.getCount());
+            assertEquals(1L, stats.hitCount());
+            assertEquals(1L, stats.missCount());
+            assertEquals(-1L, stats.maxMemory(), "memory is not tracked: -1 sentinel");
+            assertEquals(-1L, stats.dataSize(), "data size is not tracked: -1 sentinel");
+
+            final com.github.benmanes.caffeine.cache.stats.CacheStats nativeStats = cache.caffeineStats();
+            assertEquals(1L, nativeStats.hitCount());
+            assertEquals(1L, nativeStats.missCount());
+        }
+    }
 }

@@ -81,8 +81,9 @@ import com.landawn.abacus.util.function.TriPredicate;
  *     bytes) under it, and every path that frees or overwrites those resources holds it first, so
  *     a read can never observe freed memory or another entry's bytes.</li>
  * <li>A cache-wide read-write lock makes {@link #close()} (write side) mutually exclusive with
- *     all in-flight operations (read side), so native memory is never deallocated (and the store
- *     never closed) underneath one.</li>
+ *     all in-flight operations that touch native memory or the store (read side), so neither is
+ *     ever released underneath one. (Heap-only probes such as {@code containsKey}, {@code size},
+ *     {@code keySet}, and {@code stats} do not take it.)</li>
  * <li>A single allocator lock serializes all segment/slot bookkeeping.</li>
  * </ul>
  *
@@ -94,7 +95,7 @@ import com.landawn.abacus.util.function.TriPredicate;
  * <p><b>Memory pressure.</b> When slot allocation fails for a value that could fit, the put
  * falls back to the disk store when one is configured; otherwise it returns {@code false} and
  * schedules an asynchronous, debounced vacate pass that evicts the least-recently-accessed
- * ~{@code vacatingFactor} of entries and reclaims their now-empty segments.
+ * ~{@code vacatingFactor} of memory-resident entries and reclaims their now-empty segments.
  *
  * <p><b>Disk tier.</b> With an {@link OffHeapStore} configured, values that cannot be placed in
  * memory (or that the {@code storeSelector} routes to disk) are written to the store under the
@@ -241,8 +242,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private final LongAdder totalDataSize = new LongAdder();
     private final LongAdder dataSizeOnDisk = new LongAdder();
     private final LongAdder sizeOnDisk = new LongAdder();
-    private final LongAdder writeCountToDisk = new LongAdder();
-    private final LongAdder readCountFromDisk = new LongAdder();
+    // Named after the OffHeapCacheStats components they populate.
+    private final LongAdder putCountToDisk = new LongAdder();
+    private final LongAdder hitCountFromDisk = new LongAdder();
 
     private final TimingStats writeToDiskTimes = new TimingStats();
     private final TimingStats readFromDiskTimes = new TimingStats();
@@ -263,6 +265,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     final boolean statsTimeOnDisk;
     final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
     final TriFunction<K, V, Integer, Integer> storeSelector;
+    /** Store reads are timed for the timing statistics AND for the promotion tester's read-time argument. */
+    private final boolean measureStoreReadTime;
 
     private ScheduledFuture<?> maintenanceFuture;
     private Thread shutdownHook;
@@ -333,6 +337,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         this.statsTimeOnDisk = statsTimeOnDisk;
         this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
         this.storeSelector = storeSelector;
+        measureStoreReadTime = statsTimeOnDisk || testerForLoadingItemFromDiskToMemory != null;
 
         segments = new Segment[(int) (capacityInBytes / SEGMENT_SIZE)];
 
@@ -500,10 +505,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     // The store fetch must stay inside the monitor: every path that overwrites or
                     // removes this entry's bytes holds this monitor first, so bytes read here are
                     // guaranteed to be this entry's own.
-                    final long startedAt = statsTimeOnDisk ? System.nanoTime() : 0L;
+                    final long startedAt = measureStoreReadTime ? System.nanoTime() : 0L;
                     final byte[] storeBytes = offHeapStore.get(key);
 
-                    if (statsTimeOnDisk) {
+                    if (measureStoreReadTime) {
                         storeReadMillis = elapsedMillisSince(startedAt);
                     }
 
@@ -523,7 +528,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             }
 
-            if (storeReadMillis >= 0) {
+            if (statsTimeOnDisk && storeReadMillis >= 0) {
                 readFromDiskTimes.record(storeReadMillis);
             }
 
@@ -547,7 +552,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             if (!entry.isMemory()) {
                 // Counted only once the value has actually been reconstructed; a throwing
                 // deserializer is not a successful disk read.
-                readCountFromDisk.increment();
+                hitCountFromDisk.increment();
                 maybePromoteToMemory(key, entry, bytes, storeReadMillis);
             }
 
@@ -571,7 +576,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final ActivityPrint print = diskEntry.activityPrint;
         final long remainingLiveTime = print.getMaxLiveTime() - (System.currentTimeMillis() - print.getCreatedTime());
 
-        if (remainingLiveTime <= 0) {
+        // A value larger than the entire region can never be placed; skip the doomed (and
+        // allocator-lock-heavy) slot allocation attempt, mirroring doPut's guard.
+        if (remainingLiveTime <= 0 || diskEntry.size > capacityInBytes) {
             return;
         }
 
@@ -584,17 +591,24 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final Entry<V> memoryEntry = new Entry<>(diskEntry.type, diskEntry.size, remainingLiveTime, print.getMaxIdleTime(), slots);
         copyEntryToMemory(memoryEntry, bytes);
 
-        entries.compute(key, (k, current) -> {
-            if (current != diskEntry) {
-                // The mapping changed concurrently; discard the promoted copy, keep the current one.
-                releaseSlots(memoryEntry);
-                return current;
-            }
+        try {
+            entries.compute(key, (k, current) -> {
+                if (current != diskEntry) {
+                    // The mapping changed concurrently; discard the promoted copy, keep the current one.
+                    releaseSlots(memoryEntry);
+                    return current;
+                }
 
-            free(k, diskEntry, FreeCause.REPLACED, true);
-            install(memoryEntry);
-            return memoryEntry;
-        });
+                free(k, diskEntry, FreeCause.REPLACED, true);
+                install(memoryEntry);
+                return memoryEntry;
+            });
+        } catch (final RuntimeException | Error e) {
+            // A throwing key hashCode/equals aborts the compute before the lambda installs the
+            // promoted entry; release its freshly allocated slots instead of leaking them.
+            releaseSlots(memoryEntry);
+            throw e;
+        }
     }
 
     // ------------------------------------------------------------------------------------- put
@@ -628,6 +642,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or if
      *                                  {@code storeSelector} returns {@code null} or a value outside 0..2
      * @throws IllegalStateException if the cache has been closed
+     * @throws java.util.concurrent.RejectedExecutionException if the put fails under memory
+     *                                  pressure and the shared executor rejects the vacate task
+     *                                  (possible only during JVM shutdown)
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
@@ -689,14 +706,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     final Entry<V> entry = new Entry<>(type, size, effectiveLiveTime, effectiveMaxIdleTime, slots);
                     copyEntryToMemory(entry, bytes);
 
-                    entries.compute(key, (k, old) -> {
-                        if (old != null) {
-                            free(k, old, FreeCause.REPLACED, true);
-                        }
+                    try {
+                        entries.compute(key, (k, old) -> {
+                            if (old != null) {
+                                free(k, old, FreeCause.REPLACED, true);
+                            }
 
-                        install(entry);
-                        return entry;
-                    });
+                            install(entry);
+                            return entry;
+                        });
+                    } catch (final RuntimeException | Error e) {
+                        // A throwing key hashCode/equals aborts the compute before the lambda
+                        // installs the entry; release its freshly allocated slots.
+                        releaseSlots(entry);
+                        throw e;
+                    }
 
                     putCount.increment();
                     return true;
@@ -792,7 +816,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return false;
         }
 
-        writeCountToDisk.increment();
+        putCountToDisk.increment();
 
         if (writeMillis[0] >= 0) {
             writeToDiskTimes.record(writeMillis[0]);
@@ -838,11 +862,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         try {
             assertNotClosed();
 
-            final Entry<V> entry = entries.remove(key);
+            // Freeing inside the per-key compute serializes this entry's store-byte removal with
+            // any concurrent same-key disk write: detaching first and freeing outside would let
+            // offHeapStore.remove(key) delete the bytes a newer entry just wrote under the key.
+            entries.compute(key, (k, current) -> {
+                if (current != null) {
+                    free(k, current, FreeCause.REMOVED, true);
+                }
 
-            if (entry != null) {
-                free(key, entry, FreeCause.REMOVED, true);
-            }
+                return null;
+            });
         } finally {
             lifecycleLock.readLock().unlock();
         }
@@ -1049,8 +1078,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         // LongAdder.sum() is not an atomic snapshot; clamp the up-and-down gauges to >= 0 so a
         // transiently observed decrement-without-increment cannot make the stats record throw.
-        return new OffHeapCacheStats(capacity, entries.size(), Math.max(0L, sizeOnDisk.sum()), putCount.sum(), writeCountToDisk.sum(), hits + misses, hits,
-                readCountFromDisk.sum(), misses, evictionCount.sum(), Math.max(0L, evictionCountFromDisk.sum()), capacityInBytes,
+        return new OffHeapCacheStats(capacity, entries.size(), Math.max(0L, sizeOnDisk.sum()), putCount.sum(), putCountToDisk.sum(), hits + misses, hits,
+                hitCountFromDisk.sum(), misses, evictionCount.sum(), Math.max(0L, evictionCountFromDisk.sum()), capacityInBytes,
                 Math.max(0L, totalOccupiedMemorySize.sum()), Math.max(0L, totalDataSize.sum()), Math.max(0L, dataSizeOnDisk.sum()), writeToDiskTimes.snapshot(),
                 readFromDiskTimes.snapshot(), SEGMENT_SIZE, snapshotOccupiedSlots());
     }
@@ -1119,18 +1148,25 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /** Atomically removes the mapping if it still points at {@code entry}, then frees it. */
+    /**
+     * Atomically removes the mapping if it still points at {@code entry}, freeing it inside the
+     * map's per-key compute so the entry's store-byte removal is serialized (by the bin lock)
+     * with any concurrent same-key disk write.
+     */
     private void removeIfCurrent(final K key, final Entry<V> entry, final FreeCause cause) {
-        if (entries.remove(key, entry)) {
-            free(key, entry, cause, true);
-        }
+        entries.compute(key, (k, current) -> {
+            if (current != entry) {
+                return current;
+            }
+
+            free(k, entry, cause, true);
+            return null;
+        });
     }
 
     private void removeAllEntries(final FreeCause cause) {
         for (final Map.Entry<K, Entry<V>> mapEntry : entries.entrySet()) {
-            if (entries.remove(mapEntry.getKey(), mapEntry.getValue())) {
-                free(mapEntry.getKey(), mapEntry.getValue(), cause, true);
-            }
+            removeIfCurrent(mapEntry.getKey(), mapEntry.getValue(), cause);
         }
     }
 
@@ -1149,9 +1185,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Schedules an asynchronous vacate pass that evicts the least-recently-accessed
-     * ~{@code vacatingFactor} of entries and reclaims their now-empty segments. Debounced (a pass
-     * that finished within the last 3 s suppresses a new one) and single-flight (at most one pass
-     * runs at a time). The pass holds the lifecycle read lock, so {@link #close()} waits for it.
+     * ~{@code vacatingFactor} of memory-resident entries and reclaims their now-empty segments.
+     * Debounced (a pass that finished within the last 3 s suppresses a new one) and single-flight
+     * (at most one pass runs at a time). The pass holds the lifecycle read lock, so
+     * {@link #close()} waits for it.
      */
     private void vacate() {
         if (System.nanoTime() - lastVacateFinishedNanos < VACATE_DEBOUNCE_NANOS || !vacating.compareAndSet(false, true)) {
@@ -1166,6 +1203,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         evictLeastRecentlyAccessed();
                         reclaimEmptySegments();
                     }
+                } catch (final Exception e) {
+                    // The task's future is never read; without this catch a failed pass would
+                    // abort silently. The next put under pressure schedules a fresh one.
+                    logger.warn("Off-heap cache vacate pass failed; a later put under memory pressure will retry", e);
                 } finally {
                     lifecycleLock.readLock().unlock();
                     lastVacateFinishedNanos = System.nanoTime();
@@ -1179,12 +1220,22 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Evicts the least-recently-accessed ~{@code vacatingFactor} of memory-resident entries.
+     * Disk-backed entries are not candidates: evicting them frees no native memory, which is the
+     * only pressure a vacate exists to relieve.
+     */
     private void evictLeastRecentlyAccessed() {
-        final List<Map.Entry<K, Entry<V>>> candidates = new ArrayList<>(entries.size());
+        // Each candidate carries a frozen copy of its access time: sorting on the live (volatile,
+        // concurrently touched) field would make comparisons inconsistent mid-sort, which TimSort
+        // rejects with an IllegalArgumentException.
+        final List<Map.Entry<Long, Map.Entry<K, Entry<V>>>> candidates = new ArrayList<>(entries.size());
 
         for (final Map.Entry<K, Entry<V>> mapEntry : entries.entrySet()) {
-            if (!mapEntry.getValue().freed) {
-                candidates.add(mapEntry);
+            final Entry<V> entry = mapEntry.getValue();
+
+            if (entry.isMemory() && !entry.freed) {
+                candidates.add(Map.entry(entry.activityPrint.getLastAccessTime(), mapEntry));
             }
         }
 
@@ -1192,12 +1243,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        candidates.sort((a, b) -> Long.compare(a.getValue().activityPrint.getLastAccessTime(), b.getValue().activityPrint.getLastAccessTime()));
+        candidates.sort(Map.Entry.comparingByKey());
 
         final int evictTargetCount = Math.max(1, (int) (candidates.size() * vacatingFactor));
 
         for (int i = 0; i < evictTargetCount; i++) {
-            removeIfCurrent(candidates.get(i).getKey(), candidates.get(i).getValue(), FreeCause.EVICTED);
+            final Map.Entry<K, Entry<V>> victim = candidates.get(i).getValue();
+            removeIfCurrent(victim.getKey(), victim.getValue(), FreeCause.EVICTED);
         }
     }
 

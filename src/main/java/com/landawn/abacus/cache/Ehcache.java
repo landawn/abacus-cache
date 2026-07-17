@@ -111,9 +111,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if cache is null
      */
     public Ehcache(final Cache<K, V> cache) {
-        N.checkArgNotNull(cache, "cache");
-
-        cacheImpl = cache;
+        cacheImpl = N.checkArgNotNull(cache, "cache");
     }
 
     /**
@@ -305,7 +303,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws CacheLoadingException if the cache loader fails
      * @throws CacheWritingException if the cache writer fails
      */
-    public V putIfAbsent(final K key, final V value) throws CacheLoadingException, CacheWritingException {
+    public V putIfAbsent(final K key, final V value) {
         assertNotClosed();
 
         N.checkArgNotNull(key, "key");
@@ -365,7 +363,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheLoadingException if the bulk cache loader fails
      */
-    public Map<K, V> getAll(final Set<? extends K> keys) throws BulkCacheLoadingException {
+    public Map<K, V> getAll(final Set<? extends K> keys) {
         assertNotClosed();
 
         N.checkArgNotNull(keys, "keys");
@@ -410,7 +408,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
-    public void putAll(final Map<? extends K, ? extends V> entries) throws BulkCacheWritingException {
+    public void putAll(final Map<? extends K, ? extends V> entries) {
         assertNotClosed();
 
         N.checkArgNotNull(entries, "entries");
@@ -455,7 +453,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
-    public void removeAll(final Set<? extends K> keys) throws BulkCacheWritingException {
+    public void removeAll(final Set<? extends K> keys) {
         assertNotClosed();
 
         N.checkArgNotNull(keys, "keys");

@@ -118,13 +118,15 @@ import java.util.Objects;
  * @param missCount the number of failed get operations where the entry was not found in either memory or
  *                  disk. This can occur when the key never existed, was explicitly removed, has expired, or
  *                  still had a cache mapping whose backing-store bytes were missing.
- * @param evictionCount the total number of entries removed by the eviction / vacate paths (i.e., entries
- *                      reclaimed because the cache reached capacity, or because the periodic eviction sweep
- *                      noticed they had expired). Explicit {@code remove()} / {@code clear()} calls and
- *                      {@code put()} replacements use a different code path and are NOT counted here.
- * @param evictionCountFromDisk the number of disk-stored entries removed by eviction or vacate (expired
- *                              or reclaimed to free capacity). Explicit {@code remove()} / {@code clear()}
- *                              and {@code put()} replacements of a disk-stored key are NOT counted here.
+ * @param evictionCount the total number of entries removed because they expired (lazily on access or by
+ *                      the periodic maintenance sweep) or were reclaimed by the memory-pressure vacate
+ *                      pass. Explicit {@code remove()} / {@code clear()} calls and {@code put()}
+ *                      replacements are NOT counted here.
+ * @param evictionCountFromDisk the number of disk-stored entries removed because they expired (lazily on
+ *                              access or by the maintenance sweep). The vacate pass evicts only
+ *                              memory-resident entries, so it never contributes here. Explicit
+ *                              {@code remove()} / {@code clear()} and {@code put()} replacements of a
+ *                              disk-stored key are NOT counted here.
  * @param allocatedMemory the total allocated off-heap memory in bytes. This represents the maximum memory
  *                        that has been reserved for the cache, typically organized into fixed-size segments.
  * @param occupiedMemory the currently occupied off-heap slot space in bytes. This includes serialized

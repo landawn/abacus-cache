@@ -150,4 +150,21 @@ public class KryoTranscoderTest extends TestBase {
         assertTrue(cd.getData().length > 0);
         assertNull(tx.decode(cd));
     }
+
+    /** The caller-supplied-parser constructors: round-trip through a custom parser, and null rejection. */
+    @Test
+    public void testConstructor_CustomParser() {
+        final com.landawn.abacus.parser.KryoParser parser = com.landawn.abacus.parser.ParserFactory.createKryoParser();
+
+        final KryoTranscoder<String> defaultSize = new KryoTranscoder<>(parser);
+        assertEquals(CachedData.MAX_SIZE, defaultSize.getMaxSize());
+        assertEquals("round-trip", defaultSize.decode(defaultSize.encode("round-trip")));
+
+        final KryoTranscoder<String> customSize = new KryoTranscoder<>(1024, parser);
+        assertEquals(1024, customSize.getMaxSize());
+        assertEquals("round-trip", customSize.decode(customSize.encode("round-trip")));
+
+        assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<String>((com.landawn.abacus.parser.KryoParser) null));
+        assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<String>(1024, null));
+    }
 }

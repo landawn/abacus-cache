@@ -16,6 +16,8 @@ package com.landawn.abacus.cache;
 
 import static com.landawn.abacus.cache.DistributedCacheClient.DEFAULT_TIMEOUT;
 
+import java.util.function.LongFunction;
+
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolableAdapter;
 import com.landawn.abacus.util.N;
@@ -602,48 +604,17 @@ public final class CacheFactory {
             }
 
             if (DistributedCacheClient.MEMCACHED.equalsIgnoreCase(className)) {
-                if (parameters.length == 1) {
-                    return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT));
-                } else if (parameters.length == 2) {
-                    // An all-digit second parameter is a timeout, not a key prefix: "(url,5000)"
-                    // virtually always means a custom timeout, and silently binding "5000" as the
-                    // key namespace would corrupt every generated key. An all-digit key prefix
-                    // must use the explicit three-parameter layout, e.g. "(url,123,1000)".
-                    if (looksLikeTimeoutParameter(parameters[1])) {
-                        return new DistributedCache<>(new SpyMemcached<>(url, parseTimeoutParameter(parameters[1])));
-                    }
-
-                    return newDistributedCacheOrDisconnect(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
-                } else if (parameters.length == 3) {
-                    return newDistributedCacheOrDisconnect(new SpyMemcached<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
-                } else {
-                    throw new IllegalArgumentException(
-                            "Unsupported parameters for Memcached: " + Strings.join(parameters) + ". Expected Memcached(serverUrl[,keyPrefix[,timeout]])");
-                }
+                return createMemcachedOrRedisCache("Memcached", parameters, timeout -> new SpyMemcached<>(url, timeout));
             } else if (DistributedCacheClient.REDIS.equalsIgnoreCase(className)) {
-                if (parameters.length == 1) {
-                    return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT));
-                } else if (parameters.length == 2) {
-                    // Same all-digit rule as the Memcached branch above.
-                    if (looksLikeTimeoutParameter(parameters[1])) {
-                        return new DistributedCache<>(new JRedis<>(url, parseTimeoutParameter(parameters[1])));
-                    }
-
-                    return newDistributedCacheOrDisconnect(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
-                } else if (parameters.length == 3) {
-                    return newDistributedCacheOrDisconnect(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
-                } else {
-                    throw new IllegalArgumentException(
-                            "Unsupported parameters for Redis: " + Strings.join(parameters) + ". Expected Redis(serverUrl[,keyPrefix[,timeout]])");
-                }
+                return createMemcachedOrRedisCache("Redis", parameters, timeout -> new JRedis<>(url, timeout));
             } else {
                 final RedisClusterParameters redisClusterParameters = parseRedisClusterParameters(parameters);
 
-                if (redisClusterParameters.keyPrefix == null) {
-                    return new DistributedCache<>(new JRedisCluster<>(redisClusterParameters.serverUrl, redisClusterParameters.timeout));
+                if (redisClusterParameters.keyPrefix() == null) {
+                    return new DistributedCache<>(new JRedisCluster<>(redisClusterParameters.serverUrl(), redisClusterParameters.timeout()));
                 } else {
-                    return newDistributedCacheOrDisconnect(new JRedisCluster<>(redisClusterParameters.serverUrl, redisClusterParameters.timeout),
-                            redisClusterParameters.keyPrefix);
+                    return newDistributedCacheOrDisconnect(new JRedisCluster<>(redisClusterParameters.serverUrl(), redisClusterParameters.timeout()),
+                            redisClusterParameters.keyPrefix());
                 }
             }
         } else {
@@ -721,6 +692,33 @@ public final class CacheFactory {
     }
 
     /**
+     * Shared implementation of the Memcached and Redis provider branches of
+     * {@code createCache(String)}, which differ only in the client they construct and the provider
+     * name in their error messages. The layout is {@code provider(serverUrl[,keyPrefix[,timeout]])}.
+     */
+    private static <K, V> DistributedCache<K, V> createMemcachedOrRedisCache(final String provider, final String[] parameters,
+            final LongFunction<? extends DistributedCacheClient<V>> clientFactory) {
+        if (parameters.length == 1) {
+            return new DistributedCache<>(clientFactory.apply(DEFAULT_TIMEOUT));
+        } else if (parameters.length == 2) {
+            // An all-digit second parameter is a timeout, not a key prefix: "(url,5000)"
+            // virtually always means a custom timeout, and silently binding "5000" as the
+            // key namespace would corrupt every generated key. An all-digit key prefix
+            // must use the explicit three-parameter layout, e.g. "(url,123,1000)".
+            if (looksLikeTimeoutParameter(parameters[1])) {
+                return new DistributedCache<>(clientFactory.apply(parseTimeoutParameter(parameters[1])));
+            }
+
+            return newDistributedCacheOrDisconnect(clientFactory.apply(DEFAULT_TIMEOUT), parameters[1]);
+        } else if (parameters.length == 3) {
+            return newDistributedCacheOrDisconnect(clientFactory.apply(parseTimeoutParameter(parameters[2])), parameters[1]);
+        } else {
+            throw new IllegalArgumentException("Unsupported parameters for " + provider + ": " + Strings.join(parameters) + ". Expected " + provider
+                    + "(serverUrl[,keyPrefix[,timeout]])");
+        }
+    }
+
+    /**
      * RedisCluster serverUrl itself is a comma-separated host:port seed list, so split provider
      * parameters that still look like Redis cluster nodes are treated as part of serverUrl rather
      * than as the keyPrefix. A final all-digit token is the timeout; when the token before such a
@@ -734,27 +732,30 @@ public final class CacheFactory {
         long timeout = DEFAULT_TIMEOUT;
         boolean hasExplicitTimeout = false;
 
-        // An all-digit final token following an endpoint-shaped token is irreducibly ambiguous:
-        // "(seed, seed, timeout)" and "(seed, endpoint-shaped-prefix, timeout)" are the same
-        // shape with opposite intents, and either silent reading breaks the other silently (a
-        // demoted seed changes the key namespace of every entry; a promoted prefix is quietly
-        // tolerated as one unreachable seed once topology discovery succeeds through the real
-        // ones). Reject it with instructions for expressing both intents unambiguously.
-        if (parameterCount >= 3 && looksLikeTimeoutParameter(parameters[parameterCount - 1])
-                && isRedisClusterSeedNodeParameter(parameters[parameterCount - 2])) {
-            throw new IllegalArgumentException("Ambiguous RedisCluster parameters: " + Strings.join(parameters) + ". The token '"
-                    + parameters[parameterCount - 2] + "' before the numeric timeout is a valid host:port endpoint, so it could be either an additional"
-                    + " seed node or the key prefix. If it is a seed node, put all seed nodes space-separated in the first parameter, e.g."
-                    + " RedisCluster(host1:7000 host2:7000,3000). If it is the key prefix, use a prefix that is not host:port-shaped (a trailing ':'"
-                    + " suffices, e.g. tenant:1:), or build the client programmatically via new JRedisCluster(...) and CacheFactory.createDistributedCache(...)");
-        }
+        if (parameterCount >= 3) {
+            final boolean penultimateIsSeedNode = isRedisClusterSeedNodeParameter(parameters[parameterCount - 2]);
 
-        // If the penultimate token is not an endpoint, the final token can only be its timeout.
-        if (parameterCount >= 3 && !isRedisClusterSeedNodeParameter(parameters[parameterCount - 2])) {
-            keyPrefixIndex = parameterCount - 2;
-            seedParameterCount = keyPrefixIndex;
-            timeout = parseTimeoutParameter(parameters[parameterCount - 1]);
-            hasExplicitTimeout = true;
+            // An all-digit final token following an endpoint-shaped token is irreducibly ambiguous:
+            // "(seed, seed, timeout)" and "(seed, endpoint-shaped-prefix, timeout)" are the same
+            // shape with opposite intents, and either silent reading breaks the other silently (a
+            // demoted seed changes the key namespace of every entry; a promoted prefix is quietly
+            // tolerated as one unreachable seed once topology discovery succeeds through the real
+            // ones). Reject it with instructions for expressing both intents unambiguously.
+            if (penultimateIsSeedNode) {
+                if (looksLikeTimeoutParameter(parameters[parameterCount - 1])) {
+                    throw new IllegalArgumentException("Ambiguous RedisCluster parameters: " + Strings.join(parameters) + ". The token '"
+                            + parameters[parameterCount - 2] + "' before the numeric timeout is a valid host:port endpoint, so it could be either an additional"
+                            + " seed node or the key prefix. If it is a seed node, put all seed nodes space-separated in the first parameter, e.g."
+                            + " RedisCluster(host1:7000 host2:7000,3000). If it is the key prefix, use a prefix that is not host:port-shaped (a trailing ':'"
+                            + " suffices, e.g. tenant:1:), or build the client programmatically via new JRedisCluster(...) and CacheFactory.createDistributedCache(...)");
+                }
+            } else {
+                // The penultimate token is not an endpoint, so the final token can only be its timeout.
+                keyPrefixIndex = parameterCount - 2;
+                seedParameterCount = keyPrefixIndex;
+                timeout = parseTimeoutParameter(parameters[parameterCount - 1]);
+                hasExplicitTimeout = true;
+            }
         }
 
         if (keyPrefixIndex < 0) {
@@ -901,29 +902,11 @@ public final class CacheFactory {
     }
 
     private static String joinRedisClusterServerUrl(final String[] parameters, final int length) {
-        final StringBuilder sb = new StringBuilder();
-
-        for (int i = 0; i < length; i++) {
-            if (i > 0) {
-                sb.append(',');
-            }
-
-            sb.append(parameters[i]);
-        }
-
-        return sb.toString();
+        return Strings.join(parameters, 0, length, ",");
     }
 
-    private static final class RedisClusterParameters {
-        private final String serverUrl;
-        private final String keyPrefix;
-        private final long timeout;
-
-        RedisClusterParameters(final String serverUrl, final String keyPrefix, final long timeout) {
-            this.serverUrl = serverUrl;
-            this.keyPrefix = keyPrefix;
-            this.timeout = timeout;
-        }
+    /** The parsed components of a {@code RedisCluster(...)} provider specification. */
+    private record RedisClusterParameters(String serverUrl, String keyPrefix, long timeout) {
     }
 
     /**

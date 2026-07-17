@@ -263,6 +263,19 @@ public class JRedisClusterTest {
         verify(mockCluster, never()).get(utf8("during-close"));
     }
 
+    /**
+     * A RuntimeException from the cluster client's close() is swallowed: disconnect() still
+     * returns normally and the instance stays marked shut down.
+     */
+    @Test
+    public void test_disconnect_swallowsClusterCloseFailure() {
+        org.mockito.Mockito.doThrow(new RuntimeException("close failed")).when(mockCluster).close();
+
+        cache.disconnect(); // must not throw
+
+        assertThrows(IllegalStateException.class, cache::flushAll);
+    }
+
     @Test
     public void test_serverUrl_returns_constructor_value() {
         assertEquals("10.0.0.1:7000", cache.serverUrl());

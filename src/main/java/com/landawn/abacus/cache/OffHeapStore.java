@@ -227,10 +227,11 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * <p>This {@code default} implementation does nothing, which is appropriate for stores that hold
      * no resources requiring explicit release. Implementations that open files, mmap regions, or
      * connections should override it. The method is expected to be idempotent (safe to call more
-     * than once). During normal cache shutdown an {@link Exception} raised here is logged after the
-     * cache has attempted its other cleanup; an {@link Error} is allowed to propagate. If cache
-     * construction fails after acquiring the store, a store-close failure is attached to the
-     * construction failure as a suppressed exception.
+     * than once). During normal cache shutdown an unchecked exception raised here propagates from
+     * the cache's {@code close()} (or is attached as a suppressed exception when an earlier cleanup
+     * step already failed); the cache's other cleanup steps still run. If cache construction fails
+     * after acquiring the store, a store-close failure is attached to the construction failure as a
+     * suppressed exception.
      */
     @Override
     default void close() {

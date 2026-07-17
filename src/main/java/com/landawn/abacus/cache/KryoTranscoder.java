@@ -69,11 +69,17 @@ import net.spy.memcached.transcoders.Transcoder;
 public class KryoTranscoder<T> implements Transcoder<T> {
 
     /**
-     * Shared default Kryo parser used when no parser is supplied to the constructor. Reused across
-     * instances to avoid the cost of building a parser per transcoder; it pools Kryo/Output/Input
-     * instances internally under locks, so it is safe for concurrent use.
+     * Lazily initialized shared default Kryo parser used when no parser is supplied to the
+     * constructor. Reused across instances to avoid the cost of building a parser per transcoder;
+     * it pools Kryo/Output/Input instances internally under locks, so it is safe for concurrent
+     * use. Held in a nested holder class so that constructing a {@code KryoTranscoder} with a
+     * caller-supplied parser never touches it — creating the default parser fails with
+     * {@code NoClassDefFoundError} when the optional Kryo dependency is absent, and that failure
+     * must not leak into code paths that never need the default.
      */
-    private static final KryoParser DEFAULT_KRYO_PARSER = ParserFactory.createKryoParser();
+    private static final class DefaultParserHolder {
+        static final KryoParser DEFAULT_KRYO_PARSER = ParserFactory.createKryoParser();
+    }
 
     private final KryoParser kryoParser;
 
@@ -140,7 +146,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @see #KryoTranscoder(int, KryoParser)
      */
     public KryoTranscoder(final int maxSize) {
-        this(maxSize, DEFAULT_KRYO_PARSER);
+        this(maxSize, DefaultParserHolder.DEFAULT_KRYO_PARSER);
     }
 
     /**

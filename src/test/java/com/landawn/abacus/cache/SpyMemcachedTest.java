@@ -693,11 +693,10 @@ public class SpyMemcachedTest {
      * Regression test for huge-timeout overflow.
      *
      * <p>A huge configured operation timeout (e.g. {@code Long.MAX_VALUE} as a "no timeout"
-     * sentinel) previously made every synchronous operation fail instantly: the wrapper's own
-     * {@code resultOf()} wait bound ({@code timeout * 4}) wrapped negative, and — independently —
-     * spymemcached's internal millisecond-to-nanosecond conversion overflowed so every in-flight
-     * operation appeared timed out. The timeout is now clamped to a ~146-year safety cap and the
-     * wait bound saturates, so operations work.
+     * sentinel) previously made every synchronous operation fail instantly: spymemcached's
+     * internal millisecond-to-nanosecond conversion overflowed so every in-flight operation
+     * appeared timed out. The timeout is now clamped to a ~146-year safety cap (which also bounds
+     * {@code resultOf()}'s synchronous wait), so operations work.
      */
     @Test
     public void test_constructor_with_huge_timeout_operationsStillWork() {

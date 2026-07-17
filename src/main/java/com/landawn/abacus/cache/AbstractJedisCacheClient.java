@@ -14,6 +14,7 @@
 
 package com.landawn.abacus.cache;
 
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -23,9 +24,12 @@ import java.util.Map;
 
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
+import com.landawn.abacus.util.AddrUtil;
 import com.landawn.abacus.util.Charsets;
 import com.landawn.abacus.util.N;
 
+import redis.clients.jedis.DefaultJedisClientConfig;
+import redis.clients.jedis.JedisClientConfig;
 import redis.clients.jedis.UnifiedJedis;
 import redis.clients.jedis.params.SetParams;
 
@@ -78,7 +82,21 @@ import redis.clients.jedis.params.SetParams;
  */
 abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClient<T> {
 
-    private static final KryoParser kryoParser = ParserFactory.createKryoParser();
+    /**
+     * The Kryo wire format is this client family's documented serialization contract, so unlike
+     * the backends that fall back to another format, a missing Kryo dependency must fail — but
+     * with an actionable message instead of a bare {@code NoClassDefFoundError} at class load.
+     */
+    private static final KryoParser KRYO_PARSER = createRequiredKryoParser();
+
+    private static KryoParser createRequiredKryoParser() {
+        if (!ParserFactory.isKryoParserAvailable()) {
+            throw new IllegalStateException("Kryo is required by the Jedis cache clients (JRedis/JRedisCluster) but is not on the classpath;"
+                    + " add the optional com.esotericsoftware:kryo dependency");
+        }
+
+        return ParserFactory.createKryoParser();
+    }
 
     private volatile boolean isShutdown = false;
 
@@ -90,6 +108,47 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      */
     protected AbstractJedisCacheClient(final String serverUrl) {
         super(serverUrl);
+    }
+
+    /**
+     * Validates and converts a constructor timeout, shared by both concrete constructors so their
+     * validation stays identical.
+     *
+     * @param timeout the connection and socket timeout in milliseconds
+     * @return a client config with both the connection and socket timeout set to {@code timeout}
+     * @throws IllegalArgumentException if {@code timeout} is not positive or exceeds
+     *         {@link Integer#MAX_VALUE} (the underlying Jedis API accepts an {@code int} timeout)
+     */
+    protected static JedisClientConfig buildClientConfig(final long timeout) {
+        N.checkArgPositive(timeout, "timeout");
+
+        if (timeout > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("timeout exceeds maximum value: " + timeout + " (max: " + Integer.MAX_VALUE + ")");
+        }
+
+        final int timeoutMillis = (int) timeout;
+
+        return DefaultJedisClientConfig.builder().connectionTimeoutMillis(timeoutMillis).socketTimeoutMillis(timeoutMillis).build();
+    }
+
+    /**
+     * Parses a constructor server URL into socket addresses, shared by both concrete constructors
+     * so their validation stays identical.
+     *
+     * @param serverUrl the server URL(s) in {@code host1:port1,host2:port2,...} format
+     * @return the parsed addresses; never empty
+     * @throws IllegalArgumentException if {@code serverUrl} is malformed or yields no addresses
+     */
+    protected static List<InetSocketAddress> resolveServerAddresses(final String serverUrl) {
+        final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
+
+        // Currently unreachable (getAddressList throws rather than returning an empty list); kept
+        // deliberately as a guard against that contract changing in a future abacus-common release.
+        if (N.isEmpty(addressList)) {
+            throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
+        }
+
+        return addressList;
     }
 
     /**
@@ -613,7 +672,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @see #decode(byte[])
      */
     protected byte[] encode(final Object value) {
-        return value == null ? N.EMPTY_BYTE_ARRAY : kryoParser.encode(value);
+        return value == null ? N.EMPTY_BYTE_ARRAY : KRYO_PARSER.encode(value);
     }
 
     /**
@@ -632,6 +691,6 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
             return null;
         }
 
-        return kryoParser.decode(bytes);
+        return KRYO_PARSER.decode(bytes);
     }
 }

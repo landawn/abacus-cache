@@ -316,7 +316,7 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Block and transform the result
      * String name = cache.asyncGet("user:123")
-     *      .get()
+     *      .get()                                 // throws InterruptedException, ExecutionException
      *      .map(User::getName)
      *      .orElse("Unknown");
      * }</pre>
