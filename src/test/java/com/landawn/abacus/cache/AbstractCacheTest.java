@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -187,6 +188,25 @@ public class AbstractCacheTest extends TestBase {
             assertDoesNotThrow(() -> cache.removeProperty("a"));
             assertEquals("1", cache.getOrNull("a"));
         }
+    }
+
+    /**
+     * Property mutators are lifecycle-guarded like the data operations: mutating the property bag
+     * of a closed cache is a lifecycle bug and fails fast with {@link IllegalStateException}.
+     * Property reads remain usable after close, like other configuration accessors.
+     */
+    @Test
+    public void testPropertyMutators_EdgeCase_AfterClose_throwISE_whileReadsStayUsable() {
+        final LocalCache<String, String> cache = newCache();
+        cache.setProperty("region", "us-east");
+        cache.close();
+
+        assertThrows(IllegalStateException.class, () -> cache.setProperty("region", "eu-west"));
+        assertThrows(IllegalStateException.class, () -> cache.removeProperty("region"));
+
+        // Reads are configuration accessors and stay usable; the failed mutations changed nothing.
+        assertEquals("us-east", cache.getProperty("region"));
+        assertEquals("us-east", cache.getProperties().get("region"));
     }
 
     // --- Fix: shared async executor must use daemon threads -------------------------------------

@@ -21,6 +21,8 @@ import com.landawn.abacus.cache.SpyMemcached;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
 
+import net.spy.memcached.util.StringUtils;
+
 /**
  * A distributed lock implementation using Memcached as the coordination service.
  * This class provides a simple distributed locking mechanism that can be used to coordinate
@@ -605,7 +607,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         been closed (which is logged at {@code WARN})
      * @throws IllegalArgumentException if {@code target} is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
-     *         or containing a space, CR, LF, or NUL byte)
+     *         or containing a space, CR, LF, or NUL byte). The key is validated eagerly, so this is
+     *         thrown even when the lock client has already been closed - a deterministic programming
+     *         error is never downgraded to the quiet {@code false}
      * @see #tryUnlock(Object)
      * @see #tryLock(Object, long)
      */
@@ -613,6 +617,14 @@ public class MemcachedLock<K, V> implements AutoCloseable {
         N.checkArgNotNull(target, "target");
 
         final String key = toKey(target);
+
+        // Validate the key eagerly with the memcached client's own rules (empty, > 250 UTF-8
+        // bytes, space/CR/LF/NUL). Inside the try below, the closed check runs before the client
+        // would validate the key, and the resulting IllegalStateException is deliberately
+        // swallowed to `false` - which would let an invalid key on a closed instance silently
+        // bypass the documented IllegalArgumentException. A deterministic programming error must
+        // surface identically whether or not the instance is still open.
+        StringUtils.validateKey(key, false);
 
         try {
             assertOpen();

@@ -7,6 +7,7 @@ package com.landawn.abacus.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -386,27 +387,93 @@ public class CacheFactoryTest extends TestBase {
     }
 
     /**
-     * Regression: a key prefix that looks like {@code name:port} (e.g. {@code tenant:1}) must not be
-     * absorbed into the Redis Cluster seed list. Previously any {@code host:digits} token was treated
-     * as a seed node, silently dropping the prefix (and mis-assigning a trailing timeout).
+     * An endpoint-shaped token directly before the numeric timeout is irreducibly ambiguous —
+     * {@code (seed, seed, timeout)} and {@code (seed, endpoint-shaped-prefix, timeout)} are the
+     * same shape with opposite intents, and either silent reading breaks the other silently (a
+     * demoted seed changes the key namespace; a promoted prefix is quietly tolerated as one
+     * unreachable seed). The parser must reject it with guidance for expressing both intents.
      */
     @Test
-    public void testCreateCache_RedisCluster_keyPrefixLookingLikeHostPort_notAbsorbedAsSeed() throws ReflectiveOperationException {
+    public void testCreateCache_RedisCluster_EdgeCase_EndpointShapedTokenBeforeTimeout_rejectedAsAmbiguous() {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class)) {
+            // Seed-list intent: two seeds plus a timeout.
+            final IllegalArgumentException seedIntent = assertThrows(IllegalArgumentException.class,
+                    () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,10.0.0.2:7000,3000)"));
+            assertTrue(seedIntent.getMessage().contains("Ambiguous RedisCluster parameters"));
+
+            // Prefix intent: an endpoint-shaped prefix such as "tenant:1".
+            final IllegalArgumentException prefixIntent = assertThrows(IllegalArgumentException.class,
+                    () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1,1000)"));
+            assertTrue(prefixIntent.getMessage().contains("Ambiguous RedisCluster parameters"));
+        }
+    }
+
+    /** The documented escape hatches for both readings of an endpoint-shaped token must work. */
+    @Test
+    public void testCreateCache_RedisCluster_AmbiguityEscapeHatches() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            // An explicitly supplied timeout equal to DEFAULT_TIMEOUT must still count as an
-            // explicit disambiguator; value equality with the default must not erase its presence.
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1,1000)")) {
-                assertNotNull(cache);
-                assertTrue(cache instanceof DistributedCache);
-                assertEquals("10.0.0.1:7000", distributedClient(cache).serverUrl());
+            final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
+            prefixField.setAccessible(true);
 
-                // The prefix must be applied to generated keys.
-                final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
-                prefixField.setAccessible(true);
-                assertEquals("tenant:1", prefixField.get(cache));
+            // Seed intent: all seed nodes space-separated in the first parameter.
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000 10.0.0.2:7000,3000)")) {
+                assertEquals("10.0.0.1:7000 10.0.0.2:7000", distributedClient(cache).serverUrl());
+                assertEquals("", prefixField.get(cache));
+            }
+
+            // Prefix intent: a trailing ':' makes the prefix non-endpoint-shaped.
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1:,1000)")) {
+                assertEquals("10.0.0.1:7000", distributedClient(cache).serverUrl());
+                assertEquals("tenant:1:", prefixField.get(cache));
             }
         }
+    }
+
+    /**
+     * A final all-digit token following nothing but seed nodes is the timeout, not the key prefix:
+     * silently binding "3000" as the key namespace would corrupt every generated key while the
+     * intended timeout silently stayed at the default.
+     */
+    @Test
+    public void testCreateCache_RedisCluster_FinalNumericTokenIsTimeoutNotPrefix() throws ReflectiveOperationException {
+        try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
+             MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
+            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,3000)")) {
+                assertEquals("10.0.0.1:7000", distributedClient(cache).serverUrl());
+
+                final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
+                prefixField.setAccessible(true);
+                assertEquals("", prefixField.get(cache), "the all-digit token must configure the timeout, not the key prefix");
+            }
+        }
+    }
+
+    /** Same all-digit rule for the standalone Redis two-parameter form. */
+    @Test
+    public void testCreateCache_Redis_TwoParam_AllDigitSecondParameterIsTimeout() throws ReflectiveOperationException {
+        try (Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,5000)")) {
+            assertEquals("localhost:6379", distributedClient(cache).serverUrl());
+
+            final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
+            prefixField.setAccessible(true);
+            assertEquals("", prefixField.get(cache), "the all-digit token must configure the timeout, not the key prefix");
+        }
+
+        // A non-positive all-digit token is a timeout and is rejected as such, not bound as a prefix.
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Redis(localhost:6379,-5000)"));
+    }
+
+    /** Timeout tokens are strictly decimal; Numbers.toLong's hex/octal/trailing-L forms are rejected. */
+    @Test
+    public void testCreateCache_EdgeCase_NonDecimalTimeoutRejected() {
+        final IllegalArgumentException hex = assertThrows(IllegalArgumentException.class,
+                () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,0x1F4)"));
+        assertTrue(hex.getMessage().contains("Invalid timeout parameter"));
+
+        final IllegalArgumentException trailingL = assertThrows(IllegalArgumentException.class,
+                () -> CacheFactory.createCache("Redis(localhost:6379,p:,5000L)"));
+        assertTrue(trailingL.getMessage().contains("Invalid timeout parameter"));
     }
 
     // Validation: null/empty provider string

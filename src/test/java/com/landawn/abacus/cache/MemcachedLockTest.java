@@ -219,6 +219,20 @@ public class MemcachedLockTest {
         assertFalse(local.unlockQuietly("k"));
     }
 
+    /**
+     * The key is validated eagerly, before the closed check: an invalid key is a deterministic
+     * programming error and must surface as the documented {@link IllegalArgumentException} even on
+     * a closed instance, instead of being downgraded to the quiet {@code false} by the swallowed
+     * closed-state {@code IllegalStateException}.
+     */
+    @Test
+    public void testTryUnlockQuietly_EdgeCase_OverlongKeyOnClosedInstance_throwsIAE() {
+        final MemcachedLock<String, Long> local = new MemcachedLock<>(SERVER_URL);
+        local.close();
+
+        assertThrows(IllegalArgumentException.class, () -> local.unlockQuietly("x".repeat(251)));
+    }
+
     // --- construction / lifecycle --------------------------------------------------------------
 
     @Test

@@ -1057,12 +1057,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * For a {@link ByteBuffer} value, the bytes from index {@code 0} up to its current position are
      * stored; the supplied buffer's position, limit, and mark are left unchanged.
      *
-     * <p><b>&#9888;&#65039; Replacement failure:</b> A failed replacement of a disk-spilled entry
-     * may leave the key without either value if the store overwrite succeeds but the new wrapper
-     * cannot subsequently be installed in the pool. The prior bytes are no longer recoverable
-     * through the key-only {@link OffHeapStore} API, which provides no transactional or versioned
-     * replace operation. In the normal path, removing the prior wrapper frees the pool slot needed
-     * by the replacement; the residual loss path is limited to an exceptional pool rejection/failure.
+     * <p><b>&#9888;&#65039; Replacement failure:</b> a failed replacement restores the prior entry
+     * whenever its backing data is still intact: the prior mapping is detached (never handed to the
+     * pool as an internal replacement) and retired only after the new wrapper is successfully
+     * installed, so a rejected install reinstates it. The one residual loss is a disk-to-disk
+     * replacement whose store write already overwrote the prior entry's bytes and whose pool
+     * install then fails (e.g. the new entry expired during a slow store write): the prior bytes
+     * are unrecoverable through the key-only {@link OffHeapStore} API, so the method returns
+     * {@code false} with the key absent, and the discard is logged at warn level.
      *
      * @param key the key with which the specified value is to be associated; must not be {@code null}
      * @param value the value to be cached; must not be {@code null}
@@ -1156,6 +1158,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // off-heap region (they can never fit, so memory is not even attempted; see below).
         boolean vacateOnNull = true;
 
+        // Holder for a prior same-key wrapper that putToDisk detached from the pool before
+        // overwriting the backing bytes. A non-null element means the prior mapping is currently
+        // out of the pool and NOT yet retired: the install block below owns it and must either
+        // retire it (successful install) or restore/discard it (failed install). putToDisk leaves
+        // the element null on its own failure paths, where it restores the prior itself.
+        @SuppressWarnings("unchecked")
+        final Wrapper<V>[] detachedPrior = new Wrapper[1];
+
         try {
             // Inside the try so a throwing storeSelector still reaches the finally below,
             // which recycles the pooled serialization buffer.
@@ -1189,7 +1199,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                     w = new SlotWrapper(type, effectiveLiveTime, effectiveMaxIdleTime, size, slot, slotStartPtr);
                 } else if (canBeStoredToDisk && offHeapStore != null) {
-                    w = putToDisk(key, effectiveLiveTime, effectiveMaxIdleTime, type, bytes, size);
+                    w = putToDisk(key, effectiveLiveTime, effectiveMaxIdleTime, type, bytes, size, detachedPrior);
                 }
             } else {
                 int copiedSize = 0;
@@ -1225,7 +1235,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 if (copiedSize == size) {
                     w = new MultiSlotsWrapper(type, effectiveLiveTime, effectiveMaxIdleTime, size, slots);
                 } else if (canBeStoredToDisk && offHeapStore != null) {
-                    w = putToDisk(key, effectiveLiveTime, effectiveMaxIdleTime, type, bytes, size);
+                    w = putToDisk(key, effectiveLiveTime, effectiveMaxIdleTime, type, bytes, size, detachedPrior);
                 }
             }
         } finally {
@@ -1266,6 +1276,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         boolean result = false;
         final int wkind = w.kind;
 
+        // Install-first-retire-second, mirroring doPromoteToMemory: the prior same-key mapping is
+        // detached (never handed to _pool.put as a replacement) and retired only AFTER a successful
+        // install. Installing via a bare _pool.put would let the pool destroy the replaced mapping
+        // internally even when its in-lock insert then fails (expiry re-check), silently deleting
+        // the existing entry on a failed replacement. For a disk-routed wrapper, putToDisk already
+        // detached the prior before overwriting the backing bytes.
+        Wrapper<V> prior = detachedPrior[0];
+
         try {
             if (wkind == Wrapper.KIND_SLOT || wkind == Wrapper.KIND_MULTI_SLOTS) {
                 totalOccupiedMemorySize.add(occupiedMemory);
@@ -1273,25 +1291,59 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 // StoreWrapper already accounts for totalDataSize in its constructor; only memory
                 // wrappers need it added here (and their destroy() subtracts the matching amount).
                 totalDataSize.add(size);
+
+                prior = _pool.remove(key);
             }
 
             result = _pool.put(key, w);
         } finally {
             if (!result) {
-                // The pool rejected the wrapper; for a StoreWrapper this also removes the disk bytes
-                // that putToDisk just wrote. Since nothing was retained, do NOT count it toward the
-                // disk write stats (writeCountToDisk) — that keeps the disk-write count consistent
-                // with putCount, which by contract excludes puts that fail before the wrapper is
-                // installed in the pool.
-                w.destroy(Caller.PUT_ADD_FAILURE);
-            } else if (wkind == Wrapper.KIND_STORE) {
-                writeCountToDisk.increment();
+                try {
+                    // The pool rejected the wrapper; for a StoreWrapper this also removes the disk bytes
+                    // that putToDisk just wrote. Since nothing was retained, do NOT count it toward the
+                    // disk write stats (writeCountToDisk) — that keeps the disk-write count consistent
+                    // with putCount, which by contract excludes puts that fail before the wrapper is
+                    // installed in the pool.
+                    w.destroy(Caller.PUT_ADD_FAILURE);
+                } finally {
+                    if (prior != null) {
+                        if (wkind == Wrapper.KIND_STORE && prior.kind == Wrapper.KIND_STORE) {
+                            // A disk->disk replacement already overwrote the prior wrapper's backing
+                            // bytes (and the rejected wrapper's destroy above just deleted them), so
+                            // the prior entry's data is unrecoverable: discard its metadata instead of
+                            // resurrecting a mapping whose reads could only miss.
+                            ((StoreWrapper) prior).discardReplacedStoreMetadata();
 
-                if (statsTimeOnDisk) {
-                    synchronized (totalWriteToDiskTimeStats) {
-                        // putToDisk measures only OffHeapStore.put(), excluding serialization and
-                        // unsuccessful in-memory placement work that happened before disk fallback.
-                        totalWriteToDiskTimeStats.accept(((StoreWrapper) w).writeToDiskTimeMillis);
+                            if (logger.isWarnEnabled()) {
+                                logger.warn(
+                                        "A disk-backed replacement overwrote the previous entry's bytes but could not be installed; the entry was discarded");
+                            }
+                        } else {
+                            // The prior wrapper's backing data (memory slots, or disk bytes that a
+                            // memory-routed replacement never touched) is intact: restore the mapping
+                            // so a failed replacement does not delete the existing entry.
+                            restoreDetachedPrior(key, prior);
+                        }
+                    }
+                }
+            } else {
+                if (prior != null) {
+                    // destroy() is ownership-guarded: a disk-backed prior superseded by a disk write
+                    // (store ownership already transferred to the new wrapper) only clears its
+                    // metadata, while a still-owning prior also releases its memory slots or removes
+                    // its disk bytes.
+                    prior.destroy(Caller.REMOVE_REPLACE_CLEAR);
+                }
+
+                if (wkind == Wrapper.KIND_STORE) {
+                    writeCountToDisk.increment();
+
+                    if (statsTimeOnDisk) {
+                        synchronized (totalWriteToDiskTimeStats) {
+                            // putToDisk measures only OffHeapStore.put(), excluding serialization and
+                            // unsuccessful in-memory placement work that happened before disk fallback.
+                            totalWriteToDiskTimeStats.accept(((StoreWrapper) w).writeToDiskTimeMillis);
+                        }
                     }
                 }
             }
@@ -1317,11 +1369,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * ordering ensures a cache-owned allocation/map failure cannot occur after a successful store
      * mutation and leave untracked bytes behind. A prior {@code StoreWrapper}'s later {@code destroy()}
      * cannot delete the new bytes — it only removes store bytes while it is still the registered
-     * owner. On a successful write, a prior disk-backed wrapper has its metadata discarded
-     * without touching the store ({@code discardReplacedStoreMetadata()}), while a prior
-     * memory-backed wrapper is destroyed (releasing its slots); on a failed write, the prior
-     * wrapper is restored to the pool so a failed replacement does not silently delete the
-     * existing entry. The caller is responsible for installing the returned wrapper in the pool.
+     * owner. On a successful write, the detached prior wrapper is handed back to the caller
+     * (un-retired) through {@code detachedPriorOut} so it can be retired only after the returned
+     * wrapper is successfully installed in the pool — or restored/discarded if the install fails.
+     * On a failed write or an exception, this method restores the prior wrapper to the pool itself
+     * (a failed replacement does not silently delete the existing entry) and leaves
+     * {@code detachedPriorOut} untouched. The caller is responsible for installing the returned
+     * wrapper in the pool.
      *
      * <p>The new {@code StoreWrapper} maintains metadata about the disk-stored value including
      * its type, size, expiration settings, and the key needed to retrieve it from the
@@ -1342,14 +1396,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *              the actual data size, so only the first {@code size} bytes are stored.
      * @param size the actual size of the serialized data in bytes. Must be non-negative and
      *             must not exceed the length of the {@code bytes} array.
+     * @param detachedPriorOut single-element holder through which, on success only, the detached
+     *        and not-yet-retired prior same-key wrapper (possibly {@code null}) is handed back to
+     *        the caller, which then owns its retirement or restoration
      * @return a {@code StoreWrapper} for the disk-stored value if storage was successful,
      *         or {@code null} if the {@code offHeapStore.put()} operation failed
      */
-    Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size) {
-        // Temporarily remove any prior wrapper at this key before writing disk bytes. On a
-        // successful disk write, the prior wrapper is retired before the new wrapper is installed.
-        // On a failed disk write, the prior wrapper is restored so a failed replacement does not
-        // silently delete the existing cache entry.
+    Wrapper<V> putToDisk(final K k, final long liveTime, final long maxIdleTime, final Type<V> type, final byte[] bytes, final int size,
+            final Wrapper<V>[] detachedPriorOut) {
+        // Temporarily remove any prior wrapper at this key before writing disk bytes (the write
+        // overwrites the shared key-addressed store slot). On a successful disk write, the prior
+        // is handed back un-retired so the caller can retire it only after a successful pool
+        // install. On a failed disk write, the prior wrapper is restored here so a failed
+        // replacement does not silently delete the existing cache entry.
         final Wrapper<V> prior = _pool.remove(k);
 
         StoreWrapper storeWrapper = null;
@@ -1399,7 +1458,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
 
             try {
-                restorePriorAfterDiskWriteFailure(k, prior);
+                restoreDetachedPrior(k, prior);
             } catch (final RuntimeException | Error restoreFailure) {
                 addSuppressedIfDistinct(e, restoreFailure);
             }
@@ -1408,19 +1467,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         if (stored) {
-            if (prior != null) {
-                if (prior.kind == Wrapper.KIND_STORE) {
-                    ((StoreWrapper) prior).discardReplacedStoreMetadata();
-                } else {
-                    prior.destroy(Caller.REMOVE_REPLACE_CLEAR);
-                }
-            }
+            detachedPriorOut[0] = prior;
 
             return storeWrapper;
         }
 
         storeWrapper.discardReplacedStoreMetadata();
-        restorePriorAfterDiskWriteFailure(k, prior);
+        restoreDetachedPrior(k, prior);
 
         return null;
     }
@@ -1460,7 +1513,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return value;
     }
 
-    private void restorePriorAfterDiskWriteFailure(final K k, final Wrapper<V> prior) {
+    /**
+     * Reinstalls a same-key wrapper that a replacement attempt detached from the pool, after the
+     * replacement failed (disk write failure, exception, or a rejected pool install). Called under
+     * the key's mutation lock, so no competing same-key mapping can have appeared. If the pool
+     * rejects the reinstall (e.g. the entry expired meanwhile), the wrapper is destroyed and the
+     * discard is logged.
+     */
+    private void restoreDetachedPrior(final K k, final Wrapper<V> prior) {
         if (prior != null) {
             final boolean restored = _pool.put(k, prior);
 
@@ -1468,7 +1528,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 prior.destroy(Caller.PUT_ADD_FAILURE);
 
                 if (logger.isWarnEnabled()) {
-                    logger.warn("Failed to restore the previous off-heap cache entry after a disk write failed; the previous entry was discarded");
+                    logger.warn("Failed to restore the previous off-heap cache entry after a failed replacement; the previous entry was discarded");
                 }
             }
         }

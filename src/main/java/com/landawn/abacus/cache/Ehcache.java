@@ -180,7 +180,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
      * @param liveTime the time-to-live in milliseconds (ignored; configure expiration via the Ehcache builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored; configure expiration via the Ehcache builder)
-     * @return {@code true} (this implementation always succeeds unless an exception is thrown)
+     * @return {@code true} whenever the call returns normally. This reports that Ehcache accepted
+     *         the operation, not that the value is durably stored: under Ehcache's default (robust)
+     *         resilience strategy, an internal store failure ({@code StoreAccessException}) is
+     *         routed to the resilience strategy and the call still returns normally, so {@code true}
+     *         can be reported while the mapping was not actually retained. This wrapper cannot
+     *         detect that case; if it matters, configure a custom {@code ResilienceStrategy} on the
+     *         Ehcache instance
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
      * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails

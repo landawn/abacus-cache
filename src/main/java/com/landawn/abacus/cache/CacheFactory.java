@@ -478,17 +478,26 @@ public final class CacheFactory {
      * <li>{@code com.example.CustomCache(params...)} - Custom implementation with fully qualified class name</li>
      * </ul>
      *
+     * <p><b>Numeric second parameter (Memcached/Redis):</b> in the two-parameter forms, an all-digit
+     * second parameter (an optional sign followed by decimal digits) is interpreted as the timeout
+     * rather than the key prefix: {@code Redis(localhost:6379,5000)} configures a 5-second timeout
+     * with no prefix. An all-digit key prefix must use the explicit three-parameter layout, e.g.
+     * {@code Redis(localhost:6379,123,1000)}. Timeout tokens are strictly decimal: hexadecimal/octal
+     * forms and a trailing {@code L} (e.g. {@code 0x1F4}, {@code 5000L}) are rejected.
+     *
      * <p><b>RedisCluster seed-node vs. key-prefix disambiguation:</b> because the cluster seed list may itself
      * be comma-separated (e.g. {@code RedisCluster(host1:7000,host2:7000,myPrefix:,3000)}), consecutive
      * parameters after the first are treated as additional seed nodes while they are syntactically valid
      * {@code host:port} endpoints. This includes ordinary alphabetic DNS names such as {@code primary:7000},
-     * IPv4/FQDN hosts, and bracketed IPv6 literals. The first non-endpoint parameter is the key prefix.
-     * A prefix that is itself a valid endpoint is inherently ambiguous in a two-parameter specification;
-     * supply an explicit numeric timeout to disambiguate it, for example
-     * {@code RedisCluster(host:7000,tenant:1,1000)}. In a specification with at least three parameters,
-     * a final token consisting of an optional sign followed entirely by decimal digits is treated as the
-     * timeout. To use such a token as the prefix, put all seed nodes space-separated in the first parameter,
-     * e.g. {@code RedisCluster(redis:7000 valkey:7000,123)}.
+     * IPv4/FQDN hosts, and bracketed IPv6 literals. The first non-endpoint parameter is the key prefix, and
+     * a final all-digit token following nothing but seed nodes is the timeout (so
+     * {@code RedisCluster(host1:7000 host2:7000,3000)} - seed nodes space-separated in the first
+     * parameter - configures a timeout with no prefix). A specification whose final token is all-digit
+     * while the token before it is a valid endpoint - e.g. {@code RedisCluster(host1:7000,host2:7000,3000)}
+     * or {@code RedisCluster(host:7000,tenant:1,1000)} - is rejected as ambiguous: the endpoint-shaped
+     * token could be either an additional seed node or the key prefix, and either silent reading would
+     * break the other intent. Put all seed nodes space-separated in the first parameter, or use a key
+     * prefix that is not host:port-shaped (a trailing {@code ':'} suffices, e.g. {@code tenant:1:}).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -519,6 +528,8 @@ public final class CacheFactory {
      * CacheFactory.createCache("Memcached()");                     // "missing parameters" (the parser yields an empty parameter list)
      * CacheFactory.createCache("Memcached(localhost,p:,0)");       // non-positive timeout rejected
      * CacheFactory.createCache("Memcached(localhost,p:,abc)");     // "Invalid timeout parameter: abc"
+     * CacheFactory.createCache("Memcached(localhost,p:,0x1F4)");   // "Invalid timeout parameter" (decimal digits only)
+     * CacheFactory.createCache("RedisCluster(h1:7000,h2:7000,3000)"); // "Ambiguous RedisCluster parameters" (endpoint-shaped token before the timeout)
      * CacheFactory.createCache("Memcached(a,b,1000,extra)");       // "Unsupported parameters" (more than 3)
      * CacheFactory.createCache("Memcached(localhost,app:");        // unbalanced parenthesis -> "Failed to parse provider specification"
      * CacheFactory.createCache("com.example.NoSuchCache(host)");   // "Cannot find class: com.example.NoSuchCache"
@@ -594,6 +605,14 @@ public final class CacheFactory {
                 if (parameters.length == 1) {
                     return new DistributedCache<>(new SpyMemcached<>(url, DEFAULT_TIMEOUT));
                 } else if (parameters.length == 2) {
+                    // An all-digit second parameter is a timeout, not a key prefix: "(url,5000)"
+                    // virtually always means a custom timeout, and silently binding "5000" as the
+                    // key namespace would corrupt every generated key. An all-digit key prefix
+                    // must use the explicit three-parameter layout, e.g. "(url,123,1000)".
+                    if (looksLikeTimeoutParameter(parameters[1])) {
+                        return new DistributedCache<>(new SpyMemcached<>(url, parseTimeoutParameter(parameters[1])));
+                    }
+
                     return newDistributedCacheOrDisconnect(new SpyMemcached<>(url, DEFAULT_TIMEOUT), parameters[1]);
                 } else if (parameters.length == 3) {
                     return newDistributedCacheOrDisconnect(new SpyMemcached<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
@@ -605,6 +624,11 @@ public final class CacheFactory {
                 if (parameters.length == 1) {
                     return new DistributedCache<>(new JRedis<>(url, DEFAULT_TIMEOUT));
                 } else if (parameters.length == 2) {
+                    // Same all-digit rule as the Memcached branch above.
+                    if (looksLikeTimeoutParameter(parameters[1])) {
+                        return new DistributedCache<>(new JRedis<>(url, parseTimeoutParameter(parameters[1])));
+                    }
+
                     return newDistributedCacheOrDisconnect(new JRedis<>(url, DEFAULT_TIMEOUT), parameters[1]);
                 } else if (parameters.length == 3) {
                     return newDistributedCacheOrDisconnect(new JRedis<>(url, parseTimeoutParameter(parameters[2])), parameters[1]);
@@ -699,8 +723,9 @@ public final class CacheFactory {
     /**
      * RedisCluster serverUrl itself is a comma-separated host:port seed list, so split provider
      * parameters that still look like Redis cluster nodes are treated as part of serverUrl rather
-     * than as the keyPrefix. A final numeric token is recognized as the timeout first; this makes
-     * an endpoint-shaped prefix unambiguous in {@code (seedNodes...,keyPrefix,timeout)}.
+     * than as the keyPrefix. A final all-digit token is the timeout; when the token before such a
+     * timeout is itself endpoint-shaped, the specification is rejected as ambiguous (extra seed
+     * node vs. endpoint-shaped prefix) rather than silently resolved either way.
      */
     private static RedisClusterParameters parseRedisClusterParameters(final String[] parameters) {
         final int parameterCount = parameters.length;
@@ -709,11 +734,23 @@ public final class CacheFactory {
         long timeout = DEFAULT_TIMEOUT;
         boolean hasExplicitTimeout = false;
 
+        // An all-digit final token following an endpoint-shaped token is irreducibly ambiguous:
+        // "(seed, seed, timeout)" and "(seed, endpoint-shaped-prefix, timeout)" are the same
+        // shape with opposite intents, and either silent reading breaks the other silently (a
+        // demoted seed changes the key namespace of every entry; a promoted prefix is quietly
+        // tolerated as one unreachable seed once topology discovery succeeds through the real
+        // ones). Reject it with instructions for expressing both intents unambiguously.
+        if (parameterCount >= 3 && looksLikeTimeoutParameter(parameters[parameterCount - 1])
+                && isRedisClusterSeedNodeParameter(parameters[parameterCount - 2])) {
+            throw new IllegalArgumentException("Ambiguous RedisCluster parameters: " + Strings.join(parameters) + ". The token '"
+                    + parameters[parameterCount - 2] + "' before the numeric timeout is a valid host:port endpoint, so it could be either an additional"
+                    + " seed node or the key prefix. If it is a seed node, put all seed nodes space-separated in the first parameter, e.g."
+                    + " RedisCluster(host1:7000 host2:7000,3000). If it is the key prefix, use a prefix that is not host:port-shaped (a trailing ':'"
+                    + " suffices, e.g. tenant:1:), or build the client programmatically via new JRedisCluster(...) and CacheFactory.createDistributedCache(...)");
+        }
+
         // If the penultimate token is not an endpoint, the final token can only be its timeout.
-        // A numeric-looking final token also explicitly disambiguates an endpoint-shaped prefix
-        // such as "tenant:1" from an additional seed node.
-        if (parameterCount >= 3
-                && (!isRedisClusterSeedNodeParameter(parameters[parameterCount - 2]) || looksLikeTimeoutParameter(parameters[parameterCount - 1]))) {
+        if (parameterCount >= 3 && !isRedisClusterSeedNodeParameter(parameters[parameterCount - 2])) {
             keyPrefixIndex = parameterCount - 2;
             seedParameterCount = keyPrefixIndex;
             timeout = parseTimeoutParameter(parameters[parameterCount - 1]);
@@ -732,6 +769,14 @@ public final class CacheFactory {
 
         if (keyPrefixIndex < 0) {
             return new RedisClusterParameters(joinRedisClusterServerUrl(parameters, parameterCount), null, DEFAULT_TIMEOUT);
+        }
+
+        // A final all-digit token that follows nothing but seed nodes is a timeout, not a key
+        // prefix: "(seeds..., 3000)" configures a custom timeout with no prefix, consistent with
+        // the Memcached/Redis two-parameter forms. An all-digit key prefix must use the explicit
+        // three-parameter layout, e.g. "(seeds,123,3000)".
+        if (keyPrefixIndex == parameterCount - 1 && looksLikeTimeoutParameter(parameters[keyPrefixIndex])) {
+            return new RedisClusterParameters(joinRedisClusterServerUrl(parameters, keyPrefixIndex), null, parseTimeoutParameter(parameters[keyPrefixIndex]));
         }
 
         final int expectedLastIndex = hasExplicitTimeout ? parameterCount - 2 : parameterCount - 1;
@@ -887,16 +932,26 @@ public final class CacheFactory {
      *
      * @param timeoutValue the raw timeout token (in milliseconds)
      * @return the parsed, strictly-positive timeout
-     * @throws IllegalArgumentException if the token is not a valid number or is not positive
+     * @throws IllegalArgumentException if the token is not an optional sign followed by decimal
+     *         digits, does not fit in a {@code long}, or is not positive
      */
     private static long parseTimeoutParameter(final String timeoutValue) {
+        // Accept exactly what looksLikeTimeoutParameter recognizes - an optional sign followed by
+        // decimal digits - so the parser and the disambiguation predicate stay consistent.
+        // Numbers.toLong alone would also accept hexadecimal/octal forms and a trailing 'L'
+        // ("0x1F4", "5000L"), which the predicate deliberately does not treat as timeouts; letting
+        // those through here would make a token's meaning depend on which code path examined it.
+        if (!looksLikeTimeoutParameter(timeoutValue)) {
+            throw new IllegalArgumentException("Invalid timeout parameter: " + timeoutValue + " (expected an optional sign followed by decimal digits)");
+        }
+
         final long timeout;
 
         try {
             timeout = Numbers.toLong(timeoutValue);
         } catch (final NumberFormatException | ArithmeticException e) {
-            // Numbers.toLong throws NumberFormatException for non-numeric tokens and ArithmeticException
-            // for numeric tokens that overflow long; both are surfaced as the documented IllegalArgumentException.
+            // Numbers.toLong throws ArithmeticException for all-digit tokens that overflow long;
+            // it is surfaced as the documented IllegalArgumentException.
             throw new IllegalArgumentException("Invalid timeout parameter: " + timeoutValue, e);
         }
 

@@ -663,6 +663,9 @@ public interface Cache<K, V> extends Closeable {
      * @param propName the property name to set
      * @param propValue the property value to set (may be {@code null})
      * @return the previous value associated with this property name, or {@code null} if there was none
+     * @throws IllegalStateException if the cache has been closed (property reads remain usable
+     *         after close, but mutating a closed cache's property bag fails fast like the data
+     *         operations)
      * @see #getProperty(String)
      * @see #removeProperty(String)
      */
@@ -686,6 +689,9 @@ public interface Cache<K, V> extends Closeable {
      * @param <T> the expected type of the removed property value (caller responsibility)
      * @param propName the property name to remove
      * @return the previous value associated with this property name, or {@code null} if there was none
+     * @throws IllegalStateException if the cache has been closed (property reads remain usable
+     *         after close, but mutating a closed cache's property bag fails fast like the data
+     *         operations)
      * @see #getProperty(String)
      * @see #setProperty(String, Object)
      */

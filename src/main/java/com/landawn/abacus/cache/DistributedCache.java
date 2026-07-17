@@ -800,7 +800,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Closes the cache and disconnects from all distributed cache servers.
-     * After closing, supported stateful operations throw {@link IllegalStateException};
+     * After closing, supported stateful operations - the data operations and the property
+     * mutators ({@code setProperty}/{@code removeProperty}) - throw {@link IllegalStateException};
+     * property reads and {@code serverUrl()} remain usable as configuration accessors, while
      * {@link #keySet()} and {@link #size()} remain unsupported and throw
      * {@link UnsupportedOperationException} regardless of lifecycle state.
      * This method is idempotent and thread-safe - calling multiple times has no additional effect after the first call.

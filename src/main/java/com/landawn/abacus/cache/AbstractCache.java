@@ -502,7 +502,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation writes the value to {@link #properties} and returns the
-     * previous value via an unchecked cast to {@code T}.
+     * previous value via an unchecked cast to {@code T}. Like the data operations, this mutator is
+     * lifecycle-guarded: once {@link #isClosed()} reports {@code true}, it throws
+     * {@link IllegalStateException} instead of mutating the property bag of a closed cache. The
+     * read-only accessors ({@link #getProperty(String)}, {@link #getProperties()}) remain usable
+     * after close, like other configuration accessors.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -515,12 +519,19 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * // Re-setting the same name returns the value it replaced.
      * String prev2 = cache.setProperty("name", "beta");   // returns "alpha"
      * cache.getProperty("name");                          // returns "beta"
+     *
+     * cache.close();
+     * cache.setProperty("name", "gamma");                 // throws IllegalStateException
+     * cache.getProperty("name");                          // returns "beta" (reads stay usable)
      * }</pre>
      *
+     * @throws IllegalStateException if this cache has been closed
      */
     @SuppressWarnings("unchecked")
     @Override
     public <T> T setProperty(final String propName, final Object propValue) {
+        assertNotClosedForPropertyMutation();
+
         return (T) properties.put(propName, propValue);
     }
 
@@ -528,7 +539,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation removes the entry from {@link #properties} and returns the
-     * removed value via an unchecked cast to {@code T}.
+     * removed value via an unchecked cast to {@code T}. Like {@link #setProperty(String, Object)},
+     * this mutator is lifecycle-guarded and throws {@link IllegalStateException} once the cache
+     * has been closed.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -541,12 +554,29 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * // Edge: removing a name that was never set returns null.
      * cache.removeProperty("never-set");         // returns null
+     *
+     * cache.close();
+     * cache.removeProperty("foo");               // throws IllegalStateException
      * }</pre>
      *
+     * @throws IllegalStateException if this cache has been closed
      */
     @SuppressWarnings("unchecked")
     @Override
     public <T> T removeProperty(final String propName) {
+        assertNotClosedForPropertyMutation();
+
         return (T) properties.remove(propName);
+    }
+
+    /**
+     * Rejects property mutation on a closed cache. Property reads remain usable after close (like
+     * other configuration accessors), but mutating the property bag of a closed cache is almost
+     * certainly a lifecycle bug in the caller, so it fails fast like the data operations do.
+     */
+    private void assertNotClosedForPropertyMutation() {
+        if (isClosed()) {
+            throw new IllegalStateException("This cache has been closed");
+        }
     }
 }
