@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -48,6 +49,17 @@ public class OffHeapCacheTest {
 
     private static final long start = System.currentTimeMillis();
     private static final AtomicInteger counter = new AtomicInteger();
+
+    /**
+     * Frees the class-level 4 GB native cache as soon as this class finishes instead of holding
+     * it until JVM exit. When the whole suite runs in one fork (AbacusCacheTestSuite), leaving
+     * each class's static off-heap cache alive stacks multiple 4 GB commits and can exhaust the
+     * OS commit limit before a later class's static allocation.
+     */
+    @AfterAll
+    static void releaseStaticCache() {
+        cache.close();
+    }
 
     /**
      * Null-key handling is now consistent across all four key operations: {@code put} already
@@ -506,17 +518,12 @@ public class OffHeapCacheTest {
     }
 
     /**
-     * Regression test for the disk→disk put data-loss bug in
-     * {@link com.landawn.abacus.cache.AbstractOffHeapCache#putToDisk}.
-     *
-     * <p>Scenario: put key K (disk) → put key K (disk again with different value). Before the fix,
-     * putToDisk wrote the NEW bytes to the disk store under key K, then _pool.put(K, newWrapper)
-     * destroyed the prior StoreWrapper(K) whose destroy() called offHeapStore.remove(K) — wiping
-     * the bytes we had just written. A subsequent get(K) returned null.
-     *
-     * <p>After the fix: putToDisk pre-removes any prior pool entry (so its destroy operates on
-     * the OLD bytes) before writing new bytes; the new bytes survive and a subsequent get(K)
-     * returns the new value.
+     * A replacement put whose value is larger than the ENTIRE off-heap region is doomed: no amount
+     * of vacating can make it fit. Such a put must fail side-effect-free — in particular it must
+     * NOT schedule the memory-pressure vacate, which runs asynchronously and destroys ~20% of the
+     * pool (here: the key's own prior mapping, turning a failed replacement into data loss that
+     * won the race against this test's get() only by timing). A failed put of a value that COULD
+     * fit still legitimately schedules a vacate, and the prior mapping may then be evicted.
      */
     @Test
     public void test_failed_memory_replacement_preserves_existing_entry() {
@@ -528,6 +535,7 @@ public class OffHeapCacheTest {
             assertTrue(c.put("k", oldValue));
             assertFalse(c.put("k", new byte[2 * 1024 * 1024]));
             assertArrayEquals(oldValue, c.get("k").orElse(null));
+            assertEquals(0, c.stats().evictionCount(), "a doomed oversized put must not schedule a vacate");
         } finally {
             c.close();
         }

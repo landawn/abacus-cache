@@ -112,11 +112,10 @@ import com.landawn.abacus.util.N;
  *         client.close();
  *     }
  *
- *     // Optionally override bulk operations if supported
- *     @Override
- *     public Map<String, T> getBulk(String... keys) {
- *         return client.multiGet(keys);
- *     }
+ *     // getBulk(...) and flushAll() are intentionally NOT overridden here, so this class
+ *     // inherits the base-class defaults, which throw UnsupportedOperationException.
+ *     // (Method-level examples below use MyDistributedCache to demonstrate exactly that.)
+ *     // Override them only if the underlying cache system supports bulk retrieval / flush.
  * }
  * }</pre>
  *

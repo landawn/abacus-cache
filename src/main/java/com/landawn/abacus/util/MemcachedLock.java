@@ -190,7 +190,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalArgumentException if target is null, liveTime is not positive or cannot be
      *         represented by Memcached's expiration field, or if the key
      *         derived from {@code target} (via {@code toKey}) is rejected by the memcached client —
-     *         empty, longer than 250 bytes, or containing spaces/control characters. The default
+     *         empty, longer than 250 bytes (UTF-8), or containing a space, CR, LF, or NUL byte. The default
      *         {@code toKey} uses the target's string form verbatim, so composite targets whose string
      *         representation is JSON-like (maps, beans) typically need a sanitizing {@code toKey} override
      * @throws RuntimeException if the Memcached operation fails. The lock state is then
@@ -276,7 +276,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalArgumentException if target is null, liveTime is not positive or cannot be
      *         represented by Memcached's expiration field, or if the key
      *         derived from {@code target} (via {@code toKey}) is rejected by the memcached client —
-     *         empty, longer than 250 bytes, or containing spaces/control characters. The default
+     *         empty, longer than 250 bytes (UTF-8), or containing a space, CR, LF, or NUL byte. The default
      *         {@code toKey} uses the target's string form verbatim, so composite targets whose string
      *         representation is JSON-like (maps, beans) typically need a sanitizing {@code toKey} override
      * @throws RuntimeException if the Memcached operation fails. The lock state is then
@@ -368,7 +368,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
-     *         or containing spaces/control characters)
+     *         or containing a space, CR, LF, or NUL byte)
      * @throws RuntimeException if the Memcached operation fails
      * @see #tryLock(Object, long)
      * @see #tryLock(Object, Object, long)
@@ -445,7 +445,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
-     *         or containing spaces/control characters)
+     *         or containing a space, CR, LF, or NUL byte)
      * @throws ClassCastException if the stored value is not compatible with {@code V}; because of generic
      *         type erasure this is typically surfaced at the call site rather than inside this method
      * @throws RuntimeException if the Memcached operation fails
@@ -532,7 +532,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if target is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
-     *         or containing spaces/control characters)
+     *         or containing a space, CR, LF, or NUL byte)
      * @throws RuntimeException if the Memcached operation fails
      * @see #unlockQuietly(Object)
      * @see #tryLock(Object, long)
@@ -605,7 +605,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         been closed (which is logged at {@code WARN})
      * @throws IllegalArgumentException if {@code target} is null, or if the key derived from {@code target}
      *         (via {@code toKey}) is rejected by the memcached client (empty, longer than 250 bytes,
-     *         or containing spaces/control characters)
+     *         or containing a space, CR, LF, or NUL byte)
      * @see #tryUnlock(Object)
      * @see #tryLock(Object, long)
      */

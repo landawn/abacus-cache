@@ -15,6 +15,8 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
@@ -81,6 +83,7 @@ public class CaffeineCacheTest extends TestBase {
         final CountDownLatch allowPutToFinish = new CountDownLatch(1);
 
         org.mockito.Mockito.when(delegate.asMap()).thenReturn(delegateMap);
+        stubQuietProbe(delegate, delegateMap);
         doAnswer(invocation -> {
             putStarted.countDown();
             assertTrue(allowPutToFinish.await(5, TimeUnit.SECONDS));
@@ -126,6 +129,7 @@ public class CaffeineCacheTest extends TestBase {
         final CountDownLatch allowPutToFinish = new CountDownLatch(1);
 
         org.mockito.Mockito.when(delegate.asMap()).thenReturn(delegateMap);
+        stubQuietProbe(delegate, delegateMap);
         doAnswer(invocation -> {
             putStarted.countDown();
             assertTrue(allowPutToFinish.await(5, TimeUnit.SECONDS));
@@ -164,6 +168,176 @@ public class CaffeineCacheTest extends TestBase {
             allowPutToFinish.countDown();
             putThread.join(5_000L);
             cache.close();
+        }
+    }
+
+    /** The closed-state cleanup probes via {@code Policy.getIfPresentQuietly}; mocks must stub it. */
+    @SuppressWarnings("unchecked")
+    private static void stubQuietProbe(final com.github.benmanes.caffeine.cache.Cache<String, String> delegate,
+            final ConcurrentMap<String, String> delegateMap) {
+        final com.github.benmanes.caffeine.cache.Policy<String, String> delegatePolicy = mock(com.github.benmanes.caffeine.cache.Policy.class);
+        org.mockito.Mockito.when(delegate.policy()).thenReturn(delegatePolicy);
+        org.mockito.Mockito.when(delegatePolicy.getIfPresentQuietly("k")).thenAnswer(invocation -> delegateMap.get("k"));
+    }
+
+    /**
+     * The post-close cleanup must be side-effect-free on the delegate: it probes with the
+     * documented no-side-effect {@code Policy.getIfPresentQuietly} and issues at most one
+     * conditional remove. The previous {@code computeIfPresent} cleanup was processed by Caffeine
+     * as an update even when it kept the mapping - refreshing the newer entry's expiration
+     * metadata and, with {@code recordStats()}, logging a synthetic loadSuccess (kept) or
+     * loadFailure (removed). Real-Caffeine load counters pin both cleanup branches at zero.
+     */
+    @Test
+    public void testPut_RacingClose_CleanupRecordsNoLoadStatsOnRealCaffeine() throws Exception {
+        // Branch 1: cleanup finds its own write current and removes it -> no loadFailure.
+        runRealCaffeineCleanupScenario(false);
+        // Branch 2: cleanup finds a newer direct write and keeps it -> no loadSuccess.
+        runRealCaffeineCleanupScenario(true);
+    }
+
+    private void runRealCaffeineCleanupScenario(final boolean directWriteReplacesLateWrite) throws Exception {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> real = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                .recordStats()
+                .build();
+        final CountDownLatch putStarted = new CountDownLatch(1);
+        final CountDownLatch allowPutToFinish = new CountDownLatch(1);
+
+        final com.github.benmanes.caffeine.cache.Cache<String, String> latchingDelegate = new ForwardingCaffeineCache(real) {
+            @Override
+            public void put(final String key, final String value) {
+                putStarted.countDown();
+
+                try {
+                    assertTrue(allowPutToFinish.await(5, TimeUnit.SECONDS));
+                } catch (final InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+
+                super.put(key, value);
+
+                if (directWriteReplacesLateWrite) {
+                    // A direct delegate user replaces the late write before the wrapper's cleanup.
+                    // Built via StringBuilder so it is guaranteed to be a distinct String instance.
+                    super.put(key, new StringBuilder("newer-direct-value").toString());
+                }
+            }
+        };
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(latchingDelegate);
+        final AtomicReference<Throwable> putFailure = new AtomicReference<>();
+        final Thread putThread = new Thread(() -> {
+            try {
+                cache.put("k", "v", 0, 0);
+            } catch (final Throwable e) {
+                putFailure.set(e);
+            }
+        });
+
+        try {
+            putThread.start();
+            assertTrue(putStarted.await(5, TimeUnit.SECONDS));
+
+            cache.close();
+            allowPutToFinish.countDown();
+            putThread.join(5_000L);
+
+            assertFalse(putThread.isAlive());
+            assertInstanceOf(IllegalStateException.class, putFailure.get());
+
+            if (directWriteReplacesLateWrite) {
+                assertEquals("newer-direct-value", real.asMap().get("k"), "the newer direct write must survive the cleanup");
+            } else {
+                assertFalse(real.asMap().containsKey("k"), "the wrapper's own late write must be removed");
+            }
+
+            assertEquals(0L, real.stats().loadSuccessCount(), "cleanup must not record a synthetic load success");
+            assertEquals(0L, real.stats().loadFailureCount(), "cleanup must not record a synthetic load failure");
+        } finally {
+            allowPutToFinish.countDown();
+            putThread.join(5_000L);
+            cache.close();
+        }
+    }
+
+    /** Forwards every {@code Cache} method to a real Caffeine instance; tests override what they latch. */
+    private static class ForwardingCaffeineCache implements com.github.benmanes.caffeine.cache.Cache<String, String> {
+        private final com.github.benmanes.caffeine.cache.Cache<String, String> real;
+
+        ForwardingCaffeineCache(final com.github.benmanes.caffeine.cache.Cache<String, String> real) {
+            this.real = real;
+        }
+
+        @Override
+        public String getIfPresent(final String key) {
+            return real.getIfPresent(key);
+        }
+
+        @Override
+        public String get(final String key, final java.util.function.Function<? super String, ? extends String> mappingFunction) {
+            return real.get(key, mappingFunction);
+        }
+
+        @Override
+        public Map<String, String> getAllPresent(final Iterable<? extends String> keys) {
+            return real.getAllPresent(keys);
+        }
+
+        @Override
+        public Map<String, String> getAll(final Iterable<? extends String> keys,
+                final java.util.function.Function<? super Set<? extends String>, ? extends Map<? extends String, ? extends String>> mappingFunction) {
+            return real.getAll(keys, mappingFunction);
+        }
+
+        @Override
+        public void put(final String key, final String value) {
+            real.put(key, value);
+        }
+
+        @Override
+        public void putAll(final Map<? extends String, ? extends String> map) {
+            real.putAll(map);
+        }
+
+        @Override
+        public void invalidate(final String key) {
+            real.invalidate(key);
+        }
+
+        @Override
+        public void invalidateAll(final Iterable<? extends String> keys) {
+            real.invalidateAll(keys);
+        }
+
+        @Override
+        public void invalidateAll() {
+            real.invalidateAll();
+        }
+
+        @Override
+        public long estimatedSize() {
+            return real.estimatedSize();
+        }
+
+        @Override
+        public com.github.benmanes.caffeine.cache.stats.CacheStats stats() {
+            return real.stats();
+        }
+
+        @Override
+        public ConcurrentMap<String, String> asMap() {
+            return real.asMap();
+        }
+
+        @Override
+        public void cleanUp() {
+            real.cleanUp();
+        }
+
+        @Override
+        public com.github.benmanes.caffeine.cache.Policy<String, String> policy() {
+            return real.policy();
         }
     }
 

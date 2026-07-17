@@ -241,6 +241,13 @@
 					if you want failures to fail the build -->
 					<argLine>
 						-Dfile.encoding=UTF-8
+						<!-- Bound the fork's memory so the suite's footprint is deterministic: several test
+						     classes hold 4 GB native caches (Unsafe/FFM statics, Ehcache off-heap), and with
+						     the default unbounded-ish heap (1/4 of RAM) G1 can balloon during the load tests
+						     until the OS commit limit is exhausted, crashing the fork. Direct memory must
+						     exceed the Ehcache 4096 MB off-heap test, and is limited to -Xmx when unset. -->
+						-Xmx8g
+						-XX:MaxDirectMemorySize=5g
 						--sun-misc-unsafe-memory-access=allow
 						--add-opens java.base/java.lang=ALL-UNNAMED
 						--add-opens java.base/java.lang.reflect=ALL-UNNAMED

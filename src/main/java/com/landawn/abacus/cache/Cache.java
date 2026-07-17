@@ -45,7 +45,7 @@ import com.landawn.abacus.util.u.Optional;
  * 
  * // Asynchronous operations
  * ContinuableFuture<Boolean> future = cache.asyncPut("user:456", anotherUser);
- * future.thenAcceptAsync(success -> System.out.println("Cached: " + success));
+ * future.thenRunAsync(success -> System.out.println("Cached: " + success));
  * 
  * // Custom expiration
  * cache.put("temp:data", data, 5000, 2000);   // 5s TTL, 2s idle timeout
@@ -312,7 +312,7 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * cache.asyncGet("user:123")
-     *      .thenAcceptAsync(opt -> opt.ifPresent(u -> System.out.println("Found: " + u.getName())));
+     *      .thenRunAsync(opt -> opt.ifPresent(u -> System.out.println("Found: " + u.getName())));
      *
      * // Block and transform the result
      * String name = cache.asyncGet("user:123")
@@ -339,7 +339,7 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * cache.asyncGetOrNull("user:123")
-     *      .thenAcceptAsync(user -> {
+     *      .thenRunAsync(user -> {
      *          if (user != null) {
      *              process(user);
      *          }
@@ -364,7 +364,7 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * cache.asyncPut("user:123", user)
-     *      .thenAcceptAsync(success -> {
+     *      .thenRunAsync(success -> {
      *          if (success) {
      *              log("User cached successfully");
      *          }
@@ -391,7 +391,7 @@ public interface Cache<K, V> extends Closeable {
      *
      * // Session with 1 hour TTL, 30 minute idle timeout
      * cache.asyncPut("session:abc", session, 3600000, 1800000)
-     *      .thenAcceptAsync(success -> log("Session cached: " + success));
+     *      .thenRunAsync(success -> log("Session cached: " + success));
      *
      * // Short-lived temporary data
      * cache.asyncPut("temp:data", data, 5000, 0)
@@ -441,7 +441,7 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * cache.asyncContainsKey("user:123")
-     *      .thenAcceptAsync(exists -> log("User exists in cache: " + exists));
+     *      .thenRunAsync(exists -> log("User exists in cache: " + exists));
      * }</pre>
      *
      * @param key the cache key to check for; null-handling is implementation-defined (most implementations reject null)

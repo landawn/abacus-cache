@@ -630,6 +630,11 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * The function receives the byte array and the value {@link Type}, and should return
          * the deserialized value instance.
          *
+         * <p>The deserializer must NOT mutate the supplied byte array: when a disk-spilled
+         * entry is promoted back to off-heap memory, the same array that was passed to the
+         * deserializer is subsequently copied into native memory, so in-place modification
+         * (e.g., in-place decryption) would corrupt the promoted copy.
+         *
          * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
         private BiFunction<byte[], Type<V>, ? extends V> deserializer;

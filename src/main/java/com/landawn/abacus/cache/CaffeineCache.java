@@ -176,8 +176,11 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * from multiple threads. The underlying Caffeine cache handles synchronization. If this
      * operation races with {@link #close()}, it removes its own late write when that mapping is
      * still current and then throws {@link IllegalStateException}; a newer mapping with a different
-     * value instance written directly through the caller-owned Caffeine cache is not removed. As
-     * with any value-only conditional removal, an ABA rewrite of the same instance is indistinguishable.
+     * value instance written directly through the caller-owned Caffeine cache is left completely
+     * untouched - the closed-state cleanup probes it quietly, without recording statistics or
+     * refreshing its expiration metadata. As with any value-based conditional removal, an ABA
+     * rewrite of the same instance (or an equals-equal instance written between the probe and the
+     * removal) is indistinguishable.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -228,8 +231,19 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
         // same-instance ABA rewrite cannot be distinguished without controlling all delegate
         // writers. This keeps the normal path lock-free and avoids serializing concurrent puts on
         // the close() monitor.
+        //
+        // The probe must be Policy.getIfPresentQuietly (documented side-effect-free), not
+        // asMap().computeIfPresent with an identity check: Caffeine processes a computeIfPresent
+        // that returns the same instance as an update - resetting the entry's access/write times
+        // (extending expireAfterAccess/expireAfterWrite) and, with recordStats(), logging a
+        // synthetic loadSuccess/loadFailure - so a closed wrapper would measurably mutate a newer
+        // mapping it explicitly disclaims ownership of. An equals-equal different instance written
+        // between the probe and the conditional remove is indistinguishable, same as the ABA case.
         if (isClosed) {
-            cacheImpl.asMap().computeIfPresent(key, (k, currentValue) -> currentValue == value ? null : currentValue);
+            if (cacheImpl.policy().getIfPresentQuietly(key) == value) {
+                cacheImpl.asMap().remove(key, value);
+            }
+
             throw new IllegalStateException("This cache has been closed");
         }
 
@@ -520,7 +534,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * was built with {@code recordStats()} (otherwise they are zero). {@code putCount} is tracked by
      * this wrapper. {@code capacity} is the Caffeine eviction maximum when an eviction bound is configured
      * — the maximum entry count for a size-bounded cache, or the maximum total weight for a weight-bounded
-     * cache (a weight, not an entry count) — and {@code 0} only when the cache is unbounded. {@code maxMemory}
+     * cache (a weight, not an entry count) — clamped to {@link Integer#MAX_VALUE} when the configured
+     * maximum exceeds it (possible for weight bounds). It is {@code 0} when the cache is unbounded, or
+     * when it is explicitly bounded at zero ({@code maximumSize(0)}). {@code maxMemory}
      * and {@code dataSize} are reported as {@code -1} ("not tracked") because Caffeine does not expose
      * byte-level usage.
      * For the full set of Caffeine-native metrics (load counts, average load penalty, etc.), use

@@ -139,13 +139,16 @@ import java.util.Objects;
  *                       subset of {@code dataSize} and counts only entries that have been persisted to
  *                       disk storage.
  * @param writeToDiskTimeStats statistics for disk-spilled put operations, tracking the minimum, maximum, and
- *                             average time in milliseconds. The measured window is the end-to-end put latency
- *                             for entries that ended up on disk (serialization, the failed in-memory slot
- *                             search, the store write, and the pool insert) - not just the raw store write -
- *                             so these values are not directly comparable to {@code readFromDiskTimeStats}.
+ *                             average time in milliseconds. The measured window is the store write
+ *                             ({@code OffHeapStore.put()}) itself, excluding serialization, the preceding
+ *                             failed in-memory slot search, and the pool insert - the write counterpart
+ *                             of {@code readFromDiskTimeStats}.
  * @param readFromDiskTimeStats statistics for disk read operations, tracking the minimum, maximum, and
- *                              average time in milliseconds for reading entry bytes from the store. This
- *                              helps monitor disk read performance and cache hit efficiency.
+ *                              average time in milliseconds for reading entry bytes from the store. The
+ *                              measured window is the store read ({@code OffHeapStore.get()}) itself;
+ *                              lookups that never reach the store (entry already destroyed, or ownership
+ *                              lost to a concurrent same-key re-spill) are not recorded. This helps
+ *                              monitor disk read performance and cache hit efficiency.
  * @param segmentSize the size of each memory segment in bytes. The off-heap memory is organized into
  *                    fixed-size segments (typically 1MB = 1048576 bytes) to manage memory allocation
  *                    and reduce fragmentation.

@@ -320,6 +320,71 @@ public class AbstractDistributedCacheClientTest extends TestBase {
         assertEquals(1, deleteCalls.get());
     }
 
+    /**
+     * The delegation-cycle guard is keyed on (thread, client, name-pair) only — it cannot tell a
+     * true cycle from a nested bridged call with a different key. The javadoc therefore requires
+     * that an overriding pair member never call back into its bridged counterpart on {@code this},
+     * even for a different key. This test pins that documented fail-fast behavior.
+     */
+    @Test
+    public void testCompatibilityDefaults_NestedDifferentKeyDelegationFailsFast() {
+        final class IndexWritingLegacyClient extends AbstractDistributedCacheClient<String> {
+            private final Map<String, String> values = new HashMap<>();
+
+            IndexWritingLegacyClient() {
+                super("nested.test:1");
+            }
+
+            @Override
+            public String get(final String key) {
+                return values.get(key);
+            }
+
+            @Deprecated
+            @Override
+            public boolean set(final String key, final String value, final long liveTime) {
+                values.put(key, value);
+                if (!key.startsWith("index:")) {
+                    put("index:" + key, value, liveTime); // nested bridged call, different key
+                }
+                return true;
+            }
+
+            @Override
+            public long incr(final String key) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public long incr(final String key, final long delta) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public long decr(final String key) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public long decr(final String key, final long delta) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void disconnect() {
+            }
+        }
+
+        final IndexWritingLegacyClient nested = new IndexWritingLegacyClient();
+        final UnsupportedOperationException failure = assertThrows(UnsupportedOperationException.class, () -> nested.put("k", "v", 0));
+        assertEquals("A DistributedCacheClient implementation must provide a non-recursive implementation of either put(...) or set(...)",
+                failure.getMessage());
+
+        // The guard is released on exit: after the failed call, a direct top-level set(...) still works.
+        assertTrue(nested.set("k2", "v2", 0));
+        assertEquals("v2", nested.get("k2"));
+    }
+
     @SuppressWarnings("unchecked")
     private static <T> DistributedCacheClient<T> newProxy(final InvocationHandler handler) {
         return (DistributedCacheClient<T>) Proxy.newProxyInstance(DistributedCacheClient.class.getClassLoader(),

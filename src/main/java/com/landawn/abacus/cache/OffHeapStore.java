@@ -99,6 +99,9 @@ package com.landawn.abacus.cache;
  *         }
  *         try {
  *             if (!Files.deleteIfExists(file)) {
+ *                 // The bytes vanished externally (crash residue, manual cleanup): drop the
+ *                 // stale mapping too, so later calls do not keep reporting a phantom entry.
+ *                 keyToFile.remove(key, file);
  *                 return false;
  *             }
  *             return keyToFile.remove(key, file);

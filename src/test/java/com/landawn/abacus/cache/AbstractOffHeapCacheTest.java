@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -24,6 +26,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -35,6 +38,7 @@ import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.pool.KeyedObjectPool;
+import com.landawn.abacus.pool.Poolable.Caller;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.AsyncExecutor;
@@ -514,6 +518,100 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
+    /**
+     * A disk lookup that returns early without touching the store (here: the wrapper was already
+     * destroyed by a concurrent eviction while the pool still mapped it) must not contribute an
+     * observation to {@code readFromDiskTimeStats}: recording the ~0 ms non-I/O path would
+     * permanently drag {@code min()} to 0 and skew the average of the real store-read timings.
+     */
+    @Test
+    public void testStaleDiskLookupRecordsNoReadTimingObservation() throws Exception {
+        final AtomicLong ticker = new AtomicLong();
+        final AtomicReference<byte[]> stored = new AtomicReference<>();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                ticker.addAndGet(TimeUnit.MILLISECONDS.toNanos(11));
+                final byte[] value = stored.get();
+                return value == null ? null : value.clone();
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                stored.set(value.clone());
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return stored.getAndSet(null) != null;
+            }
+        };
+
+        try (ControlledTimeOffHeapCache cache = new ControlledTimeOffHeapCache(ticker, store)) {
+            assertTrue(cache.put("key", "value"));
+            assertEquals("value", cache.getOrNull("key"));
+
+            final OffHeapCacheStats beforeStaleLookup = cache.stats();
+            assertEquals(11.0D, beforeStaleLookup.readFromDiskTimeStats().min());
+
+            // Destroy the disk wrapper in place while the pool still maps it - the state a getOrNull
+            // racing an eviction observes just after its pool lookup.
+            final KeyedObjectPool<String, AbstractOffHeapCache.Wrapper<String>> pool = poolOf(cache);
+            final AbstractOffHeapCache.Wrapper<String> wrapper = pool.peek("key");
+            assertNotNull(wrapper);
+            wrapper.destroy(Caller.REMOVE_REPLACE_CLEAR);
+
+            assertNull(cache.getOrNull("key"), "a destroyed disk entry must read as a miss");
+
+            final OffHeapCacheStats afterStaleLookup = cache.stats();
+            assertEquals(11.0D, afterStaleLookup.readFromDiskTimeStats().min(),
+                    "the store-less early return must not record a ~0 ms disk-read observation");
+            assertEquals(11.0D, afterStaleLookup.readFromDiskTimeStats().max());
+            assertEquals(11.0D, afterStaleLookup.readFromDiskTimeStats().avg());
+        }
+    }
+
+    /**
+     * Memory-tier reads must participate in the lifecycle exclusion. The pool's internal expiry
+     * sweep detaches expired wrappers from the map before destroying them outside the pool lock, so
+     * {@code _pool.close()} never synchronizes on a detached wrapper's monitor - the wrapper-monitor
+     * protocol alone cannot order an in-flight {@code read()} before {@code deallocate()}. This test
+     * simulates the detach (a bare {@code pool.remove}), parks a reader inside {@code copyFromMemory},
+     * and verifies {@code close()} cannot complete - and native memory cannot be poisoned - until the
+     * read finishes.
+     */
+    @Test
+    public void testMemoryReadBlocksCloseUntilReadCompletes() throws Exception {
+        final LatchedReadOffHeapCache cache = new LatchedReadOffHeapCache();
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+            assertTrue(cache.put("key", "value"));
+
+            cache.latchReads.set(true);
+            final Future<String> reader = executor.submit(() -> cache.getOrNull("key"));
+            assertTrue(cache.readEntered.await(5, TimeUnit.SECONDS), "reader must reach copyFromMemory");
+
+            // Simulate the sweep's phase-1 detach: the wrapper leaves the map undestroyed, so
+            // _pool.close() below cannot see it and will not block on its monitor.
+            poolOf(cache).remove("key");
+
+            final Future<?> closer = executor.submit(cache::close);
+            assertThrows(TimeoutException.class, () -> closer.get(300, TimeUnit.MILLISECONDS),
+                    "close() must wait for the in-flight memory read instead of deallocating under it");
+
+            cache.releaseReads.countDown();
+            assertEquals("value", reader.get(5, TimeUnit.SECONDS), "the read must complete against live memory");
+            closer.get(5, TimeUnit.SECONDS);
+            assertTrue(cache.isClosed());
+        } finally {
+            cache.releaseReads.countDown();
+            executor.shutdownNow();
+            cache.close();
+        }
+    }
+
     /** Vacate debounce uses the monotonic source, including when its first valid reading is zero. */
     @Test
     public void testVacateDebounceUsesMonotonicClock() throws Exception {
@@ -633,6 +731,56 @@ public class AbstractOffHeapCacheTest {
             }
 
             return 17;
+        }
+    }
+
+    /**
+     * Memory-only fixture whose "native" memory is a heap array. {@code deallocate()} poisons the
+     * array so any read that races past {@code close()} deserializes garbage instead of the stored
+     * value, and {@code copyFromMemory} can park on a latch to hold a read in flight.
+     */
+    private static final class LatchedReadOffHeapCache extends AbstractOffHeapCache<String, String> {
+        final byte[] memory = new byte[SEGMENT_SIZE];
+        final AtomicBoolean latchReads = new AtomicBoolean();
+        final CountDownLatch readEntered = new CountDownLatch(1);
+        final CountDownLatch releaseReads = new CountDownLatch(1);
+
+        LatchedReadOffHeapCache() {
+            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, (value, output) -> {
+                final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                output.write(bytes, 0, bytes.length);
+            }, (bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8), null, false, null, null,
+                    LoggerFactory.getLogger(LatchedReadOffHeapCache.class));
+        }
+
+        @Override
+        protected long allocate(final long capacityInBytes) {
+            return 0L;
+        }
+
+        @Override
+        protected void deallocate() {
+            Arrays.fill(memory, (byte) 0x55);
+        }
+
+        @Override
+        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
+            System.arraycopy(bytes, srcOffset, memory, (int) startPtr, len);
+        }
+
+        @Override
+        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+            if (latchReads.get()) {
+                readEntered.countDown();
+
+                try {
+                    releaseReads.await(5, TimeUnit.SECONDS);
+                } catch (final InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+
+            System.arraycopy(memory, (int) startPtr, bytes, destOffset, len);
         }
     }
 
@@ -1308,20 +1456,29 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
-     * A failed in-memory put of a brand-new (non-replacing) oversized key schedules the asynchronous
-     * vacating task. Exercises the {@code vacate()} scheduling path and keeps the cache usable.
+     * A failed in-memory put of a value that COULD fit an empty cache (genuine memory pressure,
+     * not an impossible size) schedules the asynchronous vacating task. Exercises the
+     * {@code vacate()} scheduling path end-to-end: the task evicts entries and reclaims their
+     * now-empty segments, keeping the cache usable. (A value larger than the entire capacity no
+     * longer triggers a vacate - the in-memory attempt is skipped for it entirely.)
      */
     @Test
     public void testVacateScheduledWhenMemoryFullForNewKey() throws InterruptedException {
         try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build()) {
-            // 2 MB value cannot fit the 1 MB cache; key is new so this is not a replacement and
-            // therefore triggers vacate().
-            assertFalse(cache.put("brand-new-oversized-key", new byte[2 * 1024 * 1024]));
+            // Fill most of the single 1 MB segment, then ask for more than remains. Sizes are
+            // exact multiples of the 8192-byte max block size (byte[] values are stored raw, at
+            // exactly array length) so every chunk uses the segment's single 8192 slot class: 100
+            // of its 128 slots are taken, and the second put needs 100 more. The second value
+            // would fit an empty cache, so the failure is genuine memory pressure and schedules
+            // the vacating task.
+            assertTrue(cache.put("occupant", new byte[100 * 8192]));
+            assertFalse(cache.put("crowded-out", new byte[100 * 8192]));
 
             // Allow the asynchronously-scheduled vacating task to run (covers its lambda body).
             Thread.sleep(200);
 
-            // Slots allocated during the failed put were released, so the cache is still usable.
+            // The vacate evicted the occupant and reclaimed its now-empty segment, so the cache
+            // is usable again - even for a different slot-size class.
             final byte[] ok = new byte[128];
             for (int i = 0; i < ok.length; i++) {
                 ok[i] = (byte) i;
@@ -1336,8 +1493,13 @@ public class AbstractOffHeapCacheTest {
         final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
 
         try {
-            // An oversized write activates the otherwise-lazy per-cache vacation executor.
-            assertFalse(cache.put("oversized", new byte[2 * 1024 * 1024]));
+            // A memory-pressure write (a value that could fit an empty cache, arriving when the
+            // segment is already occupied) activates the otherwise-lazy per-cache vacation
+            // executor. Sizes are exact multiples of the 8192-byte max block size so both puts
+            // compete for the single segment's one 8192 slot class (see
+            // testVacateScheduledWhenMemoryFullForNewKey).
+            assertTrue(cache.put("occupant", new byte[100 * 8192]));
+            assertFalse(cache.put("crowded-out", new byte[100 * 8192]));
 
             final Field field = AbstractOffHeapCache.class.getDeclaredField("_asyncExecutor");
             field.setAccessible(true);

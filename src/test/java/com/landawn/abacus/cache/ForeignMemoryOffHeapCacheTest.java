@@ -27,6 +27,7 @@ import org.ehcache.config.builders.ResourcePoolsBuilder;
 import org.ehcache.config.units.EntryUnit;
 import org.ehcache.config.units.MemoryUnit;
 import org.ehcache.spi.serialization.SerializerException;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.rocksdb.Options;
@@ -119,6 +120,21 @@ public class ForeignMemoryOffHeapCacheTest {
 
     private static final long start = System.currentTimeMillis();
     private static final AtomicInteger counter = new AtomicInteger();
+
+    /**
+     * Frees the class-level native caches (4 GB + 100 MB) as soon as this class finishes instead
+     * of holding them until JVM exit. When the whole suite runs in one fork (AbacusCacheTestSuite),
+     * leaving each class's static off-heap cache alive stacks multiple 4 GB commits and can
+     * exhaust the OS commit limit before a later class's static allocation.
+     */
+    @AfterAll
+    static void releaseStaticCaches() {
+        try {
+            cache.close();
+        } finally {
+            persistentCache.close();
+        }
+    }
 
     /**
      * Null-key handling is consistent across all four key operations (mirrors {@code OffHeapCacheTest}),
@@ -402,7 +418,7 @@ public class ForeignMemoryOffHeapCacheTest {
                         CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, Account.class,
                                 ResourcePoolsBuilder.newResourcePoolsBuilder()
                                         .heap(1000000, EntryUnit.ENTRIES) // Heap storage
-                                        .offheap(4096, MemoryUnit.MB)))
+                                        .offheap(2048, MemoryUnit.MB)))
                 .withSerializer(Account.class, KryoSerializer.class) // Off-heap storage
                 .build(true);
 

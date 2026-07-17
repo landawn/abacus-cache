@@ -58,10 +58,12 @@ import redis.clients.jedis.RedisClient;
  * connection for each command, so the client may be freely shared across threads.
  *
  * <p><b>Connection pooling:</b> Each shard's {@link RedisClient} uses the default connection pool
- * configuration (Apache Commons Pool). The pool is created lazily — constructing a {@code JRedis}
- * does not open a Redis socket; connections are established on first use. Address parsing and DNS
- * resolution may still fail during construction. A resolvable but unreachable Redis server normally
- * fails on the first operation routed to that shard.
+ * configuration (Apache Commons Pool). Each shard's pool object (and its idle-eviction task) is
+ * created eagerly during construction, but connections are established lazily on first use —
+ * constructing a {@code JRedis} does not open a Redis socket. Address parsing (malformed
+ * {@code host:port}, invalid port) fails during construction with {@link IllegalArgumentException};
+ * an unresolvable hostname, however, does NOT fail construction — like an unreachable server, it
+ * surfaces on the first operation routed to that shard.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
@@ -124,7 +126,9 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses
-     * @throws RuntimeException if an address cannot be resolved or a client pool cannot be constructed
+     * @throws RuntimeException if a shard's client pool cannot be constructed. Note that an
+     *         unresolvable hostname does NOT fail construction: the failure surfaces on the first
+     *         operation routed to that shard.
      * @see #JRedis(String, long)
      */
     public JRedis(final String serverUrl) {
@@ -163,7 +167,9 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
-     * @throws RuntimeException if an address cannot be resolved or a client pool cannot be constructed
+     * @throws RuntimeException if a shard's client pool cannot be constructed. Note that an
+     *         unresolvable hostname does NOT fail construction: the failure surfaces on the first
+     *         operation routed to that shard.
      * @see #JRedis(String)
      */
     public JRedis(final String serverUrl, final long timeout) {
@@ -177,6 +183,8 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
 
         final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
 
+        // Currently unreachable (getAddressList throws rather than returning an empty list); kept
+        // deliberately as a guard against that contract changing in a future abacus-common release.
         if (N.isEmpty(addressList)) {
             throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
         }

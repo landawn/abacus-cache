@@ -276,7 +276,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <p><b>&#9888;&#65039; Replacement failure:</b> The underlying pool (including the default
      * {@code GenericKeyedObjectPool}) removes and destroys an existing mapping <i>before</i>
      * attempting to store its replacement. If the pool then rejects the new entry (capacity or
-     * memory limit), this method returns {@code false} and the previous mapping is no longer present.
+     * memory limit, or a millisecond-scale {@code liveTime} that expires between the pool's
+     * pre-lock check and its in-lock re-check), this method returns {@code false} and the
+     * previous mapping is no longer present.
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
      * @param value the cache value to be associated with the specified key (must not be null)
@@ -380,11 +382,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns a set of all keys currently in the cache.
-     * The returned set is a snapshot taken at the time of the call and may include
-     * keys for expired entries that have not been evicted yet by the background
-     * eviction process. The returned set is not a live view of the cache: subsequent
-     * cache changes are not reflected in it, and changes to the returned set (if
-     * mutation is supported at all) do not propagate back to the cache.
+     * With the default {@code GenericKeyedObjectPool}, the returned set is a snapshot taken at
+     * the time of the call: subsequent cache changes are not reflected in it, and changes to the
+     * returned set (if mutation is supported at all) do not propagate back to the cache. The
+     * {@code KeyedObjectPool} interface itself does not require a copy, so a custom pool supplied
+     * via {@link #LocalCache(long, long, KeyedObjectPool)} may lawfully return a live view. The
+     * set may include keys for expired entries that have not been evicted yet by the background
+     * eviction process.
      *
      * <p>Use this method to enumerate all cached keys, inspect cache contents,
      * or perform bulk operations. Be aware that accessing values for returned keys

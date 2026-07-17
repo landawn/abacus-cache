@@ -297,10 +297,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     // disk-to-memory promotion in getOrNull()) hold the read lock across their copyToMemory
     // calls, and close() holds the write lock across deallocate(). Without it, a thread that
     // passed the isClosed() fail-fast could still be mid-copy when close() frees the region -
-    // a use-after-free (SIGSEGV or silent corruption for the Unsafe-based subclass). Reads do
-    // not need it: SlotWrapper/MultiSlotsWrapper.read() hold the wrapper monitor for the whole
-    // copyFromMemory, and every destroy path (including _pool.close()) must acquire that same
-    // monitor first, so deallocate() can only run after in-flight reads finish.
+    // a use-after-free (SIGSEGV or silent corruption for the Unsafe-based subclass).
+    //
+    // Readers of native memory (SlotWrapper/MultiSlotsWrapper.read() in getOrNull()) must hold
+    // it too, re-checking isClosed() under the lock. The wrapper monitor alone is NOT enough:
+    // the pool's internal expiry sweep (scheduled when evictDelay > 0) detaches expired
+    // wrappers from the map under the pool lock but destroys them OUTSIDE it, on a scheduler
+    // thread that _pool.close() cancels without joining. A wrapper detached but not yet
+    // destroyed is invisible to _pool.close()'s destroy sweep, so nothing synchronizes on its
+    // monitor before deallocate() - an in-flight read of it would touch freed memory.
     private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
 
     /**
@@ -413,7 +418,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
             final Logger logger, final MaintenanceTaskScheduler maintenanceTaskScheduler, final ShutdownHookRegistrar shutdownHookRegistrar) {
         this(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, arrayOffset, serializer, deserializer, offHeapStore,
-                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger, maintenanceTaskScheduler, shutdownHookRegistrar, System::nanoTime);
+                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger, maintenanceTaskScheduler, shutdownHookRegistrar,
+                System::nanoTime);
     }
 
     /** Package-private clock seam for deterministic duration and debounce testing. */
@@ -671,7 +677,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the key whose associated value is to be returned; must not be {@code null}
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
-     *         or the disk-backed entry has been removed from the store
+     *         the disk-backed entry has been removed from the store, or the entry was destroyed
+     *         by a concurrent eviction/removal between the pool lookup and the value read
      * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws IllegalStateException if the cache has been closed, or if a value cannot be
      *                               reconstructed because the retrieved size no longer matches
@@ -690,26 +697,27 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final StoreWrapper storeWrapper = (StoreWrapper) w;
 
             if (statsTimeOnDisk || testerForLoadingItemFromDiskToMemory != null) {
-                final long startTime = nanoTimeSource.getAsLong();
-
                 // Read the serialized bytes from disk exactly once. The same bytes are
                 // reused both to produce the return value and (when promotion is enabled)
                 // to copy the value back into off-heap memory, avoiding a second disk read.
+                //
+                // readBytes reports how long the OffHeapStore.get() call itself took through the
+                // out-parameter, and leaves the -1 sentinel in place when it returned without
+                // touching the store (wrapper already destroyed, or ownership lost to a same-key
+                // re-spill). Recording those non-I/O early returns as ~0 ms "disk reads" would
+                // permanently drag readFromDiskTimeStats().min() to 0 and skew the average; only
+                // observations that correspond to actual store I/O may be accepted. This also
+                // keeps the measured window symmetric with the write side, which times only
+                // OffHeapStore.put().
+                final long[] storeReadElapsedMillis = { -1L };
                 final byte[] diskBytes;
-                long elapsedTime = 0;
 
                 try {
-                    diskBytes = storeWrapper.readBytes();
+                    diskBytes = storeWrapper.readBytes(storeReadElapsedMillis);
                 } finally {
-                    // A duration must use a monotonic source: wall-clock corrections must not turn a
-                    // short read into zero or an arbitrarily large observation. Clamp only as a
-                    // defensive measure for a broken custom test/source; System.nanoTime subtraction
-                    // remains correct across its normal wraparound for practical elapsed intervals.
-                    elapsedTime = elapsedMillisSince(startTime);
-
-                    if (statsTimeOnDisk) {
+                    if (statsTimeOnDisk && storeReadElapsedMillis[0] >= 0) {
                         synchronized (totalReadFromDiskTimeStats) {
-                            totalReadFromDiskTimeStats.accept(elapsedTime);
+                            totalReadFromDiskTimeStats.accept(storeReadElapsedMillis[0]);
                         }
                     }
                 }
@@ -719,6 +727,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     removeStaleStoreWrapperIfCurrent(key, storeWrapper);
                     return null;
                 }
+
+                // Non-null bytes imply the store was actually read, so the elapsed time is a real
+                // observation (never the -1 sentinel) by the time the promotion tester sees it.
+                final long elapsedTime = storeReadElapsedMillis[0];
 
                 final V value = storeWrapper.deserialize(diskBytes);
 
@@ -768,7 +780,26 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 return value;
             }
         } else {
-            return w == null ? null : w.read();
+            if (w == null) {
+                return null;
+            }
+
+            // Reading a memory-tier wrapper copies from native memory, so it must participate in
+            // the lifecycle exclusion like the writers do (see the lifecycleLock comment): a
+            // wrapper detached by the pool's expiry sweep but not yet destroyed escapes
+            // _pool.close()'s destroy pass, so without this lock (and the closed re-check under
+            // it) the copy could race close()'s deallocate() and read freed memory.
+            lifecycleLock.readLock().lock();
+
+            try {
+                if (_pool.isClosed()) {
+                    throw new IllegalStateException(getClass().getSimpleName() + " has been closed");
+                }
+
+                return w.read();
+            } finally {
+                lifecycleLock.readLock().unlock();
+            }
         }
     }
 
@@ -1016,7 +1047,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * {@code storeSelector}), the value may be written to the configured {@link OffHeapStore}
      * instead. If neither memory nor disk storage succeeds, the method returns {@code false}; an
      * asynchronous vacating task to reclaim space is also scheduled, unless in-memory storage was
-     * disabled for this entry (disk-only mode), in which case no vacating task is scheduled.
+     * disabled for this entry (disk-only mode) or the serialized value is larger than the entire
+     * off-heap capacity (no amount of vacating could make it fit; the in-memory attempt is skipped
+     * entirely) - in those cases no vacating task is scheduled, and such a doomed put leaves the
+     * in-memory cache contents untouched.
      *
      * <p>Non-positive {@code liveTime} or {@code maxIdleTime} values are interpreted as
      * "no expiration" and internally translated to {@code Long.MAX_VALUE}.
@@ -1116,9 +1150,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         List<Slot> slots = null;
 
         // Track whether memory allocation was attempted, so the vacate() decision after the
-        // try block can distinguish between memory-pressure failures (where vacating makes
-        // sense) and disk-only failures (where vacating is pointless and would evict the
-        // prior entry that putToDisk just restored).
+        // try block can distinguish memory-pressure failures (where vacating makes sense) from
+        // failures where vacating is pointless and only destructive: disk-only mode (it would
+        // evict the prior entry that putToDisk just restored) and values larger than the whole
+        // off-heap region (they can never fit, so memory is not even attempted; see below).
         boolean vacateOnNull = true;
 
         try {
@@ -1131,7 +1166,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             }
 
             final int storeSelection = selectedStore;
-            final boolean canBeStoredInMemory = storeSelection < 2;
+            // A value larger than the entire off-heap region can never fit no matter how many
+            // entries a vacate frees, so do not even attempt the in-memory placement: the attempt
+            // would pointlessly claim segments for its slot-size class (fragmentation another
+            // maintenance pass must repair), copy megabytes into native memory, and then schedule
+            // a vacate that evicts ~20% of a healthy cache per attempt - and, for a replacement,
+            // asynchronously destroy the key's prior mapping - all for zero benefit. Such a doomed
+            // put goes straight to the disk fallback (if any) and never schedules a vacate.
+            final boolean canBeStoredInMemory = storeSelection < 2 && size <= _capacityInBytes;
             final boolean canBeStoredToDisk = storeSelection != 1;
             vacateOnNull = canBeStoredInMemory;
 
@@ -2409,7 +2451,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * {@code dataSizeOnDisk}, and {@code totalDataSize} counters. Upon destruction these
      * counters are decremented accordingly.
      *
-     * <p>Thread safety: {@link #readBytes()} and {@link #destroy(Caller)} are synchronized
+     * <p>Thread safety: {@link #readBytes(long[])} and {@link #destroy(Caller)} are synchronized
      * on the wrapper instance to prevent concurrent access issues. {@link #deserialize(byte[])}
      * is intentionally not synchronized so the (potentially expensive) deserialization step
      * can run outside the lock.
@@ -2446,11 +2488,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
          * so it can run outside the lock and so callers can reuse the bytes (e.g. to
          * promote the value back into memory without a second disk read).
          *
+         * @param storeReadElapsedMillisOut optional single-element out-parameter (may be
+         *        {@code null}). When the {@code OffHeapStore.get()} call actually runs and
+         *        returns, element 0 is set to its elapsed wall time in milliseconds (measured
+         *        with the monotonic time source); on the destroyed/ownership-lost early
+         *        returns - and when the store call throws - the element is left untouched, so
+         *        a caller-initialized {@code -1} sentinel distinguishes real store I/O from a
+         *        read that never reached the store.
          * @return the serialized bytes, or {@code null} if the entry was already
          *         destroyed by concurrent eviction or is missing from the store
          * @throws IllegalStateException if the fetched size does not match the recorded size
          */
-        byte[] readBytes() {
+        byte[] readBytes(final long[] storeReadElapsedMillisOut) {
             synchronized (this) {
                 if (permanentKey == null) {
                     return null; // Already destroyed by concurrent eviction
@@ -2475,7 +2524,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         return null;
                     }
 
+                    // A duration must use a monotonic source: wall-clock corrections must not turn
+                    // a short read into zero or an arbitrarily large observation. The elapsed time
+                    // is reported only after the store call returns, so a throwing store never
+                    // produces an observation - symmetric with the write side, which records
+                    // OffHeapStore.put() timing only on success.
+                    final long storeReadStartedAt = storeReadElapsedMillisOut != null ? nanoTimeSource.getAsLong() : 0L;
+
                     final byte[] bytes = offHeapStore.get(k);
+
+                    if (storeReadElapsedMillisOut != null) {
+                        storeReadElapsedMillisOut[0] = elapsedMillisSince(storeReadStartedAt);
+                    }
 
                     if (bytes == null) {
                         return null;
@@ -2497,7 +2557,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         /**
-         * Deserializes bytes previously obtained from {@link #readBytes()} into the value.
+         * Deserializes bytes previously obtained from {@link #readBytes(long[])} into the value.
          * Operates only on the supplied local array (and the effectively-immutable type /
          * deserializer), so it is safe to invoke outside the wrapper lock.
          *
@@ -2511,7 +2571,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         @Override
         V read() {
-            final byte[] bytes = readBytes();
+            final byte[] bytes = readBytes(null);
 
             return bytes == null ? null : deserialize(bytes);
         }

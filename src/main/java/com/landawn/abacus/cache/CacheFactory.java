@@ -214,6 +214,8 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @throws SecurityException if runtime policy denies shutdown-hook registration
+     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects
+     *         the eviction task (this overload always schedules one, using the default eviction delay)
      * @see #createOffHeapCache(int, long)
      * @see #createOffHeapCache(int, long, long, long)
      * @see OffHeapCache#builder()
@@ -237,6 +239,8 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @throws SecurityException if runtime policy denies shutdown-hook registration
+     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive and
+     *         the maintenance scheduler rejects its task
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long, long, long)
      */
@@ -260,6 +264,8 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @throws SecurityException if runtime policy denies shutdown-hook registration
+     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive and
+     *         the maintenance scheduler rejects its task
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long)
      */

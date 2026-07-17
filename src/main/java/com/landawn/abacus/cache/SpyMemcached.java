@@ -98,6 +98,12 @@ interface LegacySpyMemcachedAsyncApi<T> {
  * a non-negative timeout, are no-ops; {@link #disconnect(long)} always validates its argument, so a
  * negative timeout is rejected even after shutdown.
  *
+ * <p><b>Key validation:</b> beyond the {@code null} checks documented per method, the underlying
+ * memcached client validates every key on the calling thread and throws
+ * {@link IllegalArgumentException} for keys that are empty, longer than 250 bytes (UTF-8), or that
+ * contain a space, CR, LF, or NUL byte. This applies to every keyed operation and is stated here
+ * instead of repeated in each method's {@code @throws} list.
+ *
  * <p><b>Counter encoding:</b> Memcached's native increment/decrement commands operate only on raw
  * ASCII decimal values. Ordinary values written by {@link #put(String, Object, long)} use the
  * configured transcoder and therefore are not valid native counters when Kryo is active. The
@@ -248,6 +254,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
 
         N.checkArgPositive(timeout, "timeout");
 
+        // The getAddressList call is the load-bearing part: it fails fast with a descriptive
+        // IllegalArgumentException on any malformed serverUrl before any client resources exist.
+        // The isEmpty branch is currently unreachable (getAddressList throws rather than returning
+        // an empty list) and is kept deliberately as a guard against that contract changing in a
+        // future abacus-common release.
         if (N.isEmpty(AddrUtil.getAddressList(serverUrl))) {
             throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
         }
@@ -390,6 +401,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * complete or timeout. The caller's array is copied before validation and dispatch, so later
      * mutation cannot change the in-flight request.
      *
+     * <p><b>&#9888;&#65039; A missing key is not always a cache miss:</b> when an operation sits
+     * unwritten longer than the operation timeout (server stalled or reconnecting, write-queue
+     * backlog), the underlying client completes it as timed out without cancelling or erroring it,
+     * and the returned map silently lacks that server's keys instead of this method throwing. The
+     * single-key {@code get} throws in the identical scenario; only the bulk path is silent.
+     *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
      *
@@ -437,6 +454,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * in the returned map. The client generally sends one operation to each involved server. The
      * caller's array is copied before validation and dispatch.
      *
+     * <p><b>&#9888;&#65039; A missing key is not always a cache miss:</b> an operation that sits
+     * unwritten longer than the operation timeout is completed as timed out without error, and the
+     * future's map silently lacks that server's keys (see {@link #getBulk(String...)}).
+     *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *
      * <p><b>Usage Examples:</b>
@@ -480,6 +501,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * will not be present in the returned map. This is a synchronous operation that blocks until
      * complete or timeout. The collection is copied and validated in one pass before dispatch;
      * later caller mutation cannot affect the request.
+     *
+     * <p><b>&#9888;&#65039; A missing key is not always a cache miss:</b> an operation that sits
+     * unwritten longer than the operation timeout is completed as timed out without error, and the
+     * returned map silently lacks that server's keys (see {@link #getBulk(String...)}).
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -527,6 +552,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * found key-value pairs. Keys not found in the cache or that have expired will not be present
      * in the returned map. The client generally sends one operation to each involved server. The
      * collection is copied and validated in one pass before dispatch.
+     *
+     * <p><b>&#9888;&#65039; A missing key is not always a cache miss:</b> an operation that sits
+     * unwritten longer than the operation timeout is completed as timed out without error, and the
+     * future's map silently lacks that server's keys (see {@link #getBulk(String...)}).
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently from multiple threads.
      *

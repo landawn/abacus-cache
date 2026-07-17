@@ -211,7 +211,11 @@ public interface DistributedCacheClient<T> {
      * {@link #set(String, Object, long)} name when the concrete client overrides it. A concrete
      * client must provide a non-recursive implementation of either this method (recommended) or
      * {@code set}. Omitting both methods, or routing both names back through these defaults, fails
-     * fast with {@link UnsupportedOperationException}.
+     * fast with {@link UnsupportedOperationException}. The cycle guard is per-thread and
+     * per-client, not per-key: while this default is delegating to {@code set}, re-entering either
+     * name of the pair on the same thread — even for a different key — is treated as a delegation
+     * cycle and also fails fast, so an overriding {@code set} must not call back into
+     * {@code this.put(...)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -270,7 +274,10 @@ public interface DistributedCacheClient<T> {
      * override {@code put}; the two defaults let either implementation style serve callers using
      * the other name. Every concrete client must provide a non-recursive implementation of at
      * least one member of the pair; otherwise this method fails fast with
-     * {@link UnsupportedOperationException}.
+     * {@link UnsupportedOperationException}. The cycle guard is per-thread and per-client, not
+     * per-key: while this default is delegating to {@code put}, re-entering either name of the
+     * pair on the same thread — even for a different key — is treated as a delegation cycle and
+     * also fails fast, so an overriding {@code put} must not call back into {@code this.set(...)}.
      *
      * @param key the cache key, must not be {@code null}
      * @param value the value to cache, may be {@code null} if supported by the implementation
@@ -317,7 +324,11 @@ public interface DistributedCacheClient<T> {
      * {@link #delete(String)} name when the concrete client overrides it. A concrete client must
      * provide a non-recursive implementation of either this method (recommended) or
      * {@code delete}. Omitting both methods, or routing both names back through these defaults,
-     * fails fast with {@link UnsupportedOperationException}.
+     * fails fast with {@link UnsupportedOperationException}. The cycle guard is per-thread and
+     * per-client, not per-key: while this default is delegating to {@code delete}, re-entering
+     * either name of the pair on the same thread — even for a different key — is treated as a
+     * delegation cycle and also fails fast, so an overriding {@code delete} must not call back
+     * into {@code this.remove(...)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -375,7 +386,11 @@ public interface DistributedCacheClient<T> {
      * implementations that override {@code delete} and current implementations that override
      * {@code remove}. Every concrete client must provide a non-recursive implementation of at
      * least one member of the pair; otherwise this method fails fast with
-     * {@link UnsupportedOperationException}.
+     * {@link UnsupportedOperationException}. The cycle guard is per-thread and per-client, not
+     * per-key: while this default is delegating to {@code remove}, re-entering either name of the
+     * pair on the same thread — even for a different key — is treated as a delegation cycle and
+     * also fails fast, so an overriding {@code remove} must not call back into
+     * {@code this.delete(...)}.
      *
      * @param key the cache key, must not be {@code null}
      * @return {@code true} if the key existed and was removed; {@code false} otherwise

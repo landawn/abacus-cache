@@ -157,6 +157,8 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
 
         final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
 
+        // Currently unreachable (getAddressList throws rather than returning an empty list); kept
+        // deliberately as a guard against that contract changing in a future abacus-common release.
         if (N.isEmpty(addressList)) {
             throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
         }
