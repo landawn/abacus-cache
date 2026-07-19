@@ -497,9 +497,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     public long incr(final String key, final long delta) {
         assertNotShutdown();
 
-        final byte[] keyBytes = getKeyBytes(key);
-
+        N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
+
+        final byte[] keyBytes = getKeyBytes(key);
 
         return clientFor(keyBytes).incrBy(keyBytes, delta);
     }
@@ -578,9 +579,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     public long decr(final String key, final long delta) {
         assertNotShutdown();
 
-        final byte[] keyBytes = getKeyBytes(key);
-
+        N.checkArgNotNull(key, "key");
         N.checkArgNotNegative(delta, "delta");
+
+        final byte[] keyBytes = getKeyBytes(key);
 
         return clientFor(keyBytes).decrBy(keyBytes, delta);
     }

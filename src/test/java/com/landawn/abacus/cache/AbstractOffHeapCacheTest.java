@@ -1367,6 +1367,74 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
+    /**
+     * A zero-length {@code byte[]} value is a legal cache value that exercises the size-0 path of
+     * the slot math ({@code slotSizeOfChunk} maps a 0-byte chunk to one {@code MIN_BLOCK_SIZE}
+     * slot): the entry must occupy a slot, read back as a non-null empty array (a hit, never
+     * mistaken for a miss), and release its slot on removal.
+     */
+    @Test
+    public void testZeroLengthByteArrayRoundTripInMemory() {
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build()) {
+            assertTrue(cache.put("empty", new byte[0]));
+
+            assertTrue(cache.containsKey("empty"));
+            final byte[] out = cache.getOrNull("empty");
+            assertNotNull(out, "a zero-length value must read back as a hit, not a miss");
+            assertEquals(0, out.length);
+
+            final OffHeapCacheStats stats = cache.stats();
+            assertEquals(1, stats.size());
+            assertEquals(1, totalOccupiedSlots(stats), "a zero-length value still occupies one minimum-size slot");
+            assertEquals(0L, stats.dataSize(), "a zero-length value contributes no payload bytes");
+            assertEquals(1L, stats.hitCount());
+
+            cache.remove("empty");
+            assertEquals(0, totalOccupiedSlots(cache.stats()), "removing the zero-length entry must release its slot");
+        }
+    }
+
+    /**
+     * A {@link ByteBuffer} at position 0 stores zero payload bytes (the cache stores {@code [0,
+     * position)}): it must round-trip as a non-null, zero-capacity buffer rather than a miss.
+     */
+    @Test
+    public void testZeroPositionByteBufferRoundTrip() {
+        try (OffHeapCache<String, ByteBuffer> cache = OffHeapCache.<String, ByteBuffer> builder().capacityInMB(1).evictDelay(0).build()) {
+            assertTrue(cache.put("empty", ByteBuffer.allocate(16))); // position 0 -> zero bytes stored
+
+            final ByteBuffer out = cache.getOrNull("empty");
+            assertNotNull(out, "a zero-byte ByteBuffer value must read back as a hit, not a miss");
+            assertEquals(0, ByteBufferType.byteArrayOf(out).length);
+        }
+    }
+
+    /**
+     * A zero-length value routed to the disk tier: the store receives an empty array, the read
+     * passes the size consistency check ({@code storeBytes.length == entry.size == 0}), and the
+     * value reads back as a non-null empty array counted as a disk hit.
+     */
+    @Test
+    public void testZeroLengthValueOnDiskTier() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+
+        try (OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newInMemoryStore(backing))
+                .storeSelector((k, v, size) -> 2)
+                .build()) {
+            assertTrue(cache.put("empty", new byte[0]));
+            assertEquals(0, backing.get("empty").length, "the store must receive the zero-length payload");
+            assertEquals(1L, cache.stats().sizeOnDisk());
+
+            final byte[] out = cache.getOrNull("empty");
+            assertNotNull(out, "a zero-length disk-tier value must read back as a hit, not a miss");
+            assertEquals(0, out.length);
+            assertEquals(1L, cache.stats().hitCountFromDisk());
+        }
+    }
+
     // TODO: The shutdown-hook-registration failure path and the background-eviction error handler
     // (AbstractOffHeapCache constructor catch blocks) require the JVM to be mid-shutdown, which cannot
     // be simulated deterministically in an isolated unit test; left uncovered intentionally.

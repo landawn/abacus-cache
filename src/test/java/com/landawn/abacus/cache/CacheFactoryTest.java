@@ -561,13 +561,16 @@ public class CacheFactoryTest extends TestBase {
 
     /**
      * A provider specification with an empty class name (the text before the parenthesis) is rejected
-     * with the "class name cannot be empty" message.
+     * with an {@link IllegalArgumentException} naming the missing class name. Since abacus-common
+     * 7.8.8, {@code TypeAttrParser.parse} rejects the missing class name itself ("Malformed type
+     * attribute: missing class name"); {@code createCache}'s own "class name cannot be empty" branch
+     * remains as defense should the parser's contract change again.
      */
     @Test
     public void testCreateCache_EdgeCase_EmptyClassName() {
         final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("(localhost:11211)"));
-        assertTrue(ex.getMessage() != null && ex.getMessage().contains("class name cannot be empty"),
-                "expected a 'class name cannot be empty' message but was: " + ex.getMessage());
+        assertTrue(ex.getMessage() != null && (ex.getMessage().contains("missing class name") || ex.getMessage().contains("class name cannot be empty")),
+                "expected a missing/empty class name message but was: " + ex.getMessage());
     }
 
     /**

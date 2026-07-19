@@ -476,6 +476,44 @@ At the end, produce a detailed final report that includes:
 
 Prioritize correctness over preserving existing behavior. If existing behavior is clearly incorrect, fix it and update the corresponding tests and documentation accordingly.
 
+==============================================================================================================================================
 
+
+AbstractOffHeapCache and its subclasses (OffHeapCache, ForeignMemoryOffHeapCache, plus the
+supporting types OffHeapStore and OffHeapCacheStats) have been rewritten several times, evolving
+from a very simple design into something quite complicated — layers of locks, restore paths, and
+defensive comments accumulated across many review passes.
+
+Do a full review of the current implementation, then REWRITE it with simplicity and correctness
+as the primary goals.
+
+Ground rules:
+- You have complete freedom. Do not treat the current implementation, javadoc, or comments as
+  constraints — they may be wrong, outdated, or overcomplicated. Redesign the internal
+  architecture (locking model, wrapper/slot/segment structures, disk-spill protocol, stats
+  accounting) however you judge best.
+- Backward compatibility is NOT required. You may change public APIs, constructors, builders,
+  and behavior if the result is simpler or more correct.
+- Do not ask me for confirmation at any point — make every decision yourself.
+- Prefer deleting complexity over preserving it: if a feature/edge-case handler exists only to
+  patch a design flaw, fix the design instead of keeping the patch.
+
+Quality gates (all must pass when you are done):
+- mvn compile — clean
+- mvn javadoc:javadoc — zero doclint warnings
+- Full test suite green. Update/rewrite tests to match the new design; add tests for anything
+  new. Tests that pinned old internal behavior may be changed or deleted, but user-visible
+  guarantees you keep must stay tested.
+
+At the end, produce a summary report:
+- The new design in brief (architecture, locking model, storage tiers).
+- Every significant change and the reasoning behind it.
+- What was deliberately dropped or simplified away, and why.
+- Any known limitations or trade-offs in the new design.
+
+==============================================================================================================================================
+
+
+fully review all classes under folder: ./src/main/java/ line by line for bug fixes, performance improvements, implementation simplify, naming convension/consistent, javadoc/comments correction/improvements, adding test case for edge cases.
 
 
