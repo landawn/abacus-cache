@@ -667,7 +667,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final long effectiveLiveTime = liveTime > 0 ? liveTime : Long.MAX_VALUE;
         final long effectiveMaxIdleTime = maxIdleTime > 0 ? maxIdleTime : Long.MAX_VALUE;
 
-        @SuppressWarnings("unchecked")
         final Type<V> type = N.typeOf(value.getClass());
 
         ByteArrayOutputStream os = null;

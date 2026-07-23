@@ -556,7 +556,6 @@ public final class CacheFactory {
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createLocalCache(int, long)
      */
-    @SuppressWarnings("unchecked")
     public static <K, V> Cache<K, V> createCache(final String provider) {
         if (Strings.isEmpty(provider)) {
             throw new IllegalArgumentException("Provider specification cannot be null or empty");
