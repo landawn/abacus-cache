@@ -84,7 +84,6 @@ import java.util.Objects;
  * double occupancyRatio = inMemoryDataSize == 0 ? 1.0
  *         : (double) stats.occupiedMemory() / inMemoryDataSize;
  * System.out.println("Memory overhead: " + ((occupancyRatio - 1) * 100) + "%");
- * cache.close();
  * }</pre>
  *
  * @param capacity a theoretical upper bound on the number of in-memory entries, derived from the off-heap

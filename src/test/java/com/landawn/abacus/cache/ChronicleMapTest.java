@@ -24,26 +24,38 @@ public class ChronicleMapTest extends TestBase {
 
     @Test
     public void testDefaultConstructor() {
-        try (ChronicleMap<String, String> map = new ChronicleMap<>()) {
+        final ChronicleMap<String, String> map = new ChronicleMap<>();
+
+        try {
             assertNotNull(map);
             assertTrue(map.put("k", "v"));
             assertEquals("v", map.getOrNull("k"));
+        } finally {
+            map.close();
         }
     }
 
     @Test
     public void testConstructor_WithCapacityAndEvictDelay() {
-        try (ChronicleMap<String, Integer> map = new ChronicleMap<>(64, 0L)) {
+        final ChronicleMap<String, Integer> map = new ChronicleMap<>(64, 0L);
+
+        try {
             assertTrue(map.put("count", 42));
             assertEquals(Integer.valueOf(42), map.getOrNull("count"));
+        } finally {
+            map.close();
         }
     }
 
     @Test
     public void testConstructor_FullySpecified() {
-        try (ChronicleMap<String, String> map = new ChronicleMap<>(128, 0L, 60_000L, 30_000L)) {
+        final ChronicleMap<String, String> map = new ChronicleMap<>(128, 0L, 60_000L, 30_000L);
+
+        try {
             assertTrue(map.put("session", "abc"));
             assertEquals("abc", map.getOrNull("session"));
+        } finally {
+            map.close();
         }
     }
 
@@ -59,10 +71,14 @@ public class ChronicleMapTest extends TestBase {
 
     @Test
     public void testRemove() {
-        try (ChronicleMap<String, String> map = new ChronicleMap<>()) {
+        final ChronicleMap<String, String> map = new ChronicleMap<>();
+
+        try {
             map.put("k", "v");
             map.remove("k");
             assertNull(map.getOrNull("k"));
+        } finally {
+            map.close();
         }
     }
 

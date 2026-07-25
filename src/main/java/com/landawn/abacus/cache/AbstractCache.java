@@ -53,7 +53,7 @@ import com.landawn.abacus.util.u.Optional;
  * <li>{@link #keySet()} - key enumeration (may throw {@link UnsupportedOperationException} if unsupported).</li>
  * <li>{@link #size()} - entry count (may be approximate or unsupported depending on the implementation).</li>
  * <li>{@link #clear()} - bulk removal.</li>
- * <li>{@link #close()} - resource cleanup.</li>
+ * <li>{@link #close()} - explicit early retirement when the owning application requires it.</li>
  * <li>{@link #isClosed()} - state check.</li>
  * </ul>
  *
@@ -140,6 +140,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
         @Override
         public V putIfAbsent(final K key, final V value) {
             return values.putIfAbsent(key, value);
+        }
+
+        @Override
+        public V getOrDefault(final Object key, final V defaultValue) {
+            return values.getOrDefault(key, defaultValue);
         }
 
         @Override
@@ -502,11 +507,12 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation writes the value to {@link #properties} and returns the
-     * previous value via an unchecked cast to {@code T}. Like the data operations, this mutator is
-     * lifecycle-guarded: once {@link #isClosed()} reports {@code true}, it throws
-     * {@link IllegalStateException} instead of mutating the property bag of a closed cache. The
-     * read-only accessors ({@link #getProperty(String)}, {@link #getProperties()}) remain usable
-     * after close, like other configuration accessors.
+     * previous value via an unchecked cast to {@code T}. Like the data operations, this convenience
+     * mutator is lifecycle-guarded: once {@link #isClosed()} reports {@code true}, it throws
+     * {@link IllegalStateException}. The read accessors ({@link #getProperty(String)},
+     * {@link #getProperties()}) remain usable after close. The mutable map returned by
+     * {@code getProperties()} is deliberately exposed directly, so callers that mutate that map
+     * bypass this convenience method's lifecycle check.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -519,10 +525,6 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * // Re-setting the same name returns the value it replaced.
      * String prev2 = cache.setProperty("name", "beta");   // returns "alpha"
      * cache.getProperty("name");                          // returns "beta"
-     *
-     * cache.close();
-     * cache.setProperty("name", "gamma");                 // throws IllegalStateException
-     * cache.getProperty("name");                          // returns "beta" (reads stay usable)
      * }</pre>
      *
      * @throws IllegalStateException if this cache has been closed
@@ -540,8 +542,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * <p>This base implementation removes the entry from {@link #properties} and returns the
      * removed value via an unchecked cast to {@code T}. Like {@link #setProperty(String, Object)},
-     * this mutator is lifecycle-guarded and throws {@link IllegalStateException} once the cache
-     * has been closed.
+     * this convenience mutator is lifecycle-guarded and throws {@link IllegalStateException} once
+     * the cache has been closed. Removing through the mutable map returned by
+     * {@link #getProperties()} bypasses this method's lifecycle check.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -554,9 +557,6 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * // Edge: removing a name that was never set returns null.
      * cache.removeProperty("never-set");         // returns null
-     *
-     * cache.close();
-     * cache.removeProperty("foo");               // throws IllegalStateException
      * }</pre>
      *
      * @throws IllegalStateException if this cache has been closed

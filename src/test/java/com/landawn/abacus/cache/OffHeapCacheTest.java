@@ -1154,32 +1154,44 @@ public class OffHeapCacheTest {
     /** {@code OffHeapCache(capacityInMB)} delegates to the (capacity, evictDelay=3000) constructor. */
     @Test
     public void testConstructor_capacityOnly() {
-        try (OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1)) {
+        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1);
+
+        try {
             assertFalse(cache.isClosed());
             final byte[] value = { 1, 2, 3, 4 };
             assertTrue(cache.put("k", value));
             assertArrayEquals(value, cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
     /** {@code OffHeapCache(capacityInMB, evictDelay)} delegates to the default-TTL constructor. */
     @Test
     public void testConstructor_capacityAndEvictDelay() {
-        try (OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, 0L)) {
+        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, 0L);
+
+        try {
             final byte[] value = { 5, 6, 7 };
             assertTrue(cache.put("k", value));
             assertArrayEquals(value, cache.getOrNull("k"));
             assertNotNull(cache.stats());
+        } finally {
+            cache.close();
         }
     }
 
     /** {@code OffHeapCache(capacityInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime)} full basic form. */
     @Test
     public void testConstructor_capacityEvictDelayLiveTimeIdleTime() {
-        try (OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, 0L, 60_000L, 60_000L)) {
+        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, 0L, 60_000L, 60_000L);
+
+        try {
             final byte[] value = { 8, 9 };
             assertTrue(cache.put("k", value));
             assertArrayEquals(value, cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 

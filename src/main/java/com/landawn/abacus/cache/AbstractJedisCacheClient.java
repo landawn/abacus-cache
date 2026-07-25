@@ -19,8 +19,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
@@ -211,9 +213,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * Retrieves multiple values from the cache, returning a map of only the keys that were found.
      * Keys that are absent, expired, or decode to {@code null} are omitted from the result.
      *
-     * <p><b>Behavior:</b> This method issues one {@code GET} per key (each routed to its owning
-     * client) and assembles the results. The keys are validated up-front, before any network call is
-     * made.
+     * <p><b>Behavior:</b> This method issues one {@code GET} per <em>distinct</em> key (each routed to
+     * its owning client) and assembles the results. Duplicate input keys therefore produce one map
+     * entry and one backend lookup, rather than observing the same key repeatedly at different
+     * instants. The keys are validated up-front, before any network call is made.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -306,9 +309,17 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     }
 
     private Map<String, T> fetchBulk(final Collection<String> keys) {
-        final Map<String, T> result = new HashMap<>(Math.max(16, keys.size() * 2));
+        // A map cannot represent duplicate requested keys. Fetch each logical key once as well:
+        // besides avoiding redundant round trips, this prevents an internally inconsistent result
+        // when the first GET finds a duplicate key and a later GET observes it as expired/missing.
+        final Set<String> fetchedKeys = new HashSet<>();
+        final Map<String, T> result = new HashMap<>();
 
         for (final String key : keys) {
+            if (!fetchedKeys.add(key)) {
+                continue;
+            }
+
             final byte[] keyBytes = getKeyBytes(key);
 
             final T value = decode(clientFor(keyBytes).get(keyBytes));
@@ -608,6 +619,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * closes the underlying client(s) (via {@code closeClients()}); subsequent calls are no-ops.
      * Publishing shutdown first prevents new operations from starting while pool closure is in
      * progress. It does not remove any data from Redis; it only closes client-side connections.
+     * Redis clients are intended to be long-lived and shared; this terminal operation is appropriate
+     * for optional component or application shutdown, not routine per-request cleanup.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe, but once called, no other operations should be
      * attempted on this client instance from any thread.

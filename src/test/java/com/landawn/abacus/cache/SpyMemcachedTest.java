@@ -10,12 +10,14 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.AbstractCollection;
@@ -24,13 +26,16 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.landawn.abacus.util.ContinuableFuture;
 
 import net.spy.memcached.MemcachedClient;
+import net.spy.memcached.internal.BulkFuture;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -42,9 +47,10 @@ import org.junit.jupiter.api.Test;
  * Integration tests for {@link SpyMemcached} that run against a real Memcached server reachable at
  * {@code localhost:11211} (e.g. {@code docker run --name memcached -p 11211:11211 -d memcached:latest}).
  *
- * <p>These tests deliberately use no mock client and no in-memory fake: every operation is exercised
- * end-to-end against the live server. A single client is shared across the class and the server is
- * flushed before each test for isolation.
+ * <p>Most operations are exercised end-to-end against the live server. The one bulk-future timeout
+ * regression replaces a private client on a dedicated wrapper with a mock so an unresponsive
+ * request is deterministic and fast. A single integration client is shared across the class and
+ * the server is flushed before each test for isolation.
  *
  * <p><b>Memcached + Kryo note:</b> this client serializes values with a Kryo transcoder, so a stored
  * value is NOT an ASCII-decimal string. Memcached's native {@code incr}/{@code decr} therefore only
@@ -525,6 +531,39 @@ public class SpyMemcachedTest {
 
         assertEquals(1, got.size());
         assertEquals(1, got.get("a"));
+    }
+
+    /**
+     * spymemcached's bulk future implements no-argument {@code get()} by waiting for
+     * {@link Long#MAX_VALUE} milliseconds. SpyMemcached must substitute its configured operation
+     * timeout, surface the timeout through {@link ExecutionException}, and cancel the delegate so a
+     * written request to an unresponsive server cannot pin the caller indefinitely.
+     */
+    @Test
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    public void test_asyncGetBulk_noArgumentGetUsesConfiguredTimeout() throws Exception {
+        final long timeoutMillis = 25L;
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL, timeoutMillis);
+        final Field clientField = SpyMemcached.class.getDeclaredField("mc");
+        clientField.setAccessible(true);
+        final MemcachedClient realClient = (MemcachedClient) clientField.get(local);
+        final MemcachedClient mockedClient = mock(MemcachedClient.class);
+        final BulkFuture<Map<String, Object>> bulkFuture = mock(BulkFuture.class);
+
+        when(mockedClient.asyncGetBulk(any(String[].class))).thenReturn((BulkFuture) bulkFuture);
+        when(bulkFuture.get(timeoutMillis, TimeUnit.MILLISECONDS)).thenThrow(new TimeoutException("test timeout"));
+        clientField.set(local, mockedClient);
+
+        try {
+            final ContinuableFuture<Map<String, Object>> future = local.asyncGetBulk("never-completes");
+            final ExecutionException error = assertThrows(ExecutionException.class, future::get);
+
+            assertTrue(error.getCause() instanceof TimeoutException);
+            verify(bulkFuture).get(timeoutMillis, TimeUnit.MILLISECONDS);
+            verify(bulkFuture).cancel(true);
+        } finally {
+            realClient.shutdown();
+        }
     }
 
     // --- flushAll ------------------------------------------------------------------------------

@@ -37,7 +37,7 @@ import com.landawn.abacus.util.N;
  * <li>Comprehensive statistics via {@link #stats()}</li>
  * </ul>
  *
- * <p>Example usage:
+ * <p>Example of an application-wide cache:
  * <pre>{@code
  * // Create cache with 1000 max entries, 60 second eviction delay
  * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
@@ -346,6 +346,12 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * peeks at the entry without updating its last-access time, so it does not reset the idle
      * timer or otherwise extend the entry's lifetime.
      *
+     * <p><b>&#9888;&#65039; Not a side-effect-free probe:</b> per the {@link KeyedObjectPool#peek(Object)}
+     * contract, an entry found to have expired is removed and destroyed by this call before
+     * {@code false} is returned. Probing an expired key therefore reclaims it immediately, which can
+     * be observed as a drop in {@link #size()} and {@link #keySet()}. This differs from the off-heap
+     * caches, whose {@code containsKey} leaves an expired entry for the next maintenance pass.
+     *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.
      *
      * <p><b>Usage Examples:</b>
@@ -361,8 +367,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *     User cachedUser = cache.getOrNull("user:123");   // returns the stored user
      * } else {
      *     System.out.println("User not in cache - loading from database");   // not reached here (key present)
-     *     User user = loadFromDatabase("user:123");
-     *     cache.put("user:123", user);   // would re-cache on a miss
+     *     User loadedUser = loadFromDatabase("user:123");
+     *     cache.put("user:123", loadedUser);   // would re-cache on a miss
      * }
      *
      * cache.containsKey(null);                      // throws IllegalArgumentException (key must not be null)
@@ -382,13 +388,12 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Returns a set of all keys currently in the cache.
-     * With the default {@code GenericKeyedObjectPool}, the returned set is a snapshot taken at
+     * The {@link KeyedObjectPool#keySet()} contract defines the returned set as a snapshot taken at
      * the time of the call: subsequent cache changes are not reflected in it, and changes to the
-     * returned set (if mutation is supported at all) do not propagate back to the cache. The
-     * {@code KeyedObjectPool} interface itself does not require a copy, so a custom pool supplied
-     * via {@link #LocalCache(long, long, KeyedObjectPool)} may lawfully return a live view. The
-     * set may include keys for expired entries that have not been evicted yet by the background
-     * eviction process.
+     * returned set do not propagate back to the cache. This applies both to the default
+     * {@code GenericKeyedObjectPool} and to conforming custom pools supplied via
+     * {@link #LocalCache(long, long, KeyedObjectPool)}. The set may include keys for expired entries
+     * that have not yet been evicted.
      *
      * <p>Use this method to enumerate all cached keys, inspect cache contents,
      * or perform bulk operations. Be aware that accessing values for returned keys
@@ -490,10 +495,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * System.out.println("After clear: " + cache.size());    // prints "After clear: 0"
      *
      * // Common use case: invalidate cache after data update
-     * void updateAllUsers() {
-     *     updateDatabase();   // persist changes first (application-supplied helper)
-     *     cache.clear();      // invalidate all cached users
-     * }
+     * updateDatabase();   // persist changes first (application-supplied helper)
+     * cache.clear();      // invalidate all cached users
      * }</pre>
      *
      * @throws IllegalStateException if the underlying pool has been closed
@@ -542,12 +545,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * stats.capacity();              // returns 1000
      *
      * // Calculate and display hit rate
-     * long totalRequests = stats.hitCount() + stats.missCount();   // 2
-     * double hitRate = 0.0;
-     * if (totalRequests > 0) {
-     *     hitRate = (double) stats.hitCount() / totalRequests;                         // 0.5
-     *     System.out.println("Hit rate: " + String.format("%.2f%%", hitRate * 100));   // prints "Hit rate: 50.00%"
-     * }
+     * double hitRate = stats.hitRate();                                             // 0.5
+     * System.out.println("Hit rate: " + String.format("%.2f%%", hitRate * 100));   // prints "Hit rate: 50.00%"
      *
      * // Display cache utilization
      * System.out.println("Cache size: " + stats.size() + "/" + stats.capacity());   // prints "Cache size: 1/1000"
@@ -591,9 +590,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>This method is idempotent and thread-safe - multiple calls have no additional
      * effect beyond the first invocation. The method is synchronized to ensure proper
-     * shutdown coordination. It is strongly recommended to always close the cache when
-     * it's no longer needed to prevent resource leaks, especially the background
-     * eviction thread.
+     * shutdown coordination. Local caches are commonly application-scoped; call this method
+     * only when deliberately decommissioning one before process termination and no component
+     * will use it again. It is not per-operation or per-request cleanup.
      *
      * <p><b>Thread Safety:</b> This method is synchronized on the cache instance, so concurrent
      * invocations of {@code close()} are serialized. Other cache methods are not synchronized on
@@ -602,30 +601,18 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Try-with-resources (recommended approach)
-     * try (LocalCache<String, User> cache = new LocalCache<>(1000, 60000)) {
-     *     cache.put("user:123", user);                  // returns true
-     *     User cached = cache.getOrNull("user:123");    // returns the stored user
-     *     // Cache is automatically closed when exiting try block
-     * } // close() called automatically here
+     * LocalCache<String, User> applicationCache = new LocalCache<>(1000, 60000);
+     * applicationCache.put("user:123", user);                  // returns true
+     * User cached = applicationCache.getOrNull("user:123");    // returns the stored user
      *
-     * // Try-finally (manual resource management)
-     * LocalCache<String, User> cache = new LocalCache<>(1000, 60000);
-     * try {
-     *     cache.put("user:123", user);                  // returns true
-     *     User cached = cache.getOrNull("user:123");    // returns the stored user
-     *     // ... use cache ...
-     * } finally {
-     *     cache.close();   // always close to release resources
-     * }
-     *
-     * cache.isClosed();    // returns true after close()
+     * // Deliberately retire the application cache early, after all users have stopped.
+     * applicationCache.close();       // also stops and closes the owned pool
+     * applicationCache.isClosed();    // returns true
      *
      * // After close, query methods such as size()/keySet()/stats() throw IllegalStateException.
-     * cache.size();        // throws IllegalStateException (pool is closed)
+     * applicationCache.size();        // throws IllegalStateException (pool is closed)
      *
-     * cache.close();   // safe to call multiple times; idempotent no-op after the first
-     * cache.close();   // no effect on subsequent calls
+     * applicationCache.close();       // idempotent no-op after the first call
      * }</pre>
      *
      */
@@ -657,16 +644,16 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }
      *
      * // Pattern for conditional cache usage
-     * public void cacheUserIfOpen(String userId, User user) {
-     *     if (cache != null && !cache.isClosed()) {
-     *         cache.put(userId, user);   // store only while the cache is open
-     *     } else {
-     *         System.out.println("Cache unavailable, skipping caching");   // taken once the cache is closed
-     *     }
+     * String userId = "user:123";
+     * User user = new User();
+     * if (!cache.isClosed()) {
+     *     cache.put(userId, user);   // store only while the cache is open
+     * } else {
+     *     System.out.println("Cache unavailable, skipping caching");   // taken once the cache is closed
      * }
      *
-     * // Verify cache state after shutdown
-     * cache.close();   // closes the cache (idempotent)
+     * // Verify state after deliberate early decommissioning
+     * cache.close();   // explicitly retires the application cache (idempotent)
      * System.out.println("Cache closed: " + cache.isClosed());   // prints "Cache closed: true"
      * }</pre>
      *

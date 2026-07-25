@@ -34,6 +34,11 @@ import com.landawn.abacus.util.N;
  * stateless. A concrete client is thread-safe only if its overrides and backend client are also
  * thread-safe.
  *
+ * <p><b>Lifecycle:</b> Concrete clients commonly own connection pools and are intended to be
+ * long-lived, application-scoped collaborators. Construct and share them rather than creating and
+ * disconnecting one around each cache operation. An owning application may call
+ * {@link #disconnect()} once during its lifecycle shutdown.
+ *
  * <p>Key features:
  * <ul>
  * <li>Stores and provides access to server URL(s)</li>
@@ -143,11 +148,13 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Single server
+     * // Application-scoped clients, typically created once during application initialization
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      *
      * // Multiple servers (format depends on implementation)
-     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("server1:11211 server2:11211");
+     * AbstractDistributedCacheClient<User> shardedClient =
+     *         new SpyMemcached<>("server1:11211 server2:11211");
+     * // Retain and share these clients; optionally disconnect them during application shutdown.
      * }</pre>
      *
      * @param serverUrl the server URL(s) for connecting to the distributed cache, must not be {@code null},
@@ -168,8 +175,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * String url = client.serverUrl();
+     * String url = client.serverUrl(); // client is the application's shared cache client
      * System.out.println("Connected to: " + url);   // Output: "Connected to: localhost:11211"
      * }</pre>
      *
@@ -202,7 +208,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // The successful calls below need a subclass that overrides getBulk (SpyMemcached does).
+     * // The shared application client below must override getBulk (SpyMemcached does).
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * Map<String, User> users = client.getBulk("user:123", "user:456", "user:789");   // map of found keys; missing keys are absent
      * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));  // prints one line per found entry
@@ -214,7 +220,11 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * // Without a subclass override, the base-class default does not validate keys and simply throws:
      * AbstractDistributedCacheClient<User> plain = new MyDistributedCache<>("localhost:11211");  // does not override getBulk
-     * plain.getBulk("user:123");                                                       // throws UnsupportedOperationException (default impl)
+     * try {
+     *     plain.getBulk("user:123");                                                   // throws UnsupportedOperationException (default impl)
+     * } catch (UnsupportedOperationException expected) {
+     *     // This implementation has no bulk operation.
+     * }
      * }</pre>
      *
      * @param keys the cache keys to retrieve values for (variable number of String arguments),
@@ -259,7 +269,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // The successful calls below need a subclass that overrides getBulk (SpyMemcached does).
+     * // The shared application client below must override getBulk (SpyMemcached does).
      * AbstractDistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * List<String> userKeys = Arrays.asList("user:123", "user:456", "user:789");       // setup: 3 keys to look up
      * Map<String, User> users = client.getBulk(userKeys);                              // map of found keys; missing keys are absent
@@ -274,7 +284,11 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * // Without a subclass override, the base-class default does not validate keys and simply throws:
      * AbstractDistributedCacheClient<User> plain = new MyDistributedCache<>("localhost:11211");  // does not override getBulk
-     * plain.getBulk(userKeys);                                                         // throws UnsupportedOperationException (default impl)
+     * try {
+     *     plain.getBulk(userKeys);                                                     // throws UnsupportedOperationException (default impl)
+     * } catch (UnsupportedOperationException expected) {
+     *     // This implementation has no bulk operation.
+     * }
      * }</pre>
      *
      * @param keys the collection of cache keys to retrieve values for,
@@ -312,25 +326,29 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <p><b>Implementation Note:</b> An override must document its backend-specific scope. The
      * operation should be idempotent (safe to call multiple times).
      *
-     * <p><b>Thread Safety:</b> Implementations must be thread-safe. However, note that
-     * once executed, all cached data will be permanently lost and the effects are
-     * visible immediately to all clients connected to the same cache servers.
+     * <p><b>Thread Safety:</b> Implementations must be thread-safe. Data successfully flushed from
+     * the implementation-defined scope cannot be recovered, and the invalidation is normally
+     * visible to every client sharing that scope.
      *
-     * <p><b>&#9888;&#65039; Destructive operation:</b> An overriding implementation removes all data
-     * from all connected cache servers. There is no way to undo this operation.
-     * Use with extreme caution in production environments.
+     * <p><b>&#9888;&#65039; Destructive operation:</b> An overriding implementation may remove every
+     * entry in its documented backend scope (potentially all data on every connected server).
+     * There is no way to undo this operation. Use with extreme caution in production environments.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // WARNING: a subclass override of flushAll() removes ALL data from all cache servers!
-     * // (SpyMemcached, for example, overrides it — calling flushAll() there wipes every server.)
+     * // WARNING: a subclass override may remove every entry in its documented backend scope.
+     * // SpyMemcached, for example, requests a full flush from every configured server.
      *
      * // Without a subclass override, the base-class default simply throws:
      * AbstractDistributedCacheClient<User> client = new MyDistributedCache<>("localhost:11211");  // does not override flushAll()
-     * client.flushAll();                                              // throws UnsupportedOperationException (default impl)
+     * try {
+     *     client.flushAll();                                          // throws UnsupportedOperationException (default impl)
+     * } catch (UnsupportedOperationException expected) {
+     *     // This implementation has no flush operation.
+     * }
      *
      * // Safe usage in testing
-     * @After
+     * @AfterEach
      * public void cleanupCache() {
      *     try {
      *         cacheClient.flushAll();                                 // throws UnsupportedOperationException if unsupported

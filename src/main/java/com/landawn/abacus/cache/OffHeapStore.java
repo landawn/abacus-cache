@@ -39,9 +39,12 @@ package com.landawn.abacus.cache;
  * <li>Persistence - data should survive JVM restarts if required.</li>
  * <li>Performance - optimize for cache access patterns (frequent reads).</li>
  * <li>Resource management - handle file handles and disk space efficiently.</li>
- * <li>Error handling - use {@code null} / {@code false} for an ordinary miss or inability to
- *     complete an operation. Implementations may propagate unexpected runtime failures; the owning
- *     cache does not silently translate such exceptions into misses.</li>
+ * <li>Error handling - {@link #get(Object) get} may return {@code null}, and
+ *     {@link #remove(Object) remove} may return {@code false}, only for a confirmed absent key.
+ *     Operational read/removal failures must throw an unchecked exception so a read failure is not
+ *     treated as a miss and a cleanup failure remains visible (the cache logs removal failures).
+ *     {@link #put(Object, byte[]) put} may return {@code false} for an ordinary, failure-atomic
+ *     write rejection.</li>
  * <li>Argument validation - the cache always passes non-null, already-validated keys and values, so
  *     implementations need not null-check arguments; behavior on a {@code null} key or value is left
  *     to the implementation.</li>
@@ -52,62 +55,87 @@ package com.landawn.abacus.cache;
  * public class FileBasedOffHeapStore<K> implements OffHeapStore<K> {
  *     private final Path storageDir;
  *     private final ConcurrentHashMap<K, Path> keyToFile = new ConcurrentHashMap<>();
+ *     private final Object[] keyStripes = new Object[64];
  *
  *     public FileBasedOffHeapStore(Path storageDir) throws IOException {
  *         this.storageDir = storageDir;
  *         Files.createDirectories(storageDir);
+ *         java.util.Arrays.setAll(keyStripes, ignored -> new Object());
+ *     }
+ *
+ *     private Object stripeFor(K key) {
+ *         return keyStripes[Math.floorMod(key.hashCode(), keyStripes.length)];
  *     }
  *
  *     public byte[] get(K key) {
- *         Path file = keyToFile.get(key);
- *         if (file != null && Files.exists(file)) {
- *             try {
- *                 return Files.readAllBytes(file);
- *             } catch (IOException e) {
- *                 // Log error and return null
+ *         synchronized (stripeFor(key)) {
+ *             Path file = keyToFile.get(key);
+ *             if (file == null) {
  *                 return null;
  *             }
+ *             try {
+ *                 return Files.readAllBytes(file);
+ *             } catch (NoSuchFileException e) {
+ *                 // A confirmed external deletion is a miss; remove the stale index entry too.
+ *                 keyToFile.remove(key);
+ *                 return null;
+ *             } catch (IOException e) {
+ *                 // Do not turn a transient I/O failure into a miss: the cache would discard its
+ *                 // metadata and could then remove otherwise valid backing bytes.
+ *                 throw new UncheckedIOException(file.toString(), e);
+ *             }
  *         }
- *         return null;
  *     }
  *
  *     public boolean put(K key, byte[] value) {
- *         try {
- *             // Use a unique file name per put; deriving it from key.hashCode() would let two
- *             // distinct keys with the same hash code overwrite each other's data.
- *             Path file = storageDir.resolve(UUID.randomUUID() + ".cache");
- *             Files.write(file, value);
- *             Path previous = keyToFile.put(key, file);
- *             if (previous != null) {
- *                 try {
- *                     Files.deleteIfExists(previous); // best-effort cleanup of superseded bytes
- *                 } catch (IOException ignored) {
- *                     // The replacement is already committed; report it as successful.
+ *         synchronized (stripeFor(key)) {
+ *             Path file = null;
+ *             try {
+ *                 // Let the file system allocate a unique path; deriving one from key.hashCode()
+ *                 // would let distinct keys with the same hash overwrite each other's data.
+ *                 file = Files.createTempFile(storageDir, "offheap-", ".cache");
+ *                 Files.write(file, value);
+ *                 Path previous = keyToFile.put(key, file);
+ *                 if (previous != null) {
+ *                     try {
+ *                         Files.deleteIfExists(previous); // best-effort cleanup of superseded bytes
+ *                     } catch (IOException ignored) {
+ *                         // The replacement is already committed; report it as successful.
+ *                     }
  *                 }
+ *                 return true;
+ *             } catch (IOException e) {
+ *                 // The unique path was never published, so the previous mapping is unchanged.
+ *                 if (file != null) {
+ *                     try {
+ *                         Files.deleteIfExists(file); // best-effort cleanup of a partial write
+ *                     } catch (IOException ignored) {
+ *                         // No mapping points at this unique path.
+ *                     }
+ *                 }
+ *                 return false;
  *             }
- *             return true;
- *         } catch (IOException e) {
- *             // Log error and return false
- *             return false;
  *         }
  *     }
  *
  *     public boolean remove(K key) {
- *         Path file = keyToFile.get(key);
- *         if (file == null) {
- *             return false;
- *         }
- *         try {
- *             if (!Files.deleteIfExists(file)) {
- *                 // The bytes vanished externally (crash residue, manual cleanup): drop the
- *                 // stale mapping too, so later calls do not keep reporting a phantom entry.
- *                 keyToFile.remove(key, file);
+ *         synchronized (stripeFor(key)) {
+ *             Path file = keyToFile.get(key);
+ *             if (file == null) {
  *                 return false;
  *             }
- *             return keyToFile.remove(key, file);
- *         } catch (IOException e) {
- *             // Keep the mapping so a later remove can retry cleanup.
- *             return false;
+ *             try {
+ *                 if (!Files.deleteIfExists(file)) {
+ *                     // The bytes vanished externally: drop the stale mapping too.
+ *                     keyToFile.remove(key);
+ *                     return false;
+ *                 }
+ *                 keyToFile.remove(key);
+ *                 return true;
+ *             } catch (IOException e) {
+ *                 // false means confirmed absent; an operational failure must stay distinguishable.
+ *                 throw new UncheckedIOException(file.toString(), e);
+ *             }
  *         }
  *     }
  * }
@@ -122,8 +150,9 @@ public interface OffHeapStore<K> extends AutoCloseable {
 
     /**
      * Retrieves the byte array associated with the specified key.
-     * Returns {@code null} if the key is not found or the implementation cannot complete an ordinary
-     * retrieval. Unexpected runtime failures may be propagated to the caller.
+     * Returns {@code null} only if the key is confirmed not to exist. An operational retrieval
+     * failure must be reported with an unchecked exception; the owning cache interprets
+     * {@code null} as a definitive miss and retires its stale entry metadata.
      * Implementations may return either a defensive copy or an internally retained array. The
      * owning cache treats the returned array as store-owned and makes its own copy before exposing
      * bytes to a caller or custom deserializer.
@@ -142,6 +171,7 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * } else {
      *     System.out.println("User not found");
      * }
+     * store.close();
      * }</pre>
      *
      * <p><b>Round-trip contract:</b> the returned array must contain exactly the bytes passed to
@@ -151,7 +181,7 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * corruption and fails the read with an exception rather than a cache miss.
      *
      * @param key the key whose associated value is to be retrieved; must not be {@code null}
-     * @return the stored byte array, or {@code null} if not found or the retrieval cannot be completed normally
+     * @return the stored byte array, or {@code null} if the key is confirmed not to exist
      */
     byte[] get(K key);
 
@@ -183,6 +213,7 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * } else {
      *     System.out.println("Failed to store data");
      * }
+     * store.close();
      * }</pre>
      *
      * @param key the key with which the specified value is to be associated; must not be {@code null}
@@ -194,10 +225,9 @@ public interface OffHeapStore<K> extends AutoCloseable {
 
     /**
      * Removes the value associated with the specified key.
-     * Returns {@code true} if a value was removed, {@code false} if the key was not found
-     * or if the implementation cannot complete an ordinary removal. Unexpected runtime failures
-     * may be propagated to the caller. It is safe to call this method for a
-     * non-existent key.
+     * Returns {@code true} if a value was removed or {@code false} if the key is confirmed not to
+     * exist. An operational removal failure must be reported with an unchecked exception; it must
+     * not be collapsed into {@code false}. It is safe to call this method for a non-existent key.
      *
      * <p><b>Thread Safety:</b>
      * Implementations of this method must be thread-safe and support concurrent
@@ -209,8 +239,9 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * if (store.remove("user:123")) {
      *     System.out.println("User data removed from disk");
      * } else {
-     *     System.out.println("User data not found or removal failed");
+     *     System.out.println("User data not found");
      * }
+     * store.close();
      * }</pre>
      *
      * @param key the key whose associated value is to be removed; must not be {@code null}

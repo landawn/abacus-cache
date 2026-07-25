@@ -108,7 +108,9 @@ import com.landawn.abacus.util.function.TriPredicate;
  * <p><b>Value handling.</b> {@code byte[]} values are stored raw (exactly {@code array.length}
  * bytes); {@link ByteBuffer} values store the bytes from index 0 up to the current position
  * (position, limit, and mark are left untouched); all other types go through the configured
- * serializer/deserializer, defaulting to Kryo when available, otherwise JSON.
+ * serializer/deserializer, defaulting to Kryo when available, otherwise JSON. For disk reads that
+ * may be promoted to memory, the deserializer receives a private copy so even an in-place decoder
+ * cannot alter the bytes installed in the memory tier.
  *
  * @param <K> the key type
  * @param <V> the value type
@@ -290,12 +292,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without an explicit one
      * @param vacatingFactor the fraction of entries evicted by a memory-pressure vacate pass, in
      *                       {@code [0.0, 1.0]}; {@code 0} selects the default (0.2)
-     * @param arrayOffset the heap-array offset convention the subclass's copy primitives expect:
-     *                    an {@code Unsafe}-based implementation passes the array base offset,
-     *                    a {@code MemorySegment}-based implementation passes 0
+     * @param arrayOffset the zero-based heap-array index adjustment supplied to the copy hooks;
+     *                    both built-in implementations pass 0
      * @param serializer custom serializer, or {@code null} for the default (Kryo/JSON)
-     * @param deserializer custom deserializer, or {@code null} for the default. Must not mutate
-     *                     the supplied byte array (a promoted disk read reuses it)
+     * @param deserializer custom deserializer, or {@code null} for the default
      * @param offHeapStore optional disk store for spill-over; {@code null} for memory-only. The
      *                     cache owns it and closes it in {@link #close()}
      * @param statsTimeOnDisk whether to record disk I/O timing statistics
@@ -431,10 +431,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param startPtr the destination address in off-heap memory
      * @param bytes the source array
-     * @param srcOffset the source offset, expressed in the convention supplied to the base class
-     *                  as {@code arrayOffset}: an {@code Unsafe}-based implementation receives an
-     *                  address-style offset that already includes the array base offset, whereas a
-     *                  {@code MemorySegment}-based implementation receives a plain zero-based index
+     * @param srcOffset the zero-based source-array index, plus the {@code arrayOffset} supplied at
+     *                  construction. A backend that needs an object-layout base offset must add it
+     *                  using {@code long} arithmetic in this hook.
      * @param len the number of bytes to copy
      */
     protected abstract void copyToMemory(long startPtr, byte[] bytes, int srcOffset, int len);
@@ -445,7 +444,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param startPtr the source address in off-heap memory
      * @param bytes the destination array
-     * @param destOffset the destination offset, in the same convention as
+     * @param destOffset the zero-based destination-array index (plus the construction-time
+     *                   {@code arrayOffset}), in the same convention as
      *                   {@link #copyToMemory(long, byte[], int, int)}'s {@code srcOffset}
      * @param len the number of bytes to copy
      */
@@ -488,7 +488,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             // map bin lock are deferred until after the monitor is released (lock order: bin ->
             // entry monitor, never the reverse).
             boolean expired = false;
-            boolean missingBytes = false;
+            boolean storeMiss = false;
             byte[] bytes = null;
             long storeReadMillis = -1L;
 
@@ -513,7 +513,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     }
 
                     if (storeBytes == null) {
-                        missingBytes = true;
+                        storeMiss = true;
                     } else if (storeBytes.length != entry.size) {
                         // Cannot be an internal race (see the ordering argument above); the store
                         // itself returned bytes inconsistent with what was written.
@@ -535,9 +535,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             if (bytes == null) {
                 if (expired) {
                     removeIfCurrent(key, entry, FreeCause.EXPIRED);
-                } else if (missingBytes) {
-                    // The backing bytes vanished from the store; drop the stale mapping. Not an
-                    // eviction: nothing expired, the data is simply gone.
+                } else if (storeMiss) {
+                    // A null store result is a confirmed miss by OffHeapStore contract. Drop the
+                    // stale mapping; operational read failures must be reported by throwing and
+                    // therefore never enter this cleanup path.
                     removeIfCurrent(key, entry, FreeCause.REMOVED);
                 }
 
@@ -547,9 +548,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             hitCount.increment();
 
-            final V value = deserializeValue(bytes, entry.type);
+            final boolean readFromDisk = !entry.isMemory();
+            // A custom deserializer is allowed to decode in place. Preserve the pristine store
+            // bytes when this read may subsequently install them in the memory tier.
+            final byte[] bytesToDeserialize = readFromDisk && testerForLoadingItemFromDiskToMemory != null ? bytes.clone() : bytes;
+            final V value = deserializeValue(bytesToDeserialize, entry.type);
 
-            if (!entry.isMemory()) {
+            if (readFromDisk) {
                 // Counted only once the value has actually been reconstructed; a throwing
                 // deserializer is not a successful disk read.
                 hitCountFromDisk.increment();
@@ -574,7 +579,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         final ActivityPrint print = diskEntry.activityPrint;
-        final long remainingLiveTime = print.getMaxLiveTime() - (System.currentTimeMillis() - print.getCreatedTime());
+        // A wall-clock correction can make now precede the recorded creation time. Treat that as
+        // zero elapsed lifetime; subtracting a negative age could otherwise overflow and suppress
+        // promotion of a non-expiring entry.
+        final long elapsedLiveTime = Math.max(0L, System.currentTimeMillis() - print.getCreatedTime());
+        final long remainingLiveTime = print.getMaxLiveTime() == Long.MAX_VALUE ? Long.MAX_VALUE : print.getMaxLiveTime() - elapsedLiveTime;
 
         // A value larger than the entire region can never be placed; skip the doomed (and
         // allocator-lock-heavy) slot allocation attempt, mirroring doPut's guard.
@@ -588,14 +597,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return; // No memory available; promotion is an optimization only.
         }
 
-        final Entry<V> memoryEntry = new Entry<>(diskEntry.type, diskEntry.size, remainingLiveTime, print.getMaxIdleTime(), slots);
-        copyEntryToMemory(memoryEntry, bytes);
+        final Entry<V> memoryEntry = createMemoryEntry(diskEntry.type, diskEntry.size, remainingLiveTime, print.getMaxIdleTime(), slots, bytes);
 
         try {
             entries.compute(key, (k, current) -> {
                 if (current != diskEntry) {
                     // The mapping changed concurrently; discard the promoted copy, keep the current one.
-                    releaseSlots(memoryEntry);
+                    discardUninstalledMemoryEntry(memoryEntry);
                     return current;
                 }
 
@@ -606,7 +614,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         } catch (final RuntimeException | Error e) {
             // A throwing key hashCode/equals aborts the compute before the lambda installs the
             // promoted entry; release its freshly allocated slots instead of leaking them.
-            releaseSlots(memoryEntry);
+            discardUninstalledMemoryEntry(memoryEntry);
             throw e;
         }
     }
@@ -631,8 +639,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <p>Non-positive {@code liveTime}/{@code maxIdleTime} values mean "no expiration"/"no idle
      * limit". For a {@link ByteBuffer} value, the bytes from index 0 up to the current position
      * are stored; the buffer's position, limit, and mark are left unchanged. An entry's expiration
-     * clock starts when the entry is installed (for a disk-routed value: after the store write
-     * completes).
+     * clock starts only after its serialized bytes have been copied to native memory or, for a
+     * disk-routed value, after the store write has completed; map installation follows.
      *
      * @param key the key; must not be {@code null}
      * @param value the value; must not be {@code null}
@@ -702,8 +710,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 final long[] slots = allocateSlots(size);
 
                 if (slots != null) {
-                    final Entry<V> entry = new Entry<>(type, size, effectiveLiveTime, effectiveMaxIdleTime, slots);
-                    copyEntryToMemory(entry, bytes);
+                    final Entry<V> entry = createMemoryEntry(type, size, effectiveLiveTime, effectiveMaxIdleTime, slots, bytes);
 
                     try {
                         entries.compute(key, (k, old) -> {
@@ -717,7 +724,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     } catch (final RuntimeException | Error e) {
                         // A throwing key hashCode/equals aborts the compute before the lambda
                         // installs the entry; release its freshly allocated slots.
-                        releaseSlots(entry);
+                        discardUninstalledMemoryEntry(entry);
                         throw e;
                     }
 
@@ -956,12 +963,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes the cache and releases all resources: cancels the maintenance task, removes the JVM
-     * shutdown hook, frees every entry (removing disk-backed entries' bytes from the store),
-     * deallocates the native region, and closes the configured {@link OffHeapStore}, if any.
+     * Deliberately decommissions this application-scoped cache before JVM termination. It cancels
+     * the maintenance task, removes the JVM shutdown hook, frees every entry (removing disk-backed
+     * entries' bytes from the store), deallocates the native region, and closes the configured
+     * {@link OffHeapStore}, if any. If the cache remains active for the application lifetime, the
+     * registered shutdown hook invokes this method automatically during JVM shutdown.
      * Every step runs even when an earlier one fails; the first failure propagates with any
-     * later ones attached as suppressed exceptions. Idempotent; also invoked automatically by the
-     * registered shutdown hook during JVM shutdown.
+     * later ones attached as suppressed exceptions. This method is idempotent.
      *
      * <p><b>Reentrant callback restriction:</b> a serializer, store selector, or other callback
      * invoked from an operation holding this cache's lifecycle read lock must not close the cache
@@ -1077,7 +1085,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         // LongAdder.sum() is not an atomic snapshot; clamp the up-and-down gauges to >= 0 so a
         // transiently observed decrement-without-increment cannot make the stats record throw.
-        return new OffHeapCacheStats(capacity, entries.size(), Math.max(0L, sizeOnDisk.sum()), putCount.sum(), putCountToDisk.sum(), hits + misses, hits,
+        final long gets = hits > Long.MAX_VALUE - misses ? Long.MAX_VALUE : hits + misses;
+
+        return new OffHeapCacheStats(capacity, entries.size(), Math.max(0L, sizeOnDisk.sum()), putCount.sum(), putCountToDisk.sum(), gets, hits,
                 hitCountFromDisk.sum(), misses, evictionCount.sum(), Math.max(0L, evictionCountFromDisk.sum()), capacityInBytes,
                 Math.max(0L, totalOccupiedMemorySize.sum()), Math.max(0L, totalDataSize.sum()), Math.max(0L, dataSizeOnDisk.sum()), writeToDiskTimes.snapshot(),
                 readFromDiskTimes.snapshot(), SEGMENT_SIZE, snapshotOccupiedSlots());
@@ -1258,8 +1268,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Allocates the slots needed for a value of the given serialized size: one slot of the
      * smallest sufficient class when {@code size <= maxBlockSize}, otherwise one
      * {@code maxBlockSize} slot per full chunk plus a smaller-class slot for the final partial
-     * chunk. Returns {@code null} (with any partial allocation released) when the region cannot
-     * currently satisfy the request.
+     * chunk. Returns {@code null} when the region cannot currently satisfy the request. Any partial
+     * allocation is released, and segments made empty by that rollback are immediately returned to
+     * the free pool so a disk fallback cannot strand them in the attempted size class.
      */
     private long[] allocateSlots(final int size) {
         final int chunkCount = chunkCountOf(size);
@@ -1273,6 +1284,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     for (int j = 0; j < i; j++) {
                         releaseSlotLocked(slots[j]);
                     }
+
+                    reclaimEmptySegmentsLocked();
 
                     return null;
                 }
@@ -1332,10 +1345,31 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /** Releases every slot held by a memory entry. Safe to call at most once per entry. */
     private void releaseSlots(final Entry<V> entry) {
+        releaseSlots(entry.slots);
+    }
+
+    /** Releases raw slot handles when entry construction or the initial memory copy fails. */
+    private void releaseSlots(final long[] slots) {
         synchronized (allocatorLock) {
-            for (final long slot : entry.slots) {
+            for (final long slot : slots) {
                 releaseSlotLocked(slot);
             }
+        }
+    }
+
+    /** Releases an entry that never reached the map and immediately reclaims emptied segments. */
+    private void discardUninstalledMemoryEntry(final Entry<V> entry) {
+        discardUninstalledSlots(entry.slots);
+    }
+
+    /** Releases raw, unpublished slots and atomically returns newly empty segments to the free pool. */
+    private void discardUninstalledSlots(final long[] slots) {
+        synchronized (allocatorLock) {
+            for (final long slot : slots) {
+                releaseSlotLocked(slot);
+            }
+
+            reclaimEmptySegmentsLocked();
         }
     }
 
@@ -1351,17 +1385,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     private void reclaimEmptySegments() {
         synchronized (allocatorLock) {
-            for (final Deque<Segment> queue : segmentQueues) {
-                for (final Iterator<Segment> it = queue.iterator(); it.hasNext();) {
-                    final Segment segment = it.next();
+            reclaimEmptySegmentsLocked();
+        }
+    }
 
-                    if (segment.used == 0) {
-                        it.remove();
-                        dedicatedSegments.clear(segment.index);
+    /** Returns all empty dedicated segments to the free pool. Caller holds the allocator lock. */
+    private void reclaimEmptySegmentsLocked() {
+        for (final Deque<Segment> queue : segmentQueues) {
+            for (final Iterator<Segment> it = queue.iterator(); it.hasNext();) {
+                final Segment segment = it.next();
 
-                        if (segment.index < nextFreeSegmentHint) {
-                            nextFreeSegmentHint = segment.index;
-                        }
+                if (segment.used == 0) {
+                    it.remove();
+                    dedicatedSegments.clear(segment.index);
+                    segment.slotSize = 0;
+
+                    if (segment.index < nextFreeSegmentHint) {
+                        nextFreeSegmentHint = segment.index;
                     }
                 }
             }
@@ -1442,14 +1482,32 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return baseAddress + (long) segmentIndexOf(slot) * SEGMENT_SIZE + (long) slotIndexOf(slot) * slotSize;
     }
 
-    /** Copies a value's serialized bytes into the entry's freshly allocated (private) slots. */
-    private void copyEntryToMemory(final Entry<V> entry, final byte[] bytes) {
+    /** Copies serialized bytes into freshly allocated, still-unpublished slots. */
+    private void copyToAllocatedSlots(final int size, final long[] slots, final byte[] bytes) {
         int copied = 0;
 
-        for (int i = 0; i < entry.slots.length; i++) {
-            final int chunkSize = chunkSizeOfChunk(entry.size, i);
-            copyToMemory(addressOf(entry.slots[i], slotSizeOfChunk(entry.size, i)), bytes, arrayOffset + copied, chunkSize);
+        for (int i = 0; i < slots.length; i++) {
+            final int chunkSize = chunkSizeOfChunk(size, i);
+            copyToMemory(addressOf(slots[i], slotSizeOfChunk(size, i)), bytes, arrayOffset + copied, chunkSize);
             copied += chunkSize;
+        }
+    }
+
+    /**
+     * Creates and fills a memory entry, returning every allocated slot if construction or copying
+     * fails before the entry can be offered to the map.
+     */
+    private Entry<V> createMemoryEntry(final Type<V> type, final int size, final long liveTime, final long maxIdleTime, final long[] slots,
+            final byte[] bytes) {
+        try {
+            // Perform the potentially expensive native copy before starting the entry's TTL/idle
+            // clocks. The resulting ActivityPrint is created before map installation begins,
+            // matching the disk path, whose clock starts only after its store write completes.
+            copyToAllocatedSlots(size, slots, bytes);
+            return new Entry<>(type, size, liveTime, maxIdleTime, slots);
+        } catch (final RuntimeException | Error e) {
+            discardUninstalledSlots(slots);
+            throw e;
         }
     }
 

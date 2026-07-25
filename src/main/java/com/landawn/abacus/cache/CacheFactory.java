@@ -162,6 +162,10 @@ public final class CacheFactory {
      * be used directly by the cache for all entry storage and retrieval operations.
      * The pool's capacity and eviction settings will override any defaults.
      *
+     * <p><b>Ownership transfer:</b> The returned cache assumes ownership of {@code pool};
+     * closing the cache closes the supplied pool. Do not share it with a component whose lifetime
+     * extends beyond the cache.
+     *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Create custom pool with specific configuration
@@ -373,8 +377,7 @@ public final class CacheFactory {
      * // Actual cache key: "myapp:sessions:" + Base64("user123")
      * Session s = cache.getOrNull("user123");        // returns the value, or null if absent/circuit-open
      *
-     * // A null or empty prefix is accepted (no prefix applied)
-     * CacheFactory.createDistributedCache(redisClient, (String) null);   // returns a DistributedCache with no key prefix
+     * // Pass null or an empty string as the second argument when an unprefixed cache is desired.
      *
      * // Edge case: a null client is rejected
      * CacheFactory.createDistributedCache((DistributedCacheClient<Session>) null, "myapp:");   // throws IllegalArgumentException (client must not be null)
@@ -404,6 +407,7 @@ public final class CacheFactory {
      * <p>The circuit breaker pattern works as follows:
      * <ul>
      * <li>When consecutive failures reach {@code maxFailedNumForRetry}, the circuit opens
+     *     ({@code 0} means the first recorded failure)
      *     and read operations return {@code null} immediately without attempting cache access</li>
      * <li>After {@code retryDelay} milliseconds since the last failure, ALL subsequent reads
      *     attempt the cache again (there is no half-open single-probe gate; size the delay
@@ -425,8 +429,9 @@ public final class CacheFactory {
      * );             // returns a non-null DistributedCache
      *
      * // Circuit breaker protects against cascading failures on reads
-     * User user = cache.getOrNull("user:123");      // returns the value, or null if absent/circuit-open
-     * cache.put("user:123", user, 3600000, 0);      // returns true
+     * User user = new User();
+     * cache.put("user:123", user, 3600000, 0);         // returns true
+     * User cached = cache.getOrNull("user:123");       // returns the value, or null if absent/circuit-open
      *
      * // Edge cases (validated by the underlying constructor):
      * CacheFactory.createDistributedCache(redisClient, "app:", -1, 2000);   // throws IllegalArgumentException (maxFailedNumForRetry must be non-negative)
@@ -437,7 +442,8 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param client the distributed cache client to wrap (must not be null)
      * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
-     * @param maxFailedNumForRetry the maximum number of consecutive failures before the circuit breaker opens (must be non-negative)
+     * @param maxFailedNumForRetry the maximum number of consecutive failures before the circuit breaker opens
+     *                             (must be non-negative); {@code 0} opens it after the first recorded backend failure
      * @param retryDelay the delay in milliseconds before attempting a retry after the circuit breaker opens (must be non-negative)
      * @return a new DistributedCache instance with custom circuit breaker configuration
      * @throws IllegalArgumentException if client is null, maxFailedNumForRetry is negative, retryDelay is
@@ -523,7 +529,6 @@ public final class CacheFactory {
      * Cache<String, Object> cache5 = CacheFactory.createCache(
      *     "com.mycompany.CustomCache(param1,param2)"
      * );                                            // returns an instance of the named Cache class
-     *
      * // Edge cases (all throw IllegalArgumentException):
      * CacheFactory.createCache(null);                              // "Provider specification cannot be null or empty"
      * CacheFactory.createCache("");                                // "Provider specification cannot be null or empty"
@@ -609,12 +614,10 @@ public final class CacheFactory {
             } else {
                 final RedisClusterParameters redisClusterParameters = parseRedisClusterParameters(parameters);
 
-                if (redisClusterParameters.keyPrefix() == null) {
-                    return new DistributedCache<>(new JRedisCluster<>(redisClusterParameters.serverUrl(), redisClusterParameters.timeout()));
-                } else {
-                    return newDistributedCacheOrDisconnect(new JRedisCluster<>(redisClusterParameters.serverUrl(), redisClusterParameters.timeout()),
-                            redisClusterParameters.keyPrefix());
-                }
+                // A null keyPrefix already means "no prefix" to the DistributedCache constructor,
+                // so the no-prefix case needs no separate branch.
+                return newDistributedCacheOrDisconnect(new JRedisCluster<>(redisClusterParameters.serverUrl(), redisClusterParameters.timeout()),
+                        redisClusterParameters.keyPrefix());
             }
         } else {
             final Class<?> cls = loadCustomCacheClass(className);
@@ -664,12 +667,12 @@ public final class CacheFactory {
     }
 
     /**
-     * Wraps {@code new DistributedCache<>(client, keyPrefix)} so that a rejected key prefix does not
-     * leak the already-connected client. The client is constructed eagerly ({@code SpyMemcached}
-     * spawns its IO thread, {@code JRedisCluster} discovers cluster topology), but the key prefix is
-     * validated inside the {@code DistributedCache} constructor - without this cleanup, an invalid
-     * prefix (e.g. one containing a space) would leave a live client thread/socket behind with no
-     * handle to shut it down, leaking one client per attempt in a configuration-retry loop.
+     * Wraps a client created by this factory and disconnects it if wrapper construction fails. The
+     * clients are constructed eagerly ({@code SpyMemcached} spawns its IO thread,
+     * {@code JRedisCluster} discovers cluster topology), so any constructor failure after that point
+     * must not leave a live client thread/socket behind. The most common failure is a rejected key
+     * prefix (for example, one containing a space), but the cleanup applies equally to failures in
+     * the no-prefix wrapper path.
      */
     private static <K, V> DistributedCache<K, V> newDistributedCacheOrDisconnect(final DistributedCacheClient<V> client, final String keyPrefix) {
         try {
@@ -698,14 +701,14 @@ public final class CacheFactory {
     private static <K, V> DistributedCache<K, V> createMemcachedOrRedisCache(final String provider, final String[] parameters,
             final LongFunction<? extends DistributedCacheClient<V>> clientFactory) {
         if (parameters.length == 1) {
-            return new DistributedCache<>(clientFactory.apply(DEFAULT_TIMEOUT));
+            return newDistributedCacheOrDisconnect(clientFactory.apply(DEFAULT_TIMEOUT), null);
         } else if (parameters.length == 2) {
             // An all-digit second parameter is a timeout, not a key prefix: "(url,5000)"
             // virtually always means a custom timeout, and silently binding "5000" as the
             // key namespace would corrupt every generated key. An all-digit key prefix
             // must use the explicit three-parameter layout, e.g. "(url,123,1000)".
             if (looksLikeTimeoutParameter(parameters[1])) {
-                return new DistributedCache<>(clientFactory.apply(parseTimeoutParameter(parameters[1])));
+                return newDistributedCacheOrDisconnect(clientFactory.apply(parseTimeoutParameter(parameters[1])), null);
             }
 
             return newDistributedCacheOrDisconnect(clientFactory.apply(DEFAULT_TIMEOUT), parameters[1]);

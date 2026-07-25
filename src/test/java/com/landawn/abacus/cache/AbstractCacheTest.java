@@ -44,142 +44,195 @@ public class AbstractCacheTest extends TestBase {
     }
 
     @Test
+    public void testCacheContract_DeclaresCloseWithoutBeingAutoCloseable() throws NoSuchMethodException {
+        assertFalse(AutoCloseable.class.isAssignableFrom(Cache.class));
+        assertFalse(java.io.Closeable.class.isAssignableFrom(Cache.class));
+        assertEquals(void.class, Cache.class.getDeclaredMethod("close").getReturnType());
+    }
+
+    @Test
     public void testGet() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             cache.put("k", "v");
             final Optional<String> got = cache.get("k");
             assertTrue(got.isPresent());
             assertEquals("v", got.get());
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testGet_EdgeCase_Missing() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             assertFalse(cache.get("missing").isPresent());
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testPutTwoArg_UsesDefaults() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             // Defaults should be applied; verify the entry is stored.
             assertTrue(cache.put("k", "v"));
             assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
     // Async operations
     @Test
     public void testAsyncGet() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             cache.put("k", "v");
             final ContinuableFuture<Optional<String>> f = cache.asyncGet("k");
             final Optional<String> opt = f.get();
             assertTrue(opt.isPresent());
             assertEquals("v", opt.get());
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testAsyncGetOrNull() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             cache.put("k", "v");
             assertEquals("v", cache.asyncGetOrNull("k").get());
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testAsyncGetOrNull_EdgeCase_Missing() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             assertNull(cache.asyncGetOrNull("none").get());
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testAsyncPut() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             assertTrue(cache.asyncPut("k", "v").get());
             assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testAsyncPutWithTimes() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             assertTrue(cache.asyncPut("k", "v", 5000, 5000).get());
             assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testAsyncRemove() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             cache.put("k", "v");
             assertNull(cache.asyncRemove("k").get());
             assertNull(cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testAsyncContainsKey() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             cache.put("k", "v");
             assertTrue(cache.asyncContainsKey("k").get());
             assertFalse(cache.asyncContainsKey("missing").get());
+        } finally {
+            cache.close();
         }
     }
 
     // Properties bag
     @Test
     public void testGetProperties() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             final Properties<String, Object> props = cache.getProperties();
             assertNotNull(props);
             // Returns the same instance on subsequent calls.
             assertTrue(props == cache.getProperties());
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testSetAndGetProperty() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             assertNull(cache.setProperty("name", "alpha"));
             final String name = cache.getProperty("name");
             assertEquals("alpha", name);
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testSetProperty_ReturnsPreviousValue() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             cache.setProperty("name", "v1");
             final String prev = cache.setProperty("name", "v2");
             assertEquals("v1", prev);
             assertEquals("v2", cache.getProperty("name"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testRemoveProperty() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             cache.setProperty("foo", "bar");
             final String removed = cache.removeProperty("foo");
             assertEquals("bar", removed);
             assertNull(cache.getProperty("foo"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testRemoveProperty_EdgeCase_Missing() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             assertNull(cache.removeProperty("never-set"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testProperties_DontAffectCacheEntries() {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             cache.put("a", "1");
             cache.setProperty("a", "this-is-a-property");
             // Cache entries and properties live in separate spaces.
@@ -187,6 +240,8 @@ public class AbstractCacheTest extends TestBase {
             assertEquals("this-is-a-property", cache.getProperty("a"));
             assertDoesNotThrow(() -> cache.removeProperty("a"));
             assertEquals("1", cache.getOrNull("a"));
+        } finally {
+            cache.close();
         }
     }
 
@@ -225,7 +280,8 @@ public class AbstractCacheTest extends TestBase {
 
     @Test
     public void testProperties_ConcurrentMutation_IsThreadSafe() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             final int threads = 8;
             final int perThread = 250;
             final ExecutorService pool = Executors.newFixedThreadPool(threads);
@@ -258,6 +314,8 @@ public class AbstractCacheTest extends TestBase {
                     assertEquals(t * perThread + i, value.intValue());
                 }
             }
+        } finally {
+            cache.close();
         }
     }
 
@@ -269,7 +327,8 @@ public class AbstractCacheTest extends TestBase {
      */
     @Test
     public void testProperties_ComputeIfAbsent_IsAtomic() throws Exception {
-        try (LocalCache<String, String> cache = newCache()) {
+        final LocalCache<String, String> cache = newCache();
+        try {
             final int threads = 16;
             final ExecutorService pool = Executors.newFixedThreadPool(threads);
             final CountDownLatch ready = new CountDownLatch(threads);
@@ -319,6 +378,8 @@ public class AbstractCacheTest extends TestBase {
                 releaseMapping.countDown();
                 pool.shutdownNow();
             }
+        } finally {
+            cache.close();
         }
     }
 
@@ -330,29 +391,38 @@ public class AbstractCacheTest extends TestBase {
     public void testPutTwoArg_DelegatesDefaultLiveAndIdleTimes_NoSwap() {
         final long liveTime = 111_000L;
         final long idleTime = 222_000L;
-        try (RecordingCache<String, String> cache = new RecordingCache<>(liveTime, idleTime)) {
+        final RecordingCache<String, String> cache = new RecordingCache<>(liveTime, idleTime);
+        try {
             assertTrue(cache.put("k", "v"));
             assertEquals(liveTime, cache.lastLiveTime, "defaultLiveTime must be forwarded as liveTime");
             assertEquals(idleTime, cache.lastMaxIdleTime, "defaultMaxIdleTime must be forwarded as maxIdleTime");
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testPutTwoArg_UsesInterfaceDefaultsWhenConstructedWithoutArgs() {
-        try (RecordingCache<String, String> cache = new RecordingCache<>()) {
+        final RecordingCache<String, String> cache = new RecordingCache<>();
+        try {
             assertTrue(cache.put("k", "v"));
             assertEquals(Cache.DEFAULT_LIVE_TIME, cache.lastLiveTime);
             assertEquals(Cache.DEFAULT_MAX_IDLE_TIME, cache.lastMaxIdleTime);
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testGet_WrapsGetOrNull() {
-        try (RecordingCache<String, String> cache = new RecordingCache<>()) {
+        final RecordingCache<String, String> cache = new RecordingCache<>();
+        try {
             cache.put("k", "v");
             assertTrue(cache.get("k").isPresent());
             assertEquals("v", cache.get("k").get());
             assertFalse(cache.get("missing").isPresent());
+        } finally {
+            cache.close();
         }
     }
 

@@ -51,6 +51,8 @@ import redis.clients.jedis.RedisClusterClient;
  * <p><b>Thread Safety:</b> This client is thread-safe. The single {@link RedisClusterClient} maintains
  * an internal connection pool per node and transparently borrows and returns connections per command,
  * so it may be freely shared across threads.
+ * Instances are intended to be long-lived and application-scoped; optionally call
+ * {@link #disconnect()} once during application shutdown rather than around each cache use.
  *
  * <p><b>flushAll:</b> {@link #flushAll()} broadcasts {@code FLUSHALL} to every primary (master) node
  * in the cluster. If any master fails, Jedis raises a broadcast exception after attempting them all.
@@ -68,8 +70,7 @@ import redis.clients.jedis.RedisClusterClient;
  * // Use atomic counters
  * long pageViews = cache.incr("page:views");
  *
- * // Clean up when done
- * cache.disconnect();
+ * // Retain and share the client; optionally disconnect it during application shutdown.
  * }</pre>
  *
  * @param <T> the type of objects to be cached
@@ -96,6 +97,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      *
      * // Several seed nodes for resilient bootstrapping
      * JRedisCluster<User> ha = new JRedisCluster<>("10.0.0.1:7000,10.0.0.2:7000,10.0.0.3:7000");
+     * // Retain and share cache/ha; optionally disconnect them during application shutdown.
      *
      * // Negative: null serverUrl is rejected up-front
      * JRedisCluster<User> bad = new JRedisCluster<>((String) null);           // throws IllegalArgumentException
@@ -208,9 +210,9 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
     }
 
     /**
-     * Removes all keys from the entire Redis Cluster.
-     * This is a destructive operation that affects all data across all nodes. Use with extreme caution
-     * in production environments.
+     * Requests removal of all keys from every primary in the Redis Cluster.
+     * A successful broadcast removes all data across the cluster. Use with extreme caution in
+     * production environments because a partially failed broadcast may still flush some primaries.
      *
      * <p><b>Redis-specific behavior:</b> {@code FLUSHALL} is broadcast to every primary (master) node
      * in the cluster (replicas are not targeted, so no {@code READONLY} errors occur). If one or more

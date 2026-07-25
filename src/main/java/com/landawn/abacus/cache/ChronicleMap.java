@@ -49,7 +49,6 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * String value = map.getOrNull("k");                  // returns "v"
      * map.getOrNull("absent");                            // returns null (key not present)
      * map.getOrNull((String) null);                       // throws IllegalArgumentException (key must not be null)
-     * map.close();                                        // releases the eviction scheduler
      * }</pre>
      *
      */
@@ -71,8 +70,6 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * // An evictDelay of 0 is allowed and disables automatic background eviction.
      * Cache<String, Integer> noEvict = new ChronicleMap<>(64, 0L);   // valid
-     * noEvict.close();                                    // release cache resources
-     * map.close();                                        // stop its background eviction task
      *
      * // Edge cases (validated by the constructor):
      * new ChronicleMap<>(0, 60_000L);    // throws IllegalArgumentException (capacity must be positive)
@@ -109,8 +106,6 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * // Non-positive default times mean "no expiration" for entries added via put(key, value).
      * Cache<String, String> noExpire = new ChronicleMap<>(16, 0L, 0L, 0L);   // valid
-     * noExpire.close();                                   // release cache resources
-     * map.close();                                        // stop its background eviction task
      *
      * // Edge cases (validated by the constructor):
      * new ChronicleMap<>(0, 30_000L, 3_600_000L, 300_000L);      // throws IllegalArgumentException (capacity must be positive)

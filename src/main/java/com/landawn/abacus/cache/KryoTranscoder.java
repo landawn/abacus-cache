@@ -73,17 +73,33 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * constructor. Reused across instances to avoid the cost of building a parser per transcoder;
      * it pools Kryo/Output/Input instances internally under locks, so it is safe for concurrent
      * use. Held in a nested holder class so that constructing a {@code KryoTranscoder} with a
-     * caller-supplied parser never touches it — creating the default parser fails with
-     * {@code NoClassDefFoundError} when the optional Kryo dependency is absent, and that failure
-     * must not leak into code paths that never need the default.
+     * caller-supplied parser never touches it. When the optional Kryo dependency is absent, the
+     * default-parser path fails with an actionable {@link IllegalStateException}; that failure must
+     * not leak into code paths that never need the default.
      */
     private static final class DefaultParserHolder {
         static final KryoParser DEFAULT_KRYO_PARSER = ParserFactory.createKryoParser();
     }
 
+    private static KryoParser defaultKryoParser() {
+        if (!ParserFactory.isKryoParserAvailable()) {
+            throw new IllegalStateException("Kryo is required by KryoTranscoder but is not on the classpath;"
+                    + " add the optional com.esotericsoftware:kryo dependency or use another transcoder");
+        }
+
+        // Touch the lazy holder only after the normal-method availability check. Throwing from the
+        // holder initializer would wrap the documented IllegalStateException in
+        // ExceptionInInitializerError and permanently poison this class-init path.
+        return DefaultParserHolder.DEFAULT_KRYO_PARSER;
+    }
+
     private final KryoParser kryoParser;
 
     private final int maxSize;
+
+    private static int checkMaxSize(final int maxSize) {
+        return N.checkArgPositive(maxSize, "maxSize");
+    }
 
     /**
      * Creates a new {@code KryoTranscoder} configured with the default maximum size.
@@ -107,6 +123,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * @see #KryoTranscoder(int)
      * @see CachedData#MAX_SIZE
+     * @throws IllegalStateException if the optional Kryo dependency is unavailable
      */
     public KryoTranscoder() {
         this(CachedData.MAX_SIZE);
@@ -143,18 +160,23 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * @param maxSize the maximum size in bytes for cached objects; must be positive
      * @throws IllegalArgumentException if {@code maxSize} is not positive
+     * @throws IllegalStateException if the optional Kryo dependency is unavailable
      * @see #KryoTranscoder(int, KryoParser)
      */
     public KryoTranscoder(final int maxSize) {
-        this(maxSize, DefaultParserHolder.DEFAULT_KRYO_PARSER);
+        // Constructor arguments are evaluated left-to-right. Validate before touching the lazy
+        // default-parser holder so an invalid size always produces the documented argument error
+        // (and does not initialize Kryo unnecessarily).
+        this(checkMaxSize(maxSize), defaultKryoParser());
     }
 
     /**
      * Creates a new {@code KryoTranscoder} with the default maximum size ({@link CachedData#MAX_SIZE})
      * and a caller-supplied {@link KryoParser}.
      * Use this constructor to control Kryo configuration - most importantly pre-registering classes,
-     * which makes the serialized form more compact and version-stable - instead of relying on the
-     * shared default parser.
+     * which can make the serialized form more compact. For wire-format stability, use explicit,
+     * stable registration IDs; automatically assigned IDs are safe only when registration order is
+     * identical in every process that reads the data.
      *
      * <p><b>Thread Safety:</b> The supplied {@link KryoParser} must be safe for concurrent use; the
      * bundled parsers pool Kryo/Output/Input instances internally. Complete all registrations and
@@ -174,7 +196,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * Objects whose serialized form exceeds {@code maxSize} cannot be cached, and
      * {@link #encode(Object)} will throw {@link IllegalArgumentException} when this limit is exceeded.
      * Supplying the parser lets callers control Kryo configuration (e.g. class pre-registration for
-     * compactness and version stability) rather than relying on the shared default parser.
+     * compactness, with explicit stable IDs when wire compatibility matters) rather than relying on
+     * the shared default parser.
      *
      * <p><b>Thread Safety:</b> The supplied {@link KryoParser} must be safe for concurrent use; the
      * bundled parsers pool Kryo/Output/Input instances internally. Complete all registrations and
@@ -191,7 +214,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @throws IllegalArgumentException if {@code maxSize} is not positive or {@code kryoParser} is {@code null}
      */
     public KryoTranscoder(final int maxSize, final KryoParser kryoParser) {
-        this.maxSize = N.checkArgPositive(maxSize, "maxSize");
+        this.maxSize = checkMaxSize(maxSize);
         this.kryoParser = N.checkArgNotNull(kryoParser, "kryoParser");
     }
 

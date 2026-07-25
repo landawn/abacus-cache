@@ -58,10 +58,12 @@ import lombok.experimental.Accessors;
  * <li>Requires the finalized Foreign Function &amp; Memory API (Java 22+; available as a preview in earlier releases)</li>
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
- * <li>Memory is allocated during construction and held until {@link #close()}</li>
+ * <li>Memory is allocated during construction and normally retained for the application lifetime;
+ *     a registered JVM shutdown hook releases it at process shutdown, and {@link #close()} is
+ *     available for deliberate early decommissioning</li>
  * </ul>
  *
- * <p>Example usage:
+ * <p>Example of an application-wide cache:
  * <pre>{@code
  * ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]>builder()
  *     .capacityInMB(100)
@@ -77,7 +79,6 @@ import lombok.experimental.Accessors;
  * OffHeapCacheStats stats = cache.stats();
  * System.out.println("Memory utilization: " +
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
- * cache.close();
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -104,13 +105,14 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * Creates a {@code ForeignMemoryOffHeapCache} with the specified capacity in megabytes.
      * Uses a default eviction delay of 3 seconds (3000 milliseconds) and default expiration times
      * ({@link Cache#DEFAULT_LIVE_TIME 3 hours TTL} and {@link Cache#DEFAULT_MAX_IDLE_TIME 30 minutes idle time}).
-     * Memory is allocated at construction time and held until {@link #close()}.
+     * Memory is allocated at construction time and normally retained for the application lifetime.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
      * <p><b>Memory Management:</b>
      * The memory is allocated immediately from native (off-heap) memory using the Foreign Memory API ({@link Arena}).
-     * This memory remains allocated until {@link #close()} is called. The actual allocation size is
-     * {@code capacityInMB * 1048576} bytes (1MB = 1,048,576 bytes).
+     * A registered JVM shutdown hook releases it at process shutdown; {@link #close()} is available
+     * for deliberate early release. The actual allocation size is {@code capacityInMB * 1048576}
+     * bytes (1MB = 1,048,576 bytes).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -123,7 +125,6 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * byte[] largeData = new byte[1024];
      * cache.put("key1", largeData);
      * byte[] retrieved = cache.getOrNull("key1");
-     * cache.close();
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
@@ -162,7 +163,6 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * Data data = new Data();
      * cache.put(123L, data, 7200000, 3600000);   // 2h TTL, 1h idle
      * Data retrieved = cache.getOrNull(123L);
-     * cache.close();
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
@@ -180,7 +180,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
 
     /**
      * Creates a {@code ForeignMemoryOffHeapCache} with fully specified basic parameters.
-     * Memory is allocated at construction time and held until {@link #close()}.
+     * Memory is allocated at construction time and normally retained for the application lifetime;
+     * a registered JVM shutdown hook releases it at process shutdown.
      * This constructor provides complete control over cache timing behavior.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
@@ -200,7 +201,6 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *     .build();
      * cache.put("key1", "data".getBytes());
      * byte[] data = cache.getOrNull("key1");
-     * cache.close();
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
@@ -453,7 +453,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *     .vacatingFactor(0.3f)          // evict 30% of entries (LRU first) under memory pressure
      *     .offHeapStore(diskStore)       // spill to disk when memory is full
      *     .statsTimeOnDisk(true)         // track disk read/write timing
-     *     .build();                      // returns a ForeignMemoryOffHeapCache with disk spillover enabled
+     *     .build();                      // returns an application-scoped cache with disk spillover enabled
      * }</pre>
      *
      * @param <K> the type of keys used to identify cache entries
@@ -478,7 +478,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * stores may be invoked concurrently and therefore must be thread-safe.
      *
      * <p><b>&#9888;&#65039; Store ownership:</b> A built cache assumes ownership of its configured
-     * {@link OffHeapStore} and closes it when the cache is closed.
+     * {@link OffHeapStore} and closes it during explicit early shutdown or from the cache's JVM
+     * shutdown hook.
      *
      * <p><b>Default Values:</b>
      * <ul>
@@ -544,7 +545,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * builder.capacityInMB(100)                                                  // each fluent setter returns the same builder instance
          *        .evictDelay(60000)
          *        .defaultLiveTime(3600000);                       // mutates builder in place; result is the same builder reference
-         * ForeignMemoryOffHeapCache<String, Data> cache = builder.build();   // allocates native memory; returns a ForeignMemoryOffHeapCache
+         * ForeignMemoryOffHeapCache<String, Data> cache = builder.build();   // allocates native memory for an application-scoped cache
          * }</pre>
          *
          */
@@ -615,7 +616,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
         /**
          * Custom serializer for converting values to byte streams.
          * The serializer receives the value and a {@link ByteArrayOutputStream}, and should write
-         * the complete serialized form to the stream.
+         * the complete serialized form to the stream. Primitive {@code byte[]} and
+         * {@link java.nio.ByteBuffer} values use the cache's direct raw-byte paths and do not
+         * invoke this serializer.
          *
          * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
@@ -624,12 +627,13 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
         /**
          * Custom deserializer for converting byte arrays back to values.
          * The function receives the byte array and the value {@link Type}, and should return
-         * the deserialized value instance.
+         * the deserialized value instance. Primitive {@code byte[]} and
+         * {@link java.nio.ByteBuffer} values use the cache's direct raw-byte paths and do not
+         * invoke this deserializer.
          *
-         * <p>The deserializer must NOT mutate the supplied byte array: when a disk-spilled
-         * entry is promoted back to off-heap memory, the same array that was passed to the
-         * deserializer is subsequently copied into native memory, so in-place modification
-         * (e.g., in-place decryption) would corrupt the promoted copy.
+         * <p>The function receives a cache-owned working array and may decode it in place. When a
+         * disk read may be promoted to off-heap memory, the cache preserves a separate pristine
+         * copy for that promotion.
          *
          * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
@@ -663,6 +667,7 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * <li>{@link Long} - I/O elapsed time in milliseconds</li>
          * </ul>
          * Return {@code true} to promote the value from disk to memory.
+         * Treat the supplied live {@link ActivityPrint} as read-only.
          * Only applies when {@link #offHeapStore} is configured.
          *
          * <p>Default: {@code null} (automatic promotion disabled)
@@ -691,7 +696,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *
          * <p><b>Memory Management:</b>
          * Calling this method immediately allocates native memory using the Foreign Memory API.
-         * The returned cache must be released by calling {@link ForeignMemoryOffHeapCache#close()}.
+         * The cache registers a JVM shutdown hook for application-lifetime cleanup; call
+         * {@link ForeignMemoryOffHeapCache#close()} only to release it deliberately before JVM shutdown.
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code
@@ -700,13 +706,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *     .capacityInMB(200)         // 200MB off-heap (required, must be positive)
          *     .evictDelay(60000)         // scan for expired entries every 60s
          *     .vacatingFactor(0.3f)      // evict 30% of entries (LRU first) under memory pressure
-         *     .build();                  // allocates native memory now; returns a ForeignMemoryOffHeapCache
-         * try {
-         *     cache.put("key", data);                    // serializes + copies the value off-heap; returns true on success
-         *     Data retrieved = cache.getOrNull("key");   // returns the cached value, or null if absent/expired
-         * } finally {
-         *     cache.close();             // releases the native memory (Arena); required to avoid leaks
-         * }
+         *     .build();                  // application-scoped cache; native memory now allocated
+         * cache.put("key", data);                    // serializes + copies the value off-heap; returns true on success
+         * Data retrieved = cache.getOrNull("key");   // returns the cached value, or null if absent/expired
          *
          * // Advanced cache with disk spillover
          * OffHeapStore<String> store = myOffHeapStoreImplementation;   // your disk-backed store
@@ -719,12 +721,13 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *     .vacatingFactor(0.25f)     // evict 25% of entries (LRU first) on vacate
          *     .offHeapStore(store)       // spill to disk when memory is full
          *     .statsTimeOnDisk(true)     // track disk read/write timing
-         *     .build();                  // returns a ForeignMemoryOffHeapCache with disk spillover enabled
+         *     .build();                  // returns an application-scoped cache with disk spillover enabled
          *
          * // build() validates eagerly:
          * ForeignMemoryOffHeapCache.<String, Data>builder().build();                          // throws IllegalArgumentException (capacityInMB not set / 0)
          * ForeignMemoryOffHeapCache.<String, Data>builder().capacityInMB(8).maxBlockSizeInBytes(512).build();   // throws IllegalArgumentException (maxBlockSizeInBytes < 1024)
-         * ForeignMemoryOffHeapCache.<String, Data>builder().capacityInMB(8).maxBlockSizeInBytes(0).build();      // ok: 0 is replaced with the default 8192
+         * ForeignMemoryOffHeapCache<String, Data> defaultBlock = ForeignMemoryOffHeapCache.<String, Data>builder()
+         *     .capacityInMB(8).maxBlockSizeInBytes(0).build();                                // ok: 0 is replaced with the default 8192
          * }</pre>
          *
          * @return a new {@link ForeignMemoryOffHeapCache} instance configured with the builder settings

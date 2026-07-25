@@ -46,10 +46,14 @@ import com.landawn.abacus.util.Strings;
  *
  * <p><b>Construction:</b> Constructors are {@code protected}; obtain instances through
  * {@link CacheFactory#createDistributedCache(DistributedCacheClient, String, int, long)} and its overloads.
+ * A wrapper takes ownership of the supplied client: {@link #close()} disconnects it. Do not reuse
+ * that client afterward or share it among wrappers whose lifecycles are managed independently.
+ * Both the wrapper and its client are intended to be long-lived, application-scoped objects. Closing
+ * is an optional terminal application/component lifecycle action, not routine per-operation cleanup.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
- * // Create cache with full configuration via the factory
+ * // Create once during application setup and share across requests/threads.
  * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
  * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(
  *     client,
@@ -62,9 +66,6 @@ import com.landawn.abacus.util.Strings;
  * User user = new User("John");
  * cache.put("user:123", user, 3600000, 0);   // 1 hour TTL, maxIdleTime ignored
  * User cached = cache.getOrNull("user:123");
- *
- * // Always close to release resources
- * cache.close();
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -103,10 +104,6 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     private final long retryDelay;
 
-    // Sentinel for "no failure recorded" in lastFailedTime. System.nanoTime() values are
-    // arbitrary (and may be negative), so a real timestamp can't double as the sentinel.
-    private static final long NEVER_FAILED = Long.MIN_VALUE;
-
     // Base64 of an empty byte sequence is the empty string, which is not a legal Memcached key.
     // '-' is outside the standard Base64 alphabet, so it cannot collide with any non-empty encoded key.
     private static final String EMPTY_KEY_MARKER = "-";
@@ -115,11 +112,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     private final long retryDelayNanos;
 
     /** Initial, closed state shared by resets (the record is immutable). */
-    private static final CircuitBreakerState CLOSED_CIRCUIT = new CircuitBreakerState(0, NEVER_FAILED);
+    private static final CircuitBreakerState CLOSED_CIRCUIT = new CircuitBreakerState(0, 0L, false);
 
     /**
-     * The failure count and its timestamp form one logical value and therefore must be published
-     * atomically. Keeping them in separate atomics allowed this interleaving:
+     * The failure count, timestamp, and recorded-failure marker form one logical value and therefore
+     * must be published atomically. Keeping the count and timestamp in separate atomics allowed this
+     * interleaving:
      * <ol>
      * <li>a successful read reset the count;</li>
      * <li>a concurrent failed read published its timestamp;</li>
@@ -127,7 +125,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <li>the failed read incremented the count.</li>
      * </ol>
      * The resulting state (positive count, "never failed" timestamp) silently disabled the open
-     * circuit until another failure repaired it. An immutable pair in one atomic reference makes
+     * circuit until another failure repaired it. One immutable state value in an atomic reference makes
      * every observed state coherent without adding locking to the steady-state successful-read path.
      */
     private final AtomicReference<CircuitBreakerState> circuitBreaker = new AtomicReference<>(CLOSED_CIRCUIT);
@@ -150,6 +148,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Cache operations will use circuit breaker protection
      * cache.put("key", new User("John"), 3600000, 0);
      * User user = cache.getOrNull("key");
+     * // Retain and share cache; optionally close it during application shutdown.
      * }</pre>
      *
      * @param client the distributed cache client to wrap (must not be {@code null})
@@ -175,6 +174,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // All keys will be prefixed with "myapp:" and Base64 encoded
      * cache.put("user:123", new User("John"), 3600000, 0);
      * // Actual cache key: "myapp:" + Base64("user:123")
+     * // Retain and share cache; optionally close it during application shutdown.
      * }</pre>
      *
      * @param client the distributed cache client to wrap (must not be {@code null})
@@ -196,7 +196,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Circuit Breaker Parameters:</b>
      * <ul>
-     * <li>{@code maxFailedNumForRetry}: Number of consecutive failures before circuit opens</li>
+     * <li>{@code maxFailedNumForRetry}: Number of consecutive failures before the circuit opens
+     *     ({@code 0} means the first recorded failure)</li>
      * <li>{@code retryDelay}: Milliseconds to wait before attempting retry after circuit opens</li>
      * </ul>
      *
@@ -205,23 +206,25 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     *
      * // More aggressive circuit breaker (opens faster, retries sooner)
+     * DistributedCacheClient<User> aggressiveClient = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> aggressiveCache = CacheFactory.createDistributedCache(
-     *     client,
+     *     aggressiveClient,
      *     "myapp:",  // key prefix for namespace isolation
      *     10,        // open circuit after just 10 consecutive failures
      *     500        // retry after 500ms
      * );
+     * // Retain aggressiveCache as an application-scoped cache.
      *
      * // More tolerant circuit breaker (slower to open, longer retry delay)
+     * DistributedCacheClient<User> tolerantClient = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> tolerantCache = CacheFactory.createDistributedCache(
-     *     client,
+     *     tolerantClient,
      *     "myapp:",
      *     200,       // allow up to 200 consecutive failures
      *     5000       // wait 5 seconds before retry
      * );
+     * // Retain tolerantCache as an application-scoped cache.
      * }</pre>
      *
      * @param client the distributed cache client to wrap (must not be {@code null})
@@ -230,7 +233,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        printable ASCII characters without spaces or control characters. Including at least one character
      *        outside the Base64 alphabet (such as {@code ':'}) is recommended: it guarantees prefixed and
      *        unprefixed namespaces can never collide
-     * @param maxFailedNumForRetry maximum consecutive failures before opening circuit breaker (must be non-negative).
+     * @param maxFailedNumForRetry maximum consecutive failures before opening the circuit breaker
+     *                             (must be non-negative); {@code 0} opens it after the first
+     *                             recorded backend failure
      *        A value of {@code 0} is a degenerate configuration in which the circuit opens on every failure for
      *        {@code retryDelay} ms; in that mode the failure counter stays at 0 and the closed-to-open WARN
      *        transition log is not emitted
@@ -289,7 +294,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>State Transitions:</b>
      * <ul>
-     * <li>Successful operation: Atomically resets the failure count to 0 and clears the last-failure timestamp (closes circuit)</li>
+     * <li>Successful operation: Atomically resets the failure count to 0 and clears the recorded-failure marker (closes circuit)</li>
      * <li>Failed operation: Atomically increments the failure count (capped at the threshold) and records the failure
      *     time using a monotonic clock ({@code System.nanoTime()}), so wall-clock adjustments cannot affect the window</li>
      * <li>Local key conversion/validation runs before the circuit check, so an invalid application key
@@ -370,7 +375,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         // System.nanoTime(), so wall-clock corrections cannot extend the fail-fast window.
         final CircuitBreakerState breakerSnapshot = circuitBreaker.get();
 
-        if ((breakerSnapshot.failedCount >= maxFailedNumForRetry) && (breakerSnapshot.lastFailedTime != NEVER_FAILED)
+        if ((breakerSnapshot.failedCount >= maxFailedNumForRetry) && breakerSnapshot.hasFailure
                 && ((System.nanoTime() - breakerSnapshot.lastFailedTime) < retryDelayNanos)) {
             return null;
         }
@@ -418,14 +423,17 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 // Publish the new timestamp and capped count in one CAS update. Besides preventing
                 // a torn state, this keeps the counter from overflowing after prolonged outages.
                 final CircuitBreakerState previousState = circuitBreaker.getAndUpdate(current -> new CircuitBreakerState(
-                        current.failedCount < maxFailedNumForRetry ? current.failedCount + 1 : current.failedCount, failedAt));
+                        current.failedCount < maxFailedNumForRetry ? current.failedCount + 1 : current.failedCount, failedAt, true));
 
                 // Surface the closed->open transition once at WARN: while the circuit is open
                 // every read returns null with only debug-level logging, so without this the
                 // cache can be silently disabled in production.
-                if (previousState.failedCount == maxFailedNumForRetry - 1 && logger.isWarnEnabled()) {
-                    logger.warn("Distributed cache circuit breaker opened after " + maxFailedNumForRetry
-                            + " consecutive read failures; reads will fail fast (returning null) until " + retryDelay
+                final boolean circuitJustOpened = maxFailedNumForRetry == 0 ? !previousState.hasFailure : previousState.failedCount == maxFailedNumForRetry - 1;
+
+                if (circuitJustOpened && logger.isWarnEnabled()) {
+                    final int effectiveFailureThreshold = Math.max(1, maxFailedNumForRetry);
+                    logger.warn("Distributed cache circuit breaker opened after " + effectiveFailureThreshold + " consecutive read failure"
+                            + (effectiveFailureThreshold == 1 ? "" : "s") + "; reads will fail fast (returning null) until " + retryDelay
                             + " ms have elapsed since the most recent failure");
                 }
             }
@@ -672,10 +680,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
-     * // keySet() is never supported on a distributed cache.
-     * cache.keySet();                                  // throws UnsupportedOperationException
-     *
-     * // It throws even on an empty cache (nothing has been put yet).
+     * // keySet() is never supported, even on an empty distributed cache.
      * try {
      *     Set<String> keys = cache.keySet();           // throws UnsupportedOperationException
      * } catch (UnsupportedOperationException e) {
@@ -714,10 +719,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
-     * // size() is never supported on a distributed cache.
-     * cache.size();                                    // throws UnsupportedOperationException
-     *
-     * // It throws even right after a successful put (the count is not tracked).
+     * // size() is never supported; it throws even after a successful put.
      * cache.put("user:123", new User("John"), 3600000, 0);   // returns true
      * try {
      *     int count = cache.size();                    // throws UnsupportedOperationException
@@ -738,22 +740,24 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes all entries from all connected cache servers.
-     * This is a destructive operation that affects <b>ALL data across ALL servers</b>,
-     * not just entries with the configured key prefix. Use with extreme caution in production environments.
+     * Requests a flush of the scope defined by the underlying {@link DistributedCacheClient}.
+     * The bundled clients flush every configured server (or every Redis Cluster primary), not just
+     * entries with this wrapper's key prefix. Other implementations may define a narrower database
+     * or namespace scope. Use with extreme caution in production environments.
      *
-     * <p><b>&#9888;&#65039; Global destructive impact:</b>
+     * <p><b>&#9888;&#65039; Potentially global destructive impact:</b>
      * <ul>
-     * <li>Flushes <b>ALL</b> data from all cache servers (not just keys with this instance's prefix)</li>
-     * <li>Affects all applications sharing the same cache servers</li>
-     * <li>Cannot be undone - all cached data is permanently lost</li>
+     * <li>With the bundled clients, flushes <b>ALL</b> data in their documented server/cluster scope
+     *     (not just keys with this instance's prefix)</li>
+     * <li>Can affect all applications sharing that backend scope</li>
+     * <li>Cannot be undone - flushed cached data is permanently lost</li>
      * <li>May cause sudden load spike on backend systems as all caches become cold simultaneously</li>
      * <li>Should typically only be used in testing or with dedicated cache servers</li>
      * <li>Does not reset the circuit breaker state</li>
      * </ul>
      *
      * <p><b>Thread Safety:</b>
-     * This method is thread-safe. However, due to the global impact, concurrent calls from
+     * This method is thread-safe. However, due to the potentially global impact, concurrent calls from
      * multiple threads will all trigger flush operations on the distributed cache servers.
      *
      * <p><b>Usage Examples:</b>
@@ -761,15 +765,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      *
-     * // WARNING: This will flush ALL data from all cache servers!
+     * // WARNING: This can flush ALL data from every configured cache server!
      * // Not just "myapp:" prefixed keys, but EVERYTHING!
-     * cache.clear();   // flushes every entry on all servers; returns void
+     * cache.clear();   // requests the underlying client's full flush scope; returns void
      *
      * // Safe usage in testing (with dedicated test cache server)
-     * // @After
+     * // @AfterEach
      * public void cleanupCache() {
      *     if (isTestEnvironment()) {
-     *         testCache.clear();   // OK - dedicated test server; flushes all and returns void
+     *         testCache.clear();   // OK - requests the dedicated servers' full flush scope
      *     }
      * }
      *
@@ -784,7 +788,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
-     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalStateException if the cache has been closed, or if the underlying client reports
+     *         the flush as unsuccessful (the bundled {@link SpyMemcached} client does this; note that
+     *         with multiple servers its success flag is a last-writer-wins aggregate)
      * @throws UnsupportedOperationException if the underlying client does not support {@code flushAll}
      *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
@@ -799,15 +805,20 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Closes the cache and disconnects from all distributed cache servers.
+     * Permanently shuts down this cache wrapper and disconnects its owned client from all
+     * distributed cache servers.
      * After closing, supported stateful operations - the data operations and the property
      * mutators ({@code setProperty}/{@code removeProperty}) - throw {@link IllegalStateException};
-     * property reads and {@code serverUrl()} remain usable as configuration accessors, while
+     * property reads remain usable as configuration accessors, while
      * {@link #keySet()} and {@link #size()} remain unsupported and throw
      * {@link UnsupportedOperationException} regardless of lifecycle state.
      * This method is idempotent and thread-safe - calling multiple times has no additional effect after the first call.
      *
-     * <p><b>Resource Cleanup:</b>
+     * <p>This is an optional terminal lifecycle operation for an application-scoped cache. Cache
+     * wrappers and their pooled clients should normally be retained and shared; do not call this
+     * method after each request or cache operation.
+     *
+     * <p><b>Lifecycle effects:</b>
      * <ul>
      * <li>Disconnects from all cache servers</li>
      * <li>Releases network connections and thread pools managed by the underlying cache client</li>
@@ -839,36 +850,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Try-with-resources (recommended - implements AutoCloseable)
-     * try (DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:")) {
-     *     cache.put("user:123", user, 3600000, 0);      // returns true
-     *     User cached = cache.getOrNull("user:123");    // returns the cached User
-     *     // Cache automatically closed when exiting try block
+     * // Optional lifecycle callback for an application-scoped cache
+     * @PreDestroy
+     * public void shutdownCache() {
+     *     applicationCache.close(); // also disconnects the client owned by this wrapper
      * }
      *
-     * // Try-finally pattern
-     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
-     * try {
-     *     cache.put("key", value, 3600000, 0);          // returns true
-     *     // ... use cache
-     * } finally {
-     *     cache.close();   // releases resources; disconnects the client
-     * }
-     *
-     * // Application shutdown hook
-     * Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-     *     if (!cache.isClosed()) {                       // returns false until close() runs
-     *         cache.close();                             // disconnects; sets isClosed() to true
-     *     }
-     * }));
-     *
-     * // Safe to call multiple times (idempotent)
-     * cache.close();   // first call disconnects the client
-     * cache.close();   // no-op; no exception thrown, disconnect not repeated
-     *
-     * // Verify operations fail after close
-     * cache.close();              // marks the cache closed
+     * // Lifecycle test: close is idempotent and terminal
+     * cache.close();              // marks the cache closed and disconnects its owned client
+     * cache.close();              // no-op
      * cache.getOrNull("key");     // throws IllegalStateException (cache is closed)
      * }</pre>
      *
@@ -931,8 +921,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     logger.warn("Cache is closed, skipping cache operation");   // logged when isClosed() is true
      * }
      *
-     * // Verify state after closing
-     * cache.close();                                    // disconnects the client
+     * // Verify state at application shutdown
+     * cache.close();                                    // terminally disconnects the owned client
      * System.out.println("Is closed: " + cache.isClosed());   // isClosed() returns true
      *
      * // Safe guard in long-running operations
@@ -1080,7 +1070,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /** Atomically published circuit-breaker state. */
-    private record CircuitBreakerState(int failedCount, long lastFailedTime) {
+    /**
+     * Atomically published circuit-breaker state. {@code hasFailure} is explicit because every
+     * {@code long} value is a legal {@link System#nanoTime()} result; using a magic timestamp as a
+     * "never failed" sentinel can collide with a real failure time.
+     */
+    private record CircuitBreakerState(int failedCount, long lastFailedTime, boolean hasFailure) {
     }
 }

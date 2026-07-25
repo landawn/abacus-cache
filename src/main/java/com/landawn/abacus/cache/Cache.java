@@ -14,7 +14,6 @@
 
 package com.landawn.abacus.cache;
 
-import java.io.Closeable;
 import java.util.Set;
 
 import com.landawn.abacus.util.ContinuableFuture;
@@ -32,7 +31,7 @@ import com.landawn.abacus.util.u.Optional;
  * <li>Time-to-live (TTL) and idle timeout support</li>
  * <li>Optional-based API for null-safe operations</li>
  * <li>Property bag for custom configuration</li>
- * <li>Resource management via Closeable</li>
+ * <li>An explicit shutdown operation for retiring a cache early when its owner requires it</li>
  * </ul>
  *
  * <p>Example usage:
@@ -57,7 +56,7 @@ import com.landawn.abacus.util.u.Optional;
  * @see DistributedCache
  * @see CacheFactory
  */
-public interface Cache<K, V> extends Closeable {
+public interface Cache<K, V> {
 
     /**
      * Default time-to-live for cache entries: 3 hours (in milliseconds).
@@ -167,19 +166,21 @@ public interface Cache<K, V> extends Closeable {
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
      * // Basic put operation
+     * User user = loadFromDatabase("user:123");
      * boolean success = cache.put("user:123", user);
      * if (success) {
      *     System.out.println("User cached successfully");
      * }
      *
      * // Update existing entry
+     * User updatedUser = loadFromDatabase("user:123");
      * cache.put("user:123", updatedUser);   // Replaces previous value
      *
      * // Cache-aside pattern
-     * User user = cache.getOrNull("user:123");
-     * if (user == null) {
-     *     user = loadFromDatabase("user:123");
-     *     cache.put("user:123", user);
+     * User cachedUser = cache.getOrNull("user:123");
+     * if (cachedUser == null) {
+     *     cachedUser = loadFromDatabase("user:123");
+     *     cache.put("user:123", cachedUser);
      * }
      * }</pre>
      *
@@ -280,6 +281,9 @@ public interface Cache<K, V> extends Closeable {
      * <li>Returns {@code false} if the key does not exist</li>
      * <li>Whether the call updates access time / LRU ordering / idle counters is implementation-defined</li>
      * <li>Whether expired-but-not-yet-evicted entries are visible here is implementation-defined</li>
+     * <li>Whether the call is side-effect-free is implementation-defined: some implementations
+     *     (e.g. {@link LocalCache}) reclaim an expired entry they encounter here, so a probe can
+     *     change {@link #size()}</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -467,7 +471,7 @@ public interface Cache<K, V> extends Closeable {
      *
      * // The returned Set may be a snapshot, an unmodifiable set, or a live view. Copy it before
      * // traversing while invalidating entries, and call remove() on the cache itself.
-     * new HashSet<>(cache.keySet()).stream()
+     * new java.util.HashSet<>(cache.keySet()).stream()
      *     .filter(key -> key.startsWith("temp:"))
      *     .forEach(cache::remove);
      * }</pre>
@@ -535,10 +539,15 @@ public interface Cache<K, V> extends Closeable {
     void clear();
 
     /**
-     * Closes the cache and releases its resources. After closing, the cache cannot be reopened;
-     * the behavior of subsequent operations is implementation-defined (typically they throw or
-     * return as if empty). This method is expected to be idempotent — calling it more than once
-     * has no additional effect.
+     * Explicitly shuts down this cache before the end of its normal owner-managed lifecycle.
+     * This operation is intended for early retirement of a cache instance, such as when replacing
+     * a dynamically configured cache or stopping the component that owns it. It is not a
+     * {@link java.lang.AutoCloseable} contract and does not make {@code Cache} eligible for
+     * try-with-resources.
+     *
+     * <p>After shutdown, the cache cannot be reopened; the behavior of subsequent operations is
+     * implementation-defined (typically they throw or return as if empty). This method is expected
+     * to be idempotent — calling it more than once has no additional effect.
      *
      * <p><b>Typical resource cleanup:</b>
      * <ul>
@@ -548,23 +557,19 @@ public interface Cache<K, V> extends Closeable {
      * <li>Releases file handles or other system resources</li>
      * </ul>
      *
-     * <p><b>Override:</b> Although {@link Closeable#close()} declares {@code throws IOException},
-     * this override drops the checked exception so a cache can be used in try-with-resources
-     * without forcing callers to handle IOException.
-     *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Try-with-resources (recommended)
-     * try (Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000)) {
-     *     cache.put("key", value);
-     *     User user = cache.getOrNull("key");
+     * Cache<String, User> cache = cacheRegistry.get("users");
+     * // ... the owning component uses the cache over its normal lifetime ...
+     *
+     * // Explicit early shutdown when the owner retires this cache instance.
+     * if (cacheRegistry.remove("users", cache)) {
+     *     cache.close();
      * }
      * }</pre>
      *
-     * @see Closeable#close()
      * @see #isClosed()
      */
-    @Override
     void close();
 
     /**
@@ -575,12 +580,11 @@ public interface Cache<K, V> extends Closeable {
      * <pre>{@code
      * Cache<String, User> cache = CacheFactory.createLocalCache(1000, 60000);
      *
-     * if (!cache.isClosed()) {
+     * if (cache.isClosed()) {
+     *     System.out.println("Cache has already been retired");
+     * } else {
      *     cache.put("key", value);
      * }
-     *
-     * cache.close();
-     * System.out.println("Is closed: " + cache.isClosed());   // true
      * }</pre>
      *
      * @return {@code true} if {@link #close()} has been called, {@code false} otherwise
@@ -640,9 +644,11 @@ public interface Cache<K, V> extends Closeable {
     <T> T getProperty(String propName);
 
     /**
-     * Sets a property value. Equivalent to {@code getProperties().put(propName, propValue)}.
-     * The previous value (if any) is returned as an unchecked cast to {@code T}; any
-     * {@link ClassCastException} surfaces at the call site, not inside this method.
+     * Sets a property value. While the cache is open, this has the same map effect as
+     * {@code getProperties().put(propName, propValue)}. The previous value (if any) is returned as
+     * an unchecked cast to {@code T}; any {@link ClassCastException} surfaces at the call site, not
+     * inside this method. Unlike mutation through the directly exposed property map, this
+     * convenience method rejects calls after the cache is closed.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -663,17 +669,19 @@ public interface Cache<K, V> extends Closeable {
      * @param propName the property name to set
      * @param propValue the property value to set (may be {@code null})
      * @return the previous value associated with this property name, or {@code null} if there was none
-     * @throws IllegalStateException if the cache has been closed (property reads remain usable
-     *         after close, but mutating a closed cache's property bag fails fast like the data
-     *         operations)
+     * @throws IllegalStateException if the cache has been closed (property reads remain usable;
+     *         direct mutation through the map returned by {@link #getProperties()} is not routed
+     *         through this lifecycle check)
      * @see #getProperty(String)
      * @see #removeProperty(String)
      */
     <T> T setProperty(String propName, Object propValue);
 
     /**
-     * Removes a property by name. Equivalent to {@code getProperties().remove(propName)}.
-     * Idempotent: removing an absent property returns {@code null} and has no other effect.
+     * Removes a property by name. While the cache is open, this has the same map effect as
+     * {@code getProperties().remove(propName)}. Idempotent: removing an absent property returns
+     * {@code null} and has no other effect. Unlike mutation through the directly exposed property
+     * map, this convenience method rejects calls after the cache is closed.
      * The removed value is returned as an unchecked cast to {@code T}; any
      * {@link ClassCastException} surfaces at the call site, not inside this method.
      *
@@ -689,9 +697,9 @@ public interface Cache<K, V> extends Closeable {
      * @param <T> the expected type of the removed property value (caller responsibility)
      * @param propName the property name to remove
      * @return the previous value associated with this property name, or {@code null} if there was none
-     * @throws IllegalStateException if the cache has been closed (property reads remain usable
-     *         after close, but mutating a closed cache's property bag fails fast like the data
-     *         operations)
+     * @throws IllegalStateException if the cache has been closed (property reads remain usable;
+     *         direct mutation through the map returned by {@link #getProperties()} is not routed
+     *         through this lifecycle check)
      * @see #getProperty(String)
      * @see #setProperty(String, Object)
      */

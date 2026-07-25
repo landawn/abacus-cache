@@ -57,7 +57,9 @@ import lombok.experimental.Accessors;
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
  * <li>Requires a JVM flag for Unsafe memory access on JDK 24+ (see below)</li>
- * <li>Memory is allocated during construction and held until {@link #close()}</li>
+ * <li>Memory is allocated during construction and normally retained for the application lifetime;
+ *     a registered JVM shutdown hook releases it at process shutdown, and {@link #close()} is
+ *     available for deliberate early decommissioning</li>
  * </ul>
  *
  * <p>Required JVM flag on JDK 24+ (JEP 498) — permits the {@code sun.misc.Unsafe} memory-access
@@ -78,7 +80,7 @@ import lombok.experimental.Accessors;
  * --add-opens=java.base/java.io=ALL-UNNAMED
  * </pre>
  *
- * <p>Example usage:
+ * <p>Example of an application-wide cache:
  * <pre>{@code
  * OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]>builder()
  *     .capacityInMB(100)
@@ -94,7 +96,6 @@ import lombok.experimental.Accessors;
  * OffHeapCacheStats stats = cache.stats();
  * System.out.println("Memory utilization: " +
  *     (double) stats.occupiedMemory() / stats.allocatedMemory());
- * cache.close();
  * }</pre>
  *
  * @param <K> the type of keys used to identify cache entries
@@ -127,25 +128,23 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Creates an OffHeapCache with the specified capacity in megabytes.
      * Uses default eviction delay of 3 seconds (3000 milliseconds) and default expiration times
      * ({@link Cache#DEFAULT_LIVE_TIME 3 hours TTL} and {@link Cache#DEFAULT_MAX_IDLE_TIME 30 minutes idle time}).
-     * Memory is allocated at construction time and held until close().
+     * Memory is allocated at construction time and normally retained for the application lifetime.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
      * <p><b>Memory Management:</b>
      * The memory is allocated immediately from native (off-heap) memory using sun.misc.Unsafe.
-     * This memory remains allocated until close() is called. The actual allocation size is
-     * {@code capacityInMB * 1048576} bytes (1MB = 1,048,576 bytes).
+     * A registered JVM shutdown hook releases it at process shutdown; {@link #close()} is available
+     * for deliberate early release. The actual allocation size is {@code capacityInMB * 1048576}
+     * bytes (1MB = 1,048,576 bytes).
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Create a 100MB off-heap cache through the public factory
+     * // Create a 100MB application-wide cache through the public factory
      * OffHeapCache<String, byte[]> cache = CacheFactory.createOffHeapCache(100);
      *
      * byte[] largeData = new byte[1024];
      * cache.put("key1", largeData);
      * byte[] retrieved = cache.getOrNull("key1");
-     *
-     * // Always close to free native memory
-     * cache.close();
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
@@ -181,7 +180,6 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * cache.put(123L, data, 7200000, 3600000);   // 2h TTL, 1h idle
      * Data retrieved = cache.getOrNull(123L);
      *
-     * cache.close();
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
@@ -199,7 +197,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Creates an OffHeapCache with fully specified basic parameters.
-     * Memory is allocated at construction time and held until close().
+     * Memory is allocated at construction time and normally retained for the application lifetime;
+     * a registered JVM shutdown hook releases it at process shutdown.
      * This constructor provides complete control over cache timing behavior.
      * The cache uses Kryo serialization by default if available, otherwise falls back to JSON serialization.
      *
@@ -216,7 +215,6 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * cache.put("key1", "data".getBytes());
      * byte[] data = cache.getOrNull("key1");
      *
-     * cache.close();
      * }</pre>
      *
      * @param capacityInMB the total off-heap memory to allocate in megabytes. Must be positive.
@@ -294,8 +292,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
             final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector) {
-        super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, BYTE_ARRAY_BASE, serializer, deserializer,
-                offHeapStore, statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger);
+        super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, 0, serializer, deserializer, offHeapStore,
+                statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger);
     }
 
     /**
@@ -366,8 +364,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * called automatically during cache put operations and should not be called directly.
      * 
      * <p>The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
-     * significantly faster than manual byte-by-byte copying. The srcOffset already includes
-     * the array base offset (BYTE_ARRAY_BASE), pointing directly to the data within the array object.
+     * significantly faster than manual byte-by-byte copying. The supplied {@code srcOffset} is a
+     * zero-based array index; this implementation adds {@code BYTE_ARRAY_BASE} with {@code long}
+     * arithmetic so valid indices near {@link Integer#MAX_VALUE} cannot overflow.
      *
      * <p><b>Memory Management:</b>
      * This method uses {@link sun.misc.Unsafe#copyMemory(Object, long, Object, long, long)} to perform
@@ -379,18 +378,16 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param startPtr the destination memory address in off-heap memory. Must be a valid address
      *                 within the allocated memory region.
      * @param srcBytes the source byte array from which to copy data. Must not be null.
-     * @param srcOffset the byte offset within the source array object in memory. For Unsafe-based
-     *                  operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
-     *                  to skip past the array header to the actual data. Must be non-negative.
+     * @param srcOffset the zero-based source-array index. Must be non-negative.
      * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy), fit at the destination address,
-     *            and satisfy {@code srcOffset - BYTE_ARRAY_BASE + len <= srcBytes.length}.
+     *            and satisfy {@code srcOffset + len <= srcBytes.length}.
      * @see #allocate(long)
      * @see #copyFromMemory(long, byte[], int, int)
      */
     @SuppressWarnings("removal")
     @Override
     protected void copyToMemory(final long startPtr, final byte[] srcBytes, final int srcOffset, final int len) {
-        UNSAFE.copyMemory(srcBytes, srcOffset, null, startPtr, len);
+        UNSAFE.copyMemory(srcBytes, BYTE_ARRAY_BASE + (long) srcOffset, null, startPtr, len);
     }
 
     /**
@@ -400,8 +397,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * called automatically during cache get operations and should not be called directly.
      * 
      * <p>The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
-     * significantly faster than manual byte-by-byte copying. The destOffset already includes
-     * the array base offset (BYTE_ARRAY_BASE), pointing directly to the data within the array object.
+     * significantly faster than manual byte-by-byte copying. The supplied {@code destOffset} is a
+     * zero-based array index; this implementation adds {@code BYTE_ARRAY_BASE} with {@code long}
+     * arithmetic so valid indices near {@link Integer#MAX_VALUE} cannot overflow.
      *
      * <p><b>Memory Management:</b>
      * This method uses {@link sun.misc.Unsafe#copyMemory(Object, long, Object, long, long)} to perform
@@ -413,10 +411,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param startPtr the source memory address in off-heap memory from which to copy data. Must be a
      *                 valid address within the allocated memory region.
      * @param bytes the destination byte array. Must not be null and must satisfy
-     *              {@code destOffset - BYTE_ARRAY_BASE + len <= bytes.length}.
-     * @param destOffset the byte offset within the destination array object in memory. For Unsafe-based
-     *                   operations, this must include the array base offset ({@code BYTE_ARRAY_BASE})
-     *                   to skip past the array header to the actual data. Must be non-negative.
+     *              {@code destOffset + len <= bytes.length}.
+     * @param destOffset the zero-based destination-array index. Must be non-negative.
      * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the available
      *            space in the destination array starting from destOffset.
      * @see #allocate(long)
@@ -425,7 +421,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
     @SuppressWarnings("removal")
     @Override
     protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
-        UNSAFE.copyMemory(null, startPtr, bytes, destOffset, len);
+        UNSAFE.copyMemory(null, startPtr, bytes, BYTE_ARRAY_BASE + (long) destOffset, len);
     }
 
     /**
@@ -456,7 +452,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *     .vacatingFactor(0.3f)          // evict 30% of entries (LRU first) under memory pressure
      *     .offHeapStore(diskStore)       // spill overflow entries to disk
      *     .statsTimeOnDisk(true)
-     *     .build();                      // returns an OffHeapCache; remember to close() to free native memory
+     *     .build();                      // returns an application-scoped OffHeapCache
      * }</pre>
      *
      * @param <K> the type of keys used to identify cache entries
@@ -482,7 +478,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * stores may be invoked concurrently and therefore must be thread-safe.
      *
      * <p><b>&#9888;&#65039; Store ownership:</b> A built cache assumes ownership of its configured
-     * {@link OffHeapStore} and closes it when the cache is closed.
+     * {@link OffHeapStore} and closes it during explicit early shutdown or from the cache's JVM
+     * shutdown hook.
      *
      * <p><b>Default Values:</b>
      * <ul>
@@ -552,7 +549,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *        .evictDelay(60000)
          *        .defaultLiveTime(3600000); // returns the same builder reference
          *
-         * OffHeapCache<String, Data> cache = builder.build(); // allocates native memory; close() when done
+         * OffHeapCache<String, Data> cache = builder.build(); // allocates native memory for an application-scoped cache
          * }</pre>
          *
          */
@@ -623,7 +620,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * Custom serializer for converting values to byte streams.
          * The serializer receives the value and a ByteArrayOutputStream, and should write
-         * the complete serialized form to the stream.
+         * the complete serialized form to the stream. Primitive {@code byte[]} and
+         * {@link java.nio.ByteBuffer} values use the cache's direct raw-byte paths and do not
+         * invoke this serializer.
          *
          * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
@@ -632,12 +631,13 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
         /**
          * Custom deserializer for converting byte arrays back to values.
          * The function receives the byte array and type information, and should return
-         * the deserialized value instance.
+         * the deserialized value instance. Primitive {@code byte[]} and
+         * {@link java.nio.ByteBuffer} values use the cache's direct raw-byte paths and do not
+         * invoke this deserializer.
          *
-         * <p>The deserializer must NOT mutate the supplied byte array: when a disk-spilled
-         * entry is promoted back to off-heap memory, the same array that was passed to the
-         * deserializer is subsequently copied into native memory, so in-place modification
-         * (e.g., in-place decryption) would corrupt the promoted copy.
+         * <p>The function receives a cache-owned working array and may decode it in place. When a
+         * disk read may be promoted to off-heap memory, the cache preserves a separate pristine
+         * copy for that promotion.
          *
          * <p>Default: {@code null} (uses Kryo if available, otherwise JSON)
          */
@@ -671,6 +671,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * <li>{@link Long} - I/O elapsed time in milliseconds</li>
          * </ul>
          * Return {@code true} to promote the value from disk to memory.
+         * Treat the supplied live {@link ActivityPrint} as read-only.
          * Only applies when {@link #offHeapStore} is configured.
          *
          * <p>Default: {@code null} (automatic promotion disabled)
@@ -700,7 +701,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *
          * <p><b>Memory Management:</b>
          * Calling this method immediately allocates native memory using {@code sun.misc.Unsafe}.
-         * The returned cache must be closed by calling {@link OffHeapCache#close()}.
+         * The cache registers a JVM shutdown hook for application-lifetime cleanup; call
+         * {@link OffHeapCache#close()} only to release it deliberately before JVM shutdown.
          *
          * <p><b>Usage Examples:</b>
          * <pre>{@code
@@ -709,19 +711,15 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *     .capacityInMB(200)
          *     .evictDelay(60000)
          *     .vacatingFactor(0.3f)
-         *     .build();                      // returns a new OffHeapCache; native memory now allocated
-         * try {
-         *     cache.put("key", data);                  // returns true once the value is stored
-         *     Data retrieved = cache.getOrNull("key"); // returns the stored value, or null if absent
-         * } finally {
-         *     cache.close();                 // frees the native memory; required
-         * }
+         *     .build();                      // application-scoped cache; native memory now allocated
+         * cache.put("key", data);                    // returns true once the value is stored
+         * Data retrieved = cache.getOrNull("key");   // returns the stored value, or null if absent
          *
          * // maxBlockSizeInBytes(0) is replaced with the default 8192 (does NOT throw)
          * OffHeapCache<String, Data> defaultBlock = OffHeapCache.<String, Data>builder()
          *     .capacityInMB(100)
          *     .maxBlockSizeInBytes(0)        // 0 -> default block size 8192
-         *     .build();                      // returns a cache; close() when done
+         *     .build();                      // returns an application-scoped cache
          *
          * // Invalid configuration is rejected by build()
          * OffHeapCache.<String, Data>builder().build();                          // throws IllegalArgumentException (capacityInMB not positive)
@@ -739,7 +737,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *     .vacatingFactor(0.25f)
          *     .offHeapStore(store)
          *     .statsTimeOnDisk(true)
-         *     .build();                      // returns an OffHeapCache backed by memory + disk spillover
+         *     .build();                      // returns an application-scoped cache backed by memory + disk spillover
          * }</pre>
          *
          * @return a new {@link OffHeapCache} instance configured with the builder settings

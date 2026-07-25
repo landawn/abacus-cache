@@ -272,6 +272,11 @@ public class MemcachedLockTest {
             assertThrows(IllegalStateException.class, () -> local.tryLock("k", 1_000));
             assertThrows(IllegalStateException.class, () -> local.get("k"));
             assertThrows(IllegalStateException.class, () -> local.tryUnlock("k"));
+            // Ordinary operations use the lifecycle failure consistently before argument checks.
+            assertThrows(IllegalStateException.class, () -> local.tryLock(null, 1_000));
+            assertThrows(IllegalStateException.class, () -> local.isLocked(null));
+            assertThrows(IllegalStateException.class, () -> local.get(null));
+            assertThrows(IllegalStateException.class, () -> local.tryUnlock(null));
             assertFalse(local.unlockQuietly("k"));
         }
     }
@@ -315,6 +320,17 @@ public class MemcachedLockTest {
         }
     }
 
+    @Test
+    public void test_nullKeyFromOverrideIsRejectedConsistently() {
+        try (NullKeyLock local = new NullKeyLock(SERVER_URL)) {
+            assertThrows(IllegalArgumentException.class, () -> local.tryLock("target", 1_000L));
+            assertThrows(IllegalArgumentException.class, () -> local.isLocked("target"));
+            assertThrows(IllegalArgumentException.class, () -> local.get("target"));
+            assertThrows(IllegalArgumentException.class, () -> local.tryUnlock("target"));
+            assertThrows(IllegalArgumentException.class, () -> local.unlockQuietly("target"));
+        }
+    }
+
     /**
      * A minimal subclass that namespaces keys, used to verify {@link MemcachedLock#toKey(Object)} can be
      * overridden. It connects to the real server (its constructor builds a {@code SpyMemcached}); the
@@ -333,6 +349,18 @@ public class MemcachedLockTest {
 
         String testToKey(final String target) {
             return toKey(target);
+        }
+    }
+
+    static final class NullKeyLock extends MemcachedLock<String, String> {
+
+        NullKeyLock(final String serverUrl) {
+            super(serverUrl);
+        }
+
+        @Override
+        protected String toKey(final String target) {
+            return null;
         }
     }
 }

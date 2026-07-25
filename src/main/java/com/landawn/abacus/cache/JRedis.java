@@ -53,6 +53,8 @@ import redis.clients.jedis.RedisClient;
  * <p><b>Thread Safety:</b> This client is thread-safe. Each shard is backed by a {@link RedisClient},
  * which maintains its own internal connection pool and transparently borrows and returns a
  * connection for each command, so the client may be freely shared across threads.
+ * Instances are intended to be long-lived and application-scoped; optionally call
+ * {@link #disconnect()} once during application shutdown rather than around each cache use.
  *
  * <p><b>Connection pooling:</b> Each shard's {@link RedisClient} uses the default connection pool
  * configuration (Apache Commons Pool). Each shard's pool object (and its idle-eviction task) is
@@ -75,8 +77,7 @@ import redis.clients.jedis.RedisClient;
  * // Use atomic counters
  * long pageViews = cache.incr("page:views");
  *
- * // Clean up when done
- * cache.disconnect();
+ * // Retain and share the client; optionally disconnect it during application shutdown.
  * }</pre>
  *
  * @param <T> the type of objects to be cached
@@ -113,6 +114,7 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * // Use the cache
      * User user = new User("Alice", "alice@example.com");
      * cache.put("user:123", user, 3600000);                         // returns true on success
+     * // Retain and share cache/sharded; optionally disconnect them during application shutdown.
      *
      * // Negative: null serverUrl is rejected up-front
      * JRedis<User> bad = new JRedis<>((String) null);               // throws IllegalArgumentException
@@ -181,8 +183,8 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
             for (final InetSocketAddress addr : addressList) {
                 // Use getHostString() (returns the literal host or IP) instead of getHostName(), which
                 // performs a reverse DNS lookup. Reverse DNS can block startup, fail if no PTR record
-                // exists, and produce shard hash keys that differ between processes whose resolvers
-                // disagree — silently breaking sharding consistency.
+                // exists, or substitute a hostname that Jedis would then resolve again. Shard routing
+                // itself depends only on the cache-key bytes and the configured address order.
                 shardClients.add(RedisClient.builder().hostAndPort(new HostAndPort(addr.getHostString(), addr.getPort())).clientConfig(clientConfig).build());
             }
         } catch (final RuntimeException | Error e) {

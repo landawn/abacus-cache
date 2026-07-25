@@ -529,32 +529,44 @@ public class ForeignMemoryOffHeapCacheTest {
     /** {@code ForeignMemoryOffHeapCache(capacityInMB)} delegates to the (capacity, evictDelay=3000) constructor. */
     @Test
     public void testConstructor_capacityOnly() {
-        try (ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(1)) {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(1);
+
+        try {
             assertFalse(cache.isClosed());
             final byte[] value = { 1, 2, 3, 4 };
             assertTrue(cache.put("k", value));
             assertArrayEquals(value, cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
     /** {@code ForeignMemoryOffHeapCache(capacityInMB, evictDelay)} delegates to the default-TTL constructor. */
     @Test
     public void testConstructor_capacityAndEvictDelay() {
-        try (ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(1, 0L)) {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(1, 0L);
+
+        try {
             final byte[] value = { 5, 6, 7 };
             assertTrue(cache.put("k", value));
             assertArrayEquals(value, cache.getOrNull("k"));
             assertNotNull(cache.stats());
+        } finally {
+            cache.close();
         }
     }
 
     /** {@code ForeignMemoryOffHeapCache(capacityInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime)} full basic form. */
     @Test
     public void testConstructor_capacityEvictDelayLiveTimeIdleTime() {
-        try (ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(1, 0L, 60_000L, 60_000L)) {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(1, 0L, 60_000L, 60_000L);
+
+        try {
             final byte[] value = { 8, 9 };
             assertTrue(cache.put("k", value));
             assertArrayEquals(value, cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
@@ -567,9 +579,13 @@ public class ForeignMemoryOffHeapCacheTest {
     @Test
     public void testAllocate_failureClosesArenaAndRethrows() {
         assertThrows(Throwable.class, () -> {
-            try (ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(Integer.MAX_VALUE)) {
+            final ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(Integer.MAX_VALUE);
+
+            try {
                 // unreachable: allocation of ~2 PB must fail during construction.
                 cache.put("k", new byte[1]);
+            } finally {
+                cache.close();
             }
         });
     }

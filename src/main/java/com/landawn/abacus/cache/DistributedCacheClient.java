@@ -32,8 +32,14 @@ import java.util.Map;
  * <li>Time-based expiration support</li>
  * </ul>
  *
+ * <p><b>Lifecycle:</b> Implementations commonly own connection pools and are designed to be shared
+ * for an application's lifetime. Do not create and disconnect a client per request or cache
+ * operation. An owning application may invoke {@link #disconnect()} once during component or
+ * application shutdown.
+ *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
+ * // Construct once during application setup and share across requests/threads.
  * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
  * User user = new User("John", "john@example.com");
  * client.put("user:123", user, 3600000);   // Cache for 1 hour
@@ -77,8 +83,7 @@ public interface DistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * String url = client.serverUrl();
+     * String url = client.serverUrl(); // client is the application's shared cache client
      * System.out.println("Connected to: " + url);
      * }</pre>
      *
@@ -95,9 +100,9 @@ public interface DistributedCacheClient<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // Simple get operation
-     * User user = client.get("user:123");
-     * if (user != null) {
-     *     System.out.println("Found user: " + user.getName());
+     * User cachedUser = client.get("user:123");
+     * if (cachedUser != null) {
+     *     System.out.println("Found user: " + cachedUser.getName());
      * } else {
      *     System.out.println("User not found in cache");
      * }
@@ -120,7 +125,9 @@ public interface DistributedCacheClient<T> {
     /**
      * Retrieves multiple values from the cache. Implementations may batch requests by server or
      * issue individual gets when backend topology requires it. Keys not found in the cache will
-     * not be present in the returned map.
+     * not be present in the returned map. An implementation that represents a cached {@code null}
+     * as a miss may also omit keys explicitly stored with a null value; consult the implementation's
+     * null-value contract.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -157,7 +164,9 @@ public interface DistributedCacheClient<T> {
     /**
      * Retrieves multiple values from the cache. Implementations may batch requests by server or
      * issue individual gets when backend topology requires it. Keys not found in the cache will
-     * not be present in the returned map.
+     * not be present in the returned map. An implementation that represents a cached {@code null}
+     * as a miss may also omit keys explicitly stored with a null value; consult the implementation's
+     * null-value contract.
      *
      * <p>This method is thread-safe and can be called concurrently from multiple threads.
      * The implementation handles concurrent access safely across distributed cache clients.
@@ -177,7 +186,7 @@ public interface DistributedCacheClient<T> {
      * List<String> keys = userIds.stream()
      *                            .map(id -> "user:" + id)
      *                            .collect(Collectors.toList());
-     * Map<String, User> users = client.getBulk(keys);
+     * Map<String, User> dynamicUsers = client.getBulk(keys);
      * }</pre>
      *
      * @param keys the cache keys to retrieve; a supporting implementation requires a non-null
@@ -334,7 +343,7 @@ public interface DistributedCacheClient<T> {
      * <pre>{@code
      * // Simple delete
      * boolean success = client.remove("user:123");
-     * System.out.println("Delete operation sent: " + success);
+     * System.out.println("Key existed and was removed: " + success);
      *
      * // Delete after update
      * User user = client.get("user:456");
@@ -642,18 +651,18 @@ public interface DistributedCacheClient<T> {
      * <p><b>&#9888;&#65039; Destructive operation:</b> The scope is implementation-specific and may
      * include databases or namespaces used by other applications on the same servers.
      *
-     * <p>This method is thread-safe but its effects are visible immediately to all clients.
-     * Once executed, all cached data will be permanently lost. There is no way to recover
-     * the data after this operation completes.
+     * <p>This method is thread-safe. Data successfully flushed from the implementation-defined
+     * scope cannot be recovered, and the invalidation is normally visible to every client sharing
+     * that scope.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // WARNING: This removes ALL data from ALL cache servers!
+     * // WARNING: This may remove every entry in the implementation-defined backend scope!
      * client.flushAll();
-     * System.out.println("All cache data cleared");
+     * System.out.println("Configured cache scope cleared");
      *
      * // Safe usage in testing
-     * @After
+     * @AfterEach
      * public void cleanupCache() {
      *     if (isTestEnvironment()) {
      *         cacheClient.flushAll();
@@ -689,35 +698,18 @@ public interface DistributedCacheClient<T> {
      * After calling this method, the client cannot be used anymore and any subsequent
      * operations will fail or throw exceptions.
      *
-     * <p>This method should be called when the client is no longer needed to ensure
-     * proper cleanup of network connections, thread pools, and other resources. It is
-     * safe to call this method multiple times; subsequent calls will have no effect.
+     * <p>This is an optional, terminal lifecycle operation for the application or component that
+     * owns the client. Implementations commonly pool connections, so callers should normally retain
+     * and share a client and invoke this method only when that owner is permanently shutting down,
+     * not after an individual request or cache operation. Implementations should make repeated calls
+     * harmless; consult the concrete implementation for exact idempotence and failure behavior.
      *
      * <p>This method is thread-safe, but once called, no other operations should be
      * attempted on this client instance.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Try-finally pattern
-     * DistributedCacheClient<User> client = new SpyMemcached<>("localhost:11211");
-     * try {
-     *     client.put("user:123", user, 3600000);
-     *     User cached = client.get("user:123");
-     * } finally {
-     *     client.disconnect();
-     *     System.out.println("Cache client disconnected");
-     * }
-     *
-     * // Try-with-resources pattern via an AutoCloseable adapter
-     * // (AutoCloseable.close() declares checked Exception, so a catch clause is required)
-     * try (AutoCloseable closeable = client::disconnect) {
-     *     client.put("key", value, 3600000);
-     *     // Client will be disconnected automatically when the block exits
-     * } catch (Exception e) {
-     *     logger.warn("Failed to disconnect cache client", e);
-     * }
-     *
-     * // Application shutdown hook
+     * // Optional application shutdown hook for a shared client
      * Runtime.getRuntime().addShutdownHook(new Thread(() -> {
      *     logger.info("Shutting down cache client");
      *     cacheClient.disconnect();
@@ -731,8 +723,8 @@ public interface DistributedCacheClient<T> {
      *     }
      * }
      *
-     * // Graceful shutdown with timeout (implementation-specific)
-     * public void shutdownGracefully() {
+     * // Explicit component lifecycle callback
+     * public void shutdownCacheClient() {
      *     logger.info("Disconnecting from cache servers");
      *     client.disconnect();
      *     logger.info("Disconnection complete");

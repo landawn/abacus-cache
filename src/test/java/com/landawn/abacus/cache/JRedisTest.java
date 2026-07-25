@@ -155,6 +155,20 @@ public class JRedisTest {
         assertTrue(cache.getBulk(List.of()).isEmpty());
     }
 
+    /**
+     * A bulk result is keyed by the requested key, so duplicate requests must not trigger repeated
+     * network reads (which could observe different values or expiry states for the same map entry).
+     */
+    @Test
+    public void test_getBulk_duplicateKeysAreFetchedOnce() {
+        when(mockJedis.get(utf8("same"))).thenReturn(KRYO.encode("value"));
+
+        final Map<String, Object> result = cache.getBulk("same", "same", "same");
+
+        assertEquals(Map.of("same", "value"), result);
+        verify(mockJedis, times(1)).get(utf8("same"));
+    }
+
     @Test
     public void test_getBulk_rejects_null_keys() {
         assertThrows(IllegalArgumentException.class, () -> cache.getBulk((String[]) null));

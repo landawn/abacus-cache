@@ -44,7 +44,7 @@ import com.landawn.abacus.util.N;
  * <li>Window TinyLFU eviction policy for near-optimal hit rate</li>
  * </ul>
  *
- * <p><b>Usage Examples:</b>
+ * <p><b>Application-wide usage example:</b>
  * <pre>{@code
  * import com.github.benmanes.caffeine.cache.Cache;
  * import com.github.benmanes.caffeine.cache.Caffeine;
@@ -99,9 +99,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * The underlying Caffeine cache should be pre-configured with desired
      * eviction policies, maximum size, and expiration settings.
      *
-     * <p><b>&#9888;&#65039; Shared-instance impact:</b> Calling {@link #close()} invalidates every
-     * entry in the supplied Caffeine cache. Do not share that instance with components
-     * that expect its entries to survive this wrapper's lifetime.
+     * <p><b>&#9888;&#65039; Shared-instance impact:</b> Deliberately decommissioning this wrapper through
+     * {@link #close()} invalidates every entry in the supplied Caffeine cache. Do not share that
+     * instance with components that expect its entries to survive this wrapper's lifetime.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -442,6 +442,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>&#9888;&#65039; Shared-instance impact:</b> Invalidation affects every user of the supplied
      * Caffeine cache, not only this wrapper. Entries written directly to the delegate after that
      * invalidation are outside the closed wrapper's ownership and may remain present.
+     * Application-wide wrappers normally remain active for the application lifetime; use this
+     * method only for deliberate early decommissioning after all wrapper users have stopped.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and idempotent. Calling it again has no
      * additional effect and does not throw. The same reentrant lifecycle lock used by
@@ -451,28 +453,17 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Try-with-resources pattern (recommended)
-     * try (CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance)) {
-     *     cache.put("user:123", user, 0, 0);             // seed one entry
-     *     User retrieved = cache.getOrNull("user:123");  // returns the stored user
-     *     // Cache is automatically closed (invalidateAll() + marked closed) on block exit
-     * }
+     * CaffeineCache<String, User> applicationCache = new CaffeineCache<>(caffeineInstance);
+     * applicationCache.put("user:123", user, 0, 0);             // seed one entry
+     * User retrieved = applicationCache.getOrNull("user:123");  // returns the stored user
      *
-     * // Manual close
-     * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * try {
-     *     cache.put("user:123", user, 0, 0);   // seed one entry
-     * } finally {
-     *     cache.close();   // always close the wrapper and invalidate existing entries
-     * }
-     *
-     * // Safe to call multiple times (idempotent)
-     * cache.close();       // first call closes the wrapper
-     * cache.close();       // no-op; no exception thrown
+     * // Deliberately retire the application wrapper early, after all users have stopped.
+     * applicationCache.close();       // marks the wrapper closed and invalidates delegate entries
+     * applicationCache.close();       // idempotent no-op
      *
      * // After closing, operations throw IllegalStateException
      * try {
-     *     cache.getOrNull("user:123");   // throws IllegalStateException
+     *     applicationCache.getOrNull("user:123");   // throws IllegalStateException
      * } catch (IllegalStateException e) {
      *     System.out.println("Cache is closed");   // this branch runs
      * }
@@ -509,13 +500,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeineInstance);
-     * if (!cache.isClosed()) {                 // returns false on a fresh cache, so this branch runs
+     * if (!cache.isClosed()) {                 // evaluates to true on a fresh cache, so this branch runs
      *     cache.put("user:123", user, 0, 0);   // seed one entry
      * } else {
      *     System.out.println("Cache is closed, cannot perform operation");   // not reached on a fresh cache
      * }
      *
-     * cache.close();                       // close the wrapper
+     * cache.close();                       // deliberately retire the application wrapper early
      * boolean closed = cache.isClosed();   // returns true
      * }</pre>
      *

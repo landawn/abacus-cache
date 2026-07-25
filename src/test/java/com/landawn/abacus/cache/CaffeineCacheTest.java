@@ -49,16 +49,24 @@ public class CaffeineCacheTest extends TestBase {
 
     @Test
     public void testPutAndGetOrNull() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             assertTrue(cache.put("k", "v", 0, 0));
             assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testPut_EdgeCase_NullKey() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 0, 0));
+        } finally {
+            cache.close();
         }
     }
 
@@ -69,8 +77,12 @@ public class CaffeineCacheTest extends TestBase {
      */
     @Test
     public void testPut_EdgeCase_NullValue() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 0, 0));
+        } finally {
+            cache.close();
         }
     }
 
@@ -341,39 +353,57 @@ public class CaffeineCacheTest extends TestBase {
 
     @Test
     public void testGetOrNull_EdgeCase_Missing() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             assertNull(cache.getOrNull("missing"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testRemove() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             cache.put("k", "v", 0, 0);
             cache.remove("k");
             assertNull(cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testContainsKey() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             cache.put("k", "v", 0, 0);
             assertTrue(cache.containsKey("k"));
             assertFalse(cache.containsKey("missing"));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testKeySet_Unsupported() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             assertThrows(UnsupportedOperationException.class, cache::keySet);
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testSize() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             cache.put("a", "1", 0, 0);
             cache.put("b", "2", 0, 0);
             // Caffeine performs maintenance lazily; force pending writes to drain so size is reliable.
@@ -381,15 +411,21 @@ public class CaffeineCacheTest extends TestBase {
             final int size = cache.size();
             assertTrue(size >= 0);
             assertTrue(size <= 2);
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testClear() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             cache.put("k", "v", 0, 0);
             cache.clear();
             assertNull(cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
@@ -516,11 +552,15 @@ public class CaffeineCacheTest extends TestBase {
 
     @Test
     public void testStats_ReturnsNonNull() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             cache.put("k", "v", 0, 0);
             cache.getOrNull("k");
             cache.getOrNull("missing");
             assertNotNull(cache.stats());
+        } finally {
+            cache.close();
         }
     }
 
@@ -535,22 +575,34 @@ public class CaffeineCacheTest extends TestBase {
      */
     @Test
     public void testGetOrNull_EdgeCase_NullKey() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testRemove_EdgeCase_NullKey() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        } finally {
+            cache.close();
         }
     }
 
     @Test
     public void testContainsKey_EdgeCase_NullKey() {
-        try (CaffeineCache<String, String> cache = newCache()) {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
             assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
+        } finally {
+            cache.close();
         }
     }
 
@@ -561,7 +613,9 @@ public class CaffeineCacheTest extends TestBase {
      */
     @Test
     public void testStats_ContentReflectsTraffic() {
-        try (CaffeineCache<String, String> cache = newCache()) { // maximumSize(100), recordStats()
+        final CaffeineCache<String, String> cache = newCache(); // maximumSize(100), recordStats()
+
+        try {
             assertTrue(cache.put("a", "1"));
             assertEquals("1", cache.getOrNull("a"));
             assertNull(cache.getOrNull("missing"));
@@ -579,6 +633,8 @@ public class CaffeineCacheTest extends TestBase {
             final com.github.benmanes.caffeine.cache.stats.CacheStats nativeStats = cache.caffeineStats();
             assertEquals(1L, nativeStats.hitCount());
             assertEquals(1L, nativeStats.missCount());
+        } finally {
+            cache.close();
         }
     }
 }

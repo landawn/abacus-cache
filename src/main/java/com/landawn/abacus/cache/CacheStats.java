@@ -68,12 +68,12 @@ package com.landawn.abacus.cache;
  *
  * // Calculate cache hit rate (the helper avoids long overflow in hitCount + missCount)
  * double hitRate = stats.hitRate();
- * System.out.printf("Cache hit rate: %.2f%%\n", hitRate * 100);
+ * System.out.printf("Cache hit rate: %.2f%%%n", hitRate * 100);
  *
  * // Check cache utilization. Capacity 0 can mean unbounded/unreported, so do not divide by it.
  * if (stats.capacity() > 0) {
  *     double utilizationPercent = (double) stats.size() / stats.capacity() * 100;
- *     System.out.printf("Cache utilization: %d/%d entries (%.1f%%)\n",
+ *     System.out.printf("Cache utilization: %d/%d entries (%.1f%%)%n",
  *         stats.size(), stats.capacity(), utilizationPercent);
  * } else {
  *     System.out.printf("Cache size: %d entries (capacity unreported)%n", stats.size());
@@ -82,7 +82,7 @@ package com.landawn.abacus.cache;
  * // Monitor memory usage
  * if (stats.maxMemory() > 0) {
  *     double memoryUsagePercent = (double) stats.dataSize() / stats.maxMemory() * 100;
- *     System.out.printf("Memory usage: %d/%d bytes (%.1f%%)\n",
+ *     System.out.printf("Memory usage: %d/%d bytes (%.1f%%)%n",
  *         stats.dataSize(), stats.maxMemory(), memoryUsagePercent);
  * }
  *

@@ -54,10 +54,14 @@ public class CacheFactoryTest extends TestBase {
     // Two-arg createLocalCache
     @Test
     public void testCreateLocalCache() {
-        try (LocalCache<String, String> cache = CacheFactory.createLocalCache(100, 0)) {
+        final LocalCache<String, String> cache = CacheFactory.createLocalCache(100, 0);
+
+        try {
             assertNotNull(cache);
             assertTrue(cache.put("k", "v"));
             assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
@@ -69,9 +73,13 @@ public class CacheFactoryTest extends TestBase {
     // Four-arg createLocalCache
     @Test
     public void testCreateLocalCache_FourArg() {
-        try (LocalCache<String, String> cache = CacheFactory.createLocalCache(100, 0, 60000L, 30000L)) {
+        final LocalCache<String, String> cache = CacheFactory.createLocalCache(100, 0, 60000L, 30000L);
+
+        try {
             assertNotNull(cache);
             assertTrue(cache.put("a", "b"));
+        } finally {
+            cache.close();
         }
     }
 
@@ -82,10 +90,14 @@ public class CacheFactoryTest extends TestBase {
         final IntFunction<KeyedObjectPool<String, PoolableAdapter<String>>> poolFactory = cap -> PoolFactory.createKeyedObjectPool(cap, 0);
         final KeyedObjectPool<String, PoolableAdapter<String>> pool = poolFactory.apply(64);
 
-        try (LocalCache<String, String> cache = CacheFactory.createLocalCache(pool, 60000L, 30000L)) {
+        final LocalCache<String, String> cache = CacheFactory.createLocalCache(pool, 60000L, 30000L);
+
+        try {
             assertNotNull(cache);
             assertTrue(cache.put("x", "y"));
             assertEquals("y", cache.getOrNull("x"));
+        } finally {
+            cache.close();
         }
     }
 
@@ -132,9 +144,12 @@ public class CacheFactoryTest extends TestBase {
     @Test
     public void testCreateCache_Memcached() {
         try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("Memcached(localhost:11211)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("Memcached(localhost:11211)");
+            try {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -143,8 +158,11 @@ public class CacheFactoryTest extends TestBase {
     @Test
     public void testCreateCache_MemcachedWithPrefix() {
         try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("Memcached(localhost:11211,prefix:)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("Memcached(localhost:11211,prefix:)");
+            try {
                 assertNotNull(cache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -153,8 +171,11 @@ public class CacheFactoryTest extends TestBase {
     @Test
     public void testCreateCache_MemcachedWithTimeout() {
         try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("Memcached(localhost:11211,prefix:,5000)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("Memcached(localhost:11211,prefix:,5000)");
+            try {
                 assertNotNull(cache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -204,9 +225,12 @@ public class CacheFactoryTest extends TestBase {
     @Test
     public void testCreateCache_Redis() {
         try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379)");
+            try {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -214,8 +238,11 @@ public class CacheFactoryTest extends TestBase {
     @Test
     public void testCreateCache_RedisWithPrefix() {
         try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,prefix:)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,prefix:)");
+            try {
                 assertNotNull(cache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -223,8 +250,11 @@ public class CacheFactoryTest extends TestBase {
     @Test
     public void testCreateCache_RedisWithTimeout() {
         try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,prefix:,5000)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,prefix:,5000)");
+            try {
                 assertNotNull(cache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -259,9 +289,12 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisCluster() {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000)");
+            try {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -270,10 +303,13 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisClusterWithMultipleSeedNodes() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,10.0.0.2:7000)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,10.0.0.2:7000)");
+            try {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);
                 assertEquals("10.0.0.1:7000,10.0.0.2:7000", distributedClient(cache).serverUrl());
+            } finally {
+                cache.close();
             }
         }
     }
@@ -287,8 +323,11 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisClusterWithAlphabeticSeedHostname() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379)");
+            try {
                 assertEquals("10.0.0.1:7000,primary:6379", distributedClient(cache).serverUrl());
+            } finally {
+                cache.close();
             }
         }
     }
@@ -297,12 +336,15 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisClusterWithAlphabeticSeedHostnameAndPrefix() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379,prefix:)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379,prefix:)");
+            try {
                 assertEquals("10.0.0.1:7000,primary:6379", distributedClient(cache).serverUrl());
 
                 final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
                 prefixField.setAccessible(true);
                 assertEquals("prefix:", prefixField.get(cache));
+            } finally {
+                cache.close();
             }
         }
     }
@@ -311,12 +353,15 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisClusterWithNumericLeadingPrefix() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379,123prefix)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,primary:6379,123prefix)");
+            try {
                 assertEquals("10.0.0.1:7000,primary:6379", distributedClient(cache).serverUrl());
 
                 final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
                 prefixField.setAccessible(true);
                 assertEquals("123prefix", prefixField.get(cache));
+            } finally {
+                cache.close();
             }
         }
     }
@@ -325,10 +370,13 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisClusterWithMultipleSeedNodesPrefixAndTimeout() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,10.0.0.2:7000,prefix:,5000)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,10.0.0.2:7000,prefix:,5000)");
+            try {
                 assertNotNull(cache);
                 assertTrue(cache instanceof DistributedCache);
                 assertEquals("10.0.0.1:7000,10.0.0.2:7000", distributedClient(cache).serverUrl());
+            } finally {
+                cache.close();
             }
         }
     }
@@ -337,8 +385,11 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisClusterWithPrefix() {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,prefix:)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,prefix:)");
+            try {
                 assertNotNull(cache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -347,8 +398,11 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisClusterWithTimeout() {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,prefix:,5000)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,prefix:,5000)");
+            try {
                 assertNotNull(cache);
+            } finally {
+                cache.close();
             }
         }
     }
@@ -417,15 +471,21 @@ public class CacheFactoryTest extends TestBase {
             prefixField.setAccessible(true);
 
             // Seed intent: all seed nodes space-separated in the first parameter.
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000 10.0.0.2:7000,3000)")) {
-                assertEquals("10.0.0.1:7000 10.0.0.2:7000", distributedClient(cache).serverUrl());
-                assertEquals("", prefixField.get(cache));
+            final Cache<String, Object> seedCache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000 10.0.0.2:7000,3000)");
+            try {
+                assertEquals("10.0.0.1:7000 10.0.0.2:7000", distributedClient(seedCache).serverUrl());
+                assertEquals("", prefixField.get(seedCache));
+            } finally {
+                seedCache.close();
             }
 
             // Prefix intent: a trailing ':' makes the prefix non-endpoint-shaped.
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1:,1000)")) {
-                assertEquals("10.0.0.1:7000", distributedClient(cache).serverUrl());
-                assertEquals("tenant:1:", prefixField.get(cache));
+            final Cache<String, Object> prefixCache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,tenant:1:,1000)");
+            try {
+                assertEquals("10.0.0.1:7000", distributedClient(prefixCache).serverUrl());
+                assertEquals("tenant:1:", prefixField.get(prefixCache));
+            } finally {
+                prefixCache.close();
             }
         }
     }
@@ -439,12 +499,15 @@ public class CacheFactoryTest extends TestBase {
     public void testCreateCache_RedisCluster_FinalNumericTokenIsTimeoutNotPrefix() throws ReflectiveOperationException {
         try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
              MockedConstruction<RedisClusterClient> clientIntercept = Mockito.mockConstruction(RedisClusterClient.class)) {
-            try (Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,3000)")) {
+            final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(10.0.0.1:7000,3000)");
+            try {
                 assertEquals("10.0.0.1:7000", distributedClient(cache).serverUrl());
 
                 final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
                 prefixField.setAccessible(true);
                 assertEquals("", prefixField.get(cache), "the all-digit token must configure the timeout, not the key prefix");
+            } finally {
+                cache.close();
             }
         }
     }
@@ -452,12 +515,15 @@ public class CacheFactoryTest extends TestBase {
     /** Same all-digit rule for the standalone Redis two-parameter form. */
     @Test
     public void testCreateCache_Redis_TwoParam_AllDigitSecondParameterIsTimeout() throws ReflectiveOperationException {
-        try (Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,5000)")) {
+        final Cache<String, Object> cache = CacheFactory.createCache("Redis(localhost:6379,5000)");
+        try {
             assertEquals("localhost:6379", distributedClient(cache).serverUrl());
 
             final Field prefixField = DistributedCache.class.getDeclaredField("keyPrefix");
             prefixField.setAccessible(true);
             assertEquals("", prefixField.get(cache), "the all-digit token must configure the timeout, not the key prefix");
+        } finally {
+            cache.close();
         }
 
         // A non-positive all-digit token is a timeout and is rejected as such, not bound as a prefix.
@@ -579,12 +645,15 @@ public class CacheFactoryTest extends TestBase {
      */
     @Test
     public void testCreateCache_CustomClassImplementingCache() {
-        try (Cache<String, Object> cache = CacheFactory.createCache(DummyProviderCache.class.getName() + "(localhost:9999)")) {
+        final Cache<String, Object> cache = CacheFactory.createCache(DummyProviderCache.class.getName() + "(localhost:9999)");
+        try {
             assertNotNull(cache);
             assertTrue(cache instanceof DummyProviderCache);
             assertEquals("localhost:9999", ((DummyProviderCache<String, Object>) cache).serverUrl());
             assertTrue(cache.put("k", "v"));
             assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
@@ -599,11 +668,14 @@ public class CacheFactoryTest extends TestBase {
      */
     @Test
     public void testCreateCache_CustomClassWithNoArgConstructor() {
-        try (Cache<String, Object> cache = CacheFactory.createCache(DummyProviderCache.class.getName() + "()")) {
+        final Cache<String, Object> cache = CacheFactory.createCache(DummyProviderCache.class.getName() + "()");
+        try {
             assertNotNull(cache);
             assertTrue(cache instanceof DummyProviderCache);
             assertTrue(cache.put("k", "v"));
             assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
@@ -622,10 +694,14 @@ public class CacheFactoryTest extends TestBase {
     /** Factory smoke test: the createCaffeineCache delegation wraps the supplied Caffeine cache. */
     @Test
     public void testCreateCaffeineCache_Smoke() {
-        try (CaffeineCache<String, String> cache = CacheFactory
-                .createCaffeineCache(com.github.benmanes.caffeine.cache.Caffeine.newBuilder().maximumSize(10).build())) {
+        final CaffeineCache<String, String> cache = CacheFactory
+                .createCaffeineCache(com.github.benmanes.caffeine.cache.Caffeine.newBuilder().maximumSize(10).build());
+
+        try {
             assertTrue(cache.put("k", "v"));
             assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
         }
     }
 
