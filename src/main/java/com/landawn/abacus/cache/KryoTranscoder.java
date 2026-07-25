@@ -121,9 +121,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * String decoded = transcoder.decode(encoded);   // "Alice" -- equal to the encoded value
      * }</pre>
      *
+     * @throws IllegalStateException if the optional Kryo dependency is unavailable
      * @see #KryoTranscoder(int)
      * @see CachedData#MAX_SIZE
-     * @throws IllegalStateException if the optional Kryo dependency is unavailable
      */
     public KryoTranscoder() {
         this(CachedData.MAX_SIZE);

@@ -471,7 +471,7 @@ public interface Cache<K, V> {
      *
      * // The returned Set may be a snapshot, an unmodifiable set, or a live view. Copy it before
      * // traversing while invalidating entries, and call remove() on the cache itself.
-     * new java.util.HashSet<>(cache.keySet()).stream()
+     * Set.copyOf(cache.keySet()).stream()
      *     .filter(key -> key.startsWith("temp:"))
      *     .forEach(cache::remove);
      * }</pre>

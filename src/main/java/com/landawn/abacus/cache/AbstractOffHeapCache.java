@@ -1409,7 +1409,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     /** Builds the per-class, per-segment occupied-slot detail for {@link #stats()}. */
-    @SuppressWarnings("unused")
     private Map<Integer, Map<Integer, Integer>> snapshotOccupiedSlots() {
         final Map<Integer, Map<Integer, Integer>> result = new LinkedHashMap<>();
 

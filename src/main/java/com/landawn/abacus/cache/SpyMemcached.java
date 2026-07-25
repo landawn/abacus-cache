@@ -121,6 +121,13 @@ interface LegacySpyMemcachedAsyncApi<T> {
  * wraps spymemcached's otherwise effectively-unbounded bulk-get {@code Future#get()} so a written
  * request to an unresponsive server cannot pin the caller indefinitely.
  *
+ * <p><b>Subclassing:</b> the four bulk-get methods ({@link #getBulk(String...)},
+ * {@link #getBulk(Collection)}, {@link #asyncGetBulk(String...)}, and
+ * {@link #asyncGetBulk(Collection)}) are {@code final}. They copy the caller-supplied key container
+ * before validating it and then issue commands only from that private copy, so validation cannot be
+ * defeated by mutating the argument afterward; sealing them keeps that guarantee intact for every
+ * instance of this type. Every other operation remains overridable.
+ *
  * <p>Example usage:
  * <pre>{@code
  * // Construct once during application setup and share across requests/threads.

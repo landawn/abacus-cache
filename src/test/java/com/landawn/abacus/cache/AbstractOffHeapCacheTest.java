@@ -223,7 +223,10 @@ public class AbstractOffHeapCacheTest {
     /** Invalid custom routing results are programming errors, not undocumented aliases. */
     @Test
     public void testStoreSelectorRejectsUnknownAndNullResults() {
-        final OffHeapCache<String, byte[]> unknownSelectorCache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).storeSelector((key, value, size) -> 3).build();
+        final OffHeapCache<String, byte[]> unknownSelectorCache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .storeSelector((key, value, size) -> 3)
+                .build();
         try {
             assertThrows(IllegalArgumentException.class, () -> unknownSelectorCache.put("k", new byte[] { 1 }));
             assertEquals(0, unknownSelectorCache.size());
@@ -231,7 +234,10 @@ public class AbstractOffHeapCacheTest {
             unknownSelectorCache.close();
         }
 
-        final OffHeapCache<String, byte[]> nullSelectorCache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).storeSelector((key, value, size) -> null).build();
+        final OffHeapCache<String, byte[]> nullSelectorCache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .storeSelector((key, value, size) -> null)
+                .build();
         try {
             assertThrows(IllegalArgumentException.class, () -> nullSelectorCache.put("k", new byte[] { 1 }));
             assertEquals(0, nullSelectorCache.size());
