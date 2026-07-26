@@ -242,7 +242,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @param maxBlockSize maximum size of a single memory block in bytes used for allocation efficiency.
      *                     Must be between 1024 and {@code SEGMENT_SIZE} (1,048,576). The value is rounded up to
      *                     the nearest multiple of {@code MIN_BLOCK_SIZE} (64 bytes). Values larger than
-     *                     {@code maxBlockSize} are split across multiple blocks. Default is 8192 bytes.
+     *                     {@code maxBlockSize} are split across multiple blocks. Unlike {@link Builder#build()},
+     *                     this constructor performs no {@code 0}-to-default substitution; pass 8192 for the
+     *                     conventional block size.
      * @param evictDelay the delay between eviction runs in milliseconds. Use {@code 0} or negative to disable automatic eviction.
      * @param defaultLiveTime default time-to-live for entries in milliseconds. Use {@code 0} or negative for no TTL expiration.
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use {@code 0} or negative for no idle timeout.
@@ -299,8 +301,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * Allocation latency and when physical pages become resident are operating-system dependent,
      * so applications should measure construction and resident-memory behavior for their platform.
      *
-     * @param capacityInBytes the number of bytes to allocate. Must be positive. This is typically a multiple
-     *                        of {@code SEGMENT_SIZE} (1,048,576 bytes).
+     * @param capacityInBytes the number of bytes to allocate. Must be positive. Through normal
+     *                        construction this is always a multiple of {@code SEGMENT_SIZE} (1,048,576 bytes).
      * @return the base address of the allocated {@link MemorySegment}, as reported by
      *         {@link MemorySegment#address()}. It is recorded as the base address from which
      *         {@link #copyToMemory} and {@link #copyFromMemory} derive a relative offset into the segment.
@@ -542,9 +544,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * <p><b>Usage Examples:</b>
          * <pre>{@code
          * ForeignMemoryOffHeapCache.Builder<String, Data> builder = ForeignMemoryOffHeapCache.builder();   // new builder, defaults applied
-         * builder.capacityInMB(100)                                                  // each fluent setter returns the same builder instance
+         * builder.capacityInMB(100)                                                                        // each fluent setter returns the same builder instance
          *        .evictDelay(60000)
-         *        .defaultLiveTime(3600000);                       // mutates builder in place; result is the same builder reference
+         *        .defaultLiveTime(3600000);                                  // mutates builder in place; result is the same builder reference
          * ForeignMemoryOffHeapCache<String, Data> cache = builder.build();   // allocates native memory for an application-scoped cache
          * }</pre>
          *
@@ -565,7 +567,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
         /**
          * Maximum size of a single memory block in bytes.
          * Values larger than this are split across multiple blocks.
-         * Must be between 1024 and {@code SEGMENT_SIZE} (1,048,576), and is rounded up to the
+         * Must be {@code 0} (replaced with the default 8192 by {@link #build()}) or between 1024 and
+         * {@code SEGMENT_SIZE} (1,048,576), and is rounded up to the
          * nearest multiple of {@code MIN_BLOCK_SIZE} (64 bytes).
          * Larger blocks reduce fragmentation but may waste space for small objects.
          *
@@ -703,28 +706,28 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * <pre>{@code
          * // Basic cache with required fields
          * ForeignMemoryOffHeapCache<String, Data> cache = ForeignMemoryOffHeapCache.<String, Data>builder()
-         *     .capacityInMB(200)         // 200MB off-heap (required, must be positive)
-         *     .evictDelay(60000)         // scan for expired entries every 60s
-         *     .vacatingFactor(0.3f)      // evict 30% of entries (LRU first) under memory pressure
-         *     .build();                  // application-scoped cache; native memory now allocated
+         *     .capacityInMB(200)                     // 200MB off-heap (required, must be positive)
+         *     .evictDelay(60000)                     // scan for expired entries every 60s
+         *     .vacatingFactor(0.3f)                  // evict 30% of entries (LRU first) under memory pressure
+         *     .build();                              // application-scoped cache; native memory now allocated
          * cache.put("key", data);                    // serializes + copies the value off-heap; returns true on success
          * Data retrieved = cache.getOrNull("key");   // returns the cached value, or null if absent/expired
          *
          * // Advanced cache with disk spillover
          * OffHeapStore<String> store = myOffHeapStoreImplementation;   // your disk-backed store
          * ForeignMemoryOffHeapCache<String, Data> advancedCache = ForeignMemoryOffHeapCache.<String, Data>builder()
-         *     .capacityInMB(100)         // 100MB off-heap
+         *     .capacityInMB(100)            // 100MB off-heap
          *     .maxBlockSizeInBytes(16384)   // 16KB max block; larger values split across blocks
-         *     .evictDelay(30000)         // scan every 30s
-         *     .defaultLiveTime(3600000)  // default 1h TTL
-         *     .defaultMaxIdleTime(1800000)   // default 30min idle timeout
-         *     .vacatingFactor(0.25f)     // evict 25% of entries (LRU first) on vacate
-         *     .offHeapStore(store)       // spill to disk when memory is full
-         *     .statsTimeOnDisk(true)     // track disk read/write timing
-         *     .build();                  // returns an application-scoped cache with disk spillover enabled
+         *     .evictDelay(30000)            // scan every 30s
+         *     .defaultLiveTime(3600000)     // default 1h TTL
+         *     .defaultMaxIdleTime(1800000)  // default 30min idle timeout
+         *     .vacatingFactor(0.25f)        // evict 25% of entries (LRU first) on vacate
+         *     .offHeapStore(store)          // spill to disk when memory is full
+         *     .statsTimeOnDisk(true)        // track disk read/write timing
+         *     .build();                     // returns an application-scoped cache with disk spillover enabled
          *
          * // build() validates eagerly:
-         * ForeignMemoryOffHeapCache.<String, Data>builder().build();                          // throws IllegalArgumentException (capacityInMB not set / 0)
+         * ForeignMemoryOffHeapCache.<String, Data>builder().build();                                            // throws IllegalArgumentException (capacityInMB not set / 0)
          * ForeignMemoryOffHeapCache.<String, Data>builder().capacityInMB(8).maxBlockSizeInBytes(512).build();   // throws IllegalArgumentException (maxBlockSizeInBytes < 1024)
          * ForeignMemoryOffHeapCache<String, Data> defaultBlock = ForeignMemoryOffHeapCache.<String, Data>builder()
          *     .capacityInMB(8).maxBlockSizeInBytes(0).build();                                // ok: 0 is replaced with the default 8192

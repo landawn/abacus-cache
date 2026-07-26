@@ -175,8 +175,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * String url = client.serverUrl(); // client is the application's shared cache client
-     * System.out.println("Connected to: " + url);   // Output: "Connected to: localhost:11211"
+     * String url = client.serverUrl();            // client is the application's shared cache client
+     * System.out.println("Connected to: " + url); // Output: "Connected to: localhost:11211"
      * }</pre>
      *
      * @return the server URL(s) for this client, never {@code null} or blank

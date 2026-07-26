@@ -61,6 +61,7 @@ import java.util.Objects;
  * OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]>builder()
  *     .capacityInMB(100)
  *     .evictDelay(60000)
+ *     .statsTimeOnDisk(true)   // required for the disk-timing stats below; defaults to false
  *     .build();
  * // ... use cache ...
  * OffHeapCacheStats stats = cache.stats();
@@ -126,8 +127,9 @@ import java.util.Objects;
  *                              memory-resident entries, so it never contributes here. Explicit
  *                              {@code remove()} / {@code clear()} and {@code put()} replacements of a
  *                              disk-stored key are NOT counted here.
- * @param allocatedMemory the total allocated off-heap memory in bytes. This represents the maximum memory
- *                        that has been reserved for the cache, typically organized into fixed-size segments.
+ * @param allocatedMemory the total allocated off-heap memory in bytes. This is the fixed amount of
+ *                        native memory reserved for the cache at creation, organized into fixed-size
+ *                        segments.
  * @param occupiedMemory the currently occupied off-heap slot space in bytes. This includes serialized
  *                       data plus slot-rounding/alignment padding, but not the heap-resident entry metadata.
  * @param dataSize the total size of actual serialized data tracked by the cache in bytes, across both
@@ -141,16 +143,22 @@ import java.util.Objects;
  *                             average time in milliseconds. The measured window is the store write
  *                             ({@code OffHeapStore.put()}) itself, excluding serialization, the preceding
  *                             failed in-memory slot search, and the entry installation - the write
- *                             counterpart of {@code readFromDiskTimeStats}.
+ *                             counterpart of {@code readFromDiskTimeStats}. Timing observations are recorded
+ *                             only when the cache is built with {@code statsTimeOnDisk(true)} (it defaults to
+ *                             {@code false}); when disabled, no observations are ever recorded and all three
+ *                             values stay {@code 0.0}.
  * @param readFromDiskTimeStats statistics for disk read operations, tracking the minimum, maximum, and
  *                              average time in milliseconds for reading entry bytes from the store. The
  *                              measured window is the store read ({@code OffHeapStore.get()}) itself;
  *                              lookups that never reach the store (entry already removed or replaced
- *                              concurrently) are not recorded. This helps monitor disk read performance
+ *                              concurrently) are not recorded. Timing observations are recorded only when
+ *                              the cache is built with {@code statsTimeOnDisk(true)} (it defaults to
+ *                              {@code false}); when disabled, no observations are ever recorded and all
+ *                              three values stay {@code 0.0}. This helps monitor disk read performance
  *                              and cache hit efficiency.
  * @param segmentSize the size of each memory segment in bytes. The off-heap memory is organized into
- *                    fixed-size segments (typically 1MB = 1048576 bytes) to manage memory allocation
- *                    and reduce fragmentation.
+ *                    fixed-size segments (the built-in caches always use 1MB = 1048576 bytes) to manage
+ *                    memory allocation and reduce fragmentation.
  * @param occupiedSlots a detailed map showing memory slot occupation across segments. The outer map's key
  *                      is the slot size in bytes - any multiple of the 64-byte minimum block size up to
  *                      {@code maxBlockSize} (e.g., 64, 128, 192, 256, 320, ...), not only powers of two - and
@@ -313,8 +321,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
     /**
      * Statistics for the minimum, maximum, and average values of a metric.
      * Within {@link OffHeapCacheStats} this is used to track disk I/O timings (values are in
-     * milliseconds). When no observations have been recorded yet, all three values are reported
-     * as {@code 0.0}.
+     * milliseconds). When no observations have been recorded - including when timing collection is
+     * disabled on the cache - all three values are reported as {@code 0.0}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

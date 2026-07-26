@@ -245,7 +245,7 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * }</pre>
      *
      * @param key the key whose associated value is to be removed; must not be {@code null}
-     * @return {@code true} if a value was removed, {@code false} otherwise
+     * @return {@code true} if a value was removed, {@code false} if the key is confirmed not to exist
      */
     boolean remove(K key);
 

@@ -36,8 +36,9 @@ import net.spy.memcached.transcoders.Transcoder;
  *
  * <p><b>&#9888;&#65039; Circular references are not supported by default:</b> the default {@link KryoParser}
  * creates its Kryo instances with reference tracking disabled (Kryo's default), so encoding an
- * object graph with a cycle (e.g., a bidirectional parent/child link) recurses until
- * {@link StackOverflowError}, and even acyclic shared references are duplicated in the payload
+ * object graph with a cycle (e.g., a bidirectional parent/child link) recurses until the stack
+ * overflows (the {@link StackOverflowError} may surface wrapped inside a Kryo serialization
+ * error), and even acyclic shared references are duplicated in the payload
  * (object identity is not preserved on decode). {@code KryoParser} does not expose Kryo's
  * reference-tracking option, so there is no configuration workaround: cache only value types
  * whose object graphs are trees.
@@ -206,7 +207,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * KryoParser parser = ParserFactory.createKryoParser();   // configure / register classes as needed
-     * KryoTranscoder<User> transcoder = new KryoTranscoder<>(512 * 1024, parser);
+     * KryoTranscoder<String> transcoder = new KryoTranscoder<>(512 * 1024, parser);
      * }</pre>
      *
      * @param maxSize the maximum size in bytes for cached objects; must be positive

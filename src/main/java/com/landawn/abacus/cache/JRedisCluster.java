@@ -32,8 +32,9 @@ import redis.clients.jedis.RedisClusterClient;
  * Unlike {@link JRedis} — which shards client-side across independent standalone servers — this class
  * targets a Redis Cluster, where the servers cooperate and shard data themselves by hash slot. A
  * single {@link RedisClusterClient} discovers the cluster topology from the supplied seed nodes and
- * routes every command to the slot-owning node server-side (following {@code MOVED}/{@code ASK}
- * redirects). Objects are serialized using Kryo (see {@link AbstractJedisCacheClient}).
+ * uses it to send every command directly to the slot-owning node (following {@code MOVED}/{@code ASK}
+ * redirects when its cached topology is stale). Objects are serialized using Kryo (see
+ * {@link AbstractJedisCacheClient}).
  *
  * <p><b>When to use this vs {@link JRedis}:</b>
  * <ul>
@@ -62,7 +63,7 @@ import redis.clients.jedis.RedisClusterClient;
  * // Connect to a Redis Cluster via a few seed nodes
  * JRedisCluster<User> cache = new JRedisCluster<>("10.0.0.1:7000,10.0.0.2:7000,10.0.0.3:7000");
  *
- * // Store and retrieve objects (routing is handled server-side by the cluster)
+ * // Store and retrieve objects (each key is routed to its slot-owning node by hash slot)
  * User user = new User("John", "john@example.com");
  * cache.put("user:123", user, 3600000);   // Cache for 1 hour
  * User cached = cache.get("user:123");
@@ -198,8 +199,8 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
 
     /**
      * Returns the single cluster client for every key. A {@link RedisClusterClient} routes commands to
-     * the slot-owning node server-side, so the key argument is intentionally ignored here (no
-     * client-side shard selection is performed).
+     * the slot-owning node by hash slot, so the key argument is intentionally ignored here (this class
+     * performs no client-side shard selection of its own).
      *
      * @param keyBytes the UTF-8 encoded key bytes (ignored; the cluster routes by hash slot)
      * @return the {@link RedisClusterClient}, never {@code null}

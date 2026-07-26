@@ -26,7 +26,7 @@ import com.landawn.abacus.util.N;
 /**
  * A thread-safe, in-memory cache implementation with automatic eviction and expiration support.
  * This cache stores objects in local memory and provides configurable time-to-live (TTL) and
- * idle timeout capabilities. It uses an underlying KeyedObjectPool for efficient memory management
+ * idle timeout capabilities. It uses an underlying {@code KeyedObjectPool} for efficient memory management
  * and automatic eviction of expired entries.
  *
  * <p>Key features:
@@ -275,10 +275,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>&#9888;&#65039; Replacement failure:</b> The underlying pool (including the default
      * {@code GenericKeyedObjectPool}) removes and destroys an existing mapping <i>before</i>
-     * attempting to store its replacement. If the pool then rejects the new entry (capacity or
-     * memory limit, or a millisecond-scale {@code liveTime} that expires between the pool's
-     * pre-lock check and its in-lock re-check), this method returns {@code false} and the
-     * previous mapping is no longer present.
+     * checking whether its replacement can be stored. If the pool then rejects the new entry
+     * (capacity or memory limit), this method returns {@code false} and the previous mapping is
+     * no longer present. By contrast, if the new entry is rejected up front because it is already
+     * expired at the pool's initial check (only possible with a millisecond-scale {@code liveTime}),
+     * any previous mapping is retained.
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
      * @param value the cache value to be associated with the specified key (must not be null)
@@ -545,21 +546,21 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * stats.capacity();              // returns 1000
      *
      * // Calculate and display hit rate
-     * double hitRate = stats.hitRate();                                             // 0.5
+     * double hitRate = stats.hitRate();                                            // 0.5
      * System.out.println("Hit rate: " + String.format("%.2f%%", hitRate * 100));   // prints "Hit rate: 50.00%"
      *
      * // Display cache utilization
      * System.out.println("Cache size: " + stats.size() + "/" + stats.capacity());   // prints "Cache size: 1/1000"
-     * double utilization = (double) stats.size() / stats.capacity() * 100;   // 0.1
+     * double utilization = (double) stats.size() / stats.capacity() * 100;          // 0.1
      * System.out.println("Utilization: " + String.format("%.2f%%", utilization));   // prints "Utilization: 0.10%"
      *
      * // Display operation counts
      * System.out.println("Total get operations: " + stats.getCount());   // prints "Total get operations: 2"
      * System.out.println("Total put operations: " + stats.putCount());   // prints "Total put operations: 1"
-     * System.out.println("Evictions: " + stats.evictionCount());          // prints "Evictions: 0"
+     * System.out.println("Evictions: " + stats.evictionCount());         // prints "Evictions: 0"
      *
      * // Monitor cache effectiveness
-     * if (hitRate < 0.5) {   // false here (hitRate == 0.5)
+     * if (hitRate < 0.5) {                                                                       // false here (hitRate == 0.5)
      *     System.out.println("Warning: Low hit rate - consider increasing cache size or TTL");   // not reached here
      * }
      *

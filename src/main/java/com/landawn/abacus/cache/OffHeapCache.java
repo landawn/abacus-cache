@@ -238,7 +238,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * This constructor is called internally by the Builder's build() method and should not be
      * invoked directly. It provides access to all advanced configuration options including
      * custom serialization, disk spillover, and memory management tuning.
-     * 
+     *
      * <p>This is the most flexible constructor, delegating to the parent {@link AbstractOffHeapCache} with all
      * configuration parameters. All constructors of this class are package-private; for typical usage,
      * obtain an instance through the builder obtained from {@link #builder()} or via {@link CacheFactory}.
@@ -298,10 +298,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Allocates off-heap memory using sun.misc.Unsafe.
-     * This memory is outside the JVM heap and must be explicitly freed via deallocate().
+     * This memory is outside the JVM heap and must be explicitly freed via {@link #deallocate()}.
      * The allocated memory address is used for direct byte-level operations.
      * This is an internal method called automatically during cache construction and should not be called directly.
-     * 
+     *
      * <p>The memory is allocated from the native heap, not managed by the Java garbage collector.
      * This reduces GC pressure but requires manual deallocation via {@link #deallocate()} to prevent memory leaks.
      * The allocated memory is uninitialized and may contain arbitrary data.
@@ -311,8 +311,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * from the operating system. The memory remains allocated until explicitly freed. Unlike heap memory,
      * this allocation does not trigger garbage collection or affect heap usage statistics.
      *
-     * @param capacityInBytes the number of bytes to allocate. Must be positive. This is typically a multiple
-     *                        of SEGMENT_SIZE (1,048,576 bytes).
+     * @param capacityInBytes the number of bytes to allocate. Must be positive. This is always a multiple
+     *                        of SEGMENT_SIZE (1,048,576 bytes), since the region is sized as
+     *                        {@code capacityInMB * 1048576}.
      * @return the base address (pointer) of the allocated memory block in native memory. This address is
      *         used for all subsequent memory access operations via copyToMemory and copyFromMemory.
      * @throws OutOfMemoryError if the allocation fails due to insufficient native memory available on the system
@@ -334,7 +335,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Called during cache shutdown to release native memory and prevent memory leaks.
      * This method is automatically invoked by close(). This is an internal method
      * and should not be called directly.
-     * 
+     *
      * <p>Once called, the base memory address becomes invalid and must not be accessed.
      * All cache operations should be stopped before calling this method. The method uses
      * sun.misc.Unsafe to free the native memory back to the operating system.
@@ -362,7 +363,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Uses unsafe operations for efficient memory transfer, bypassing standard
      * Java array access for maximum performance. This is an internal method
      * called automatically during cache put operations and should not be called directly.
-     * 
+     *
      * <p>The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
      * significantly faster than manual byte-by-byte copying. The supplied {@code srcOffset} is a
      * zero-based array index; this implementation adds {@code BYTE_ARRAY_BASE} with {@code long}
@@ -395,7 +396,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Uses unsafe operations for efficient memory transfer, bypassing standard
      * Java array access for maximum performance. This is an internal method
      * called automatically during cache get operations and should not be called directly.
-     * 
+     *
      * <p>The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
      * significantly faster than manual byte-by-byte copying. The supplied {@code destOffset} is a
      * zero-based array index; this implementation adds {@code BYTE_ARRAY_BASE} with {@code long}
@@ -470,7 +471,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Provides a fluent API for setting all cache parameters including capacity,
      * eviction policies, serialization, and disk spillover options. All setters
      * return the builder instance for method chaining.
-     * 
+     *
      * <p>The builder uses Lombok's {@code @Data} and {@code @Accessors} annotations to generate fluent
      * setter methods automatically. All fields have sensible defaults (except {@code capacityInMB}, which is required)
      * and can be overridden as needed before calling {@link #build()}.
@@ -711,7 +712,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *     .capacityInMB(200)
          *     .evictDelay(60000)
          *     .vacatingFactor(0.3f)
-         *     .build();                      // application-scoped cache; native memory now allocated
+         *     .build();                              // application-scoped cache; native memory now allocated
          * cache.put("key", data);                    // returns true once the value is stored
          * Data retrieved = cache.getOrNull("key");   // returns the stored value, or null if absent
          *
@@ -722,7 +723,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *     .build();                      // returns an application-scoped cache
          *
          * // Invalid configuration is rejected by build()
-         * OffHeapCache.<String, Data>builder().build();                          // throws IllegalArgumentException (capacityInMB not positive)
+         * OffHeapCache.<String, Data>builder().build();                                          // throws IllegalArgumentException (capacityInMB not positive)
          * OffHeapCache.<String, Data>builder().capacityInMB(8).maxBlockSizeInBytes(512).build(); // throws IllegalArgumentException (non-zero, < 1024)
          *
          * // Advanced cache with disk spillover

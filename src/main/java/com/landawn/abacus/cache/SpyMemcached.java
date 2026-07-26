@@ -212,7 +212,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * SpyMemcached<String> cache = new SpyMemcached<>("localhost:11211"); // uses DEFAULT_TIMEOUT
-     * cache.put("key1", "value1", 3600000); // stores with 3600s TTL; returns true on success
+     * cache.put("key1", "value1", 3600000);                               // stores with 3600s TTL; returns true on success
      * // Retain and share cache; optionally disconnect it during application shutdown.
      *
      * // A null/blank serverUrl is rejected before any connection attempt.
@@ -245,7 +245,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Create cache with 5-second operation timeout
      * SpyMemcached<User> cache = new SpyMemcached<>("localhost:11211", 5000); // 5000ms operation timeout
-     * cache.put("user:123", user, 3600000); // stores with 3600s TTL; returns true on success
+     * cache.put("user:123", user, 3600000);                                   // stores with 3600s TTL; returns true on success
      * // Retain and share cache; optionally disconnect it during application shutdown.
      *
      * // timeout must be strictly positive (checkArgPositive).
@@ -384,14 +384,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Simple async get
      * ContinuableFuture<User> getFuture = cache.asyncGet("user:123"); // dispatched; never null
-     * User user = getFuture.get();                            // blocks until complete; yields the value or null if absent
+     * User user = getFuture.get();                                    // blocks until complete; yields the value or null if absent
      *
      * // Async get with timeout (requires: import java.util.concurrent.TimeoutException;)
      * ContinuableFuture<User> timedGet = cache.asyncGet("user:123"); // dispatches the get; returns the Future
      * try {
      *     User timedUser = timedGet.get(1000, TimeUnit.MILLISECONDS); // waits up to 1s for the result
      * } catch (TimeoutException e) {
-     *     timedGet.cancel(true); // abandon the operation if it did not complete in time
+     *     timedGet.cancel(true);                         // abandon the operation if it did not complete in time
      *     System.out.println("Get operation timed out"); // printed if the result was not ready in time
      * }
      *
@@ -488,13 +488,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Simple async bulk get
      * ContinuableFuture<Map<String, User>> bulkFuture = cache.asyncGetBulk("user:1", "user:2"); // dispatched; never null
-     * Map<String, User> users = bulkFuture.get();                                      // bounded by the configured operation timeout
+     * Map<String, User> users = bulkFuture.get();                                               // bounded by the configured operation timeout
      *
      * // Async bulk get with timeout (requires: import java.util.concurrent.TimeoutException;)
      * ContinuableFuture<Map<String, User>> timedBulk = cache.asyncGetBulk("user:1", "user:2", "user:3"); // dispatches the bulk get
      * try {
      *     Map<String, User> timedUsers = timedBulk.get(2000, TimeUnit.MILLISECONDS); // waits up to 2s
-     *     System.out.println("Retrieved " + timedUsers.size() + " users");          // size() <= number of requested keys
+     *     System.out.println("Retrieved " + timedUsers.size() + " users");           // size() <= number of requested keys
      * } catch (TimeoutException e) {
      *     timedBulk.cancel(true); // abandon the operation if it did not complete in time
      * }
@@ -591,12 +591,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * // Simple async bulk get with collection (requires: import java.util.Set;)
      * Set<String> keys = new HashSet<>(Arrays.asList("user:1", "user:2"));
      * ContinuableFuture<Map<String, User>> userFuture = cache.asyncGetBulk(keys); // dispatched; never null
-     * Map<String, User> users = userFuture.get();                        // bounded by the configured operation timeout
+     * Map<String, User> users = userFuture.get();                                 // bounded by the configured operation timeout
      *
      * // Async bulk get from dynamically generated keys (requires: import java.util.concurrent.TimeoutException;)
      * List<String> productKeys = generateProductKeys();
      * ContinuableFuture<Map<String, Product>> productFuture = cache.asyncGetBulk(productKeys); // dispatches the bulk get
-     * Map<String, Product> products = productFuture.get(3000, TimeUnit.MILLISECONDS);           // waits up to 3s
+     * Map<String, Product> products = productFuture.get(3000, TimeUnit.MILLISECONDS);          // waits up to 3s
      *
      * cache.asyncGetBulk((Collection<String>) null);     // throws IllegalArgumentException (keys must not be null)
      * cache.asyncGetBulk(Arrays.asList("user:1", null)); // throws IllegalArgumentException (no null elements allowed)
@@ -776,7 +776,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Simple async set
      * ContinuableFuture<Boolean> storeFuture = cache.asyncPut("user:123", user, 3600000); // dispatched; never null
-     * boolean stored = storeFuture.get();                                       // blocks until complete; yields true on success
+     * boolean stored = storeFuture.get();                                                 // blocks until complete; yields true on success
      * if (stored) {
      *     System.out.println("Set operation succeeded"); // printed when the store succeeded
      * }
@@ -892,8 +892,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Simple async add
      * ContinuableFuture<Boolean> addFuture = cache.asyncAdd("user:123", user, 3600000); // dispatched; never null
-     * if (addFuture.get()) {                                                    // blocks; yields true only if the key was absent
-     *     System.out.println("Added");                                    // printed when the add succeeded
+     * if (addFuture.get()) {                                                            // blocks; yields true only if the key was absent
+     *     System.out.println("Added");                                                  // printed when the add succeeded
      * } else {
      *     System.out.println("Key already exists"); // printed when add yielded false
      * }
@@ -1000,7 +1000,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Simple async replace
      * ContinuableFuture<Boolean> replaceFuture = cache.asyncReplace("user:123", updatedUser, 3600000); // dispatched; never null
-     * boolean replaced = replaceFuture.get();                                              // true only if the key already existed
+     * boolean replaced = replaceFuture.get();                                                          // true only if the key already existed
      * if (replaced) {
      *     System.out.println("Replaced successfully"); // printed when the replace succeeded
      * }
@@ -1098,7 +1098,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Simple async delete
      * ContinuableFuture<Boolean> removeFuture = cache.asyncRemove("user:123"); // dispatched; never null
-     * boolean deleted = removeFuture.get();                         // true if the key existed, false if absent
+     * boolean deleted = removeFuture.get();                                    // true if the key existed, false if absent
      * if (deleted) {
      *     System.out.println("Delete operation acknowledged"); // printed when the key was removed
      * }
@@ -1670,7 +1670,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * // WARNING: This can remove ALL data from every configured cache server!
-     * cache.flushAll(); // blocks for spymemcached's aggregate result; see multi-server caveat below
+     * cache.flushAll();                              // blocks for spymemcached's aggregate result; see multi-server caveat below
      * System.out.println("Flush command completed"); // verify servers individually if full-cluster proof is required
      *
      * // Safe usage in testing
@@ -1726,7 +1726,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Simple async flush
      * ContinuableFuture<Boolean> flushFuture = cache.asyncFlushAll(); // dispatched; never null
-     * boolean flushed = flushFuture.get();                   // see the multi-server result limitation above
+     * boolean flushed = flushFuture.get();                            // see the multi-server result limitation above
      * if (flushed) {
      *     System.out.println("Final server callback reported success");
      * }
@@ -1819,7 +1819,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Schedule a flush to happen in 10 seconds
      * ContinuableFuture<Boolean> scheduleFuture = cache.asyncFlushAll(10000); // 10000ms -> relative delay of 10s
-     * boolean scheduled = scheduleFuture.get();                       // final callback's result
+     * boolean scheduled = scheduleFuture.get();                               // final callback's result
      *
      * // Like set/add/replace expirations, delays over 30 days are sent as an absolute
      * // now+delay Unix timestamp (memcached's protocol rule for all expiration values).
@@ -1829,9 +1829,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * ContinuableFuture<Boolean> timedSchedule = cache.asyncFlushAll(30000); // 30000ms -> relative delay of 30s
      * try {
      *     boolean scheduledInTime = timedSchedule.get(1000, TimeUnit.MILLISECONDS); // waits up to 1s
-     *     System.out.println("Flush scheduled: " + scheduledInTime);   // final callback's result
+     *     System.out.println("Flush scheduled: " + scheduledInTime);                // final callback's result
      * } catch (TimeoutException e) {
-     *     timedSchedule.cancel(true); // abandon the wait if confirmation did not arrive in time
+     *     timedSchedule.cancel(true);              // abandon the wait if confirmation did not arrive in time
      *     logger.warn("Failed to schedule flush"); // emitted if confirmation was not received within 1s
      * }
      * }</pre>
@@ -1924,8 +1924,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * // Optional application shutdown with graceful timeout
      * public void shutdown() {
-     *     logger.info("Shutting down cache client"); // emitted before the graceful shutdown
-     *     cache.disconnect(10000);   // waits up to 10000ms for pending ops to finish
+     *     logger.info("Shutting down cache client");     // emitted before the graceful shutdown
+     *     cache.disconnect(10000);                       // waits up to 10000ms for pending ops to finish
      *     logger.info("Cache client shutdown complete"); // emitted after disconnect returns
      * }
      *

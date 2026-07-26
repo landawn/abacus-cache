@@ -387,7 +387,7 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param client the distributed cache client to wrap (must not be null)
      * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
-     * @return a new DistributedCache instance with key prefixing enabled
+     * @return a new DistributedCache instance wrapping the provided client with the specified key prefix
      * @throws IllegalArgumentException if client is null, or if keyPrefix contains a non-printable-ASCII
      *         character, a space, or a control character
      * @see #createDistributedCache(DistributedCacheClient)
@@ -530,17 +530,17 @@ public final class CacheFactory {
      *     "com.mycompany.CustomCache(param1,param2)"
      * );                                            // returns an instance of the named Cache class
      * // Edge cases (all throw IllegalArgumentException):
-     * CacheFactory.createCache(null);                              // "Provider specification cannot be null or empty"
-     * CacheFactory.createCache("");                                // "Provider specification cannot be null or empty"
-     * CacheFactory.createCache("Memcached()");                     // "missing parameters" (the parser yields an empty parameter list)
-     * CacheFactory.createCache("Memcached(localhost,p:,0)");       // non-positive timeout rejected
-     * CacheFactory.createCache("Memcached(localhost,p:,abc)");     // "Invalid timeout parameter: abc"
-     * CacheFactory.createCache("Memcached(localhost,p:,0x1F4)");   // "Invalid timeout parameter" (decimal digits only)
+     * CacheFactory.createCache(null);                                 // "Provider specification cannot be null or empty"
+     * CacheFactory.createCache("");                                   // "Provider specification cannot be null or empty"
+     * CacheFactory.createCache("Memcached()");                        // "missing parameters" (the parser yields an empty parameter list)
+     * CacheFactory.createCache("Memcached(localhost,p:,0)");          // non-positive timeout rejected
+     * CacheFactory.createCache("Memcached(localhost,p:,abc)");        // "Invalid timeout parameter: abc"
+     * CacheFactory.createCache("Memcached(localhost,p:,0x1F4)");      // "Invalid timeout parameter" (decimal digits only)
      * CacheFactory.createCache("RedisCluster(h1:7000,h2:7000,3000)"); // "Ambiguous RedisCluster parameters" (endpoint-shaped token before the timeout)
-     * CacheFactory.createCache("Memcached(a,b,1000,extra)");       // "Unsupported parameters" (more than 3)
-     * CacheFactory.createCache("Memcached(localhost,app:");        // unbalanced parenthesis -> "Failed to parse provider specification"
-     * CacheFactory.createCache("com.example.NoSuchCache(host)");   // "Cannot find class: com.example.NoSuchCache"
-     * CacheFactory.createCache("java.lang.String(host)");          // "Custom cache class must implement Cache"
+     * CacheFactory.createCache("Memcached(a,b,1000,extra)");          // "Unsupported parameters" (more than 3)
+     * CacheFactory.createCache("Memcached(localhost,app:");           // unbalanced parenthesis -> "Failed to parse provider specification"
+     * CacheFactory.createCache("com.example.NoSuchCache(host)");      // "Cannot find class: com.example.NoSuchCache"
+     * CacheFactory.createCache("java.lang.String(host)");             // "Custom cache class must implement Cache"
      * }</pre>
      *
      * @param <K> the type of keys maintained by the cache

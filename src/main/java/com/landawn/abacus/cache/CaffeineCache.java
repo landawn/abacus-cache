@@ -542,9 +542,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Usage Examples:</b>
      * <pre>{@code
      * CaffeineCache<String, User> cache = new CaffeineCache<>(caffeine);   // caffeine built with recordStats()
-     * cache.put("user:123", user, 0, 0);              // seed one entry
-     * cache.getOrNull("user:123");                    // hit
-     * cache.getOrNull("user:999");                    // miss
+     * cache.put("user:123", user, 0, 0);                                   // seed one entry
+     * cache.getOrNull("user:123");                                         // hit
+     * cache.getOrNull("user:999");                                         // miss
      *
      * CacheStats stats = cache.stats();
      * System.out.println("Hit rate: " + stats.hitRate());     // [0.0, 1.0]

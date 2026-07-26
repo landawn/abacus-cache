@@ -1349,7 +1349,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         releaseSlots(entry.slots);
     }
 
-    /** Releases raw slot handles when entry construction or the initial memory copy fails. */
+    /**
+     * Releases raw slot handles for a retired entry. Unlike {@link #discardUninstalledSlots(long[])},
+     * segments emptied here are not reclaimed immediately; that is left to the maintenance pass,
+     * a vacate pass, or {@link #clear()}.
+     */
     private void releaseSlots(final long[] slots) {
         synchronized (allocatorLock) {
             for (final long slot : slots) {
