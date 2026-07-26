@@ -93,7 +93,8 @@ import com.landawn.abacus.util.function.TriPredicate;
  * empty segments.
  *
  * <p><b>Memory pressure.</b> When slot allocation fails for a value that could fit, the put
- * falls back to the disk store when one is configured; otherwise it returns {@code false} and
+ * falls back to the disk store when one is configured. If no store absorbs the value — because
+ * none is configured or because its write was rejected — the put returns {@code false} and
  * schedules an asynchronous, debounced vacate pass that evicts the least-recently-accessed
  * ~{@code vacatingFactor} of memory-resident entries and reclaims their now-empty segments.
  *

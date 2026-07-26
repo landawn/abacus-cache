@@ -235,10 +235,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        unprefixed namespaces can never collide
      * @param maxFailedNumForRetry maximum consecutive failures before opening the circuit breaker
      *                             (must be non-negative); {@code 0} opens it after the first
-     *                             recorded backend failure
+     *                             recorded backend failure.
      *        A value of {@code 0} is a degenerate configuration in which the circuit opens on every failure for
-     *        {@code retryDelay} ms; in that mode the failure counter stays at 0 and the closed-to-open WARN
-     *        transition log is not emitted
+     *        {@code retryDelay} ms; in that mode the failure counter stays at 0, and the closed-to-open WARN
+     *        transition is logged once per transition — that is, on the first failure and on each later failure
+     *        that follows a successful read
      * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative)
      * @throws IllegalArgumentException if {@code client} is {@code null}, {@code maxFailedNumForRetry} is negative,
      *         {@code retryDelay} is negative, or {@code keyPrefix} contains a non-printable-ASCII character,
