@@ -26,6 +26,8 @@ package com.landawn.abacus.cache;
  *
  * @param <K> the key type
  * @param <V> the value type
+ * @see LocalCache
+ * @see CacheFactory
  *
  * @deprecated this is a compatibility wrapper, not a real Chronicle-Map adapter; its name collides
  *             with the unrelated OpenHFT {@code net.openhft.chronicle.map.ChronicleMap} and its

@@ -49,18 +49,75 @@ import net.spy.memcached.transcoders.Transcoder;
  */
 interface LegacySpyMemcachedAsyncApi<T> {
 
+    /**
+     * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncGet(String)}; see that
+     * method for the full contract.
+     *
+     * @param key the cache key whose associated value is to be retrieved
+     * @return a {@link Future} that will yield the cached object of type {@code T}, or {@code null}
+     *         if not found, expired, or evicted
+     */
     Future<T> asyncGet(String key);
 
+    /**
+     * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncGetBulk(String...)}; see
+     * that method for the full contract.
+     *
+     * @param keys the cache keys whose associated values are to be retrieved
+     * @return a {@link Future} that will yield the map of found key-value pairs; the map is never
+     *         {@code null} but may be empty
+     */
     Future<Map<String, T>> asyncGetBulk(String... keys);
 
+    /**
+     * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncGetBulk(Collection)}; see
+     * that method for the full contract.
+     *
+     * @param keys the collection of cache keys whose associated values are to be retrieved
+     * @return a {@link Future} that will yield the map of found key-value pairs; the map is never
+     *         {@code null} but may be empty
+     */
     Future<Map<String, T>> asyncGetBulk(Collection<String> keys);
 
+    /**
+     * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncAdd(String, Object, long)};
+     * see that method for the full contract.
+     *
+     * @param key the cache key with which the specified value is to be associated
+     * @param value the value to cache
+     * @param liveTime the time-to-live in milliseconds
+     * @return a {@link Future} that will yield {@code true} if the add succeeded, or {@code false}
+     *         if the key already exists
+     */
     Future<Boolean> asyncAdd(String key, T value, long liveTime);
 
+    /**
+     * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncReplace(String, Object, long)};
+     * see that method for the full contract.
+     *
+     * @param key the cache key with which the specified value is to be associated
+     * @param value the value to cache
+     * @param liveTime the time-to-live in milliseconds
+     * @return a {@link Future} that will yield {@code true} if the replacement succeeded, or
+     *         {@code false} if the key does not exist
+     */
     Future<Boolean> asyncReplace(String key, T value, long liveTime);
 
+    /**
+     * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncFlushAll()}; see that
+     * method for the full contract.
+     *
+     * @return a {@link Future} that yields the final server callback's result
+     */
     Future<Boolean> asyncFlushAll();
 
+    /**
+     * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncFlushAll(long)}; see that
+     * method for the full contract.
+     *
+     * @param delay the delay in milliseconds before the flush operation is executed
+     * @return a {@link Future} that yields the final server callback's result
+     */
     Future<Boolean> asyncFlushAll(long delay);
 }
 
@@ -661,6 +718,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         private final Future<R> delegate;
         private final long timeoutMillis;
 
+        /**
+         * Creates a future that delegates to {@code delegate} but bounds no-argument {@code get()}
+         * waits to {@code timeoutMillis}.
+         *
+         * @param delegate the future to delegate to
+         * @param timeoutMillis the wait bound, in milliseconds, applied to no-argument {@code get()}
+         */
         DefaultTimeoutFuture(final Future<R> delegate, final long timeoutMillis) {
             this.delegate = delegate;
             this.timeoutMillis = timeoutMillis;

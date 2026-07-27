@@ -742,7 +742,14 @@ public interface DistributedCacheClient<T> {
  */
 final class DistributedCacheClientCompatibilitySupport {
 
+    /**
+     * Guard-bit mask identifying the {@code put}/{@code set} write compatibility pair.
+     */
     static final int WRITE_PAIR = 1;
+
+    /**
+     * Guard-bit mask identifying the {@code remove}/{@code delete} removal compatibility pair.
+     */
     static final int REMOVE_PAIR = 1 << 1;
 
     private static final int PUT = 1;
@@ -787,6 +794,17 @@ final class DistributedCacheClientCompatibilitySupport {
         // Utility class.
     }
 
+    /**
+     * Returns whether the given runtime class provides its own implementation of the named method
+     * outside the {@link DistributedCacheClient} interface (that is, an override that is not one of
+     * the interface's compatibility default methods).
+     *
+     * @param type the runtime class of the client to inspect
+     * @param methodName the name of the method to check ({@code "put"}, {@code "set"}, {@code "remove"},
+     *                   or {@code "delete"})
+     * @return {@code true} if {@code type} declares the method outside {@code DistributedCacheClient},
+     *         {@code false} otherwise (including for an unrecognized {@code methodName})
+     */
     static boolean isOverridden(final Class<?> type, final String methodName) {
         final int methodMask = switch (methodName) {
             case "put" -> PUT;
@@ -799,6 +817,15 @@ final class DistributedCacheClientCompatibilitySupport {
         return methodMask != 0 && (OVERRIDE_MASK.get(type) & methodMask) != 0;
     }
 
+    /**
+     * Marks the given compatibility pair as actively delegating for the current thread and client.
+     *
+     * @param client the client whose default bridge is delegating
+     * @param pairMask the guard-bit mask of the pair being entered ({@link #WRITE_PAIR} or {@link #REMOVE_PAIR})
+     * @return {@code true} if the pair was not already active and entry succeeded; {@code false} if the
+     *         pair is already active on this thread, indicating a delegation cycle
+     * @see #exit(DistributedCacheClient, int)
+     */
     static boolean tryEnter(final DistributedCacheClient<?> client, final int pairMask) {
         final IdentityHashMap<DistributedCacheClient<?>, Integer> activeBridges = ACTIVE_BRIDGES.get();
         final int activeMask = activeBridges.getOrDefault(client, 0);
@@ -811,6 +838,14 @@ final class DistributedCacheClientCompatibilitySupport {
         return true;
     }
 
+    /**
+     * Clears the active-delegation mark for the given compatibility pair on the current thread,
+     * removing the client's entry entirely once no pair remains active.
+     *
+     * @param client the client whose default bridge finished delegating
+     * @param pairMask the guard-bit mask of the pair being exited ({@link #WRITE_PAIR} or {@link #REMOVE_PAIR})
+     * @see #tryEnter(DistributedCacheClient, int)
+     */
     static void exit(final DistributedCacheClient<?> client, final int pairMask) {
         final IdentityHashMap<DistributedCacheClient<?>, Integer> activeBridges = ACTIVE_BRIDGES.get();
         final Integer activeMask = activeBridges.get(client);

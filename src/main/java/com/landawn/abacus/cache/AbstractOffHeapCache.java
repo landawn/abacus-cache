@@ -201,12 +201,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     // ------------------------------------------------------------------------------------- state
 
+    /** The concrete subclass logger, used for all cache log output. */
     final Logger logger;
 
+    /** Total size of the native off-heap region in bytes ({@code capacityInMB * 1048576}). */
     final long capacityInBytes;
     /** Base address of the native region returned by {@link #allocate(long)}. */
     final long baseAddress;
+    /** Zero-based heap-array index adjustment supplied to the copy hooks; both built-in implementations pass 0. */
     final int arrayOffset;
+    /** Maximum size of a single memory block in bytes, rounded up to a multiple of {@link #MIN_BLOCK_SIZE}. */
     final int maxBlockSize;
 
     /** All entries, both memory-backed and disk-backed. Same-key mutations use atomic compute/remove. */
@@ -261,12 +265,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     // --- configuration -----------------------------------------------------------------------
 
+    /** Fraction of entries evicted by a memory-pressure vacate pass; a configured {@code 0} is replaced with the default. */
     final float vacatingFactor;
+    /** Serializer for non-raw values; defaults to Kryo (if available) or JSON when none is configured. */
     final BiConsumer<? super V, ByteArrayOutputStream> serializer;
+    /** Deserializer for non-raw values; defaults to Kryo (if available) or JSON when none is configured. */
     final BiFunction<byte[], Type<V>, ? extends V> deserializer;
+    /** Disk spill-over store, or {@code null} for a memory-only cache; owned and closed by this cache. */
     final OffHeapStore<K> offHeapStore;
+    /** Whether disk I/O timing statistics are recorded. */
     final boolean statsTimeOnDisk;
+    /** Optional predicate deciding when a disk read is promoted back into memory; {@code null} disables promotion. */
     final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory;
+    /** Optional per-put routing function returning 0 (memory, disk fallback), 1 (memory only), or 2 (disk only). */
     final TriFunction<K, V, Integer, Integer> storeSelector;
     /** Store reads are timed for the timing statistics AND for the promotion tester's read-time argument. */
     private final boolean measureStoreReadTime;
@@ -413,9 +424,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                        {@link #SEGMENT_SIZE}
      * @return the base address of the allocated region, used for all subsequent memory access
      * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
-     * @throws IllegalArgumentException if {@code capacityInBytes} is not positive (some backends,
-     *         such as the Foreign Memory API, reject a non-positive size this way; unreachable
-     *         through normal construction because {@code capacityInMB} is validated first)
+     * @throws IllegalArgumentException if {@code capacityInBytes} is negative (both built-in
+     *         backends reject a negative size this way; unreachable through normal construction
+     *         because {@code capacityInMB} is validated to be positive first)
      */
     protected abstract long allocate(long capacityInBytes);
 

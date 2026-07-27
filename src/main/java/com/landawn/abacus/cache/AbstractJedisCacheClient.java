@@ -103,7 +103,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     private volatile boolean isShutdown = false;
 
     /**
-     * Constructs the base client with the specified server URL.
+     * Constructs an AbstractJedisCacheClient with the specified server URL.
      *
      * @param serverUrl the server URL(s); must not be {@code null}, empty, or blank
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank
@@ -160,7 +160,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * cluster client (which performs server-side, hash-slot routing and therefore ignores the
      * client-side mapping).
      *
-     * @param keyBytes the UTF-8 encoded key bytes; never {@code null}
+     * @param keyBytes the UTF-8 encoded key bytes; must not be {@code null}
      * @return the {@link UnifiedJedis} client that owns the key, never {@code null}
      */
     protected abstract UnifiedJedis clientFor(byte[] keyBytes);

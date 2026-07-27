@@ -79,6 +79,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * not leak into code paths that never need the default.
      */
     private static final class DefaultParserHolder {
+        /** The shared default parser, created on first access of this holder class. */
         static final KryoParser DEFAULT_KRYO_PARSER = ParserFactory.createKryoParser();
     }
 

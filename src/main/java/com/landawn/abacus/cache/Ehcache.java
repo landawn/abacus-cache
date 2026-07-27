@@ -637,19 +637,20 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Ensures the cache is not closed before performing operations.
-     * This is a utility method called by cache operations to verify that
-     * the cache is still in an operational state. It provides a consistent
-     * way to enforce the "closed" state across cache methods.
+     * Asserts that this cache has not been closed.
+     * This utility method is invoked by cache operations that need to verify the cache
+     * is still operational; it provides a consistent way to enforce the closed-state
+     * contract across cache methods. It reads the {@code volatile isClosed} field to
+     * ensure visibility across threads.
      *
      * <p>Note: {@link #keySet()} and {@link #size()} do not call this method because
      * they always throw {@link UnsupportedOperationException} regardless of whether
      * the cache is open.
      *
-     * <p><b>Thread Safety:</b> This method is thread-safe due to the volatile
+     * <p><b>Thread Safety:</b> This method is thread-safe due to the {@code volatile}
      * {@code isClosed} field.
      *
-     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalStateException if the cache has been closed via {@link #close()}
      */
     protected void assertNotClosed() {
         if (isClosed) {

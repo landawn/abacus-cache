@@ -140,8 +140,8 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param capacity the maximum number of entries the cache can hold (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
-     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 for no expiration)
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 for no idle timeout)
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 or negative for no expiration)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 or negative for no idle timeout)
      * @return a new LocalCache instance with the specified configuration
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      * @see #createLocalCache(int, long)
@@ -193,8 +193,8 @@ public final class CacheFactory {
      * @param <K> the type of keys maintained by the cache
      * @param <V> the type of cached values
      * @param pool the pre-configured KeyedObjectPool to use for managing cache entries (must not be null)
-     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 for no expiration)
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 for no idle timeout)
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 or negative for no expiration)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 or negative for no idle timeout)
      * @return a new LocalCache instance configured with the specified pool
      * @throws IllegalArgumentException if pool is null
      * @see #createLocalCache(int, long)
@@ -263,8 +263,8 @@ public final class CacheFactory {
      * @param capacityInMB the total off-heap memory to allocate, in megabytes (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs; {@code 0} or a negative
      *                   value disables periodic eviction
-     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 for no expiration)
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 for no idle timeout)
+     * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 or negative for no expiration)
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 or negative for no idle timeout)
      * @return a new OffHeapCache instance with the specified configuration
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if the native allocation cannot be reserved

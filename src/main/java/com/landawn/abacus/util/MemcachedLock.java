@@ -42,8 +42,8 @@ import net.spy.memcached.util.StringUtils;
  * <p>Implementation notes:
  * <ul>
  * <li>Uses Memcached's atomic add operation for lock acquisition</li>
- * <li>Lock expiration prevents permanent deadlocks if holder crashes</li>
- * <li>Not reentrant - same client cannot acquire lock twice</li>
+ * <li>Lock expiration prevents permanent deadlocks if the holder crashes</li>
+ * <li>Not reentrant - the same client cannot acquire the same lock twice</li>
  * <li>No queue or fairness guarantees - it is a simple expiring lease</li>
  * </ul>
  *
@@ -130,9 +130,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * }</pre>
      *
      * @param serverUrl one or more {@code host:port} addresses separated by commas, whitespace,
-     *                  or both; must not be null, empty, or blank
-     * @throws IllegalArgumentException if serverUrl is null, empty, or blank, or contains no
-     *         valid {@code host:port} addresses
+     *                  or both; must not be {@code null}, empty, or blank
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank, or
+     *         contains no valid {@code host:port} addresses
      * @throws RuntimeException if {@code serverUrl} cannot be parsed (e.g., an unresolvable hostname)
      *         or local client/socket setup fails. Because connections are established asynchronously
      *         by the underlying SpyMemcached IO thread, a resolvable but unreachable or down server
@@ -273,7 +273,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * }</pre>
      *
      * @param target the target resource on which to acquire the lock (must not be null)
-     * @param value the value to associate with the lock (can be {@code null}; a {@code null}
+     * @param value the value to associate with the lock (may be {@code null}; a {@code null}
      *              value is stored as the same value-less marker used by {@link #tryLock(Object, long)})
      * @param liveTime the time-to-live in milliseconds before the lock automatically expires (must be positive;
      *                 converted to whole seconds for Memcached, with fractional seconds rounded up;
@@ -326,8 +326,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
     /**
      * Checks whether a lock is currently held on the specified target.
      * This method performs a read operation (mc.get) to determine lock status without
-     * attempting to acquire or modify the lock. Returns true if a value exists for the
-     * lock key, false otherwise.
+     * attempting to acquire or modify the lock. Returns {@code true} if a value exists for the
+     * lock key, {@code false} otherwise.
      *
      * <p><b>&#9888;&#65039; Point-in-time observation:</b> Due to the distributed nature and timing, a lock could expire or be
      * acquired between checking and subsequent operations. This is a point-in-time check
@@ -393,7 +393,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * Retrieves the value associated with a lock on the specified target.
      * If no lock exists (key not found), this method returns {@code null}.
      * If the lock stores an empty byte array (the default when using {@link #tryLock(Object, long)}),
-     * {@code null} is returned for convenience to distinguish empty values from actual data.
+     * that value-less marker is normalized to {@code null}, so a value-less lock reads the same as
+     * no lock.
      *
      * <p>This method is useful for:
      * <ul>
@@ -405,8 +406,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * <p><b>&#9888;&#65039; Typed-value caveats:</b>
      * <ul>
-     * <li>This method performs an unchecked cast from Object to V. Ensure the type parameter V
-     * matches the actual type of the stored value to avoid ClassCastException at runtime.</li>
+     * <li>This method performs an unchecked cast from Object to {@code V}. Ensure the type parameter
+     * {@code V} matches the actual type of the stored value to avoid ClassCastException at runtime.</li>
      * <li>The returned value represents a snapshot at the time of the call. The lock could
      * expire or be released immediately after retrieval.</li>
      * <li>Returns {@code null} if the lock doesn't exist or if it stores an empty byte array</li>
@@ -798,7 +799,6 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * <ul>
      * <li>Checking connection status</li>
      * <li>Performing bulk operations</li>
-     * <li>Accessing client statistics</li>
      * <li>Storing additional metadata alongside locks</li>
      * <li>Implementing custom caching logic independent of locking</li>
      * </ul>

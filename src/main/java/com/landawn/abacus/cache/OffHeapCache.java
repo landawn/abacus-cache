@@ -569,9 +569,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Maximum size of a single memory block in bytes.
-         * Values larger than this will be split across multiple blocks.
-         * Must be between 1024 and SEGMENT_SIZE (1,048,576), and is rounded up to the
-         * nearest multiple of MIN_BLOCK_SIZE (64 bytes).
+         * Values larger than this are split across multiple blocks.
+         * Must be {@code 0} (replaced with the default 8192 by {@link #build()}) or between 1024 and
+         * {@code SEGMENT_SIZE} (1,048,576), and is rounded up to the
+         * nearest multiple of {@code MIN_BLOCK_SIZE} (64 bytes).
          * Larger blocks reduce fragmentation but may waste space for small objects.
          *
          * <p>Default: 8192 bytes (8KB)
