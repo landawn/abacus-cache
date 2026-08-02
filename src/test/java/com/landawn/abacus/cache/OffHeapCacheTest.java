@@ -76,6 +76,16 @@ public class OffHeapCacheTest {
     }
 
     @Test
+    public void test_builder_functionalArguments_nullRejected() {
+        final OffHeapCache.Builder<String, Account> builder = OffHeapCache.builder();
+
+        assertThrows(IllegalArgumentException.class, () -> builder.serializer(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.deserializer(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.testerForLoadingItemFromDiskToMemory(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.storeSelector(null));
+    }
+
+    @Test
     public void test_ByteBuffer() {
         ByteBuffer bb = ByteBuffer.allocate(1024);
         bb.put("abc".getBytes());

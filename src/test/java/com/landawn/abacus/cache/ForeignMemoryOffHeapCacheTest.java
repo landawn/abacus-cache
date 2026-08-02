@@ -149,6 +149,16 @@ public class ForeignMemoryOffHeapCacheTest {
         assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 0, 0));
     }
 
+    @Test
+    public void test_builder_functionalArguments_nullRejected() {
+        final ForeignMemoryOffHeapCache.Builder<String, Account> builder = ForeignMemoryOffHeapCache.builder();
+
+        assertThrows(IllegalArgumentException.class, () -> builder.serializer(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.deserializer(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.testerForLoadingItemFromDiskToMemory(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.storeSelector(null));
+    }
+
     /**
      * Regression test for the post-close {@code put()} use-after-free guard on the real Foreign
      * Memory API backed allocator. {@code close()} frees the {@link java.lang.foreign.Arena},

@@ -27,6 +27,7 @@ import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.pool.ActivityPrint;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.ByteArrayOutputStream;
+import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.function.TriFunction;
 import com.landawn.abacus.util.function.TriPredicate;
 
@@ -691,6 +692,63 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * <p>Default: {@code null} (default routing behavior)
          */
         private TriFunction<K, V, Integer, Integer> storeSelector;
+
+        /**
+         * Sets the serializer used to convert values to byte streams.
+         *
+         * @param serializer the serializer to use
+         * @return this builder
+         * @throws IllegalArgumentException if {@code serializer} is {@code null}
+         */
+        public Builder<K, V> serializer(final BiConsumer<? super V, ByteArrayOutputStream> serializer) throws IllegalArgumentException {
+            N.checkArgNotNull(serializer, cs.serializer);
+
+            this.serializer = serializer;
+            return this;
+        }
+
+        /**
+         * Sets the deserializer used to reconstruct values from byte arrays.
+         *
+         * @param deserializer the deserializer to use
+         * @return this builder
+         * @throws IllegalArgumentException if {@code deserializer} is {@code null}
+         */
+        public Builder<K, V> deserializer(final BiFunction<byte[], Type<V>, ? extends V> deserializer) throws IllegalArgumentException {
+            N.checkArgNotNull(deserializer, cs.deserializer);
+
+            this.deserializer = deserializer;
+            return this;
+        }
+
+        /**
+         * Sets the predicate used to decide whether an item should be loaded from disk to memory.
+         *
+         * @param testerForLoadingItemFromDiskToMemory the predicate to use
+         * @return this builder
+         * @throws IllegalArgumentException if {@code testerForLoadingItemFromDiskToMemory} is {@code null}
+         */
+        public Builder<K, V> testerForLoadingItemFromDiskToMemory(final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory)
+                throws IllegalArgumentException {
+            N.checkArgNotNull(testerForLoadingItemFromDiskToMemory, cs.testerForLoadingItemFromDiskToMemory);
+
+            this.testerForLoadingItemFromDiskToMemory = testerForLoadingItemFromDiskToMemory;
+            return this;
+        }
+
+        /**
+         * Sets the function used to choose the storage location for a put operation.
+         *
+         * @param storeSelector the storage selector to use
+         * @return this builder
+         * @throws IllegalArgumentException if {@code storeSelector} is {@code null}
+         */
+        public Builder<K, V> storeSelector(final TriFunction<K, V, Integer, Integer> storeSelector) throws IllegalArgumentException {
+            N.checkArgNotNull(storeSelector, cs.storeSelector);
+
+            this.storeSelector = storeSelector;
+            return this;
+        }
 
         /**
          * Builds and returns a new {@link ForeignMemoryOffHeapCache} configured with the current builder settings.

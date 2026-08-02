@@ -182,6 +182,23 @@ public class AbstractCacheTest extends TestBase {
     }
 
     @Test
+    public void testProperties_FunctionalArguments_EdgeCase_NullRejected() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> props = cache.getProperties();
+
+            assertThrows(IllegalArgumentException.class, () -> props.forEach(null));
+            assertThrows(IllegalArgumentException.class, () -> props.replaceAll(null));
+            assertThrows(IllegalArgumentException.class, () -> props.computeIfAbsent("key", null));
+            assertThrows(IllegalArgumentException.class, () -> props.computeIfPresent("key", null));
+            assertThrows(IllegalArgumentException.class, () -> props.compute("key", null));
+            assertThrows(IllegalArgumentException.class, () -> props.merge("key", "value", null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
     public void testSetAndGetProperty() {
         final LocalCache<String, String> cache = newCache();
         try {

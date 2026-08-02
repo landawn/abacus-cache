@@ -163,32 +163,44 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
         }
 
         @Override
-        public void forEach(final BiConsumer<? super K, ? super V> action) {
+        public void forEach(final BiConsumer<? super K, ? super V> action) throws IllegalArgumentException {
+            N.checkArgNotNull(action, cs.action);
+
             values.forEach(action);
         }
 
         @Override
-        public void replaceAll(final BiFunction<? super K, ? super V, ? extends V> function) {
+        public void replaceAll(final BiFunction<? super K, ? super V, ? extends V> function) throws IllegalArgumentException {
+            N.checkArgNotNull(function, cs.function);
+
             values.replaceAll(function);
         }
 
         @Override
-        public V computeIfAbsent(final K key, final Function<? super K, ? extends V> mappingFunction) {
+        public V computeIfAbsent(final K key, final Function<? super K, ? extends V> mappingFunction) throws IllegalArgumentException {
+            N.checkArgNotNull(mappingFunction, cs.mappingFunction);
+
             return values.computeIfAbsent(key, mappingFunction);
         }
 
         @Override
-        public V computeIfPresent(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
+        public V computeIfPresent(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction) throws IllegalArgumentException {
+            N.checkArgNotNull(remappingFunction, cs.remappingFunction);
+
             return values.computeIfPresent(key, remappingFunction);
         }
 
         @Override
-        public V compute(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
+        public V compute(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction) throws IllegalArgumentException {
+            N.checkArgNotNull(remappingFunction, cs.remappingFunction);
+
             return values.compute(key, remappingFunction);
         }
 
         @Override
-        public V merge(final K key, final V value, final BiFunction<? super V, ? super V, ? extends V> remappingFunction) {
+        public V merge(final K key, final V value, final BiFunction<? super V, ? super V, ? extends V> remappingFunction) throws IllegalArgumentException {
+            N.checkArgNotNull(remappingFunction, cs.remappingFunction);
+
             return values.merge(key, value, remappingFunction);
         }
 
