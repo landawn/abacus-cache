@@ -1,7 +1,7 @@
 # abacus-cache
 
-[![Maven Central](https://img.shields.io/maven-central/v/com.landawn.abacus/abacus-cache.svg)](https://central.sonatype.com/artifact/com.landawn.abacus/abacus-cache/2.8.6)
-[![Javadocs](https://img.shields.io/badge/javadoc-2.8.6-brightgreen.svg)](https://www.javadoc.io/doc/com.landawn.abacus/abacus-cache/2.8.6/index.html)
+[![Maven Central](https://img.shields.io/maven-central/v/com.landawn.abacus/abacus-cache.svg)](https://central.sonatype.com/artifact/com.landawn.abacus/abacus-cache/2.8.7)
+[![Javadocs](https://img.shields.io/badge/javadoc-2.8.7-brightgreen.svg)](https://www.javadoc.io/doc/com.landawn.abacus/abacus-cache/2.8.7/index.html)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.txt)
 
 A small, unified caching library for Java. One `Cache<K, V>` interface — synchronous *and* asynchronous — backs a range of implementations: on-heap, off-heap (native memory), and distributed (Memcached / Redis). Swap the backend without touching your call sites, or build one from a configuration string.
@@ -47,14 +47,14 @@ Requires **JDK 25+**.
 <dependency>
     <groupId>com.landawn.abacus</groupId>
     <artifactId>abacus-cache</artifactId>
-    <version>2.8.6</version>
+    <version>2.8.7</version>
 </dependency>
 ```
 
 **Gradle**
 
 ```gradle
-implementation 'com.landawn.abacus:abacus-cache:2.8.6'
+implementation 'com.landawn.abacus:abacus-cache:2.8.7'
 ```
 
 Then add whichever backend you need (see [Requirements & optional dependencies](#requirements-optional-dependencies)) — e.g. `spymemcached` for Memcached, `jedis` for Redis, `caffeine` or `ehcache` for those wrappers.
@@ -251,7 +251,7 @@ if (lock.lock("resource1", 30_000)) {   // 30s lock TTL guards against a crashed
 ## Links
 
 - **User guide:** [Wiki](https://github.com/landawn/abacus-cache/wiki)
-- **API reference:** [Javadoc](https://www.javadoc.io/doc/com.landawn.abacus/abacus-cache/2.8.6/index.html)
+- **API reference:** [Javadoc](https://www.javadoc.io/doc/com.landawn.abacus/abacus-cache/2.8.7/index.html)
 - **Changelog:** [CHANGES.md](CHANGES.md)
 - **HTML API views:** [SpyMemcached](https://htmlpreview.github.io/?https://github.com/landawn/abacus-common/master/docs/SpyMemcached_view.html), [JRedis](https://htmlpreview.github.io/?https://github.com/landawn/abacus-common/master/docs/JRedis_view.html), [MemcachedLock](https://htmlpreview.github.io/?https://github.com/landawn/abacus-common/master/docs/MemcachedLock_view.html)
 - **Related projects:** [abacus-common](https://github.com/landawn/abacus-common), [abacus-jdbc](https://github.com/landawn/abacus-jdbc)
