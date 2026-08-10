@@ -406,7 +406,7 @@ public final class CacheFactory {
      *
      * <p>The circuit breaker pattern works as follows:
      * <ul>
-     * <li>When consecutive failures reach {@code maxFailedNumForRetry}, the circuit opens
+     * <li>When consecutive failures reach {@code maxFailuresBeforeCircuitOpen}, the circuit opens
      *     ({@code 0} means the first recorded failure)
      *     and read operations return {@code null} immediately without attempting cache access</li>
      * <li>After {@code retryDelay} milliseconds since the last failure, ALL subsequent reads
@@ -434,7 +434,7 @@ public final class CacheFactory {
      * User cached = cache.getOrNull("user:123");       // returns the value, or null if absent/circuit-open
      *
      * // Edge cases (validated by the underlying constructor):
-     * CacheFactory.createDistributedCache(redisClient, "app:", -1, 2000);   // throws IllegalArgumentException (maxFailedNumForRetry must be non-negative)
+     * CacheFactory.createDistributedCache(redisClient, "app:", -1, 2000);   // throws IllegalArgumentException (maxFailuresBeforeCircuitOpen must be non-negative)
      * CacheFactory.createDistributedCache(redisClient, "app:", 50, -1);     // throws IllegalArgumentException (retryDelay must be non-negative)
      * }</pre>
      *
@@ -442,19 +442,19 @@ public final class CacheFactory {
      * @param <V> the type of cached values
      * @param client the distributed cache client to wrap (must not be null)
      * @param keyPrefix the key prefix to prepend to all keys (can be empty string or null for no prefix)
-     * @param maxFailedNumForRetry the maximum number of consecutive failures before the circuit breaker opens
+     * @param maxFailuresBeforeCircuitOpen the maximum number of consecutive failures before the circuit breaker opens
      *                             (must be non-negative); {@code 0} opens it after the first recorded backend failure
      * @param retryDelay the delay in milliseconds before attempting a retry after the circuit breaker opens (must be non-negative)
      * @return a new DistributedCache instance with custom circuit breaker configuration
-     * @throws IllegalArgumentException if client is null, maxFailedNumForRetry is negative, retryDelay is
+     * @throws IllegalArgumentException if client is null, maxFailuresBeforeCircuitOpen is negative, retryDelay is
      *         negative, or keyPrefix contains a non-printable-ASCII character, a space, or a control character
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createCache(String)
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client, final String keyPrefix,
-            final int maxFailedNumForRetry, final long retryDelay) {
-        return new DistributedCache<>(client, keyPrefix, maxFailedNumForRetry, retryDelay);
+            final int maxFailuresBeforeCircuitOpen, final long retryDelay) {
+        return new DistributedCache<>(client, keyPrefix, maxFailuresBeforeCircuitOpen, retryDelay);
     }
 
     /**

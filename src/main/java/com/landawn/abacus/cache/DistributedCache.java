@@ -83,7 +83,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * When the consecutive-failure count reaches this threshold, the circuit opens and subsequent
      * operations return immediately without attempting cache access until the retry delay expires.
      */
-    protected static final int DEFAULT_MAX_FAILED_NUMBER = 100;
+    protected static final int DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN = 100;
 
     /**
      * Default delay in milliseconds before attempting to retry after the circuit breaker opens.
@@ -100,7 +100,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     // lifetime and need not be re-evaluated on every cache operation.
     private final boolean hasKeyPrefix;
 
-    private final int maxFailedNumForRetry;
+    private final int maxFailuresBeforeCircuitOpen;
 
     private final long retryDelay;
 
@@ -155,7 +155,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code client} is {@code null}
      */
     protected DistributedCache(final DistributedCacheClient<V> client) {
-        this(client, Strings.EMPTY, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
+        this(client, Strings.EMPTY,DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN, DEFAULT_RETRY_DELAY);
     }
 
     /**
@@ -185,7 +185,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         non-printable-ASCII character, a space, or a control character
      */
     protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix) {
-        this(client, keyPrefix, DEFAULT_MAX_FAILED_NUMBER, DEFAULT_RETRY_DELAY);
+        this(client, keyPrefix,DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN, DEFAULT_RETRY_DELAY);
     }
 
     /**
@@ -196,7 +196,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Circuit Breaker Parameters:</b>
      * <ul>
-     * <li>{@code maxFailedNumForRetry}: Number of consecutive failures before the circuit opens
+     * <li>{@code maxFailuresBeforeCircuitOpen}: Number of consecutive failures before the circuit opens
      *     ({@code 0} means the first recorded failure)</li>
      * <li>{@code retryDelay}: Milliseconds to wait before attempting retry after circuit opens</li>
      * </ul>
@@ -233,7 +233,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        printable ASCII characters without spaces or control characters. Including at least one character
      *        outside the Base64 alphabet (such as {@code ':'}) is recommended: it guarantees prefixed and
      *        unprefixed namespaces can never collide
-     * @param maxFailedNumForRetry maximum consecutive failures before opening the circuit breaker
+     * @param maxFailuresBeforeCircuitOpen maximum consecutive failures before opening the circuit breaker
      *                             (must be non-negative); {@code 0} opens it after the first
      *                             recorded backend failure.
      *        A value of {@code 0} is a degenerate configuration in which the circuit opens on every failure for
@@ -241,13 +241,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        transition is logged once per transition — that is, on the first failure and on each later failure
      *        that follows a successful read
      * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative)
-     * @throws IllegalArgumentException if {@code client} is {@code null}, {@code maxFailedNumForRetry} is negative,
+     * @throws IllegalArgumentException if {@code client} is {@code null}, {@code maxFailuresBeforeCircuitOpen} is negative,
      *         {@code retryDelay} is negative, or {@code keyPrefix} contains a non-printable-ASCII character,
      *         a space, or a control character
      */
-    protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix, final int maxFailedNumForRetry, final long retryDelay) {
+    protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix, final int maxFailuresBeforeCircuitOpen, final long retryDelay) {
         N.checkArgNotNull(client, "client");
-        N.checkArgNotNegative(maxFailedNumForRetry, "maxFailedNumForRetry");
+        N.checkArgNotNegative(maxFailuresBeforeCircuitOpen, "maxFailuresBeforeCircuitOpen");
         N.checkArgNotNegative(retryDelay, "retryDelay");
 
         this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
@@ -266,7 +266,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         }
         this.hasKeyPrefix = Strings.isNotEmpty(this.keyPrefix);
         this.client = client;
-        this.maxFailedNumForRetry = maxFailedNumForRetry;
+        this.maxFailuresBeforeCircuitOpen = maxFailuresBeforeCircuitOpen;
         this.retryDelay = retryDelay;
         this.retryDelayNanos = TimeUnit.MILLISECONDS.toNanos(retryDelay);
     }
@@ -286,7 +286,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <ul>
      * <li><b>Closed (Normal):</b> Operations proceed normally. Each failure increments the counter
      *     and updates the last-failure timestamp; each success resets both.</li>
-     * <li><b>Open (Failing Fast):</b> When the recorded failure count is at least {@code maxFailedNumForRetry} AND the time
+     * <li><b>Open (Failing Fast):</b> When the recorded failure count is at least {@code maxFailuresBeforeCircuitOpen} AND the time
      *     since the last failure is less than {@code retryDelay} milliseconds, this method returns
      *     {@code null} immediately without attempting cache access. Once the retry window elapses, ALL
      *     subsequent reads attempt the cache again — there is no single-probe restriction, so a
@@ -376,7 +376,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         // System.nanoTime(), so wall-clock corrections cannot extend the fail-fast window.
         final CircuitBreakerState breakerSnapshot = circuitBreaker.get();
 
-        if ((breakerSnapshot.failedCount >= maxFailedNumForRetry) && breakerSnapshot.hasFailure
+        if ((breakerSnapshot.failedCount >= maxFailuresBeforeCircuitOpen) && breakerSnapshot.hasFailure
                 && ((System.nanoTime() - breakerSnapshot.lastFailedTime) < retryDelayNanos)) {
             return null;
         }
@@ -404,7 +404,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             // to aid diagnosis without flooding logs while the circuit is open.
             if (logger.isDebugEnabled()) {
                 // Report the current count rather than guessing the post-increment value: the
-                // increment happens in the finally block below and is capped at maxFailedNumForRetry,
+                // increment happens in the finally block below and is capped at maxFailuresBeforeCircuitOpen,
                 // so "current + 1" would over-report once the breaker threshold has been reached.
                 logger.debug("Distributed cache read failed (treated as cache miss); consecutive failure count is ~" + circuitBreaker.get().failedCount, e);
             }
@@ -424,15 +424,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 // Publish the new timestamp and capped count in one CAS update. Besides preventing
                 // a torn state, this keeps the counter from overflowing after prolonged outages.
                 final CircuitBreakerState previousState = circuitBreaker.getAndUpdate(current -> new CircuitBreakerState(
-                        current.failedCount < maxFailedNumForRetry ? current.failedCount + 1 : current.failedCount, failedAt, true));
+                        current.failedCount < maxFailuresBeforeCircuitOpen ? current.failedCount + 1 : current.failedCount, failedAt, true));
 
                 // Surface the closed->open transition once at WARN: while the circuit is open
                 // every read returns null with only debug-level logging, so without this the
                 // cache can be silently disabled in production.
-                final boolean circuitJustOpened = maxFailedNumForRetry == 0 ? !previousState.hasFailure : previousState.failedCount == maxFailedNumForRetry - 1;
+                final boolean circuitJustOpened = maxFailuresBeforeCircuitOpen == 0 ? !previousState.hasFailure : previousState.failedCount == maxFailuresBeforeCircuitOpen - 1;
 
                 if (circuitJustOpened && logger.isWarnEnabled()) {
-                    final int effectiveFailureThreshold = Math.max(1, maxFailedNumForRetry);
+                    final int effectiveFailureThreshold = Math.max(1, maxFailuresBeforeCircuitOpen);
                     logger.warn("Distributed cache circuit breaker opened after " + effectiveFailureThreshold + " consecutive read failure"
                             + (effectiveFailureThreshold == 1 ? "" : "s") + "; reads will fail fast (returning null) until " + retryDelay
                             + " ms have elapsed since the most recent failure");

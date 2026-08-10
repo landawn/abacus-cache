@@ -462,7 +462,7 @@ public class DistributedCacheTest extends TestBase {
     }
 
     /**
-     * The failure counter must never exceed {@code maxFailedNumForRetry}, even under concurrent failing
+     * The failure counter must never exceed {@code maxFailuresBeforeCircuitOpen}, even under concurrent failing
      * reads. With {@code retryDelay == 0} the breaker never short-circuits, so every concurrent get
      * flows through the capped increment path. Failures are real (shut-down client) and instant.
      */
@@ -495,7 +495,7 @@ public class DistributedCacheTest extends TestBase {
             }
             pool.shutdown();
 
-            assertEquals(cap, failedCounter(cache), "failure counter must be capped at maxFailedNumForRetry under concurrency");
+            assertEquals(cap, failedCounter(cache), "failure counter must be capped at maxFailuresBeforeCircuitOpen under concurrency");
         } finally {
             cache.close();
         }
