@@ -269,8 +269,9 @@ public class LocalCacheTest {
     /**
      * Regression test for the stats() crash on drifted memory accounting.
      *
-     * <p>A custom pool with a time-varying memory measure can let its data-size accounting drift
-     * below zero (PoolStats performs no validation). Before the fix, {@code LocalCache.stats()}
+     * <p>A custom or otherwise non-standard pool can report drifted memory accounting. Current
+     * {@link PoolStats} constructors validate these fields, so a mock is used to exercise the
+     * adapter's defensive normalization directly. Before the fix, {@code LocalCache.stats()}
      * forwarded the raw negative values into {@code CacheStats}, whose compact constructor threw
      * {@code IllegalArgumentException} — so a pure monitoring call crashed. The fix clamps
      * {@code maxMemory}/{@code dataSize} to the {@code -1} "not tracked" sentinel.
@@ -279,7 +280,17 @@ public class LocalCacheTest {
     @SuppressWarnings("unchecked")
     public void testStats_NegativePoolMemoryAccounting_ClampedInsteadOfThrowing() {
         final KeyedObjectPool<String, PoolableAdapter<String>> pool = mock(KeyedObjectPool.class);
-        when(pool.stats()).thenReturn(new PoolStats(100, 1, 2, 3, 2, 1, 0, -7, -5));
+        final PoolStats poolStats = mock(PoolStats.class);
+        when(poolStats.capacity()).thenReturn(100);
+        when(poolStats.size()).thenReturn(1);
+        when(poolStats.putCount()).thenReturn(2L);
+        when(poolStats.getCount()).thenReturn(3L);
+        when(poolStats.hitCount()).thenReturn(2L);
+        when(poolStats.missCount()).thenReturn(1L);
+        when(poolStats.evictionCount()).thenReturn(0L);
+        when(poolStats.maxMemory()).thenReturn(-7L);
+        when(poolStats.dataSize()).thenReturn(-5L);
+        when(pool.stats()).thenReturn(poolStats);
 
         final LocalCache<String, String> cache = new LocalCache<>(60_000L, 30_000L, pool);
         try {
