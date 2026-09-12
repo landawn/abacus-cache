@@ -322,7 +322,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is registered
      * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive
+     * @throws RejectedExecutionException if {@code evictDelay} is positive
      *                           and the maintenance scheduler rejects its task (all cache-owned
      *                           resources are released before this propagates)
      */
@@ -662,7 +662,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or if
      *                                  {@code storeSelector} returns {@code null} or a value outside 0..2
      * @throws IllegalStateException if the cache has been closed
-     * @throws java.util.concurrent.RejectedExecutionException if the put fails under memory
+     * @throws RejectedExecutionException if the put fails under memory
      *                                  pressure and the shared executor rejects the vacate task
      *                                  (possible only during JVM shutdown)
      */
@@ -687,7 +687,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final long effectiveLiveTime = liveTime > 0 ? liveTime : Long.MAX_VALUE;
         final long effectiveMaxIdleTime = maxIdleTime > 0 ? maxIdleTime : Long.MAX_VALUE;
 
-        final Type<V> type = N.typeOf(value.getClass());
+        @SuppressWarnings("unchecked")
+        final Type<V> type = N.typeOf((Class<V>) value.getClass());
 
         ByteArrayOutputStream os = null;
 
