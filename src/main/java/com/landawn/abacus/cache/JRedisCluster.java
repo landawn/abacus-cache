@@ -126,7 +126,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
     /**
      * Creates a new JRedisCluster instance with a specified timeout.
      * The server URL should contain comma-separated host:port pairs for one or more Redis Cluster
-     * seed nodes. The timeout applies to both connection establishment and socket read/write
+     * seed nodes. The timeout applies to both connection establishment and socket read
      * operations against every cluster node.
      *
      * <p><b>Usage Examples:</b>
@@ -155,6 +155,8 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * total retry budget of about 5&times; the socket timeout), so a single operation against a
      * failing cluster can block for several multiples of the configured timeout — unlike
      * {@link JRedis}, which makes exactly one attempt.
+     * The timeout is not an end-to-end deadline: pool acquisition, topology discovery, and
+     * serialization also take time, and socket writes are not bounded by a socket read timeout.
      *
      * @param serverUrl the Redis Cluster seed node(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).

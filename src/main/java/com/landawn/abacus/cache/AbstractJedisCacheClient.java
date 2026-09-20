@@ -49,11 +49,12 @@ import redis.clients.jedis.params.SetParams;
  * <ul>
  *   <li>{@link JRedis} hashes the key client-side and returns the owning shard's client;</li>
  *   <li>{@link JRedisCluster} returns its single cluster client, which routes by hash slot
- *       server-side.</li>
+ *       to the owning node using the cluster slot map.</li>
  * </ul>
  *
  * <p><b>Serialization:</b> values are encoded with a shared {@link KryoParser}. {@code null} values
- * are stored as an empty byte array and decode back to {@code null}. Keys are encoded as UTF-8.
+ * are stored as an empty byte array and decode back to {@code null}. Keys are encoded as UTF-8;
+ * unpaired UTF-16 surrogates are rejected to prevent distinct strings from encoding to the same key.
  *
  * <p><b>Redis-Specific Behaviors</b> (common to both subclasses):
  * <ul>
@@ -157,7 +158,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * Returns the Jedis client that should execute a command for the given key.
      * This is the single point of backend variation: {@link JRedis} maps the key to one of several
      * standalone shards via client-side hashing, while {@link JRedisCluster} returns its single
-     * cluster client (which performs server-side, hash-slot routing and therefore ignores the
+     * cluster client (which performs hash-slot routing internally and therefore ignores the
      * client-side mapping).
      *
      * @param keyBytes the UTF-8 encoded key bytes; must not be {@code null}
@@ -193,9 +194,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
-     * @return the cached value, or {@code null} if not found, expired, or evicted
+     * @return the cached value, or {@code null} if not found, expired, evicted, or stored as {@code null}
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
      * @throws RuntimeException if a network error, timeout, or deserialization error occurs
      * @see #put(String, Object, long)
      * @see #remove(String)
@@ -233,7 +234,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param keys the cache keys to retrieve; must not be {@code null} or contain {@code null} elements
      * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
+     *         or contains a key with an unpaired UTF-16 surrogate
      * @throws RuntimeException if a network error, timeout, or deserialization error occurs
      * @see #get(String)
      * @see #getBulk(Collection)
@@ -271,7 +273,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param keys the collection of cache keys to retrieve; must not be {@code null} or contain {@code null} elements
      * @return a map of the found key-value pairs, never {@code null} (empty if no keys are found)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
+     *         or contains a key with an unpaired UTF-16 surrogate
      * @throws RuntimeException if a network error, timeout, or deserialization error occurs
      * @see #get(String)
      * @see #getBulk(String...)
@@ -301,6 +304,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
                 throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + index);
             }
 
+            checkUtf8Key(key);
             keySnapshot.add(key);
             index++;
         }
@@ -369,7 +373,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *         unconditional {@code SET} either replies "OK" or fails with a {@code JedisException}, so in
      *         practice this returns {@code true} on success and throws on failure rather than returning {@code false}
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
      * @throws RuntimeException if a network error, timeout, or serialization error occurs
      * @see #get(String)
      * @see #remove(String)
@@ -417,7 +421,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return {@code true} if Redis reported at least one key was actually removed; {@code false}
      *         if the key did not exist at the time the {@code DEL} command was issued
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
      * @throws RuntimeException if a network error or timeout occurs
      * @see #get(String)
      * @see #put(String, Object, long)
@@ -458,7 +462,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
      * @return the value after increment (will be 1 if the key did not exist before)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
      * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
      *         value, or the result exceeds Redis's signed 64-bit integer range
      * @see #incr(String, long)
@@ -498,7 +502,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *              SpyMemcached, which also rejects negative deltas).
      * @return the value after increment (will be equal to delta if the key did not exist before)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
      *         value, or the result exceeds Redis's signed 64-bit integer range
      * @see #incr(String)
@@ -538,7 +543,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param key the cache key whose associated value is to be decremented. Must not be {@code null}.
      * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
      * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
      *         value, or the result exceeds Redis's signed 64-bit integer range
      * @see #decr(String, long)
@@ -580,7 +585,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the value after decrement (can be negative in Redis, will be equal to {@code -delta}
      *         if the key did not exist before)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null} or {@code delta} is negative
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs, the key contains a non-integer
      *         value, or the result exceeds Redis's signed 64-bit integer range
      * @see #decr(String)
@@ -662,15 +668,17 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     /**
      * Converts a string key to UTF-8 encoded bytes for Redis operations.
      * All Redis operations use binary-safe keys, so strings must be converted to bytes.
+     * Unpaired UTF-16 surrogates are rejected rather than replaced with {@code '?'}, which would
+     * cause distinct string keys to address the same Redis entry.
      *
      * @param key the cache key to convert. Must not be {@code null}.
      * @return the UTF-8 encoded byte array representation of the key, never {@code null}
-     * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
      * @see #encode(Object)
      * @see #decode(byte[])
      */
     protected byte[] getKeyBytes(final String key) {
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
 
         return key.getBytes(Charsets.UTF_8);
     }

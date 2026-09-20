@@ -46,9 +46,10 @@ import redis.clients.jedis.RedisClient;
  * own {@link RedisClient}. A key is routed to a shard by hashing its UTF-8 bytes with CRC-32
  * modulo the number of shards, so a given key always maps to the same shard within a fixed topology.
  * The mapping is purely client-side: the standalone Redis servers do not coordinate with each other.
- * Changing the number of servers changes the mapping for many keys — acceptable for a cache, where a
- * miss simply triggers a reload. With a single server there is exactly one shard and no hashing is
- * performed.
+ * Changing the number or order of servers changes the mapping for many keys. Existing data is not
+ * migrated or invalidated: changing the topology can produce misses or expose stale entries left
+ * on a newly selected shard. All clients sharing this cache must use the same ordered server list.
+ * With a single server there is exactly one shard and no hashing is performed.
  *
  * <p><b>Thread Safety:</b> This client is thread-safe. Each shard is backed by a {@link RedisClient},
  * which maintains its own internal connection pool and transparently borrows and returns a
@@ -137,12 +138,12 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
     /**
      * Creates a new JRedis instance with a specified timeout.
      * The server URL should contain comma-separated host:port pairs for one or more Redis instances.
-     * The timeout applies to both connection establishment and socket read/write operations on every
+     * The timeout applies to both connection establishment and socket read operations on every
      * shard. Data is distributed across all specified Redis instances using client-side sharding.
      *
-     * <p>The timeout value affects network operations with Redis servers. If a Redis operation
-     * takes longer than the specified timeout, a timeout exception will be thrown. Choose an
-     * appropriate timeout based on your network latency and expected operation duration.
+     * <p>The timeout bounds individual connection and socket read waits. It is not an end-to-end
+     * deadline: waiting for a pooled connection and serialization add time, and socket writes are
+     * not bounded by a socket read timeout.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -291,7 +292,8 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * Closes every shard's {@link RedisClient}, shutting down its connection pool. Best-effort: a
      * failure closing one shard is logged at WARN level and does not prevent the remaining shards from
      * being closed. An {@link Error} thrown by a close is rethrown only after every shard has been
-     * attempted (later failures attached as suppressed) — aborting on the first shard would leave the
+     * attempted (later distinct {@code Error}s attached as suppressed; runtime exceptions are logged)
+     * — aborting on the first shard would leave the
      * remaining pools permanently unclosable, because {@code disconnect()} marks the client shut down
      * even on failure. Reuse of the same {@code Error} instance by multiple clients is tolerated
      * without attempting illegal self-suppression. Invoked once by the idempotent

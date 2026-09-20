@@ -92,6 +92,33 @@ public class JRedisTest {
     }
 
     @Test
+    public void test_malformedUnicodeKeysAreRejectedBeforeAnyCommand() {
+        for (final String key : List.of("\uD800", "\uDC00", "prefix:\uD800suffix", "prefix:\uDC00suffix", "\uD800\uD800", "\uDC00\uD800")) {
+            assertThrows(IllegalArgumentException.class, () -> cache.get(key));
+            assertThrows(IllegalArgumentException.class, () -> cache.put(key, "value", 0));
+            assertThrows(IllegalArgumentException.class, () -> cache.remove(key));
+            assertThrows(IllegalArgumentException.class, () -> cache.incr(key));
+            assertThrows(IllegalArgumentException.class, () -> cache.incr(key, 1));
+            assertThrows(IllegalArgumentException.class, () -> cache.decr(key));
+            assertThrows(IllegalArgumentException.class, () -> cache.decr(key, 1));
+            assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
+            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(List.of("valid", key)));
+        }
+
+        Mockito.verifyNoInteractions(mockJedis);
+    }
+
+    @Test
+    public void test_validSupplementaryUnicodeKeyPreservesUtf8Bytes() {
+        final String key = "user:\uD83D\uDE00:\uD800\uDC00";
+        when(mockJedis.get(utf8(key))).thenReturn(KRYO.encode("value"));
+
+        assertEquals("value", cache.get(key));
+        assertEquals(Map.of(key, "value"), cache.getBulk("missing", key));
+        verify(mockJedis, times(2)).get(utf8(key));
+    }
+
+    @Test
     public void test_get_returns_decoded_value() {
         Account account = createAccount();
         byte[] encoded = KRYO.encode(account);

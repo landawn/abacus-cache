@@ -33,10 +33,10 @@ import com.landawn.abacus.util.N;
  * allowing Ehcache to be used seamlessly within the Abacus caching framework.
  *
  * <p>
- * <b>&#9888;&#65039; Per-entry expiration is ignored:</b> Ehcache configures expiration policies at the cache level during
- * cache creation, not per-entry. Therefore, the {@code liveTime} and {@code maxIdleTime}
- * parameters in the {@link #put(Object, Object, long, long)} method are ignored.
- * Configure expiration settings when building the Ehcache instance instead.
+ * <b>&#9888;&#65039; Expiration arguments are ignored:</b> This wrapper does not forward the
+ * {@code liveTime} and {@code maxIdleTime} parameters in {@link #put(Object, Object, long, long)}.
+ * Configure an {@link org.ehcache.expiry.ExpiryPolicy} when building the Ehcache instance instead;
+ * that policy can choose different expiration durations for different entries.
  *
  * <p>
  * Ehcache features available through the underlying instance (bulk operations and {@code putIfAbsent}
@@ -128,7 +128,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Ehcache<String, User> cache = new Ehcache<>(ehcache);
      * cache.put("userId123", user, 0, 0);          // returns true; seeds an entry
      * User found = cache.getOrNull("userId123");   // returns the stored user
-     * User missing = cache.getOrNull("absent");    // returns null (no such key)
+     * User missing = cache.getOrNull("absent");    // returns null if no loader supplies a value
      *
      * cache.getOrNull(null);                        // throws IllegalArgumentException (null key)
      * }</pre>
@@ -153,9 +153,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * If the key already exists, its value will be replaced.
      *
      * <p>
-     * <b>&#9888;&#65039; Per-entry expiration is ignored:</b> Ehcache's expiration policy is configured at cache creation time.
+     * <b>&#9888;&#65039; Expiration arguments are ignored:</b> Ehcache's expiration policy is configured at cache creation time.
      * The liveTime and maxIdleTime parameters are ignored by this implementation.
-     * All entries use the cache-wide expiration settings.
+     * Expiration is determined by the configured policy, which may vary its duration by entry.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
      * concurrent updates to cache entries.
@@ -268,8 +268,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * Atomically puts a value if the key is not already present.
      * This operation is atomic and thread-safe, ensuring that concurrent operations
      * maintain consistency. If the key already exists, the existing value is returned
-     * unchanged and the cache is not modified. This is useful for implementing
-     * cache-based locking or ensuring single initialization of cached values.
+     * unchanged. A configured cache loader may supply that existing value even on a cache miss.
+     * Expiration, eviction, and resilience policies still apply, so this operation alone does not
+     * guarantee exclusive locking or exactly-once initialization of external resources.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
      * leveraging Ehcache's native atomic operations for optimal performance.
@@ -472,8 +473,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <li>Inconsistent with Ehcache's design philosophy of avoiding full cache scans</li>
      * </ul>
      *
-     * <p><b>Alternatives:</b> Track keys externally if enumeration is required, or use a different
-     * cache implementation that supports key iteration.
+     * <p><b>Alternatives:</b> Use the underlying Ehcache entry iterator when a scan is acceptable,
+     * or a cache implementation that supports key iteration. An external key set must also track
+     * expiration and eviction to reflect the cache accurately.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -516,8 +518,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * <li>Result would be stale immediately in highly concurrent scenarios</li>
      * </ul>
      *
-     * <p><b>Alternatives:</b> Track cache entry count externally using atomic counters if needed,
-     * or use a different cache implementation that supports size reporting.
+     * <p><b>Alternatives:</b> Use a different cache implementation that supports size reporting.
+     * An application-maintained counter must account for replacements, expiration, eviction,
+     * removals, and failed writes; incrementing it for each put does not measure cache size.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

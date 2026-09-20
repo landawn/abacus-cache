@@ -220,7 +220,7 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws RejectedExecutionException if the maintenance scheduler rejects
+     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects
      *         the eviction task (this overload always schedules one, using the default eviction delay)
      * @see #createOffHeapCache(int, long)
      * @see #createOffHeapCache(int, long, long, long)
@@ -245,7 +245,7 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws RejectedExecutionException if {@code evictDelay} is positive and
+     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive and
      *         the maintenance scheduler rejects its task
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long, long, long)
@@ -270,7 +270,7 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws RejectedExecutionException if {@code evictDelay} is positive and
+     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive and
      *         the maintenance scheduler rejects its task
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long)
@@ -351,9 +351,9 @@ public final class CacheFactory {
 
     /**
      * Creates a DistributedCache with a key prefix for namespace isolation.
-     * All cache keys will be automatically prefixed and Base64-encoded,
-     * allowing multiple applications or modules to share the same cache server
-     * without key collisions. Uses default circuit breaker configuration
+     * Each cache key is Base64-encoded, then the literal prefix is prepended.
+     * Use distinct prefixes ending in a delimiter outside the Base64 alphabet, such as {@code ':'},
+     * to separate applications or modules sharing the same cache server. Uses default circuit breaker configuration
      * (max 100 consecutive failures, 1000ms retry delay).
      *
      * <p>Key prefixing is useful for:
@@ -480,7 +480,7 @@ public final class CacheFactory {
      *     second address be parsed as the key-prefix parameter)</li>
      * <li>{@code Redis(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code Redis(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
-     * <li>{@code RedisCluster(serverUrl)} - Creates JRedisCluster client (Redis Cluster, server-side sharding) with default timeout (1000ms); serverUrl is a comma-separated list of cluster seed nodes</li>
+     * <li>{@code RedisCluster(serverUrl)} - Creates JRedisCluster client (client-side routing to Redis Cluster hash slots) with default timeout (1000ms); serverUrl is a comma-separated list of cluster seed nodes</li>
      * <li>{@code RedisCluster(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code RedisCluster(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
      * <li>{@code com.example.CustomCache(params...)} - Custom implementation with fully qualified class name</li>
@@ -490,8 +490,9 @@ public final class CacheFactory {
      * second parameter (an optional sign followed by decimal digits) is interpreted as the timeout
      * rather than the key prefix: {@code Redis(localhost:6379,5000)} configures a 5-second timeout
      * with no prefix. An all-digit key prefix must use the explicit three-parameter layout, e.g.
-     * {@code Redis(localhost:6379,123,1000)}. Timeout tokens are strictly decimal: hexadecimal/octal
-     * forms and a trailing {@code L} (e.g. {@code 0x1F4}, {@code 5000L}) are rejected.
+     * {@code Redis(localhost:6379,123,1000)}. Timeout tokens are strictly decimal, including tokens
+     * with leading zeros: {@code 01000} means 1000 milliseconds. Radix prefixes and a trailing
+     * {@code L} (e.g. {@code 0x1F4}, {@code 5000L}) are rejected.
      *
      * <p><b>RedisCluster seed-node vs. key-prefix disambiguation:</b> because the cluster seed list may itself
      * be comma-separated (e.g. {@code RedisCluster(host1:7000,host2:7000,myPrefix:,3000)}), consecutive
@@ -925,7 +926,7 @@ public final class CacheFactory {
     private static long parseTimeoutParameter(final String timeoutValue) {
         // Accept exactly what looksLikeTimeoutParameter recognizes - an optional sign followed by
         // decimal digits - so the parser and the disambiguation predicate stay consistent.
-        // Numbers.toLong alone would also accept hexadecimal/octal forms and a trailing 'L'
+        // Numbers.toLong alone would also accept hexadecimal forms and a trailing 'L'
         // ("0x1F4", "5000L"), which the predicate deliberately does not treat as timeouts; letting
         // those through here would make a token's meaning depend on which code path examined it.
         if (!looksLikeTimeoutParameter(timeoutValue)) {

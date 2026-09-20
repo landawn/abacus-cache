@@ -16,12 +16,12 @@
  * The Abacus caching framework: one {@link com.landawn.abacus.cache.Cache Cache} interface over
  * in-memory, off-heap, third-party, and distributed cache backends.
  *
- * <p>Every implementation in this package speaks the same contract — {@code Optional}-based reads,
+ * <p>Implementations of {@code Cache} share a contract — {@code Optional}-based reads,
  * per-entry time-to-live and idle timeout where the backend supports it, asynchronous variants
  * returning {@link com.landawn.abacus.util.ContinuableFuture ContinuableFuture}, a property bag for
  * custom configuration, and an explicit {@link com.landawn.abacus.cache.Cache#close() close()}
- * operation for retiring a cache early. Swapping a local cache for Memcached or Redis is therefore a
- * construction-site change, not a call-site one.
+ * operation for retiring a cache early. Backend changes also require checking differences in
+ * expiration, key encoding, enumeration, failure handling, and the scope of {@code clear()}.
  *
  * <h2>Contents</h2>
  *
@@ -57,8 +57,8 @@
  * <p><b>Third-party wrappers</b>
  * <ul>
  * <li>{@link com.landawn.abacus.cache.CaffeineCache} and {@link com.landawn.abacus.cache.Ehcache} —
- *     adapt a pre-configured Caffeine or Ehcache 3.x instance. Both configure expiration at the
- *     cache level, so the per-entry {@code liveTime}/{@code maxIdleTime} arguments are ignored.</li>
+ *     adapt a pre-configured Caffeine or Ehcache 3.x instance. The wrapper ignores the
+ *     {@code liveTime}/{@code maxIdleTime} arguments and uses the delegate's expiration policy.</li>
  * </ul>
  *
  * <p><b>Distributed</b>
@@ -90,7 +90,7 @@
  * <pre>{@code
  * class UserService {
  *     // Capacity 1000, evict every 60s, 1h default TTL, 30min default idle timeout.
- *     // Swapping in a distributed backend changes only this line:
+ *     // Alternative construction; review backend-specific semantics before switching:
  *     //     CacheFactory.createCache("Redis(localhost:6379,myapp:cache:,5000)")
  *     private final Cache<String, User> cache =
  *             CacheFactory.createLocalCache(1000, 60_000, 3_600_000, 1_800_000);
@@ -122,14 +122,15 @@
  * <h2>Dependencies</h2>
  *
  * <p>The backing libraries — Kryo, SpyMemcached, Jedis, Caffeine, and Ehcache — are declared with
- * {@code provided} scope. Only {@code LocalCache} and the off-heap caches work out of the box; add
- * the library for whichever backend you use to your own runtime classpath. Kryo is optional
- * everywhere it appears: the off-heap and Memcached caches fall back to JSON serialization when it
- * is absent, while the Redis clients require it.
+ * {@code provided} scope, as is {@code abacus-common}. Supply {@code abacus-common} and the libraries
+ * needed by your selected backend on the runtime classpath. Kryo is optional for the off-heap
+ * caches, which fall back to JSON serialization, and for Memcached, which uses SpyMemcached's
+ * default transcoder when Kryo is absent. The Redis clients require Kryo.
  *
  * <h2>Lifecycle and thread safety</h2>
  *
- * <p>All cache implementations here are safe for concurrent use.
+ * <p>The built-in cache implementations support concurrent use. Custom pools, stores, serializers,
+ * callbacks, and client implementations must satisfy the thread-safety contracts of their adapters.
  *
  * <p>{@code Cache} deliberately does <em>not</em> extend {@link java.lang.AutoCloseable}: a cache is
  * a long-lived, owner-managed resource rather than a block-scoped one, and

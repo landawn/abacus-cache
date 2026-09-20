@@ -16,7 +16,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Deque;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -34,6 +37,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.logging.LoggerFactory;
+import com.landawn.abacus.pool.ActivityPrint;
 import com.landawn.abacus.type.ByteBufferType;
 import com.landawn.abacus.type.Type;
 import com.landawn.abacus.util.N;
@@ -595,6 +599,67 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
+    /** Heap-array fixture with a hook for expiring an entry while promotion copies its bytes. */
+    private static final class PromotionCopyOffHeapCache extends AbstractOffHeapCache<String, byte[]> {
+        private final byte[] memory = new byte[SEGMENT_SIZE];
+        private Runnable duringCopy = () -> { };
+
+        PromotionCopyOffHeapCache(final Map<String, byte[]> backing) {
+            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, null, null, newInMemoryStore(backing), false,
+                    (activity, size, elapsed) -> true, (key, value, size) -> 2, LoggerFactory.getLogger(PromotionCopyOffHeapCache.class));
+        }
+
+        @Override
+        protected long allocate(final long capacityInBytes) {
+            return 0L;
+        }
+
+        @Override
+        protected void deallocate() {
+            // Heap-array fixture: nothing to release.
+        }
+
+        @Override
+        protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
+            duringCopy.run();
+            System.arraycopy(bytes, srcOffset, memory, (int) startPtr, len);
+        }
+
+        @Override
+        protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+            System.arraycopy(memory, (int) startPtr, bytes, destOffset, len);
+        }
+    }
+
+    private static void setActivityTime(final ActivityPrint activity, final String fieldName, final long value) {
+        try {
+            final Field field = ActivityPrint.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.setLong(activity, value);
+        } catch (final ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    /** Simulates allocation failure while creating the iterator used by segment reclamation. */
+    private static final class FailingReclamationQueue extends ArrayDeque<AbstractOffHeapCache.Segment> {
+        private boolean failNextIterator = true;
+
+        FailingReclamationQueue(final Deque<AbstractOffHeapCache.Segment> segments) {
+            super(segments);
+        }
+
+        @Override
+        public Iterator<AbstractOffHeapCache.Segment> iterator() {
+            if (failNextIterator) {
+                failNextIterator = false;
+                throw new OutOfMemoryError("forced reclamation iterator failure");
+            }
+
+            return super.iterator();
+        }
+    }
+
     /**
      * Memory-only fixture whose "native" memory is a heap array. {@code deallocate()} poisons the
      * array so any read that races past {@code close()} deserializes garbage instead of the stored
@@ -941,14 +1006,97 @@ public class AbstractOffHeapCacheTest {
                 .build();
         try {
             assertTrue(cache.put("k", new byte[] { 1, 2, 3 }, configuredLiveTime, 10_000L));
-            Thread.sleep(75L);
+            final ActivityPrint original = entriesOf(cache).get("k").activityPrint;
+            setActivityTime(original, "createdTime", System.currentTimeMillis() - 75L);
             assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("k"));
             assertEquals(0L, cache.stats().sizeOnDisk(), "the entry should have been promoted");
 
             final AbstractOffHeapCache.Entry<byte[]> promoted = entriesOf(cache).get("k");
-            final long promotedLiveTime = promoted.activityPrint.getMaxLiveTime();
-            assertTrue(promotedLiveTime > 0 && promotedLiveTime < configuredLiveTime,
-                    "promotion should install the positive remaining TTL, not a fresh/full or elapsed lifetime: " + promotedLiveTime);
+            assertEquals(original.getExpirationTime(), promoted.activityPrint.getExpirationTime(), "promotion must preserve the original TTL deadline");
+            assertEquals(original.getLastAccessTime(), promoted.activityPrint.getLastAccessTime(), "promotion must preserve the latest idle deadline");
+            assertEquals(original.getAccessCount(), promoted.activityPrint.getAccessCount(), "promotion must preserve prior accesses");
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void testPromotionDoesNotReviveEntryWhoseTtlExpiresDuringCopy() throws Exception {
+        assertPromotionDoesNotReviveEntry("createdTime");
+    }
+
+    @Test
+    public void testPromotionDoesNotReviveEntryWhoseIdleTimeExpiresDuringCopy() throws Exception {
+        assertPromotionDoesNotReviveEntry("lastAccessTime");
+    }
+
+    private static void assertPromotionDoesNotReviveEntry(final String expiryField) throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final PromotionCopyOffHeapCache cache = new PromotionCopyOffHeapCache(backing);
+        try {
+            assertTrue(cache.put("key", new byte[] { 1, 2, 3 }));
+            final ActivityPrint original = entriesOf(cache).get("key").activityPrint;
+            // Advance the entry's elapsed time at the native-copy boundary without wall-clock sleeps.
+            cache.duringCopy = () -> setActivityTime(original, expiryField, 0L);
+
+            assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("key"), "the read began while the entry was live");
+            assertFalse(cache.containsKey("key"), "promotion must not give the expired entry a fresh clock");
+            assertEquals(1L, cache.stats().sizeOnDisk(), "an expired promotion must retain the original disk mapping until cleanup");
+            assertEquals(0L, cache.stats().occupiedMemory());
+            assertTrue(cache.stats().occupiedSlots().isEmpty(), "abandoned promotion slots must be released and reclaimed");
+            assertNull(cache.getOrNull("key"));
+            assertEquals(0, cache.size());
+            assertEquals(1L, cache.stats().evictionCountFromDisk());
+            assertTrue(backing.isEmpty());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void testPromotionCopyFailureLeavesDiskEntryAndReleasesSlots() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final PromotionCopyOffHeapCache cache = new PromotionCopyOffHeapCache(backing);
+        try {
+            assertTrue(cache.put("key", new byte[] { 7 }));
+            cache.duringCopy = () -> { throw new IllegalStateException("forced promotion copy failure"); };
+
+            assertThrows(IllegalStateException.class, () -> cache.getOrNull("key"));
+            assertEquals(1L, cache.stats().sizeOnDisk());
+            assertTrue(cache.stats().occupiedSlots().isEmpty());
+            assertArrayEquals(new byte[] { 7 }, backing.get("key"));
+
+            cache.duringCopy = () -> { };
+            assertArrayEquals(new byte[] { 7 }, cache.getOrNull("key"));
+            assertEquals(0L, cache.stats().sizeOnDisk());
+            assertEquals(1, totalOccupiedSlots(cache.stats()));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** Reclamation may fail after releasing slots; its exception must not trigger another release. */
+    @SuppressWarnings("unchecked")
+    @Test
+    public void testRejectedPromotionReclamationFailureDoesNotReleaseSlotsTwice() throws Exception {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final PromotionCopyOffHeapCache cache = new PromotionCopyOffHeapCache(backing);
+        try {
+            assertTrue(cache.put("key", new byte[] { 7 }));
+            final Field queuesField = AbstractOffHeapCache.class.getDeclaredField("segmentQueues");
+            queuesField.setAccessible(true);
+            final Deque<AbstractOffHeapCache.Segment>[] queues = (Deque<AbstractOffHeapCache.Segment>[]) queuesField.get(cache);
+            cache.duringCopy = () -> {
+                cache.remove("key"); // Make this promotion stale after it reserved its memory slot.
+                queues[0] = new FailingReclamationQueue(queues[0]);
+            };
+
+            final OutOfMemoryError failure = assertThrows(OutOfMemoryError.class, () -> cache.getOrNull("key"));
+            assertEquals("forced reclamation iterator failure", failure.getMessage());
+            assertEquals(0, cache.size());
+            assertEquals(0, totalOccupiedSlots(cache.stats()), "each unpublished slot must be released exactly once");
+            cache.clear();
+            assertTrue(cache.stats().occupiedSlots().isEmpty());
         } finally {
             cache.close();
         }
@@ -1420,6 +1568,51 @@ public class AbstractOffHeapCacheTest {
             assertEquals(1L, cache.stats().evictionCount());
             assertEquals(0, totalOccupiedSlots(cache.stats()), "the sweep must reclaim the expired entry's slots");
         } finally {
+            cache.close();
+        }
+    }
+
+    /** A sweep must recheck idle expiry after an in-flight read releases the entry monitor. */
+    @Test
+    public void testMaintenancePreservesEntryRefreshedWhileWaitingForItsMonitor() throws Exception {
+        final ExecutorService executor = Executors.newSingleThreadExecutor();
+        final AtomicReference<Thread> maintenanceThread = new AtomicReference<>();
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+
+        try {
+            assertTrue(cache.put("key", new byte[] { 9 }, 0L, 60_000L));
+            final AbstractOffHeapCache.Entry<byte[]> entry = entriesOf(cache).get("key");
+            final Method maintenance = AbstractOffHeapCache.class.getDeclaredMethod("runMaintenance");
+            maintenance.setAccessible(true);
+            final Future<?> sweep;
+
+            synchronized (entry) {
+                setActivityTime(entry.activityPrint, "lastAccessTime", 0L);
+                sweep = executor.submit(() -> {
+                    maintenanceThread.set(Thread.currentThread());
+                    maintenance.invoke(cache);
+                    return null;
+                });
+
+                final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while ((maintenanceThread.get() == null || maintenanceThread.get().getState() != Thread.State.BLOCKED)
+                        && System.nanoTime() < deadline) {
+                    Thread.sleep(1L);
+                }
+
+                assertNotNull(maintenanceThread.get());
+                assertEquals(Thread.State.BLOCKED, maintenanceThread.get().getState(), "maintenance must be waiting to retire the expired candidate");
+                // Complete an access already holding the monitor while maintenance waited.
+                entry.touch();
+            }
+
+            sweep.get(5, TimeUnit.SECONDS);
+            assertArrayEquals(new byte[] { 9 }, cache.getOrNull("key"));
+            assertEquals(1, cache.size());
+            assertEquals(0L, cache.stats().evictionCount(), "a refreshed entry must not count as an eviction");
+            assertEquals(1, totalOccupiedSlots(cache.stats()));
+        } finally {
+            executor.shutdownNow();
             cache.close();
         }
     }

@@ -105,8 +105,10 @@ import java.util.Objects;
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
  *                       when off-heap memory is full and the value is stored to disk via the configured
  *                       {@link OffHeapStore}, or when the {@code storeSelector} explicitly routes the value to disk.
- * @param getCount the total number of get operations performed since cache creation. Conceptually,
- *                 {@code getCount = hitCount + missCount}; a concurrent snapshot may temporarily differ.
+ * @param getCount the total number of lookups classified as a hit or miss since cache creation.
+ *                 Failures before that classification (such as a throwing store read or a corrupt
+ *                 payload length) are not counted. Conceptually, {@code getCount = hitCount + missCount};
+ *                 the sum saturates at {@link Long#MAX_VALUE} if the two counters would overflow.
  * @param hitCount the number of get operations that found a live entry and its bytes. A get that finds a
  *                 disk-backed entry whose backing bytes are confirmed missing counts as a miss, not a hit.
  *                 To approximate hits served purely from off-heap memory, subtract {@code hitCountFromDisk}
@@ -139,7 +141,7 @@ import java.util.Objects;
  * @param dataSizeOnDisk the total size of serialized data currently stored on disk in bytes. This is a
  *                       subset of {@code dataSize} and counts only entries that have been persisted to
  *                       disk storage.
- * @param writeToDiskTimeStats statistics for disk-spilled put operations, tracking the minimum, maximum, and
+ * @param writeToDiskTimeStats statistics for successful disk-spilled put operations, tracking the minimum, maximum, and
  *                             average time in milliseconds. The measured window is the store write
  *                             ({@code OffHeapStore.put()}) itself, excluding serialization, the preceding
  *                             failed in-memory slot search, and the entry installation - the write
@@ -151,7 +153,8 @@ import java.util.Objects;
  *                              average time in milliseconds for reading entry bytes from the store. The
  *                              measured window is the store read ({@code OffHeapStore.get()}) itself;
  *                              lookups that never reach the store (entry already removed or replaced
- *                              concurrently) are not recorded. Timing observations are recorded only when
+ *                              concurrently), throwing store reads, and corrupt-length results are not
+ *                              recorded. Confirmed store misses are recorded. Timing observations are recorded only when
  *                              the cache is built with {@code statsTimeOnDisk(true)} (it defaults to
  *                              {@code false}); when disabled, no observations are ever recorded and all
  *                              three values stay {@code 0.0}. This helps monitor disk read performance
@@ -247,6 +250,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * The outer map's key is the slot size in bytes, and the inner map contains the segment
      * index as key and the number of occupied slots in that segment as value. This provides
      * detailed information about memory fragmentation and utilization.
+     * A segment that has become empty may still appear with a zero count until its dedicated
+     * slot-size assignment is reclaimed by maintenance, a vacate pass, or {@code clear()}.
      *
      * <p>The map returned by this accessor is deeply unmodifiable: both the outer map and
      * the nested maps are defensive copies captured during record construction.
@@ -268,7 +273,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * slots.put(4096, Map.of());                                      // throws UnsupportedOperationException
      * slots.get(1024).put(9, 9);                                      // throws UnsupportedOperationException
      *
-     * // When no slots are occupied this returns an empty (and still unmodifiable) map, never null.
+     * // A fresh cache, or a cache just cleared without concurrent writes, has no dedicated segments.
      * Map<Integer, Map<Integer, Integer>> empty = emptyStats.occupiedSlots();
      * empty.isEmpty();                                                // returns true
      * }</pre>

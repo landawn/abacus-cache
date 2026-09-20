@@ -16,6 +16,8 @@
 
 package com.landawn.abacus.util;
 
+import java.nio.charset.StandardCharsets;
+
 import com.landawn.abacus.annotation.SuppressFBWarnings;
 import com.landawn.abacus.cache.SpyMemcached;
 import com.landawn.abacus.logging.Logger;
@@ -102,6 +104,8 @@ import net.spy.memcached.util.StringUtils;
  * consistently and does not invoke a subclass's {@link #toKey(Object)} override. The quiet-release
  * method deliberately validates its target and derived key first, then maps a closed state to
  * {@code false}; deterministic programming errors are not swallowed as transient release failures.
+ * All derived keys must contain well-formed UTF-16. Unpaired surrogates are rejected because
+ * replacing them during UTF-8 encoding could acquire or release another target's lease.
  *
  * @param <K> the type of lock identifiers used as keys (typically String)
  * @param <V> the type of optional metadata values associated with locks
@@ -765,7 +769,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @return the non-null string key to use in Memcached. The default implementation returns
      *         {@code N.stringOf(target)} without truncation; overrides must return a non-null key
      *         accepted by spymemcached (non-empty, at most 250 UTF-8 bytes, and containing no space,
-     *         CR, LF, or NUL byte)
+     *         CR, LF, or NUL byte). Keys must also contain no unpaired UTF-16 surrogates
      * @throws IllegalArgumentException if {@code target} is {@code null}
      */
     protected String toKey(final K target) {
@@ -785,6 +789,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      */
     private String validatedKey(final K target) {
         final String key = N.checkArgNotNull(toKey(target), "key returned by toKey");
+        if (!StandardCharsets.UTF_8.newEncoder().canEncode(key)) {
+            throw new IllegalArgumentException("The key returned by toKey contains an unpaired UTF-16 surrogate");
+        }
         StringUtils.validateKey(key, false);
         return key;
     }

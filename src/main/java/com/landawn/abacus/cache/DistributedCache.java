@@ -81,13 +81,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     /**
      * Default maximum number of consecutive failures before opening the circuit breaker.
      * When the consecutive-failure count reaches this threshold, the circuit opens and subsequent
-     * operations return immediately without attempting cache access until the retry delay expires.
+     * read operations return immediately without attempting cache access until the retry delay expires.
      */
     protected static final int DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN = 100;
 
     /**
      * Default delay in milliseconds before attempting to retry after the circuit breaker opens.
-     * When the circuit is open, operations fail fast until this delay has elapsed since the last failure.
+     * When the circuit is open, reads fail fast until this delay has elapsed since the last failure.
      */
     protected static final long DEFAULT_RETRY_DELAY = 1000;
 
@@ -135,7 +135,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     /**
      * Creates a DistributedCache with default retry configuration.
      * Uses an empty key prefix and default circuit breaker parameters
-     * ({@link #DEFAULT_MAX_FAILED_NUMBER} consecutive failures, {@link #DEFAULT_RETRY_DELAY} ms retry delay).
+     * ({@link #DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN} consecutive failures, {@link #DEFAULT_RETRY_DELAY} ms retry delay).
      *
      * <p>This constructor is {@code protected}; external callers should obtain instances
      * via {@link CacheFactory#createDistributedCache(DistributedCacheClient)}.
@@ -155,13 +155,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code client} is {@code null}
      */
     protected DistributedCache(final DistributedCacheClient<V> client) {
-        this(client, Strings.EMPTY,DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN, DEFAULT_RETRY_DELAY);
+        this(client, Strings.EMPTY, DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN, DEFAULT_RETRY_DELAY);
     }
 
     /**
      * Creates a DistributedCache with a key prefix and default circuit breaker configuration.
      * All keys will be prefixed for namespace isolation. Uses default circuit breaker parameters
-     * ({@link #DEFAULT_MAX_FAILED_NUMBER} consecutive failures, {@link #DEFAULT_RETRY_DELAY} ms retry delay).
+     * ({@link #DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN} consecutive failures, {@link #DEFAULT_RETRY_DELAY} ms retry delay).
      *
      * <p>This constructor is {@code protected}; external callers should obtain instances
      * via {@link CacheFactory#createDistributedCache(DistributedCacheClient, String)}.
@@ -185,7 +185,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         non-printable-ASCII character, a space, or a control character
      */
     protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix) {
-        this(client, keyPrefix,DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN, DEFAULT_RETRY_DELAY);
+        this(client, keyPrefix, DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN, DEFAULT_RETRY_DELAY);
     }
 
     /**
@@ -254,8 +254,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
         // The prefix is prepended verbatim to generated keys (only the key part is Base64-encoded),
         // so it must itself be key-safe for the backing store: printable ASCII without spaces or
-        // control characters. Anything else would make every generated key invalid at the server -
-        // every write would throw and every read would silently feed the circuit breaker.
+        // control characters. Reject an invalid prefix once here instead of failing every later
+        // operation when a backend with strict key rules, such as Memcached, validates the result.
         for (int i = 0, len = this.keyPrefix.length(); i < len; i++) {
             final char ch = this.keyPrefix.charAt(i);
 
@@ -350,7 +350,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key, must not be {@code null}
      * @return the cached value, or {@code null} if not found, expired, evicted, circuit breaker is open, or on error
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null (validated up-front, before the circuit breaker
+     * @throws IllegalArgumentException if the key is null or its string representation is null or contains
+     *         an unpaired UTF-16 surrogate (validated up-front, before the circuit breaker
      *         check and before {@link #generateKey(Object)}), or if the underlying client rejects the
      *         generated cache key (e.g. it exceeds memcached's 250-character key limit after prefixing
      *         and Base64 expansion); such validation errors are rethrown and do not affect the circuit
@@ -429,7 +430,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 // Surface the closed->open transition once at WARN: while the circuit is open
                 // every read returns null with only debug-level logging, so without this the
                 // cache can be silently disabled in production.
-                final boolean circuitJustOpened = maxFailuresBeforeCircuitOpen == 0 ? !previousState.hasFailure : previousState.failedCount == maxFailuresBeforeCircuitOpen - 1;
+                final boolean circuitJustOpened = maxFailuresBeforeCircuitOpen == 0 ? !previousState.hasFailure
+                        : previousState.failedCount == maxFailuresBeforeCircuitOpen - 1;
 
                 if (circuitJustOpened && logger.isWarnEnabled()) {
                     final int effectiveFailureThreshold = Math.max(1, maxFailuresBeforeCircuitOpen);
@@ -506,7 +508,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return {@code true} if the operation was successful, {@code false} otherwise (as reported
      *         by the underlying cache client)
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null, if the underlying client rejects the generated
+     * @throws IllegalArgumentException if the key is null, its string representation is null or contains an
+     *         unpaired UTF-16 surrogate, if the underlying client rejects the generated
      *         cache key (e.g. it exceeds memcached's 250-character key limit after prefixing and Base64
      *         expansion), or if {@code liveTime} is too large for the underlying client's expiration
      *         encoding (the bundled {@code SpyMemcached} client rejects a {@code liveTime} whose absolute
@@ -578,7 +581,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key, must not be {@code null}
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null or the underlying client rejects the
+     * @throws IllegalArgumentException if the key is null, its string representation is null or contains an
+     *         unpaired UTF-16 surrogate, or the underlying client rejects the
      *         generated key (for example, because it exceeds Memcached's key-length limit)
      * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
      * @see #clear()
@@ -654,7 +658,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return {@code true} if the key exists and has a non-null value, {@code false} otherwise,
      *         on error, or when circuit breaker is open
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if the key is null (thrown by {@link #getOrNull(Object)})
+     * @throws IllegalArgumentException if the key or its string representation is invalid, as described
+     *         by {@link #getOrNull(Object)}
      * @see #getOrNull(Object)
      */
     @Override
@@ -962,7 +967,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <ol>
      * <li>Validate key is not null (throws {@link IllegalArgumentException} if null)</li>
      * <li>Convert key to string: the key itself if it is already a {@code String}, otherwise {@code N.stringOf(key)}</li>
-     * <li>Encode to UTF-8 bytes: {@code toString(key).getBytes(Charsets.UTF_8)}</li>
+     * <li>Reject unpaired UTF-16 surrogates, then encode to UTF-8 bytes:
+     *     {@code toString(key).getBytes(Charsets.UTF_8)}</li>
      * <li>Base64 encode: {@code Strings.base64Encode(bytes)}</li>
      * <li>If the Base64 result is empty, substitute {@value #EMPTY_KEY_MARKER}; an empty string is not
      *     a legal Memcached key and this marker cannot collide with standard Base64 output</li>
@@ -973,7 +979,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <ul>
      * <li>Ensures the encoded key part is ASCII-safe for Memcached (which restricts key characters);
      *     the prefix is prepended verbatim and is validated at construction time to be printable ASCII</li>
-     * <li>Handles Unicode characters in keys safely</li>
+     * <li>Handles valid Unicode characters in keys safely; malformed surrogate sequences are
+     *     rejected rather than silently replaced, preventing collisions with other string keys</li>
      * <li>Avoids issues with special characters (spaces, newlines, control characters, etc.)</li>
      * <li>Provides consistent key format across different cache systems</li>
      * <li>Eliminates risk of key injection or parsing issues in cache protocols</li>
@@ -981,8 +988,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Length Expansion:</b> Base64 expands the UTF-8 bytes by a factor of 4/3 (plus the prefix
      * length). With no prefix, Memcached's 250-byte key limit allows roughly 186 single-byte UTF-8
-     * characters; multibyte characters or a configured prefix lower that limit. Oversized generated
-     * keys are rejected with {@link IllegalArgumentException}. Redis has no comparable limit.
+     * characters; multibyte characters or a configured prefix lower that limit. This method does
+     * not enforce backend length limits: the Memcached client rejects an oversized generated key
+     * when a cache operation uses it. Redis has no comparable 250-byte limit.
      *
      * <p><b>Namespace Isolation:</b> a prefix containing at least one character outside the Base64
      * alphabet (such as {@code ':'}) guarantees prefixed and unprefixed key spaces can never collide;
@@ -992,6 +1000,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Thread Safety:</b>
      * This method is thread-safe and stateless. Multiple threads can call this method
      * concurrently without synchronization.
+     * Callers must supply stable string representations for their keys. Distinct non-string keys
+     * with the same {@link N#stringOf(Object)} result address the same cache entry; this wrapper
+     * does not use {@code equals} or include the key's Java type in its encoding.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1014,7 +1025,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * // Result: "myapp:bXkga2V5IHdpdGggc3BhY2VzIQ==" (safe for all cache systems)
      *
      * // Integer key (converted to string first)
-     * String intKey = cache.generateKey(12345);
+     * DistributedCache<Integer, User> integerCache = CacheFactory.createDistributedCache(client, "myapp:");
+     * String intKey = integerCache.generateKey(12345);
      * // Result: "myapp:MTIzNDU=" (prefix + Base64 of "12345")
      *
      * // Empty String key: Base64 would be empty, so a non-empty, collision-free marker is used
@@ -1026,7 +1038,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return the prefixed and Base64-encoded cache key suitable for distributed cache systems; an
      *         empty encoded key part is represented by {@value #EMPTY_KEY_MARKER}
      * @throws IllegalArgumentException if key is null, or if its string representation
-     *         (the key itself for a String key, otherwise {@link N#stringOf(Object)}) is null
+     *         (the key itself for a String key, otherwise {@link N#stringOf(Object)}) is null or contains
+     *         an unpaired UTF-16 surrogate
      * @see Strings#base64Encode(byte[])
      * @see N#stringOf(Object)
      */
@@ -1039,6 +1052,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         if (keyStr == null) {
             throw new IllegalArgumentException("Key string representation cannot be null");
         }
+
+        AbstractDistributedCacheClient.checkUtf8Key(keyStr);
 
         final String base64Key = Strings.base64Encode(keyStr.getBytes(Charsets.UTF_8));
         final String encodedKey = base64Key.isEmpty() ? EMPTY_KEY_MARKER : base64Key;

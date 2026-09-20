@@ -61,6 +61,33 @@ public class JRedisClusterTest {
     }
 
     @Test
+    public void test_malformedUnicodeKeysAreRejectedBeforeAnyCommand() {
+        for (final String key : List.of("\uD800", "\uDC00", "prefix:\uD800suffix", "prefix:\uDC00suffix")) {
+            assertThrows(IllegalArgumentException.class, () -> cache.get(key));
+            assertThrows(IllegalArgumentException.class, () -> cache.put(key, "value", 0));
+            assertThrows(IllegalArgumentException.class, () -> cache.remove(key));
+            assertThrows(IllegalArgumentException.class, () -> cache.incr(key));
+            assertThrows(IllegalArgumentException.class, () -> cache.incr(key, 1));
+            assertThrows(IllegalArgumentException.class, () -> cache.decr(key));
+            assertThrows(IllegalArgumentException.class, () -> cache.decr(key, 1));
+            assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
+            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(List.of("valid", key)));
+        }
+
+        org.mockito.Mockito.verifyNoInteractions(mockCluster);
+    }
+
+    @Test
+    public void test_validSupplementaryUnicodeKeyPreservesUtf8Bytes() {
+        final String key = "user:\uD83D\uDE00:\uD800\uDC00";
+        when(mockCluster.get(utf8(key))).thenReturn(KRYO.encode("value"));
+
+        assertEquals("value", cache.get(key));
+        assertEquals(Map.of(key, "value"), cache.getBulk(List.of("missing", key)));
+        verify(mockCluster, times(2)).get(utf8(key));
+    }
+
+    @Test
     public void test_get_returns_decoded_value() {
         when(mockCluster.get(utf8("user:1"))).thenReturn(KRYO.encode("Alice"));
 

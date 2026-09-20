@@ -37,6 +37,11 @@
  * damping stampedes — and choose a lock service with fencing tokens and atomic conditional release
  * where overlap could corrupt data.
  *
+ * <p>Lock keys share the underlying Memcached keyspace with ordinary cache entries. The default
+ * key mapping adds no namespace; override {@link com.landawn.abacus.util.MemcachedLock#toKey(Object)}
+ * with a deterministic lock-specific prefix when other cache data uses the same servers. All
+ * participants coordinating the same target must use the same mapping and value encoding.
+ *
  * <p>Using this package requires the {@code provided}-scope SpyMemcached dependency on your runtime
  * classpath.
  *

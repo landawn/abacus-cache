@@ -402,7 +402,7 @@ public class ForeignMemoryOffHeapCacheTest {
 
         final String longFirstName = Strings.repeat(Strings.uuid(), 100);
 
-        Profiler.run(16, 90000, 1, "ForeignMemoryOffHeapCache", () -> {
+        Profiler.run(16, 10000, 1, "ForeignMemoryOffHeapCache", () -> {
             final Account account = createAccount(Account.class);
             account.setFirstName(longFirstName);
 

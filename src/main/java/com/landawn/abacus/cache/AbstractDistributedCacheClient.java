@@ -376,7 +376,8 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * <ul>
      * <li>Exact seconds are converted directly (e.g., 2000ms → 2s)</li>
      * <li>Fractional seconds are rounded up (e.g., 1500ms → 2s, 999ms → 1s)</li>
-     * <li>This ensures cached items live at least as long as requested</li>
+     * <li>Rounding does not shorten the requested TTL; backend clock resolution and eviction can
+     *     still make entries disappear earlier</li>
      * <li>Zero or negative milliseconds returns zero seconds (no expiration), matching the
      *     {@link DistributedCacheClient#put(String, Object, long)} contract that documents
      *     "0 or negative for no expiration"</li>
@@ -431,12 +432,37 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
     }
 
     /**
-     * Validates a bulk-operation key array, rejecting a {@code null} array or any {@code null} element.
+     * Validates that a key can be encoded as UTF-8 without replacing any characters.
+     * Java's default UTF-8 conversion replaces unpaired UTF-16 surrogates with {@code '?'},
+     * which would otherwise let distinct keys read, overwrite, or remove the same cache entry.
+     * Valid surrogate pairs, including supplementary Unicode characters, are accepted.
+     *
+     * @param key the key or key string representation to validate; must not be {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired surrogate
+     */
+    protected static void checkUtf8Key(final String key) {
+        N.checkArgNotNull(key, "key");
+
+        for (int i = 0, len = key.length(); i < len; i++) {
+            final char ch = key.charAt(i);
+
+            if (Character.isHighSurrogate(ch) && i + 1 < len && Character.isLowSurrogate(key.charAt(i + 1))) {
+                i++;
+            } else if (Character.isSurrogate(ch)) {
+                throw new IllegalArgumentException("key contains an unpaired UTF-16 surrogate at index: " + i);
+            }
+        }
+    }
+
+    /**
+     * Validates a bulk-operation key array, rejecting a {@code null} array, {@code null} elements,
+     * and keys containing unpaired UTF-16 surrogates.
      * Shared by concrete clients so that {@link #getBulk(String...)} validates its input identically
      * across implementations.
      *
      * @param keys the keys to validate; must not be {@code null} or contain {@code null} elements
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
+     *         or contains a key with an unpaired UTF-16 surrogate
      */
     protected static void checkBulkKeys(final String... keys) {
         N.checkArgNotNull(keys, "keys");
@@ -445,16 +471,20 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
             if (keys[i] == null) {
                 throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + i);
             }
+
+            checkUtf8Key(keys[i]);
         }
     }
 
     /**
-     * Validates a bulk-operation key collection, rejecting a {@code null} collection or any {@code null} element.
+     * Validates a bulk-operation key collection, rejecting a {@code null} collection, {@code null} elements,
+     * and keys containing unpaired UTF-16 surrogates.
      * Shared by concrete clients so that {@link #getBulk(Collection)} validates its input identically
      * across implementations.
      *
      * @param keys the keys to validate; must not be {@code null} or contain {@code null} elements
-     * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
+     *         or contains a key with an unpaired UTF-16 surrogate
      */
     protected static void checkBulkKeys(final Collection<String> keys) {
         N.checkArgNotNull(keys, "keys");
@@ -465,6 +495,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
                 throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + i);
             }
 
+            checkUtf8Key(key);
             i++;
         }
     }

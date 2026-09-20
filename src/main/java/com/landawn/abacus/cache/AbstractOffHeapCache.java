@@ -104,7 +104,9 @@ import com.landawn.abacus.util.function.TriPredicate;
  * operation; a failed or throwing write leaves the prior mapping and its bytes untouched (the
  * {@link OffHeapStore#put} contract guarantees the prior bytes are unchanged on failure). Reads
  * may optionally be promoted back into memory via the configured
- * {@code testerForLoadingItemFromDiskToMemory}.
+ * {@code testerForLoadingItemFromDiskToMemory}. Promotion preserves the entry's original TTL
+ * deadline, latest access time, idle limit, and access count. If either expiration limit is
+ * exceeded while promotion is copying the bytes, the copy is discarded.
  *
  * <p><b>Value handling.</b> {@code byte[]} values are stored raw (exactly {@code array.length}
  * bytes); {@link ByteBuffer} values store the bytes from index 0 up to the current position
@@ -217,8 +219,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private final ConcurrentHashMap<K, Entry<V>> entries = new ConcurrentHashMap<>();
 
     /**
-     * Close() takes the write side while every cache operation holds the read side, so native
-     * memory is never deallocated (and the store never closed) underneath an in-flight operation.
+     * Close() takes the write side while operations touching native memory or the store hold the
+     * read side, so neither resource is released underneath an in-flight operation. Heap-only
+     * probes do not acquire this lock.
      */
     private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
 
@@ -322,7 +325,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is registered
      * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws RejectedExecutionException if {@code evictDelay} is positive
+     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive
      *                           and the maintenance scheduler rejects its task (all cache-owned
      *                           resources are released before this propagates)
      */
@@ -470,6 +473,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * exists. An expired entry encountered here is removed (and counted as an eviction). For a
      * disk-backed entry, the serialized bytes are fetched from the {@link OffHeapStore} and the
      * entry may be promoted back into memory when the configured promotion predicate accepts it.
+     * Promotion preserves the original TTL and idle deadlines. A read that found live bytes can
+     * still return its value if the entry expires while deserialization or promotion is running.
      *
      * @param key the key whose associated value is to be returned; must not be {@code null}
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
@@ -582,7 +587,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Promotes a just-read disk entry back into memory when the configured predicate accepts it.
      * Best-effort: if no memory can be allocated or the mapping changed concurrently, the disk
-     * entry simply stays in place.
+     * entry simply stays in place. Promotion preserves the original creation/access timestamps,
+     * expiration limits, and access count; copying the value must not restart either clock.
      */
     private void maybePromoteToMemory(final K key, final Entry<V> diskEntry, final byte[] bytes, final long storeReadMillis) {
         if (testerForLoadingItemFromDiskToMemory == null
@@ -590,44 +596,55 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        final ActivityPrint print = diskEntry.activityPrint;
-        // A wall-clock correction can make now precede the recorded creation time. Treat that as
-        // zero elapsed lifetime; subtracting a negative age could otherwise overflow and suppress
-        // promotion of a non-expiring entry.
-        final long elapsedLiveTime = Math.max(0L, System.currentTimeMillis() - print.getCreatedTime());
-        final long remainingLiveTime = print.getMaxLiveTime() == Long.MAX_VALUE ? Long.MAX_VALUE : print.getMaxLiveTime() - elapsedLiveTime;
-
         // A value larger than the entire region can never be placed; skip the doomed (and
         // allocator-lock-heavy) slot allocation attempt, mirroring doPut's guard.
-        if (remainingLiveTime <= 0 || diskEntry.size > capacityInBytes) {
+        if (diskEntry.activityPrint.isExpired() || diskEntry.size > capacityInBytes) {
             return;
         }
 
+        final boolean[] installed = { false };
         final long[] slots = allocateSlots(diskEntry.size);
 
         if (slots == null) {
             return; // No memory available; promotion is an optimization only.
         }
 
-        final Entry<V> memoryEntry = createMemoryEntry(diskEntry.type, diskEntry.size, remainingLiveTime, print.getMaxIdleTime(), slots, bytes);
-
         try {
+            copyToAllocatedSlots(diskEntry.size, slots, bytes);
+
             entries.compute(key, (k, current) -> {
                 if (current != diskEntry) {
-                    // The mapping changed concurrently; discard the promoted copy, keep the current one.
-                    discardUninstalledMemoryEntry(memoryEntry);
+                    // The mapping changed concurrently; keep it and discard the copy after compute.
                     return current;
                 }
 
-                free(k, diskEntry, FreeCause.REPLACED, true);
-                install(memoryEntry);
-                return memoryEntry;
+                synchronized (diskEntry) {
+                    // Allocation, copying, or waiting for this key can outlast either deadline.
+                    // Recheck before installation and snapshot activity only after prior readers
+                    // have finished, so promotion also retains their latest access information.
+                    if (diskEntry.freed || diskEntry.activityPrint.isExpired()) {
+                        return current;
+                    }
+
+                    final Entry<V> memoryEntry = new Entry<>(diskEntry.type, diskEntry.size, diskEntry.activityPrint.clone(), slots);
+                    free(k, diskEntry, FreeCause.REPLACED, true);
+                    install(memoryEntry);
+                    installed[0] = true;
+                    return memoryEntry;
+                }
             });
         } catch (final RuntimeException | Error e) {
-            // A throwing key hashCode/equals aborts the compute before the lambda installs the
-            // promoted entry; release its freshly allocated slots instead of leaking them.
-            discardUninstalledMemoryEntry(memoryEntry);
+            // Copy failures and a throwing key hashCode/equals must release unpublished slots.
+            if (!installed[0]) {
+                runCleanupStep(e, () -> discardUninstalledSlots(slots));
+            }
             throw e;
+        }
+
+        if (!installed[0]) {
+            // Keep rejection cleanup outside the catch above: a failure while reclaiming an
+            // already-released segment must never cause its slot handles to be released twice.
+            discardUninstalledSlots(slots);
         }
     }
 
@@ -662,7 +679,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or if
      *                                  {@code storeSelector} returns {@code null} or a value outside 0..2
      * @throws IllegalStateException if the cache has been closed
-     * @throws RejectedExecutionException if the put fails under memory
+     * @throws java.util.concurrent.RejectedExecutionException if the put fails under memory
      *                                  pressure and the shared executor rejects the vacate task
      *                                  (possible only during JVM shutdown)
      */
@@ -1173,7 +1190,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Atomically removes the mapping if it still points at {@code entry}, freeing it inside the
      * map's per-key compute so the entry's store-byte removal is serialized (by the bin lock)
-     * with any concurrent same-key disk write.
+     * with any concurrent same-key disk write. Expiration candidates are checked again under the
+     * entry monitor, after any preceding read has had a chance to refresh its idle timestamp.
      */
     private void removeIfCurrent(final K key, final Entry<V> entry, final FreeCause cause) {
         entries.compute(key, (k, current) -> {
@@ -1181,8 +1199,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 return current;
             }
 
-            free(k, entry, cause, true);
-            return null;
+            synchronized (entry) {
+                // An in-flight read may refresh idle time after a sweep selected this entry
+                // but before the sweep acquired its monitor. Retire only a still-expired entry.
+                if (cause == FreeCause.EXPIRED && !entry.activityPrint.isExpired()) {
+                    return current;
+                }
+
+                free(k, entry, cause, true);
+                return null;
+            }
         });
     }
 
@@ -1592,9 +1618,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         volatile boolean freed;
 
         Entry(final Type<T> type, final int size, final long liveTime, final long maxIdleTime, final long[] slots) {
+            this(type, size, new ActivityPrint(liveTime, maxIdleTime), slots);
+        }
+
+        Entry(final Type<T> type, final int size, final ActivityPrint activityPrint, final long[] slots) {
             this.type = type;
             this.size = size;
-            activityPrint = new ActivityPrint(liveTime, maxIdleTime);
+            this.activityPrint = activityPrint;
             this.slots = slots;
         }
 

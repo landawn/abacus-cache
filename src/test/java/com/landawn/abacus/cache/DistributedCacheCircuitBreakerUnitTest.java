@@ -3,14 +3,20 @@ package com.landawn.abacus.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Tag;
@@ -19,6 +25,58 @@ import org.junit.jupiter.api.Test;
 /** Service-free regression coverage for {@link DistributedCache}'s circuit-breaker state. */
 @Tag("2025")
 public class DistributedCacheCircuitBreakerUnitTest {
+
+    @Test
+    public void malformedUnicodeKeysCannotAddressAnotherEntryOrChangeBreakerState() throws Exception {
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        final DistributedCache<Object, String> cache = new DistributedCache<>(client, "prefix:", 1, 60_000L);
+
+        try {
+            final Object initialState = breakerState(cache);
+            for (final String malformed : List.of("\uD800", "\uDC00", "key:\uD800suffix", "key:\uDC00suffix")) {
+                for (final Object key : List.of(malformed, new StringBuilder(malformed))) {
+                    assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(key));
+                    assertThrows(IllegalArgumentException.class, () -> cache.put(key, "value", 0, 0));
+                    assertThrows(IllegalArgumentException.class, () -> cache.remove(key));
+                    assertThrows(IllegalArgumentException.class, () -> cache.containsKey(key));
+                }
+            }
+
+            assertSame(initialState, breakerState(cache));
+            verifyNoInteractions(client);
+
+            // Valid supplementary characters keep the established UTF-8/Base64 wire encoding.
+            final String valid = "user:\uD83D\uDE00:\uD800\uDC00";
+            final String encoded = "prefix:" + Base64.getEncoder().encodeToString(valid.getBytes(StandardCharsets.UTF_8));
+            assertEquals(encoded, cache.generateKey(valid));
+            assertEquals(encoded, cache.generateKey(new StringBuilder(valid)));
+            assertEquals("prefix:Pz8=", cache.generateKey("??"));
+            assertEquals("prefix:-", cache.generateKey(""));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void malformedUnicodeKeysAreRejectedWhileCircuitIsOpen() throws Exception {
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get(anyString())).thenThrow(new IllegalStateException("backend unavailable"));
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 1, 60_000L);
+
+        try {
+            assertNull(cache.getOrNull("valid"));
+            final Object failedState = breakerState(cache);
+
+            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull("\uD800"));
+            assertThrows(IllegalArgumentException.class, () -> cache.containsKey("\uDC00"));
+            assertSame(failedState, breakerState(cache));
+            verify(client, times(1)).get(anyString());
+        } finally {
+            cache.close();
+        }
+    }
 
     @Test
     public void failurePublishesMarkerAndSuccessResetsWholeState() throws Exception {

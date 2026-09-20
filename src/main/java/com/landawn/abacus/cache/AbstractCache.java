@@ -117,8 +117,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Backed by a synchronized map so property operations through this cache or the live view
      * returned by {@link #getProperties()} are serialized. The custom wrapper below also delegates
      * compound {@link java.util.Map} operations such as {@code putIfAbsent}, {@code compute}, and
-     * {@code merge} directly to that synchronized map; inheriting {@link Properties}' multi-step
-     * implementations would make those operations non-atomic. Individual operations on the live
+     * {@code merge} directly to that synchronized map. Copying and string formatting traverse
+     * the map under the same lock. Individual operations on the live
      * collection views are synchronized too, but iterators obtained from those views are not safe
      * while another thread mutates the properties because the backing map's mutex is internal.
      * Use {@link Properties#copy()} to obtain a stable snapshot for traversal.
@@ -127,9 +127,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
 
     /**
      * A {@link Properties} implementation whose entire {@link java.util.Map} surface delegates
-     * compound/default operations to one synchronized backing map. {@code Properties} implements
-     * several of these operations as separate {@code get}/{@code put}/{@code remove} calls; merely
-     * wrapping its backing map therefore does not make their check-then-act sequences atomic.
+     * compound/default operations to one synchronized backing map. Traversals implemented by
+     * {@code Properties} itself also need synchronization or a snapshot of that map.
      */
     private static final class SynchronizedProperties<K, V> extends Properties<K, V> {
 
@@ -208,6 +207,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
         public Properties<K, V> copy() {
             synchronized (values) {
                 return Properties.create(values);
+            }
+        }
+
+        @Override
+        public String toString() {
+            synchronized (values) {
+                return super.toString();
             }
         }
     }

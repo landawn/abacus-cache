@@ -23,16 +23,14 @@ import net.spy.memcached.transcoders.Transcoder;
 
 /**
  * A Memcached {@link Transcoder} implementation that uses Kryo for serialization.
- * Kryo is a fast and efficient serialization framework that typically delivers better
- * performance and smaller serialized payloads than Java's default serialization. This
- * transcoder integrates Kryo with SpyMemcached to improve caching performance.
+ * Values do not need to implement {@link java.io.Serializable}; their classes must instead be
+ * supported by the configured Kryo serializers. Payload size and serialization cost depend on
+ * the object graph and serializer configuration.
  *
- * <p>Benefits of using Kryo:
- * <ul>
- * <li>Faster serialization/deserialization.</li>
- * <li>Smaller serialized data size.</li>
- * <li>No requirement for the {@link java.io.Serializable} interface.</li>
- * </ul>
+ * <p>Every reader and writer of a cache key must use compatible Kryo versions, registrations,
+ * serializers, and class definitions. These payloads are not interchangeable with the stock
+ * SpyMemcached transcoder's format, even though this transcoder stores a flag value of zero.
+ * Invalidate existing entries or use a separate key namespace when changing formats.
  *
  * <p><b>&#9888;&#65039; Circular references are not supported by default:</b> the default {@link KryoParser}
  * creates its Kryo instances with reference tracking disabled (Kryo's default), so encoding an
@@ -49,6 +47,8 @@ import net.spy.memcached.transcoders.Transcoder;
  * encode/decode workloads may contend on the shared pool; correctness is unaffected. Treat parser
  * configuration as initialization-only: finish class registration and other configuration before
  * the first concurrent encode/decode, and do not mutate the parser while it is in use.
+ * Registered custom serializers must also support concurrent use, and callers must not mutate
+ * an object graph while it is being encoded.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
@@ -177,8 +177,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * and a caller-supplied {@link KryoParser}.
      * Use this constructor to control Kryo configuration - most importantly pre-registering classes,
      * which can make the serialized form more compact. For wire-format stability, use explicit,
-     * stable registration IDs; automatically assigned IDs are safe only when registration order is
-     * identical in every process that reads the data.
+     * stable registration IDs. Registrations without explicit IDs can receive process-dependent
+     * assignments; calling registration methods in the same order does not guarantee identical IDs.
      *
      * <p><b>Thread Safety:</b> The supplied {@link KryoParser} must be safe for concurrent use; the
      * bundled parsers pool Kryo/Output/Input instances internally. Complete all registrations and
@@ -222,12 +222,13 @@ public class KryoTranscoder<T> implements Transcoder<T> {
 
     /**
      * Indicates whether this transcoder supports asynchronous decoding.
-     * Kryo decoding is fast enough that asynchronous decoding offers no benefit, so this
-     * implementation always returns {@code false}.
+     * This implementation always returns {@code false}, opting out of SpyMemcached's decoder
+     * executor. Decoding cost depends on the payload and configured serializers.
      *
      * <p>This method is called by SpyMemcached to determine whether the decode operation should
-     * be deferred to a worker thread. Returning {@code false} keeps decoding on the calling
-     * thread, avoiding unnecessary threading overhead.
+     * be scheduled on a worker thread. Returning {@code false} makes SpyMemcached decode lazily
+     * on the thread that retrieves the future's value; a timed future wait does not bound this
+     * synchronous decoding work.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -318,6 +319,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * <p><b>&#9888;&#65039; Class compatibility:</b> The class definitions of the objects being deserialized must be
      * available on the classpath. If the class structure has changed between encoding and decoding
      * (e.g., fields added or removed), deserialization may fail or produce unexpected results.
+     * A type may encode successfully yet fail to decode if it lacks a no-argument constructor
+     * and no configured serializer provides its instantiation. Custom serializers and class
+     * registrations must match those used to encode the entry.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

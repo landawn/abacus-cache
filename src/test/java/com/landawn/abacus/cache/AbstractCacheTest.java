@@ -23,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -395,6 +396,84 @@ public class AbstractCacheTest extends TestBase {
                 releaseMapping.countDown();
                 pool.shutdownNow();
             }
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void testProperties_ToStringSerializesConcurrentMutation() throws Exception {
+        final LocalCache<String, String> cache = newCache();
+        final CountDownLatch formattingStarted = new CountDownLatch(1);
+        final CountDownLatch finishFormatting = new CountDownLatch(1);
+        final CountDownLatch mutationStarted = new CountDownLatch(1);
+        final AtomicReference<String> formatted = new AtomicReference<>();
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        final Properties<String, Object> properties = cache.getProperties();
+
+        properties.put("first", new Object() {
+            @Override
+            public String toString() {
+                formattingStarted.countDown();
+                try {
+                    assertTrue(finishFormatting.await(5, TimeUnit.SECONDS));
+                } catch (final InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                return "value";
+            }
+        });
+        properties.put("second", "tail");
+        final Thread reader = new Thread(() -> {
+            try {
+                formatted.set(properties.toString());
+            } catch (final Throwable e) {
+                failure.set(e);
+            }
+        });
+        final Thread writer = new Thread(() -> {
+            mutationStarted.countDown();
+            properties.put("third", "added");
+        });
+
+        try {
+            reader.start();
+            assertTrue(formattingStarted.await(5, TimeUnit.SECONDS));
+            writer.start();
+            assertTrue(mutationStarted.await(5, TimeUnit.SECONDS));
+
+            // Wait until the writer either blocks on the synchronized map or completes the
+            // mutation. The latter deterministically invalidates the old unlocked iterator.
+            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (writer.isAlive() && writer.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+                Thread.yield();
+            }
+            assertTrue(!writer.isAlive() || writer.getState() == Thread.State.BLOCKED);
+            finishFormatting.countDown();
+            reader.join(5000);
+            writer.join(5000);
+
+            assertFalse(reader.isAlive());
+            assertFalse(writer.isAlive());
+            assertNull(failure.get());
+            assertEquals("{first=value, second=tail}", formatted.get());
+            assertEquals("added", properties.get("third"));
+        } finally {
+            finishFormatting.countDown();
+            reader.join(5000);
+            writer.join(5000);
+            cache.close();
+        }
+    }
+
+    @Test
+    public void testProperties_ToStringPreservesDirectSelfReference() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            properties.put("self", properties);
+            assertEquals("{self=(this Map)}", properties.toString());
         } finally {
             cache.close();
         }

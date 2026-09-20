@@ -24,6 +24,8 @@ import com.landawn.abacus.util.u.Optional;
  * The core interface for all cache implementations in the Abacus framework.
  * Defines the contract for caching systems, providing both synchronous
  * and asynchronous operations, configurable expiration policies, and property management.
+ * Implementations may load missing values or suppress backend failures on reads, and may reject
+ * enumeration operations. Consult the selected implementation before depending on these behaviors.
  *
  * <p>Key features:
  * <ul>
@@ -158,7 +160,7 @@ public interface Cache<K, V> {
      * <li>A successful write overwrites any existing entry with the same key</li>
      * <li>A successful write resets the implementation's applicable expiration counters</li>
      * <li>May trigger eviction of other entries if cache capacity is reached</li>
-     * <li>Returns {@code false} if the operation fails (e.g., cache full and eviction not possible)</li>
+     * <li>May return {@code false} when storage is rejected; backend failures may also throw</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -186,8 +188,10 @@ public interface Cache<K, V> {
      *
      * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
-     * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full or write failure;
-     *         calling this method on a closed cache is implementation-defined and typically throws {@link IllegalStateException})
+     * @return {@code true} if the implementation reports success, {@code false} if storage was rejected.
+     *         Success does not guarantee retention: eviction, expiration, concurrent changes, or a
+     *         backend resilience policy may discard the entry. Backend failures may throw; a closed
+     *         cache typically throws {@link IllegalStateException}
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
@@ -233,8 +237,10 @@ public interface Cache<K, V> {
      *                 is supported, a value {@code <= 0} means no per-entry TTL
      * @param maxIdleTime the maximum idle time in milliseconds since last access; a value {@code <= 0} means
      *                    no idle timeout where supported; this parameter may be ignored by the implementation
-     * @return {@code true} if the entry was stored, {@code false} otherwise (e.g., cache full or write failure;
-     *         calling this method on a closed cache is implementation-defined and typically throws {@link IllegalStateException})
+     * @return {@code true} if the implementation reports success, {@code false} if storage was rejected.
+     *         Success does not guarantee retention: eviction, expiration, concurrent changes, or a
+     *         backend resilience policy may discard the entry. Backend failures may throw; a closed
+     *         cache typically throws {@link IllegalStateException}
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */

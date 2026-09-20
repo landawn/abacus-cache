@@ -23,6 +23,12 @@ package com.landawn.abacus.cache;
  * storage technologies such as memory-mapped files, embedded databases, or
  * custom file formats.
  *
+ * <p>The owning cache keeps its key index, value types, and expiration metadata in JVM memory.
+ * Persistent store bytes alone do not restore cache entries after a restart, and normal cache
+ * shutdown removes its tracked entries before closing the store. Give each cache an exclusive
+ * store or a separate key namespace; another cache or a direct store write under the same key
+ * can invalidate the owning cache's metadata.
+ *
  * <p>
  * Key characteristics:
  * <ul>
@@ -190,6 +196,8 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * If a value already exists for the key, it is replaced.
      * Implementations should consider making a defensive copy of the byte array
      * to prevent external modifications, though this behavior is implementation-specific.
+     * The owning cache already supplies a private array and does not modify it after this call,
+     * so an implementation may retain that array when used exclusively through the cache.
      *
      * <p><b>Failure atomicity:</b> Returning {@code false} or throwing must leave any value that
      * was previously associated with {@code key} unchanged. The owning cache keeps the prior

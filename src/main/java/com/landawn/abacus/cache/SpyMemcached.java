@@ -158,8 +158,9 @@ interface LegacySpyMemcachedAsyncApi<T> {
  * Instances own network resources and are intended to be long-lived and application-scoped;
  * optionally disconnect a shared instance once during application shutdown, not after each use.
  *
- * <p><b>Key validation:</b> beyond the {@code null} checks documented per method, the underlying
- * memcached client validates every key on the calling thread and throws
+ * <p><b>Key validation:</b> every key must be non-null and contain well-formed UTF-16; unpaired
+ * surrogates are rejected before encoding because UTF-8 replacement would alias a different key.
+ * The underlying memcached client additionally validates every key on the calling thread and throws
  * {@link IllegalArgumentException} for keys that are empty, longer than 250 bytes (UTF-8), or that
  * contain a space, CR, LF, or NUL byte. This applies to every keyed operation and is stated here
  * instead of repeated in each method's {@code @throws} list.
@@ -174,7 +175,9 @@ interface LegacySpyMemcachedAsyncApi<T> {
  * <p><b>Asynchronous completion:</b> asynchronous methods return after validation, any required
  * serialization, and operation enqueueing; they do not wait for a server response. Enqueueing can
  * still block briefly when the bounded operation queue is full. Calling no-argument {@code get()}
- * on a returned future is bounded by the configured operation timeout. In particular, this class
+ * on a returned future bounds the wait for server responses by the configured operation timeout.
+ * Value decoding runs after that wait and is not bounded by it; synchronous retrieval methods
+ * have the same limitation. In particular, this class
  * wraps spymemcached's otherwise effectively-unbounded bulk-get {@code Future#get()} so a written
  * request to an unresponsive server cannot pin the caller indefinitely.
  *
@@ -419,7 +422,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public T get(final String key) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         // Route through resultOf (rather than the client's synchronous get) so an interrupt
         // restores the thread's interrupt flag: spymemcached's sync methods wrap
         // InterruptedException in a RuntimeException WITHOUT restoring the flag, silently
@@ -465,7 +468,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public ContinuableFuture<T> asyncGet(final String key) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return ContinuableFuture.wrap((Future<T>) mc.asyncGet(key));
     }
 
@@ -580,7 +583,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * generally sends one operation to each server owning at least one requested key. Keys not
      * found in the cache or that have expired
      * will not be present in the returned map. This is a synchronous operation that blocks until
-     * complete or timeout. The collection is copied and validated in one pass before dispatch;
+     * complete or timeout. The collection is copied and that snapshot is validated before dispatch;
      * later caller mutation cannot affect the request.
      *
      * <p><b>&#9888;&#65039; A missing key is not always a cache miss:</b> an operation that sits
@@ -633,7 +636,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * enqueueing can still block briefly if the operation queue is full. The returned Future
      * contains a map of found key-value pairs. Keys not found in the cache or that have expired
      * will not be present in the returned map. The client generally sends one operation to each
-     * involved server. The collection is copied and validated in one pass before dispatch.
+     * involved server. The collection is copied and that snapshot is validated before dispatch.
      *
      * <p><b>&#9888;&#65039; A missing key is not always a cache miss:</b> an operation that sits
      * unwritten longer than the operation timeout is completed as timed out without error, and the
@@ -752,7 +755,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
             } catch (final TimeoutException e) {
                 // A timed-out bulk request is no longer useful to this caller. Cancellation also
                 // keeps reconnect queues from retaining work that may never receive a response.
-                delegate.cancel(true);
+                cancelAfterFailure(delegate, e);
                 throw new ExecutionException(e);
             }
         }
@@ -821,7 +824,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public boolean put(final String key, final T value, final long liveTime) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return Boolean.TRUE.equals(resultOf(mc.set(key, toMemcachedExpiration(liveTime), value)));
     }
 
@@ -873,7 +876,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public ContinuableFuture<Boolean> asyncPut(final String key, final T value, final long liveTime) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return ContinuableFuture.wrap(mc.set(key, toMemcachedExpiration(liveTime), value));
     }
 
@@ -936,7 +939,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public boolean add(final String key, final T value, final long liveTime) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return Boolean.TRUE.equals(resultOf(mc.add(key, toMemcachedExpiration(liveTime), value)));
     }
 
@@ -992,7 +995,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public ContinuableFuture<Boolean> asyncAdd(final String key, final T value, final long liveTime) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return ContinuableFuture.wrap(mc.add(key, toMemcachedExpiration(liveTime), value));
     }
 
@@ -1044,7 +1047,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public boolean replace(final String key, final T value, final long liveTime) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return Boolean.TRUE.equals(resultOf(mc.replace(key, toMemcachedExpiration(liveTime), value)));
     }
 
@@ -1099,7 +1102,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public ContinuableFuture<Boolean> asyncReplace(final String key, final T value, final long liveTime) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return ContinuableFuture.wrap(mc.replace(key, toMemcachedExpiration(liveTime), value));
     }
 
@@ -1145,7 +1148,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public boolean remove(final String key) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return Boolean.TRUE.equals(resultOf(mc.delete(key)));
     }
 
@@ -1187,7 +1190,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public ContinuableFuture<Boolean> asyncRemove(final String key) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         return ContinuableFuture.wrap(mc.delete(key));
     }
 
@@ -1252,7 +1255,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public long incr(final String key) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
         // It also surfaces errored/cancelled operations as RuntimeException instead of the
         // ambiguous -1 the sync client returns for ANY failure, so -1 reliably means "absent".
@@ -1313,7 +1316,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public long incr(final String key, final long delta) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         N.checkArgNotNegative(delta, "delta");
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncIncr(key, delta));
@@ -1368,7 +1371,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public long incr(final String key, final long delta, final long defaultValue) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         N.checkArgNotNegative(delta, "delta");
         // Memcached's "no expiration" sentinel is 0, NOT -1: memcached treats a negative seed
         // expiration as an absolute time in the past, so the counter would be re-seeded on every call.
@@ -1432,7 +1435,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public long incr(final String key, final long delta, final long defaultValue, final long liveTime) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         N.checkArgNotNegative(delta, "delta");
         return mutateWithAsciiSeed(true, key, delta, defaultValue, toMemcachedExpiration(liveTime));
     }
@@ -1482,7 +1485,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public long decr(final String key) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncDecr(key, 1));
     }
@@ -1541,7 +1544,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public long decr(final String key, final long delta) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         N.checkArgNotNegative(delta, "delta");
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncDecr(key, delta));
@@ -1599,7 +1602,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public long decr(final String key, final long delta, final long defaultValue) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         N.checkArgNotNegative(delta, "delta");
         // See incr(String, long, long): Memcached's "no expiration" sentinel is 0, not -1. A -1 seed
         // expiration would store the auto-initialized value already-expired, re-seeding every call.
@@ -1664,7 +1667,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public long decr(final String key, final long delta, final long defaultValue, final long liveTime) {
         assertNotShutdown();
-        N.checkArgNotNull(key, "key");
+        checkUtf8Key(key);
         N.checkArgNotNegative(delta, "delta");
         return mutateWithAsciiSeed(false, key, delta, defaultValue, toMemcachedExpiration(liveTime));
     }
@@ -2058,11 +2061,16 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
 
     /**
      * Waits for a {@link Future} to complete and returns its result.
-     * Blocks for at most the configured (clamped) operation timeout and converts
+     * Applies the configured (clamped) operation timeout to the future's timed wait and converts
      * {@link InterruptedException}, {@link TimeoutException}, and {@link ExecutionException} into
-     * runtime exceptions. On both interrupt and timeout the Future is cancelled; additionally,
+     * runtime exceptions. On both interrupt and timeout cancellation is attempted; a cancellation
+     * failure is suppressed on the original wait failure instead of replacing it. Additionally,
      * when an {@link InterruptedException} occurs the thread's interrupted status is restored
-     * before the runtime exception is thrown.
+     * before the runtime exception is thrown. An interruption reported by an
+     * {@link ExecutionException} belongs to the asynchronous operation and does not interrupt
+     * the thread retrieving its result.
+     * SpyMemcached retrieval futures may decode values synchronously after their response wait;
+     * that additional decoding work is outside the timeout bound.
      *
      * <p>This is a utility method used internally to convert asynchronous operations to
      * synchronous ones by blocking on the Future's result.
@@ -2093,7 +2101,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt(); // Restore interrupt status
 
-            future.cancel(true);
+            cancelAfterFailure(future, e);
 
             if (logger.isWarnEnabled()) {
                 logger.warn("Thread was interrupted while waiting for a Memcached operation to complete", e);
@@ -2101,7 +2109,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
 
             throw ExceptionUtil.toRuntimeException(e, true);
         } catch (final TimeoutException e) {
-            future.cancel(true);
+            cancelAfterFailure(future, e);
 
             if (logger.isWarnEnabled()) {
                 logger.warn("Timed out waiting for a Memcached operation to complete", e);
@@ -2109,12 +2117,18 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
 
             throw ExceptionUtil.toRuntimeException(e, true);
         } catch (final ExecutionException e) {
-            final Throwable cause = e.getCause();
-            if (cause != null) {
-                throw ExceptionUtil.toRuntimeException(cause, true);
-            } else {
-                throw ExceptionUtil.toRuntimeException(e, true);
-            }
+            // Preserve the distinction between this thread's InterruptedException above and a
+            // failure raised while executing the asynchronous operation on another thread.
+            throw ExceptionUtil.toRuntimeException(e);
+        }
+    }
+
+    /** Preserves the wait failure if cancellation races with delegate shutdown. */
+    private static void cancelAfterFailure(final Future<?> future, final Exception failure) {
+        try {
+            future.cancel(true);
+        } catch (final RuntimeException cancellationFailure) {
+            failure.addSuppressed(cancellationFailure);
         }
     }
 

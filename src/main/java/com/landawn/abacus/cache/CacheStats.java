@@ -36,9 +36,9 @@ package com.landawn.abacus.cache;
  *
  * <p><b>Statistics categories:</b>
  * <ul>
- *   <li><b>Capacity metrics:</b> {@code capacity()} (maximum cache size) and {@code size()} (current number of entries).</li>
+ *   <li><b>Capacity metrics:</b> {@code capacity()} (adapter-reported policy limit) and {@code size()} (current number of entries).</li>
  *   <li><b>Operation counts:</b> {@code putCount()} (total puts) and {@code getCount()} (total gets).</li>
- *   <li><b>Performance metrics:</b> {@code hitCount()} (successful gets) and {@code missCount()} (failed gets).</li>
+ *   <li><b>Performance metrics:</b> {@code hitCount()} (values found) and {@code missCount()} (values absent, not necessarily failed operations).</li>
  *   <li><b>Eviction metrics:</b> {@code evictionCount()} (total entries removed by eviction).</li>
  *   <li><b>Memory metrics:</b> {@code maxMemory()} (maximum allowed memory) and {@code dataSize()} (current memory usage).</li>
  * </ul>
@@ -80,16 +80,16 @@ package com.landawn.abacus.cache;
  * }
  *
  * // Monitor memory usage
- * if (stats.maxMemory() > 0) {
+ * if (stats.maxMemory() > 0 && stats.dataSize() >= 0) {
  *     double memoryUsagePercent = (double) stats.dataSize() / stats.maxMemory() * 100;
  *     System.out.printf("Memory usage: %d/%d bytes (%.1f%%)%n",
  *         stats.dataSize(), stats.maxMemory(), memoryUsagePercent);
  * }
  *
- * // Check if evictions are occurring (indicates cache pressure)
+ * // Evictions may reflect capacity pressure or ordinary expiration.
  * if (stats.evictionCount() > 0) {
  *     System.out.println("Warning: Cache is experiencing evictions: " + stats.evictionCount());
- *     System.out.println("Consider increasing cache capacity or memory limit");
+ *     System.out.println("Review capacity and expiration settings if the hit rate is too low");
  * }
  *
  * // Note: getCount() normally equals hitCount() + missCount(), and dataSize() normally does not

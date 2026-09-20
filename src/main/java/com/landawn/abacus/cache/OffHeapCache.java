@@ -153,7 +153,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @throws IllegalArgumentException if capacityInMB is not positive
      * @throws OutOfMemoryError if native memory allocation fails
      * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
-     * @throws RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
      * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     OffHeapCache(final int capacityInMB) {
@@ -189,7 +189,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @throws IllegalArgumentException if capacityInMB is not positive
      * @throws OutOfMemoryError if native memory allocation fails
      * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
-     * @throws RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
      * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     OffHeapCache(final int capacityInMB, final long evictDelay) {
@@ -226,7 +226,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @throws IllegalArgumentException if capacityInMB is not positive
      * @throws OutOfMemoryError if native memory allocation fails
      * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
-     * @throws RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
      * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
@@ -261,7 +261,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
      * @param vacatingFactor factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when
      *                       off-heap memory cannot satisfy a put and no disk store absorbs the value; this
-     *                       fraction of the current entries is then evicted (LRU first) to free space. It does
+     *                       fraction of the memory-resident entries is then evicted (LRU first) to free space. It does
      *                       NOT control when vacating starts. Use 0.0 to apply the DEFAULT_VACATING_FACTOR
      *                       (0.2). Typical values range from 0.1 to 0.3.
      * @param serializer custom serializer for converting values to byte streams, or null for default serialization
@@ -286,7 +286,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *                                  range, or if vacatingFactor is outside [0.0, 1.0]
      * @throws OutOfMemoryError if native memory allocation fails
      * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
-     * @throws RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
      * @throws SecurityException if the runtime denies shutdown-hook registration
      */
     OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
@@ -574,7 +574,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * Must be {@code 0} (replaced with the default 8192 by {@link #build()}) or between 1024 and
          * {@code SEGMENT_SIZE} (1,048,576), and is rounded up to the
          * nearest multiple of {@code MIN_BLOCK_SIZE} (64 bytes).
-         * Larger blocks reduce fragmentation but may waste space for small objects.
+         * Larger blocks reduce the number of slots needed for large values; each segment is
+         * dedicated to a single slot size and may have an unused tail when that size does not divide it.
          *
          * <p>Default: 8192 bytes (8KB)
          */
@@ -674,7 +675,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * <li>{@link Long} - I/O elapsed time in milliseconds</li>
          * </ul>
          * Return {@code true} to promote the value from disk to memory.
-         * Treat the supplied live {@link ActivityPrint} as read-only.
+         * Treat the supplied live {@link ActivityPrint} as read-only. A successful promotion preserves
+         * the original TTL deadline, latest access time, idle limit, and access count.
          * Only applies when {@link #offHeapStore} is configured.
          *
          * <p>Default: {@code null} (automatic promotion disabled)
@@ -807,7 +809,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *                                  or if {@code vacatingFactor} is outside [0.0, 1.0]
          * @throws OutOfMemoryError if native memory allocation fails
          * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is registered
-         * @throws RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+         * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
          * @throws SecurityException if the JVM denies shutdown-hook registration
          */
         public OffHeapCache<K, V> build() {
