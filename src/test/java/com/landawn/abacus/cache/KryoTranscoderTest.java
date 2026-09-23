@@ -151,6 +151,22 @@ public class KryoTranscoderTest extends TestBase {
         assertNull(tx.decode(cd));
     }
 
+    /**
+     * Regression test: decoding a memcached counter's ASCII digits (a payload not written by this
+     * transcoder) must fail with the documented {@link com.esotericsoftware.kryo.KryoException}.
+     * Values starting with '6' or '9' previously leaked an {@link InstantiationError} from Kryo's
+     * generated constructor accessor (the digit resolves to the abstract InputStream/OutputStream).
+     */
+    @Test
+    public void testDecode_ForeignCounterPayload_ThrowsKryoExceptionNotError() {
+        final KryoTranscoder<Object> tx = new KryoTranscoder<>();
+
+        for (final String counter : new String[] { "6", "9", "64", "99", "1", "42" }) {
+            final CachedData cd = new CachedData(0, counter.getBytes(java.nio.charset.StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
+            assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> tx.decode(cd), counter);
+        }
+    }
+
     /** The caller-supplied-parser constructors: round-trip through a custom parser, and null rejection. */
     @Test
     public void testConstructor_CustomParser() {

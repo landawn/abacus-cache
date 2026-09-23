@@ -316,8 +316,9 @@ public class LocalCacheTest {
     }
 
     /**
-     * Every data operation documents {@code @throws IllegalStateException} after close; the
-     * behavior lives entirely in the backing pool, so pin it here against dependency changes.
+     * Every data operation documents {@code @throws IllegalStateException} after close. Key-based
+     * operations check the state in LocalCache itself; keySet/size/clear/stats rely on the backing
+     * pool, so pin both paths here against dependency changes.
      */
     @Test
     public void testOperations_AfterClose_ThrowIllegalStateException() {
@@ -333,5 +334,17 @@ public class LocalCacheTest {
         assertThrows(IllegalStateException.class, cache::size);
         assertThrows(IllegalStateException.class, cache::clear);
         assertThrows(IllegalStateException.class, cache::stats);
+    }
+
+    /** The state check runs before argument validation: a closed cache reports ISE even for a null key/value. */
+    @Test
+    public void testKeyOperations_AfterClose_NullArgs_ThrowIllegalStateExceptionFirst() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        cache.close();
+
+        assertThrows(IllegalStateException.class, () -> cache.getOrNull(null));
+        assertThrows(IllegalStateException.class, () -> cache.put(null, null, 1000, 1000));
+        assertThrows(IllegalStateException.class, () -> cache.remove(null));
+        assertThrows(IllegalStateException.class, () -> cache.containsKey(null));
     }
 }

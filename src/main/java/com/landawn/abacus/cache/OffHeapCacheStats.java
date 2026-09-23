@@ -103,8 +103,10 @@ import java.util.Objects;
  *                 (e.g., neither memory nor disk could accept the value) is not counted; internal
  *                 disk-to-memory promotions are not counted either.
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
- *                       when off-heap memory is full and the value is stored to disk via the configured
- *                       {@link OffHeapStore}, or when the {@code storeSelector} explicitly routes the value to disk.
+ *                       when off-heap memory is full, or the value can never fit in off-heap memory, and the
+ *                       value is stored to disk via the configured {@link OffHeapStore}, or when the
+ *                       {@code storeSelector} explicitly routes the value to disk. It is a subset of
+ *                       {@code putCount}.
  * @param getCount the total number of lookups classified as a hit or miss since cache creation.
  *                 Failures before that classification (such as a throwing store read or a corrupt
  *                 payload length) are not counted. Conceptually, {@code getCount = hitCount + missCount};

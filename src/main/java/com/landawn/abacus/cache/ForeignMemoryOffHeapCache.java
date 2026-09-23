@@ -51,7 +51,7 @@ import lombok.experimental.Accessors;
  * <li>Deterministic memory lifetime through a shared {@link Arena}</li>
  * <li>Type-safe memory access via {@link MemorySegment}</li>
  * <li>Comparable steady-state (get/put) performance to an {@code Unsafe}-based implementation;
- *     construction differs - see the startup-cost note on {@code allocate}</li>
+ *     construction differs - see the construction-cost note on {@code allocate}</li>
  * <li>Better compatibility with future Java versions</li>
  * </ul>
  *
@@ -612,8 +612,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
         /**
          * Factor in {@code [0.0, 1.0]} controlling how aggressive a vacate is. Vacate is triggered when
          * off-heap memory cannot satisfy a put and no disk store absorbs the value; this fraction of
-         * the current entries is then evicted (LRU first) to free space. It does NOT control when
-         * vacating starts. Typical values are 0.1-0.3. Higher values free more space per vacate but
+         * the memory-resident entries (at least one) is then evicted (LRU first) to free space. It does
+         * NOT control when vacating starts. A value of {@code 0.0} selects the default (0.2).
+         * Typical values are 0.1-0.3. Higher values free more space per vacate but
          * evict more of the working set at once.
          *
          * <p>Default: 0.2 (20%)
@@ -692,6 +693,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * </ul>
          * The selector is evaluated for every put. Disk routing requires an
          * {@link #offHeapStore}; without one, disk-only puts return {@code false}.
+         * Any other return value, including {@code null}, makes the put throw
+         * {@link IllegalArgumentException}.
          *
          * <p>Default: {@code null} (default routing behavior)
          */

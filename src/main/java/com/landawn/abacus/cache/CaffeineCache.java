@@ -127,7 +127,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Retrieves a value from the cache by its key.
-     * Delegates to Caffeine's {@code getIfPresent}, which does not trigger cache loading.
+     * Delegates to Caffeine's {@code getIfPresent}, which never loads an absent entry. On a
+     * {@code LoadingCache} built with {@code refreshAfterWrite}, however, a hit on an entry that is
+     * due for refresh may still trigger Caffeine's asynchronous reload of that entry.
      * The operation may update the entry's access time depending on the eviction policy
      * configured when the Caffeine cache was built.
      *
@@ -260,7 +262,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * silently without throwing an exception.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
-     * from multiple threads. If it overlaps {@link #close()}, either the removal completes
+     * from multiple threads, although calls to {@code remove} and {@link #clear()} are serialized
+     * with each other on the wrapper's lifecycle lock. If it overlaps {@link #close()}, either the removal completes
      * before close invalidates the delegate or it observes the closed state and throws; it cannot
      * remove a caller-owned delegate mapping after close has returned.
      *

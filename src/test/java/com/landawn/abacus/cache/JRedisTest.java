@@ -146,6 +146,24 @@ public class JRedisTest {
         assertNull(cache.get("empty"));
     }
 
+    /**
+     * Regression test: counter values (raw ASCII digits written by INCR/DECR) are not Kryo payloads.
+     * About one in eight such values (every value starting with '6' or '9') made Kryo's generated
+     * constructor accessor instantiate an abstract class, so {@code get}/{@code getBulk} leaked a
+     * {@link InstantiationError} instead of the documented runtime (Kryo) exception — escaping
+     * {@code catch (Exception)} handlers. Every counter-shaped payload must now fail with a
+     * {@code KryoException}.
+     */
+    @Test
+    public void test_get_counterPayload_failsWithKryoException_notError() {
+        for (final String counter : List.of("6", "9", "64", "99", "9223372036854775807", "1", "-5", "42")) {
+            when(mockJedis.get(utf8("jredis-review:counter"))).thenReturn(counter.getBytes(StandardCharsets.US_ASCII));
+
+            assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.get("jredis-review:counter"), counter);
+            assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.getBulk("jredis-review:counter"), counter);
+        }
+    }
+
     // ---- getBulk: previously JRedis inherited UnsupportedOperationException; now implemented (B1) ----
 
     @Test

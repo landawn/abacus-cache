@@ -173,11 +173,16 @@ interface LegacySpyMemcachedAsyncApi<T> {
  *
  * <p><b>Asynchronous completion:</b> asynchronous methods return after validation, any required
  * serialization, and operation enqueueing; they do not wait for a server response. Enqueueing can
- * still block briefly when the bounded operation queue is full. Calling no-argument {@code get()}
- * on a returned future bounds the wait for server responses by the configured operation timeout.
- * Value decoding runs after that wait and is not bounded by it; synchronous retrieval methods
- * have the same limitation. In particular, this class
- * wraps spymemcached's otherwise effectively-unbounded bulk-get {@code Future#get()} so a written
+ * still block when the bounded operation queue is full, for at most the client's maximum queue
+ * block time (10 seconds with spymemcached's default connection settings). Calling no-argument
+ * {@code get()} on a returned future bounds the wait for server responses by the configured
+ * operation timeout. When that bound expires, a single-operation future (get, store, remove, or
+ * flush) throws spymemcached's unchecked {@code RuntimeException} whose cause is a
+ * {@link TimeoutException}, whereas a bulk-get future cancels the request and throws
+ * {@link ExecutionException} with a {@code TimeoutException} cause (see
+ * {@link #asyncGetBulk(String...)}). Value decoding runs after that wait and is not bounded by
+ * it; synchronous retrieval methods have the same limitation. In particular, this class wraps
+ * spymemcached's otherwise effectively-unbounded bulk-get {@code Future#get()} so a written
  * request to an unresponsive server cannot pin the caller indefinitely.
  *
  * <p><b>Subclassing:</b> the four bulk-get methods ({@link #getBulk(String...)},
@@ -283,7 +288,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *                  or both; must not be {@code null}, empty, or blank
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains
      *         no valid server addresses, or if a host named in {@code serverUrl} cannot be resolved
-     *         (the underlying socket connect throws {@code UnresolvedAddressException}, a subclass)
+     *         (rejected before any client resources are created)
      * @throws UncheckedIOException if local client/socket setup fails. Note: connections are established
      *         asynchronously by the SpyMemcached IO thread — a resolvable but unreachable or down server
      *         does <b>not</b> fail construction; operations against it fail later with timeouts.
@@ -320,8 +325,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *                and fail every operation instantly.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains
      *         no valid server addresses, if {@code timeout} is not positive, or if a host named in
-     *         {@code serverUrl} cannot be resolved (the underlying socket connect throws
-     *         {@code UnresolvedAddressException}, a subclass)
+     *         {@code serverUrl} cannot be resolved (rejected before any client resources are created)
      * @throws UncheckedIOException if local client/socket setup fails. Note: connections are established
      *         asynchronously by the SpyMemcached IO thread — a resolvable but unreachable or down server
      *         does <b>not</b> fail construction; operations against it fail later with timeouts.
@@ -340,6 +344,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         if (N.isEmpty(serverAddresses)) {
             throw new IllegalArgumentException("No valid server addresses found in: " + serverUrl);
         }
+
+        checkResolved(serverUrl, serverAddresses);
 
         N.checkArgPositive(timeout, cs.timeout);
 
@@ -2342,10 +2348,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param connFactory the connection factory configured with timeout and transcoder settings;
      *                    must not be {@code null}
      * @return a configured {@link MemcachedClient} instance
-     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or contains invalid
-     *         addresses, if {@code connFactory} is {@code null}, or if a host named in {@code serverUrl}
-     *         cannot be resolved (the underlying socket connect throws {@code UnresolvedAddressException},
-     *         a subclass)
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, contains invalid
+     *         addresses, or names a host that cannot be resolved (all checked before {@code connFactory}
+     *         and before any client resources are created), or if {@code connFactory} is {@code null}
      * @throws UncheckedIOException if local client/socket setup fails. Connections are established
      *         asynchronously by the SpyMemcached IO thread, so an unreachable or down server does
      *         not cause this method to fail
@@ -2353,11 +2358,32 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory) throws UncheckedIOException {
         // Parsing validates serverUrl (IllegalArgumentException), preserving signature order.
         final List<InetSocketAddress> serverAddresses = AddrUtil.getAddressList(serverUrl);
+        checkResolved(serverUrl, serverAddresses);
         // Reject eagerly with this library's IllegalArgumentException convention instead of
         // spymemcached's NullPointerException("Connection factory required").
         N.checkArgNotNull(connFactory, cs.connFactory);
 
         return createSpyMemcachedClient(serverUrl, serverAddresses, connFactory);
+    }
+
+    /**
+     * Rejects hostnames that could not be resolved while {@code serverUrl} was parsed.
+     * {@link AddrUtil#getAddressList(String)} returns an unresolved {@link InetSocketAddress}
+     * instead of failing. spymemcached would then open its NIO selector and a socket channel for
+     * every address up to and including the unresolved one before the non-blocking connect throws
+     * {@code UnresolvedAddressException}; none of those channels (nor the selector) is closed on
+     * that failure path, so every failed construction would leak file descriptors.
+     *
+     * @param serverUrl the configured server list, used only in the error message
+     * @param serverAddresses the parsed addresses
+     * @throws IllegalArgumentException if any address is unresolved
+     */
+    private static void checkResolved(final String serverUrl, final List<InetSocketAddress> serverAddresses) {
+        for (final InetSocketAddress address : serverAddresses) {
+            if (address.isUnresolved()) {
+                throw new IllegalArgumentException("Cannot resolve host '" + address.getHostString() + "' in: " + serverUrl);
+            }
+        }
     }
 
     private static MemcachedClient createSpyMemcachedClient(final String serverUrl, final List<InetSocketAddress> serverAddresses,

@@ -581,10 +581,11 @@ public class ForeignMemoryOffHeapCacheTest {
     }
 
     /**
-     * When the shared {@link java.lang.foreign.Arena} cannot satisfy the requested allocation, the
-     * arena must be closed and the failure rethrown rather than leaking the arena. A capacity of
-     * {@code Integer.MAX_VALUE} MB (~2 PB) is impossible to allocate, so construction fails inside
-     * {@code allocate()} and exercises the cleanup branch.
+     * A capacity of {@code Integer.MAX_VALUE} MB (~2 PB) is impossible to satisfy, so construction
+     * must fail rather than return a half-built cache. (It currently fails while sizing the
+     * base-class segment table, before {@code allocate()} is reached; the arena-cleanup branch of
+     * {@code allocate()} itself is covered by
+     * {@link #testAllocate_directFailure_rethrowsAndLeavesLiveSegmentUsable()}.)
      */
     @Test
     public void testAllocate_failureClosesArenaAndRethrows() {
@@ -598,6 +599,33 @@ public class ForeignMemoryOffHeapCacheTest {
                 cache.close();
             }
         });
+    }
+
+    /**
+     * Exercises the failure branch of {@code allocate()} directly: {@code Arena.allocate} rejects
+     * an overflowing size with {@link OutOfMemoryError} and a negative size with
+     * {@link IllegalArgumentException}. The failure must propagate unchanged (the fresh arena is
+     * closed, not self-suppressed) and must not disturb the live arena/segment already backing the
+     * cache.
+     */
+    @Test
+    public void testAllocate_directFailure_rethrowsAndLeavesLiveSegmentUsable() {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+
+        try {
+            final byte[] value = { 1, 2, 3 };
+            assertTrue(cache.put("k", value));
+
+            final OutOfMemoryError oom = assertThrows(OutOfMemoryError.class, () -> cache.allocate(Long.MAX_VALUE));
+            assertEquals(0, oom.getSuppressed().length);
+            assertThrows(IllegalArgumentException.class, () -> cache.allocate(-1L));
+
+            assertArrayEquals(value, cache.getOrNull("k"));
+            assertTrue(cache.put("k2", new byte[] { 4, 5 }));
+            assertArrayEquals(new byte[] { 4, 5 }, cache.getOrNull("k2"));
+        } finally {
+            cache.close();
+        }
     }
 
 }

@@ -567,6 +567,28 @@ public class CacheFactoryTest extends TestBase {
         assertTrue(trailingL.getMessage().contains("Invalid timeout parameter"));
     }
 
+    /**
+     * A quoted DSL argument keeps its surrounding whitespace (unquoted ones are stripped by the
+     * parser). The timeout predicate classifies the trimmed token, so the timeout parser must parse
+     * that same trimmed token instead of rejecting a token it had just recognized as a timeout.
+     */
+    @Test
+    public void testCreateCache_QuotedTimeoutWithSurroundingWhitespaceIsParsedLikeThePredicateSeesIt() throws ReflectiveOperationException {
+        final Field timeoutField = SpyMemcached.class.getDeclaredField("operationTimeoutMillis");
+        timeoutField.setAccessible(true);
+
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            for (final String provider : new String[] { "Memcached(localhost:11211,prefix:,\" 5000 \")", "Memcached(localhost:11211,\" 5000\")" }) {
+                final Cache<String, Object> cache = CacheFactory.createCache(provider);
+                try {
+                    assertEquals(5000L, timeoutField.getLong(distributedClient(cache)), provider);
+                } finally {
+                    cache.close();
+                }
+            }
+        }
+    }
+
     // Validation: null/empty provider string
     @Test
     public void testCreateCache_EdgeCase_NullProvider() {

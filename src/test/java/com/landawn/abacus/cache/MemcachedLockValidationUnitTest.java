@@ -38,6 +38,21 @@ public class MemcachedLockValidationUnitTest {
         }
     }
 
+    /**
+     * N.checkArg* treats a long message containing a space as the complete message, so the old
+     * {@code "key returned by toKey"} argument produced an IAE whose whole message was that fragment,
+     * without saying what was wrong with the key.
+     */
+    @Test
+    public void nullKeyFromOverrideReportsACompleteMessage() {
+        try (NullKeyLock lock = new NullKeyLock()) {
+            for (final IllegalArgumentException e : List.of(assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", 1_000L)),
+                    assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly("target")))) {
+                assertEquals("The key returned by toKey must not be null", e.getMessage());
+            }
+        }
+    }
+
     @Test
     public void ordinaryOperationsCheckClosedStateBeforeArguments() {
         final MemcachedLock<String, String> lock = new MemcachedLock<>(SERVER_URL);

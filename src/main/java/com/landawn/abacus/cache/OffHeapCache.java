@@ -65,9 +65,11 @@ import lombok.experimental.Accessors;
  * </ul>
  *
  * <p>Required JVM flag on JDK 24+ (JEP 498) — permits the {@code sun.misc.Unsafe} memory-access
- * methods this cache is built on. Without it, JDK 24+ prints a startup warning, and once the JDK's
- * default becomes {@code deny} in a future release, this class will fail with
- * {@code UnsupportedOperationException} at class load:
+ * methods this cache is built on. Without it, JDK 24+ prints a one-time warning when this class is
+ * initialized (its static initializer is the first {@code Unsafe} memory-access call). Under
+ * {@code --sun-misc-unsafe-memory-access=deny} (selectable today, and the JDK's planned future
+ * default) that call throws {@code UnsupportedOperationException}, so class initialization fails
+ * with an {@link ExceptionInInitializerError} caused by it:
  * <pre>
  * --sun-misc-unsafe-memory-access=allow
  * </pre>
@@ -614,8 +616,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
         /**
          * Factor (0.0-1.0) controlling how aggressive a vacate is. Vacate is triggered when off-heap
-         * memory cannot satisfy a put and no disk store absorbs the value; this fraction of the current
-         * entries is then evicted (LRU first) to free space. It does NOT control when vacating starts.
+         * memory cannot satisfy a put and no disk store absorbs the value; this fraction of the
+         * memory-resident entries (at least one) is then evicted (LRU first) to free space. It does NOT
+         * control when vacating starts. A value of {@code 0.0} selects the default (0.2).
          * Typical values 0.1-0.3. Higher values free more space per vacate but evict more of the
          * working set at once.
          *
@@ -695,6 +698,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * </ul>
          * The selector is evaluated for every put. Disk routing requires an
          * {@link #offHeapStore}; without one, disk-only puts return {@code false}.
+         * Any other return value, including {@code null}, makes the put throw
+         * {@link IllegalArgumentException}.
          *
          * <p>Default: {@code null} (default routing behavior)
          */

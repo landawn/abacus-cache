@@ -543,7 +543,7 @@ public final class CacheFactory {
      * CacheFactory.createCache("Memcached(localhost,p:,0x1F4)");      // "Invalid timeout parameter" (decimal digits only)
      * CacheFactory.createCache("RedisCluster(h1:7000,h2:7000,3000)"); // "Ambiguous RedisCluster parameters" (endpoint-shaped token before the timeout)
      * CacheFactory.createCache("Memcached(a,b,1000,extra)");          // "Unsupported parameters" (more than 3)
-     * CacheFactory.createCache("Memcached(localhost,app:");           // unbalanced parenthesis -> "Failed to parse provider specification"
+     * CacheFactory.createCache("Memcached(localhost,app:");           // unbalanced parenthesis -> "Malformed type attribute: missing closing ')'"
      * CacheFactory.createCache("com.example.NoSuchCache(host)");      // "Cannot find class: com.example.NoSuchCache"
      * CacheFactory.createCache("java.lang.String(host)");             // "Custom cache class must implement Cache"
      * }</pre>
@@ -558,16 +558,16 @@ public final class CacheFactory {
      *         parameter layout or an additional RedisCluster seed node that is not a {@code host:port} endpoint,
      *         specifies a timeout that is not an optional sign followed by decimal digits, does not fit in a
      *         {@code long}, or is not positive, if the client constructor rejects the server URL (no valid
-     *         server address) or the timeout (a Redis/RedisCluster timeout above {@link Integer#MAX_VALUE}), or
-     *         if the key prefix contains a non-printable-ASCII character, a space, or a control character (the
+     *         server address or, for Memcached, a hostname that cannot be resolved) or the timeout (a Redis/RedisCluster
+     *         timeout above {@link Integer#MAX_VALUE}), or if the key prefix contains a non-printable-ASCII character, a space, or a control character (the
      *         already-constructed client is disconnected first); for custom classes, also if the class cannot
      *         be found (checked against this library's classloader, then the thread context classloader), does
      *         not implement {@link Cache}, or declares no constructor matching the specified parameters. A
      *         candidate class is loaded without running its static initializer until after this type check. A
      *         custom cache class with a no-arg constructor may be specified without parameters, e.g.
      *         {@code "com.example.MyCache()"}
-     * @throws RuntimeException if a built-in client cannot be constructed (e.g. an unresolvable Memcached
-     *         hostname, a local client/socket setup failure, or a RedisCluster seed-resolution or initial
+     * @throws RuntimeException if a built-in client cannot be constructed for another reason (e.g. a local
+     *         client/socket setup failure, or a RedisCluster seed-resolution or initial
      *         topology-discovery failure), or if a custom class is found but cannot be instantiated (constructor
      *         invocation fails, security restrictions, etc.)
      * @see #createDistributedCache(DistributedCacheClient)
@@ -586,9 +586,9 @@ public final class CacheFactory {
         } catch (final IllegalArgumentException e) {
             throw e;
         } catch (final RuntimeException e) {
-            // Malformed DSL (e.g. an unbalanced parenthesis) can make the parser throw a low-level
-            // exception such as StringIndexOutOfBoundsException. Surface it as the documented
-            // IllegalArgumentException instead of leaking the parser's internal failure.
+            // The parser reports malformed DSL (e.g. an unbalanced parenthesis) as an
+            // IllegalArgumentException itself. Any other low-level parser failure is surfaced as the
+            // documented IllegalArgumentException instead of leaking the parser's internal exception.
             throw new IllegalArgumentException("Failed to parse provider specification: " + provider, e);
         }
 
@@ -956,7 +956,8 @@ public final class CacheFactory {
      * Parses the optional timeout token from a {@code createCache(String)} provider specification,
      * shared by the Memcached and Redis branches to keep their parsing identical.
      *
-     * @param timeoutValue the raw timeout token (in milliseconds)
+     * @param timeoutValue the raw timeout token (in milliseconds); surrounding whitespace, which only a
+     *                     quoted DSL argument can retain, is ignored exactly as by the disambiguation predicate
      * @return the parsed, strictly-positive timeout
      * @throws IllegalArgumentException if the token is not an optional sign followed by decimal
      *         digits, does not fit in a {@code long}, or is not positive
@@ -974,7 +975,10 @@ public final class CacheFactory {
         final long timeout;
 
         try {
-            timeout = Numbers.toLong(timeoutValue);
+            // looksLikeTimeoutParameter judged the trimmed token, so parse that same token: a quoted
+            // DSL argument keeps its surrounding whitespace (e.g. " 5000"), which Numbers.toLong
+            // would otherwise reject after the predicate had already classified it as a timeout.
+            timeout = Numbers.toLong(timeoutValue.trim());
         } catch (final NumberFormatException | ArithmeticException e) {
             // Numbers.toLong throws ArithmeticException for all-digit tokens that overflow long;
             // it is surfaced as the documented IllegalArgumentException.

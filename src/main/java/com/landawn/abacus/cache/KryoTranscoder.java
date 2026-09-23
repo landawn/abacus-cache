@@ -288,7 +288,10 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * @param o the object to encode and serialize (may be {@code null})
      * @return a {@link CachedData} containing the serialized bytes and metadata; never {@code null}
-     * @throws KryoException if a Kryo serializer cannot encode the object graph, including an unsupported cyclic graph
+     * @throws KryoException if a Kryo serializer cannot encode the object graph, including a cycle
+     *         through object fields (Kryo's field serializer wraps the resulting stack overflow)
+     * @throws StackOverflowError if the object graph contains a cycle made only of collections, maps,
+     *         or arrays (their serializers do not wrap the overflow)
      * @throws IllegalArgumentException if the serialized size exceeds the configured {@code maxSize}
      * @see #decode(CachedData)
      * @see CachedData
@@ -348,7 +351,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @return the deserialized object of type {@code T}, or {@code null} if {@code d} is
      *         {@code null}, its data is empty, or {@code null} was originally encoded
      * @throws KryoException if deserialization fails (e.g., corrupt or truncated data, class not found,
-     *         or incompatible class version)
+     *         incompatible class version, or a payload not written by this transcoder, such as a
+     *         memcached counter's ASCII digits)
      * @see #encode(Object)
      * @see CachedData#getData()
      */
@@ -361,7 +365,33 @@ public class KryoTranscoder<T> implements Transcoder<T> {
         if (data == null || data.length == 0) {
             return null;
         }
-        return kryoParser.decode(data);
+
+        try {
+            return kryoParser.decode(data);
+        } catch (final InstantiationError e) {
+            // Kryo's generated (ReflectASM) constructor accessor executes `new` directly, so a foreign
+            // payload whose leading bytes resolve to an abstract registered class (e.g. the ASCII
+            // digits '6'/'9' of a memcached counter -> InputStream/OutputStream) surfaces as a
+            // LinkageError rather than the documented KryoException.
+            throw KryoDecodeFailure.of(e);
+        }
+    }
+
+    /**
+     * Builds the {@link KryoException} for a decode failure. Kept in a nested class so the only
+     * bytecode reference to the Kryo exception type is resolved lazily, at the moment of such a
+     * failure: a {@code throw new KryoException(...)} in {@link #decode(CachedData)} itself would make
+     * the verifier load the Kryo class when linking this class, replacing the actionable
+     * {@link IllegalStateException} raised when Kryo is absent with a bare {@code NoClassDefFoundError}.
+     */
+    private static final class KryoDecodeFailure {
+        private KryoDecodeFailure() {
+        }
+
+        static RuntimeException of(final InstantiationError e) {
+            return new KryoException("Cannot decode the cached bytes as a Kryo payload (" + e.getMessage()
+                    + "); the entry was not written by a compatible KryoTranscoder (e.g. an incr/decr counter)", e);
+        }
     }
 
     /**

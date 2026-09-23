@@ -47,7 +47,8 @@ import com.landawn.abacus.util.N;
  * <li>Cache-through and cache-aside patterns with loaders/writers</li>
  * <li>Bulk operations for improved performance</li>
  * <li>Atomic operations like putIfAbsent</li>
- * <li>JSR-107 (JCache) compliance</li>
+ * <li>JSR-107 (JCache) compliance (through Ehcache's separate JCache provider; this wrapper itself
+ *     takes a native {@code org.ehcache.Cache}, not a {@code javax.cache.Cache})</li>
  * </ul>
  *
  * <p><b>No {@code stats()} method (by design):</b> unlike {@link LocalCache} and {@link CaffeineCache},
@@ -181,8 +182,11 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *         the operation, not that the value is durably stored: under Ehcache's default (robust)
      *         resilience strategy, an internal store failure ({@code StoreAccessException}) is
      *         routed to the resilience strategy and the call still returns normally, so {@code true}
-     *         can be reported while the mapping was not actually retained. This wrapper cannot
-     *         detect that case; if it matters, configure a custom {@code ResilienceStrategy} on the
+     *         can be reported while the mapping was not actually retained. {@code true} is likewise
+     *         reported when the configured {@code ExpiryPolicy} returns a zero creation/update
+     *         duration, or when a byte-sized heap tier rejects the value as too large; in both cases
+     *         Ehcache discards the new mapping and any previous one. This wrapper cannot detect these
+     *         cases; if a store failure matters, configure a custom {@code ResilienceStrategy} on the
      *         Ehcache instance
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
@@ -412,8 +416,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
         assertNotClosed();
 
         N.checkArgNotNull(entries, cs.entries);
-        N.checkElementNotNull(entries.keySet(), "entries' keys");
-        N.checkElementNotNull(entries.values(), "entries' values");
+        // N.checkElementNotNull treats a string with a space and more than 9 characters as the full
+        // error message (not an argument name), so pass complete messages here.
+        N.checkElementNotNull(entries.keySet(), "null key is found in entries");
+        N.checkElementNotNull(entries.values(), "null value is found in entries");
 
         cacheImpl.putAll(entries);
     }

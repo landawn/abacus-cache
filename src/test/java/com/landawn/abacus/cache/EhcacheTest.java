@@ -350,6 +350,34 @@ public class EhcacheTest {
         }
     }
 
+    /**
+     * Regression test for the garbled putAll validation messages.
+     *
+     * <p>{@code N.checkElementNotNull} treats a message longer than 9 characters that contains a
+     * space as the complete error message. The former arguments {@code "entries' keys"} /
+     * {@code "entries' values"} therefore surfaced verbatim as the whole exception message, which
+     * neither says that a {@code null} was found nor which part of the map was at fault.
+     */
+    @Test
+    public void testPutAll_EdgeCase_NullKeyOrValueMessageIsDescriptive() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+
+            final Map<String, String> nullKeyEntries = new HashMap<>();
+            nullKeyEntries.put(null, "2");
+            final IllegalArgumentException keyError = assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(nullKeyEntries));
+            assertEquals("null key is found in entries", keyError.getMessage());
+
+            final Map<String, String> nullValueEntries = new HashMap<>();
+            nullValueEntries.put("bad", null);
+            final IllegalArgumentException valueError = assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(nullValueEntries));
+            assertEquals("null value is found in entries", valueError.getMessage());
+        } finally {
+            cm.close();
+        }
+    }
+
     @Test
     public void testRemoveAll() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);

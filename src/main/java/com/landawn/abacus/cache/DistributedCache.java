@@ -240,7 +240,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        {@code retryDelay} ms; in that mode the failure counter stays at 0, and the closed-to-open WARN
      *        transition is logged once per transition — that is, on the first failure and on each later failure
      *        that follows a successful read
-     * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative)
+     * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative);
+     *        {@code 0} disables fail-fast entirely, so every read attempts the backend (failures are still counted)
      * @throws IllegalArgumentException if {@code client} is {@code null}, {@code keyPrefix} contains a
      *         non-printable-ASCII character, a space, or a control character, {@code maxFailuresBeforeCircuitOpen}
      *         is negative, or {@code retryDelay} is negative
@@ -289,8 +290,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <ul>
      * <li><b>Closed (Normal):</b> Operations proceed normally. Each failure increments the counter
      *     and updates the last-failure timestamp; each success resets both.</li>
-     * <li><b>Open (Failing Fast):</b> When the recorded failure count is at least {@code maxFailuresBeforeCircuitOpen} AND the time
-     *     since the last failure is less than {@code retryDelay} milliseconds, this method returns
+     * <li><b>Open (Failing Fast):</b> When at least one failure has been recorded, the recorded failure count is at least
+     *     {@code maxFailuresBeforeCircuitOpen}, AND the time since the last failure is less than {@code retryDelay}
+     *     milliseconds (so a {@code retryDelay} of {@code 0} never fails fast), this method returns
      *     {@code null} immediately without attempting cache access. Once the retry window elapses, ALL
      *     subsequent reads attempt the cache again — there is no single-probe restriction, so a
      *     still-unavailable cache may briefly cause a burst of failures before re-opening the circuit.</li>
@@ -354,8 +356,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @return the cached value, or {@code null} if not found, expired, evicted, circuit breaker is open, or on error
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key is null or its string representation is null or contains
-     *         an unpaired UTF-16 surrogate (validated up-front, before the circuit breaker
-     *         check and before {@link #generateKey(Object)}), or if the underlying client rejects the
+     *         an unpaired UTF-16 surrogate (validated locally by the null check and
+     *         {@link #generateKey(Object)} before the circuit breaker is consulted, so these are thrown even
+     *         while the circuit is open), or if the underlying client rejects the
      *         generated cache key (e.g. it exceeds memcached's 250-character key limit after prefixing
      *         and Base64 expansion); such validation errors are rethrown and do not affect the circuit
      *         breaker state
@@ -517,10 +520,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         expansion), or if {@code liveTime} is too large for the underlying client's expiration
      *         encoding (the bundled {@code SpyMemcached} client rejects a {@code liveTime} whose absolute
      *         expiration would exceed epoch second {@code 2^31-1} / January 2038, as well as any
-     *         {@code liveTime} exceeding {@link Integer#MAX_VALUE} seconds / ~68 years; the bundled Redis
-     *         clients pass the millisecond {@code liveTime} directly to Redis; the server may reject
-     *         extreme values that cannot be represented as an absolute expiration)
-     * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
+     *         {@code liveTime} exceeding {@link Integer#MAX_VALUE} seconds / ~68 years)
+     * @throws RuntimeException if a network error or timeout occurs, if the underlying client cannot encode
+     *         {@code value}, or if the server rejects {@code liveTime} (the bundled Redis clients pass the
+     *         millisecond {@code liveTime} directly to Redis, which may reject an extreme value that cannot be
+     *         represented as an absolute expiration); propagated from the underlying cache client
      * @see #generateKey(Object)
      * @see DistributedCacheClient#put(String, Object, long)
      */
@@ -843,8 +847,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * Subsequent calls return immediately without additional work.
      *
      * <p><b>Post-Close Behavior:</b>
-     * Supported stateful operations <em>started</em> after closing (except {@link #isClosed()} and
-     * {@link #close()}) throw {@link IllegalStateException} via {@link #assertNotClosed()}.
+     * Supported stateful operations <em>started</em> after closing (the data operations, which check
+     * {@link #assertNotClosed()}, and the property mutators) throw {@link IllegalStateException};
+     * {@link #isClosed()}, {@link #close()}, and the property read accessors do not.
      * {@link #keySet()} and {@link #size()} always throw {@link UnsupportedOperationException}.
      * An operation already in flight when
      * {@code close()} runs is not excluded: it may complete normally, or surface the underlying client's

@@ -281,8 +281,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <p><b>&#9888;&#65039; Replacement failure:</b> The underlying pool (including the default
      * {@code GenericKeyedObjectPool}) removes and destroys an existing mapping <i>before</i>
      * checking whether its replacement can be stored. If the pool then rejects the new entry
-     * (capacity or memory limit), this method returns {@code false} and the previous mapping is
-     * no longer present. By contrast, if the new entry is rejected up front because it is already
+     * (capacity or memory limit, or the entry expiring by the time the pool re-checks it under its
+     * lock), this method returns {@code false} and the previous mapping is no longer present. By contrast, if the new entry is rejected up front because it is already
      * expired at the pool's initial check (only possible with a millisecond-scale {@code liveTime}),
      * any previous mapping is retained.
      *
@@ -595,7 +595,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Stops the eviction scheduler, clears all entries, and releases the underlying
      * object pool. After closing, the cache cannot be used - subsequent
      * {@code get}/{@code put}/{@code remove}/{@code containsKey} operations throw
-     * {@link IllegalStateException} (raised by the underlying pool).
+     * {@link IllegalStateException} from this cache's own state check (before argument validation),
+     * and {@code keySet}/{@code size}/{@code clear}/{@code stats} throw it from the closed pool.
      *
      * <p>This method is idempotent and thread-safe - multiple calls have no additional
      * effect beyond the first invocation. The method is synchronized to ensure proper

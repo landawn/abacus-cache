@@ -254,7 +254,9 @@ public interface Cache<K, V> {
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null} and the implementation
      *         rejects that {@code null} argument; all built-in implementations reject a {@code null} key,
      *         and all except {@link DistributedCache} (which leaves {@code null} values to its client)
-     *         also reject a {@code null} value
+     *         also reject a {@code null} value. Implementations may also reject a key or {@code liveTime}
+     *         their backend cannot encode (e.g. {@link DistributedCache} with a {@code liveTime} beyond
+     *         the client's expiration range)
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
@@ -430,10 +432,10 @@ public interface Cache<K, V> {
      *
      * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)
      * @param value the value to cache; null-handling is implementation-defined
-     * @param liveTime the time-to-live in milliseconds from insertion; a value {@code <= 0} means "no TTL"
-     *                 and is never rejected by the framework implementations
+     * @param liveTime the requested time-to-live in milliseconds from insertion; where per-entry TTL
+     *                 is supported, a value {@code <= 0} means no per-entry TTL
      * @param maxIdleTime the maximum idle time in milliseconds since last access; a value {@code <= 0} means
-     *                    "no idle timeout" and is never rejected; the parameter may be ignored entirely by distributed caches
+     *                    no idle timeout where supported; this parameter may be ignored by the implementation
      * @return a ContinuableFuture that completes with {@code true} on success, {@code false} otherwise.
      *         The future completes exceptionally if the underlying {@code put} call throws.
      * @see #put(Object, Object, long, long)
@@ -505,7 +507,7 @@ public interface Cache<K, V> {
      * @return a set of cache keys; whether expired entries are included is implementation-defined
      * @throws IllegalStateException if the cache has been closed
      * @throws UnsupportedOperationException if the operation is not supported by this implementation
-     *         (e.g., some distributed cache backends)
+     *         (e.g., {@link DistributedCache}, {@link CaffeineCache}, and {@link Ehcache} always throw it)
      * @see #size()
      * @see #containsKey(Object)
      */
@@ -531,7 +533,7 @@ public interface Cache<K, V> {
      * @return the number of cache entries (may be an estimate depending on implementation)
      * @throws IllegalStateException if the cache has been closed
      * @throws UnsupportedOperationException if the operation is not supported by this implementation
-     *         (e.g., some distributed cache backends)
+     *         (e.g., {@link DistributedCache} and {@link Ehcache} always throw it)
      * @see #keySet()
      * @see #clear()
      */

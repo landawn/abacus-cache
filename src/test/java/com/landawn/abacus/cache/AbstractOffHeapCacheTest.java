@@ -1693,6 +1693,33 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
+     * A value no larger than the capacity in bytes can still be impossible to place: its
+     * slot-rounded chunks need whole segments per size class. In a 2 MB cache with the default
+     * 8192-byte max block, a value of {@code 2 MB - 100} bytes needs 255 full chunks (two whole
+     * 8192-class segments) plus a final 8092-byte chunk in the 8128-byte class, i.e. a third
+     * segment. Such a put is as doomed as an oversized one, so it must neither schedule a vacate
+     * (which would evict unrelated entries without ever making room) nor be promoted from disk.
+     */
+    @Test
+    public void testValueNeedingMoreSegmentsThanCapacityDoesNotVacate() throws Exception {
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(2).evictDelay(0).build();
+        try {
+            assertTrue(cache.put("small", new byte[] { 1 }));
+
+            final byte[] doomed = new byte[2 * 1024 * 1024 - 100];
+            assertFalse(cache.put("doomed", doomed), "the value can never be placed in memory and there is no disk store");
+
+            // Give a (wrongly) scheduled asynchronous vacate pass ample time to run.
+            Thread.sleep(500L);
+
+            assertArrayEquals(new byte[] { 1 }, cache.getOrNull("small"), "a doomed put must not vacate unrelated in-memory entries");
+            assertEquals(0L, cache.stats().evictionCount(), "a doomed put must not schedule a vacate");
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
      * Deterministic regression for the detached-free race: a {@code remove(key)} whose disk
      * cleanup is delayed (its entry monitor is pinned) must not delete the store bytes a
      * concurrent same-key disk put writes. The remove now frees inside the per-key compute, so
@@ -1755,6 +1782,39 @@ public class AbstractOffHeapCacheTest {
         }
     }
 
+    /**
+     * The vacate target must never exceed the candidate count. Computed in {@code float}
+     * arithmetic, {@code (int) (16_777_219 * 1.0f)} is 16_777_220, so a vacate over that many
+     * memory-resident entries with {@code vacatingFactor(1.0f)} indexed past its candidate list
+     * (an {@code IndexOutOfBoundsException} that aborted the pass before segment reclamation).
+     * Populating 2^24 entries is impractical in a unit test, so the target computation is checked
+     * directly.
+     */
+    @Test
+    public void testVacateTargetNeverExceedsCandidateCountForLargeCounts() throws Exception {
+        final int candidateCount = 16_777_219;
+        assertTrue((int) (candidateCount * 1.0f) > candidateCount, "precondition: float arithmetic rounds this count up");
+
+        final Method evictTargetCountOf = AbstractOffHeapCache.class.getDeclaredMethod("evictTargetCountOf", int.class);
+        evictTargetCountOf.setAccessible(true);
+
+        final OffHeapCache<String, byte[]> all = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).vacatingFactor(1.0f).build();
+        try {
+            assertEquals(candidateCount, evictTargetCountOf.invoke(all, candidateCount));
+            assertEquals(1, evictTargetCountOf.invoke(all, 1));
+        } finally {
+            all.close();
+        }
+
+        final OffHeapCache<String, byte[]> fraction = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).vacatingFactor(0.2f).build();
+        try {
+            assertEquals(1, evictTargetCountOf.invoke(fraction, 1), "at least one candidate is always evicted");
+            assertEquals(20, evictTargetCountOf.invoke(fraction, 100));
+        } finally {
+            fraction.close();
+        }
+    }
+
     /** {@code vacatingFactor(1.0f)}: a vacate pass evicts every memory-resident entry. */
     @Test
     public void testVacatingFactorOneEvictsEverything() throws Exception {
@@ -1786,20 +1846,26 @@ public class AbstractOffHeapCacheTest {
         final Map<String, byte[]> backing = new ConcurrentHashMap<>();
 
         final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                .capacityInMB(1)
+                .capacityInMB(2)
                 .maxBlockSizeInBytes(512 * 1024)
                 .evictDelay(0)
                 .offHeapStore(newInMemoryStore(backing))
                 .storeSelector((key, value, size) -> "spill".equals(key) ? 0 : 1)
                 .build();
         try {
-            // One 512 KiB chunk dedicates the only segment; the final one-byte chunk needs a
-            // different size class, so memory placement rolls back and the value spills to disk.
+            // Segment 0 is dedicated to the 128-byte class, so only segment 1 is free.
+            assertTrue(cache.put("filler", new byte[100]));
+
+            // One 512 KiB chunk dedicates the remaining free segment; the final one-byte chunk
+            // needs the 64-byte class, which has no segment and no free segment left, so memory
+            // placement rolls back and the value spills to disk. (The value could fit an empty
+            // two-segment cache, so the memory attempt is genuinely made.)
             assertTrue(cache.put("spill", new byte[512 * 1024 + 1]));
             assertEquals(1L, cache.stats().sizeOnDisk());
 
-            assertTrue(cache.put("small", new byte[] { 7 }), "the rollback must make the sole segment immediately reusable");
+            assertTrue(cache.put("small", new byte[] { 7 }), "the rollback must make the emptied segment immediately reusable");
             assertArrayEquals(new byte[] { 7 }, cache.getOrNull("small"));
+            assertArrayEquals(new byte[100], cache.getOrNull("filler"));
         } finally {
             cache.close();
         }

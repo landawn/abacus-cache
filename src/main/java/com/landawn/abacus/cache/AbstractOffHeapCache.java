@@ -69,8 +69,9 @@ import com.landawn.abacus.util.function.TriPredicate;
  * chunks, each in its own slot (the final, possibly smaller chunk uses the smallest sufficient
  * class). A segment whose slots are all freed is reclaimed &mdash; by the periodic maintenance
  * pass, a vacate pass, or {@link #clear()} &mdash; and can then be re-dedicated to a different
- * slot size. A value whose serialized form exceeds the <i>entire</i> capacity never attempts
- * in-memory placement.
+ * slot size. A value that could not be placed even in an otherwise empty region &mdash; because
+ * its serialized form, or the whole segments its slot-rounded chunks require, exceed the capacity
+ * &mdash; never attempts in-memory placement.
  *
  * <p><b>Concurrency.</b> Four mechanisms, with the lock order map bin &rarr; entry monitor
  * &rarr; allocator lock (no code path acquires them in any other order):
@@ -304,8 +305,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                     rounded up to a multiple of {@link #MIN_BLOCK_SIZE}
      * @param evictDelay the delay in milliseconds between maintenance passes; {@code 0} or a
      *                   negative value disables the periodic pass (lazy expiry still applies)
-     * @param defaultLiveTime the default TTL in milliseconds for entries added without an explicit one
-     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without an explicit one
+     * @param defaultLiveTime the default TTL in milliseconds for entries added without an explicit
+     *                        one; {@code <= 0} means no expiration
+     * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added
+     *                           without an explicit one; {@code <= 0} means no idle limit
      * @param vacatingFactor the fraction of entries evicted by a memory-pressure vacate pass, in
      *                       {@code [0.0, 1.0]}; {@code 0} selects the default (0.2)
      * @param arrayOffset the zero-based heap-array index adjustment supplied to the copy hooks;
@@ -483,7 +486,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Promotion preserves the original TTL and idle deadlines. A read that found live bytes can
      * still return its value if the entry expires while deserialization or promotion is running.
      * An unchecked exception thrown by the {@link OffHeapStore} read (its contract for an
-     * operational read failure) or by a custom deserializer is propagated.
+     * operational read failure), by a custom deserializer, by the promotion predicate, or by the
+     * promotion's native-memory copy is propagated; a failed promotion leaves the disk-backed
+     * entry in place.
      *
      * @param key the key whose associated value is to be returned; must not be {@code null}
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
@@ -605,9 +610,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
-        // A value larger than the entire region can never be placed; skip the doomed (and
-        // allocator-lock-heavy) slot allocation attempt, mirroring doPut's guard.
-        if (diskEntry.activityPrint.isExpired() || diskEntry.size > capacityInBytes) {
+        // A value that can never be placed in the region would make the slot allocation attempt
+        // doomed (and allocator-lock-heavy); skip it, mirroring doPut's guard.
+        if (diskEntry.activityPrint.isExpired() || !canEverFitInMemory(diskEntry.size)) {
             return;
         }
 
@@ -664,10 +669,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * placed in off-heap memory; when memory is unavailable (or the {@code storeSelector} directs
      * it), the value is written to the configured {@link OffHeapStore} instead.
      *
-     * <p>Values whose serialized form exceeds the entire off-heap capacity never attempt the
-     * in-memory placement (no amount of vacating could make them fit) and go straight to the disk
-     * fallback, if any; such a doomed put schedules no vacate pass and leaves the in-memory cache
-     * contents untouched.
+     * <p>Values that could not be placed even in an otherwise empty cache &mdash; because the
+     * serialized form exceeds the entire off-heap capacity, or because its slot-rounded chunks need
+     * more 1 MB segments than the region has &mdash; never attempt the in-memory placement (no
+     * amount of vacating could make them fit) and go straight to the disk fallback, if any; such a
+     * doomed put schedules no vacate pass and leaves the in-memory cache contents untouched.
      *
      * <p><b>Replacement failure:</b> a failed replacement never loses the prior entry. The new
      * entry is installed atomically with the retirement of the old one, and a failed or throwing
@@ -679,6 +685,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * are stored; the buffer's position, limit, and mark are left unchanged. An entry's expiration
      * clock starts only after its serialized bytes have been copied to native memory or, for a
      * disk-routed value, after the store write has completed; map installation follows.
+     *
+     * <p>An unchecked exception thrown by a custom serializer, by the {@code storeSelector}, or by
+     * the {@link OffHeapStore} write is propagated, leaving any prior mapping unchanged.
      *
      * @param key the key; must not be {@code null}
      * @param value the value; must not be {@code null}
@@ -740,9 +749,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             final int selectedStore = selectedStoreOf(key, value, size);
 
-            // A value larger than the entire off-heap region can never fit, no matter how many
-            // entries a vacate pass frees; skip the memory attempt entirely for it.
-            final boolean canBeStoredInMemory = selectedStore != STORE_DISK_ONLY && size <= capacityInBytes;
+            // A value that needs more segments than the entire off-heap region has can never fit,
+            // no matter how many entries a vacate pass frees; skip the memory attempt entirely.
+            final boolean canBeStoredInMemory = selectedStore != STORE_DISK_ONLY && canEverFitInMemory(size);
             final boolean canBeStoredToDisk = selectedStore != STORE_MEMORY_ONLY && offHeapStore != null;
 
             if (canBeStoredInMemory) {
@@ -893,7 +902,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes the cache entry associated with the specified key, if present, releasing its memory
-     * slots or disk bytes.
+     * slots or disk bytes. The mapping is removed even if the {@link OffHeapStore} fails to remove
+     * the disk bytes; such a failure is logged rather than propagated.
      *
      * @param key the key whose mapping is to be removed; must not be {@code null}
      * @throws IllegalStateException if the cache has been closed
@@ -974,7 +984,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes all entries, releasing their memory slots and disk bytes, and reclaims the
-     * now-empty segments for reuse by any slot size.
+     * now-empty segments for reuse by any slot size. As with {@link #remove(Object)}, a failure of
+     * the {@link OffHeapStore} to remove an entry's disk bytes is logged rather than propagated.
+     * Entries put concurrently with this call may survive it.
      *
      * @throws IllegalStateException if the cache has been closed
      */
@@ -1302,12 +1314,22 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         candidates.sort(Map.Entry.comparingByKey());
 
-        final int evictTargetCount = Math.max(1, (int) (candidates.size() * vacatingFactor));
+        final int evictTargetCount = evictTargetCountOf(candidates.size());
 
         for (int i = 0; i < evictTargetCount; i++) {
             final Map.Entry<K, Entry<V>> victim = candidates.get(i).getValue();
             removeIfCurrent(victim.getKey(), victim.getValue(), FreeCause.EVICTED);
         }
+    }
+
+    /**
+     * The number of the given (positive) candidate count a vacate pass evicts: at least one, at
+     * most all. The product is computed in {@code double}: in {@code float} arithmetic a count
+     * above 2^24 can round UP (e.g. {@code (int) (16_777_219 * 1.0f) == 16_777_220}), which would
+     * index past the candidate list.
+     */
+    private int evictTargetCountOf(final int candidateCount) {
+        return Math.min(candidateCount, Math.max(1, (int) (candidateCount * (double) vacatingFactor)));
     }
 
     // -------------------------------------------------------------------------------- allocator
@@ -1485,6 +1507,30 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     }
 
     // ------------------------------------------------------------------------- copy and helpers
+
+    /**
+     * Whether a value of the given serialized size could be placed in the region in any allocator
+     * state. Comparing the raw size with the capacity is not enough: every chunk occupies a slot
+     * rounded up to its size class, each class needs whole segments of its own, and the final
+     * partial chunk usually belongs to a different class than the full {@code maxBlockSize}
+     * chunks. The value therefore needs at least
+     * {@code ceil(maxBlockSizeSlots / slotsPerSegment)} segments for its {@code maxBlockSize}
+     * slots, plus one more segment when the final chunk uses a smaller class; if that exceeds the
+     * segment count, placement is impossible even in an empty cache.
+     */
+    private boolean canEverFitInMemory(final int size) {
+        if (size > capacityInBytes) {
+            return false;
+        }
+
+        final int chunkCount = chunkCountOf(size);
+        final boolean finalChunkUsesMaxClass = slotSizeOfChunk(size, chunkCount - 1) == maxBlockSize;
+        final long maxClassSlots = finalChunkUsesMaxClass ? chunkCount : chunkCount - 1L;
+        final int slotsPerSegment = SEGMENT_SIZE / maxBlockSize;
+        final long segmentsNeeded = (maxClassSlots + slotsPerSegment - 1) / slotsPerSegment + (finalChunkUsesMaxClass ? 0 : 1);
+
+        return segmentsNeeded <= segments.length;
+    }
 
     /** The number of slots a value of the given serialized size occupies. */
     private int chunkCountOf(final int size) {

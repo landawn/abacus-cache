@@ -136,10 +136,10 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * @param serverUrl one or more {@code host:port} addresses separated by commas, whitespace,
      *                  or both; must not be {@code null}, empty, or blank
-     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank, or
-     *         contains no valid {@code host:port} addresses
-     * @throws RuntimeException if {@code serverUrl} cannot be parsed (e.g., an unresolvable hostname)
-     *         or local client/socket setup fails. Because connections are established asynchronously
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank, contains
+     *         no valid {@code host:port} addresses (e.g., a missing or out-of-range port), or names a host
+     *         that cannot be resolved (rejected before any client connection resources are created)
+     * @throws RuntimeException if local client/socket setup fails. Because connections are established asynchronously
      *         by the underlying SpyMemcached IO thread, a resolvable but unreachable or down server
      *         does <b>not</b> fail construction; operations against it fail later with timeouts.
      */
@@ -291,8 +291,11 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         is rejected by the memcached client — empty, longer than 250 bytes (UTF-8), or containing a
      *         space, CR, LF, or NUL byte (the default {@code toKey} uses the target's string form verbatim,
      *         so composite targets whose string representation is JSON-like (maps, beans) typically need a
-     *         sanitizing {@code toKey} override); or if {@code liveTime} is not positive or cannot be
-     *         represented by Memcached's expiration field
+     *         sanitizing {@code toKey} override); if {@code liveTime} is not positive or cannot be
+     *         represented by Memcached's expiration field; or if the client's transcoder rejects
+     *         {@code value} before anything is sent (for example, spymemcached's default transcoder
+     *         rejects a non-{@code Serializable} value, and either transcoder rejects an encoded form
+     *         larger than its maximum size), in which case no lock was acquired
      * @throws RuntimeException if the Memcached operation fails. The lock state is then
      *         indeterminate: the {@code add} command may have reached the server even though its
      *         response was lost or timed out, in which case the lock IS held server-side (under this
@@ -684,8 +687,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @return {@code true} if the lock was successfully acquired, {@code false} if it is already held
      * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if {@code target} is {@code null}, if the key derived from {@code target}
-     *         (via {@code toKey}) is invalid as described by {@link #tryLock(Object, Object, long)}, or if {@code liveTime}
-     *         is not positive or cannot be represented by Memcached's expiration field
+     *         (via {@code toKey}) is invalid as described by {@link #tryLock(Object, Object, long)}, if {@code liveTime}
+     *         is not positive or cannot be represented by Memcached's expiration field, or if the client's
+     *         transcoder rejects {@code value}
      * @throws RuntimeException if the Memcached operation fails; the lock state is then indeterminate,
      *         as described by {@link #tryLock(Object, Object, long)}
      * @deprecated renamed to {@link #tryLock(Object, Object, long)} to reflect its single-attempt
@@ -820,7 +824,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         space, CR, LF, or NUL byte)
      */
     private String validatedKey(final K target) {
-        final String key = N.checkArgNotNull(toKey(target), "key returned by toKey");
+        // N.checkArg* treats a message longer than 9 characters that contains a space as the complete
+        // error message (not an argument name), so the message must be a full sentence.
+        final String key = N.checkArgNotNull(toKey(target), "The key returned by toKey must not be null");
         if (!StandardCharsets.UTF_8.newEncoder().canEncode(key)) {
             throw new IllegalArgumentException("The key returned by toKey contains an unpaired UTF-16 surrogate");
         }

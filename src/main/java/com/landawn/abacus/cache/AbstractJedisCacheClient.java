@@ -56,6 +56,10 @@ import redis.clients.jedis.params.SetParams;
  * <p><b>Serialization:</b> values are encoded with a shared {@link KryoParser}. {@code null} values
  * are stored as an empty byte array and decode back to {@code null}. Keys are encoded as UTF-8;
  * unpaired UTF-16 surrogates are rejected to prevent distinct strings from encoding to the same key.
+ * The parser does not track object references, so shared references are duplicated in the payload
+ * and a value whose object graph contains a cycle cannot be stored: {@code put} fails with a
+ * {@code KryoException} (a cycle through object fields) or a bare {@link StackOverflowError} (a cycle
+ * made only of collections, maps, or arrays).
  *
  * <p><b>Redis-Specific Behaviors</b> (common to both subclasses):
  * <ul>
@@ -390,6 +394,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
      * @throws RuntimeException if serialization of {@code value} fails, a network error or timeout occurs,
      *         or Redis rejects {@code liveTime} as an out-of-range expiration
+     * @throws StackOverflowError if {@code value}'s object graph contains a cycle made only of
+     *         collections, maps, or arrays (see the class documentation)
      * @see #get(String)
      * @see #remove(String)
      */
@@ -717,9 +723,17 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * <p><b>Thread Safety:</b> Thread-safe; the {@link KryoParser} instance is shared and safe for concurrent use.
      *
+     * <p>A payload that is not Kryo data (for example, the ASCII digits of a counter written by
+     * {@code incr}/{@code decr}) fails with a {@code KryoException}. When the payload's leading bytes
+     * resolve to an abstract registered class (the digits {@code '6'} and {@code '9'} map to
+     * {@code InputStream}/{@code OutputStream}), Kryo's generated constructor accessor raises an
+     * {@link InstantiationError} instead; that error is converted to a {@code KryoException} so a
+     * foreign payload does not escape as an {@link Error}.
+     *
      * @param bytes the byte array to decode. May be {@code null} or empty.
      * @return the deserialized object, or {@code null} if the byte array is {@code null} or empty
-     * @throws RuntimeException if deserialization fails
+     * @throws RuntimeException if deserialization fails (a {@code KryoException} for invalid or
+     *         incompatible payloads)
      * @see #encode(Object)
      */
     protected T decode(final byte[] bytes) {
@@ -727,6 +741,27 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
             return null;
         }
 
-        return KRYO_PARSER.decode(bytes);
+        try {
+            return KRYO_PARSER.decode(bytes);
+        } catch (final InstantiationError e) {
+            throw KryoDecodeFailure.of(e);
+        }
+    }
+
+    /**
+     * Builds the {@code KryoException} for a decode failure. Kept in a nested class so the only
+     * bytecode reference to the Kryo exception type is resolved lazily, at the moment of such a
+     * failure: a {@code throw new KryoException(...)} in {@link #decode(byte[])} itself would make
+     * the verifier load the Kryo class when linking this class, replacing the actionable
+     * {@link IllegalStateException} raised when Kryo is absent with a bare {@code NoClassDefFoundError}.
+     */
+    private static final class KryoDecodeFailure {
+        private KryoDecodeFailure() {
+        }
+
+        static RuntimeException of(final InstantiationError e) {
+            return new com.esotericsoftware.kryo.KryoException("Cannot decode the cached bytes as a Kryo payload (" + e.getMessage()
+                    + "); the entry was not written by this client's Kryo encoding (e.g. an incr/decr counter)", e);
+        }
     }
 }

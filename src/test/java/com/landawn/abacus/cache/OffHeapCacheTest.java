@@ -1205,4 +1205,22 @@ public class OffHeapCacheTest {
         }
     }
 
+    /**
+     * Documented {@code allocate} contract: {@code Unsafe.allocateMemory} rejects a negative size
+     * with {@link IllegalArgumentException}, and the rejected call leaves the live cache untouched.
+     */
+    @Test
+    public void testAllocate_negativeSize_throwsIllegalArgumentException() {
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+
+        try {
+            final byte[] value = { 1, 2, 3 };
+            assertTrue(cache.put("k", value));
+            assertThrows(IllegalArgumentException.class, () -> cache.allocate(-1L));
+            assertArrayEquals(value, cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
 }

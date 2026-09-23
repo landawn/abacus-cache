@@ -5,14 +5,18 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.nio.channels.UnresolvedAddressException;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -25,6 +29,7 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import net.spy.memcached.DefaultConnectionFactory;
 import net.spy.memcached.MemcachedClient;
 import net.spy.memcached.internal.GetFuture;
 
@@ -190,6 +195,25 @@ public class SpyMemcachedFutureUnitTest {
         assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient("localhost:11211", null));
         // serverUrl is validated first (signature order), also with IllegalArgumentException.
         assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient(null, null));
+    }
+
+    /**
+     * An unresolvable host used to reach spymemcached, which opened its NIO selector and a socket
+     * channel per address before the connect to the unresolved address threw
+     * {@code UnresolvedAddressException}, leaking all of them. It must now be rejected before the
+     * connection factory is asked to create any connection.
+     */
+    @Test
+    public void unresolvableHostIsRejectedBeforeConnectionResourcesAreCreated() throws Exception {
+        final DefaultConnectionFactory factory = spy(new DefaultConnectionFactory());
+        final String serverUrl = "localhost:11211,spymemcached-unit-test-host.invalid:11211";
+
+        final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> SpyMemcached.createSpyMemcachedClient(serverUrl, factory));
+
+        assertFalse(error instanceof UnresolvedAddressException, "rejected by the wrapper, not by a failed socket connect");
+        verify(factory, never()).createConnection(anyList());
+        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>(serverUrl, 1_000L));
     }
 
     @Test
