@@ -126,6 +126,51 @@ public class DistributedCacheCircuitBreakerUnitTest {
         }
     }
 
+    @Test
+    public void nullArgumentsAreRejectedWithIaeWithoutTouchingClientOrBreaker() throws Exception {
+        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<String, String>(null));
+        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<String, String>(null, "p:"));
+        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<String, String>(null, "p:", 1, 1_000L));
+
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "p:", 1, 60_000L);
+
+        try {
+            final Object initialState = breakerState(cache);
+
+            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+            assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
+            assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 1_000L, 0L));
+            assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+            assertThrows(IllegalArgumentException.class, () -> cache.generateKey(null));
+
+            assertSame(initialState, breakerState(cache));
+            verifyNoInteractions(client);
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void nullKeyPrefixMeansNoPrefixAndNullValueIsForwardedToClient() {
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, null);
+
+        try {
+            final String encoded = Base64.getEncoder().encodeToString("k".getBytes(StandardCharsets.UTF_8));
+            assertEquals(encoded, cache.generateKey("k"));
+
+            // The null policy for values belongs to the pluggable client; the wrapper forwards null as-is.
+            when(client.put(encoded, null, 1_000L)).thenReturn(true);
+            assertTrue(cache.put("k", null, 1_000L, 0L));
+            verify(client).put(encoded, null, 1_000L);
+        } finally {
+            cache.close();
+        }
+    }
+
     private static Object breakerState(final DistributedCache<?, ?> cache) throws Exception {
         final Field field = DistributedCache.class.getDeclaredField("circuitBreaker");
         field.setAccessible(true);

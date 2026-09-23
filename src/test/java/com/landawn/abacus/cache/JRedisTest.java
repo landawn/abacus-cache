@@ -197,6 +197,26 @@ public class JRedisTest {
     }
 
     @Test
+    public void test_nullKeyIsRejectedWithIllegalArgumentExceptionBeforeAnyCommand() {
+        assertThrows(IllegalArgumentException.class, () -> cache.get(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 0));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 60000));
+        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
+
+        Mockito.verifyNoInteractions(mockJedis);
+    }
+
+    @Test
+    public void test_constructor_rejects_null_server_url() {
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>((String) null));
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>((String) null, 1000L));
+    }
+
+    @Test
     public void test_getBulk_rejects_null_keys() {
         assertThrows(IllegalArgumentException.class, () -> cache.getBulk((String[]) null));
         assertThrows(IllegalArgumentException.class, () -> cache.getBulk((List<String>) null));

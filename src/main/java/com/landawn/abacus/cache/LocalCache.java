@@ -188,8 +188,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * @param defaultLiveTime the default time-to-live in milliseconds for entries (0 or negative for no TTL expiration)
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries (0 or negative for no idle timeout)
-     * @param pool the pre-configured KeyedObjectPool to use for storage (must not be null)
-     * @throws IllegalArgumentException if pool is null
+     * @param pool the pre-configured KeyedObjectPool to use for storage (must not be {@code null})
+     * @throws IllegalArgumentException if {@code pool} is {@code null}
      */
     public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableAdapter<V>> pool) {
         super(defaultLiveTime, defaultMaxIdleTime);

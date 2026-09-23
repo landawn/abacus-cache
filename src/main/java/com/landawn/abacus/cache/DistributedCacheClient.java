@@ -261,7 +261,10 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @param value the value to cache, may be {@code null} (if supported by the implementation)
+     * @param value the value to cache; may be {@code null} if supported by the implementation. Support for
+     *              {@code null} values is implementation-defined: the bundled Redis clients store it as an
+     *              empty payload, whereas a Memcached client using spymemcached's stock
+     *              {@code SerializingTranscoder} fails while encoding it (consult the implementation)
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative for no expiration)
      * @return {@code true} if the operation was successful, {@code false} otherwise
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
@@ -270,7 +273,8 @@ public interface DistributedCacheClient<T> {
      *         for the implementation's expiration representation (see above)
      * @throws UnsupportedOperationException if the concrete client supplies neither a
      *         non-recursive {@code put} nor a non-recursive {@code set} implementation
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if {@code value} cannot be encoded by the implementation (including a
+     *         {@code null} value it does not support), or if a network error or timeout occurs
      */
     @SuppressWarnings("deprecation")
     default boolean put(final String key, final T value, final long liveTime) {
@@ -303,7 +307,8 @@ public interface DistributedCacheClient<T> {
      * also fails fast, so an overriding {@code put} must not call back into {@code this.set(...)}.
      *
      * @param key the cache key, must not be {@code null}
-     * @param value the value to cache, may be {@code null} if supported by the implementation
+     * @param value the value to cache; may be {@code null} if supported by the implementation (see
+     *              {@link #put(String, Object, long)})
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative for no expiration)
      * @return {@code true} if the operation was successful, {@code false} otherwise
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
@@ -312,7 +317,8 @@ public interface DistributedCacheClient<T> {
      *         for the implementation's expiration representation (see {@link #put(String, Object, long)})
      * @throws UnsupportedOperationException if the concrete client supplies neither a
      *         non-recursive {@code put} nor a non-recursive {@code set} implementation
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if {@code value} cannot be encoded by the implementation (including a
+     *         {@code null} value it does not support), or if a network error or timeout occurs
      * @deprecated Use {@link #put(String, Object, long)}. Retained for source and binary
      *             compatibility with clients compiled against version 2.8.4 and earlier.
      */

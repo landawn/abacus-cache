@@ -328,6 +328,29 @@ public class JRedisClusterTest {
         assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("   "));
     }
 
+    @Test
+    public void test_constructor_rejects_null_server_url() {
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null));
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null, mock(RedisClusterClient.class)));
+    }
+
+    @Test
+    public void test_nullKeyIsRejectedWithIllegalArgumentExceptionBeforeAnyCommand() {
+        assertThrows(IllegalArgumentException.class, () -> cache.get(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 0));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 60000));
+        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((String[]) null));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((List<String>) null));
+
+        org.mockito.Mockito.verifyNoInteractions(mockCluster);
+    }
+
     private static byte[] utf8(final String s) {
         return s.getBytes(StandardCharsets.UTF_8);
     }

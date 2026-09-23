@@ -1,8 +1,10 @@
 package com.landawn.abacus.cache;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -15,6 +17,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import com.landawn.abacus.util.MemcachedLock;
 
@@ -83,6 +86,49 @@ public class MemcachedLockValidationUnitTest {
         when(delegate.add(key, "holder", 1_000L)).thenReturn(true);
         assertTrue(lock.tryLock(key, "holder", 1_000L));
         verify(delegate).add(key, "holder", 1_000L);
+    }
+
+    @Test
+    public void nullOrBlankServerUrlIsRejectedWithIae() {
+        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>(null));
+        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>(""));
+        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>("   "));
+    }
+
+    @Test
+    @SuppressWarnings({ "unchecked", "removal" })
+    public void nullTargetIsRejectedWithIaeBeforeAnyNetworkOperation() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
+
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock(null, 1_000L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock(null, "holder", 1_000L));
+        assertThrows(IllegalArgumentException.class, () -> lock.isLocked(null));
+        assertThrows(IllegalArgumentException.class, () -> lock.get(null));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryUnlock(null));
+        assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly(null));
+        assertThrows(IllegalArgumentException.class, () -> lock.lock(null, 1_000L));
+        assertThrows(IllegalArgumentException.class, () -> lock.lock(null, "holder", 1_000L));
+        assertThrows(IllegalArgumentException.class, () -> lock.unlock(null));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryUnlockQuietly(null));
+        verifyNoInteractions(delegate);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void nullValueIsStoredAsTheValueLessMarker() throws Exception {
+        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
+        final MemcachedLock<String, Object> lock = mock(MemcachedLock.class, CALLS_REAL_METHODS);
+        final Field clientField = MemcachedLock.class.getDeclaredField("mc");
+        clientField.setAccessible(true);
+        clientField.set(lock, delegate);
+
+        final ArgumentCaptor<Object> stored = ArgumentCaptor.forClass(Object.class);
+        when(delegate.add(eq("target"), stored.capture(), eq(1_000L))).thenReturn(true);
+
+        assertTrue(lock.tryLock("target", null, 1_000L));
+        assertTrue(stored.getValue() instanceof byte[]);
+        assertEquals(0, ((byte[]) stored.getValue()).length);
     }
 
     @SuppressWarnings("unchecked")

@@ -30,6 +30,8 @@ public final class cs { // NOSONAR
     public static final String client = "client";
     /** Parameter name {@code "cluster"}. */
     public static final String cluster = "cluster";
+    /** Parameter name {@code "connFactory"}. */
+    public static final String connFactory = "connFactory";
     /** Parameter name {@code "defaultValue"}. */
     public static final String defaultValue = "defaultValue";
     /** Parameter name {@code "delta"}. */

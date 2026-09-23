@@ -183,6 +183,21 @@ public class SpyMemcachedFutureUnitTest {
         verify(delegate).asyncGet(key);
     }
 
+    @Test
+    public void createSpyMemcachedClientRejectsNullConnectionFactoryWithIae() {
+        // Rejected before any MemcachedClient (and its IO thread) is created; previously
+        // spymemcached threw NullPointerException("Connection factory required").
+        assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient("localhost:11211", null));
+        // serverUrl is validated first (signature order), also with IllegalArgumentException.
+        assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient(null, null));
+    }
+
+    @Test
+    public void resultOfRejectsNullFutureWithIae() throws Exception {
+        final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));
+        assertThrows(IllegalArgumentException.class, () -> cache.resultOf(null));
+    }
+
     @SuppressWarnings("unchecked")
     private static SpyMemcached<Object> clientWithDelegate(final MemcachedClient delegate) throws Exception {
         final SpyMemcached<Object> cache = mock(SpyMemcached.class, CALLS_REAL_METHODS);

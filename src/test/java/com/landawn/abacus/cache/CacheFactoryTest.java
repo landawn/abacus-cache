@@ -106,6 +106,31 @@ public class CacheFactoryTest extends TestBase {
         assertThrows(IllegalArgumentException.class, () -> CacheFactory.createLocalCache((KeyedObjectPool<String, PoolableAdapter<String>>) null, 0L, 0L));
     }
 
+    /** Every createDistributedCache overload rejects a null client eagerly with IllegalArgumentException. */
+    @Test
+    public void testCreateDistributedCache_EdgeCase_NullClientRejected() {
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createDistributedCache((DistributedCacheClient<Object>) null));
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createDistributedCache((DistributedCacheClient<Object>) null, "p:"));
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createDistributedCache((DistributedCacheClient<Object>) null, null));
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createDistributedCache((DistributedCacheClient<Object>) null, "p:", 50, 2000));
+    }
+
+    /** A null key prefix means "no prefix" (null-as-default), identical to an empty prefix. */
+    @Test
+    public void testCreateDistributedCache_NullKeyPrefixMeansNoPrefix() {
+        try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+            final DistributedCache<String, Object> nullPrefix = CacheFactory.createDistributedCache(new SpyMemcached<>("localhost:11211"), null);
+            final DistributedCache<String, Object> emptyPrefix = CacheFactory.createDistributedCache(new SpyMemcached<>("localhost:11211"), "", 50, 2000);
+
+            try {
+                assertEquals(emptyPrefix.generateKey("k"), nullPrefix.generateKey("k"));
+            } finally {
+                nullPrefix.close();
+                emptyPrefix.close();
+            }
+        }
+    }
+
     // createDistributedCache one-arg overload
     @Test
     public void testCreateDistributedCache_OneArg() {
@@ -689,6 +714,12 @@ public class CacheFactoryTest extends TestBase {
         } finally {
             cache.close();
         }
+    }
+
+    /** createCaffeineCache forwards to the CaffeineCache wrapper constructor, which rejects a null delegate. */
+    @Test
+    public void testCreateCaffeineCache_EdgeCase_NullRejected() {
+        assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCaffeineCache(null));
     }
 
     /** Factory smoke test: the createCaffeineCache delegation wraps the supplied Caffeine cache. */

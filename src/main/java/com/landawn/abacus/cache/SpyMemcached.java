@@ -2333,21 +2333,31 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * <pre>{@code
      * ConnectionFactory factory = new DefaultConnectionFactory();
      * MemcachedClient client = createSpyMemcachedClient("localhost:11211", factory);
+     *
+     * createSpyMemcachedClient("localhost:11211", null); // throws IllegalArgumentException (connFactory must not be null)
      * }</pre>
      *
      * @param serverUrl one or more {@code host:port} addresses separated by commas, whitespace,
-     *                  or both
-     * @param connFactory the connection factory configured with timeout and transcoder settings
+     *                  or both; must not be {@code null} or empty
+     * @param connFactory the connection factory configured with timeout and transcoder settings;
+     *                    must not be {@code null}
      * @return a configured {@link MemcachedClient} instance
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or contains invalid
-     *         addresses, or if a host named in {@code serverUrl} cannot be resolved (the underlying socket
-     *         connect throws {@code UnresolvedAddressException}, a subclass)
+     *         addresses, if {@code connFactory} is {@code null}, or if a host named in {@code serverUrl}
+     *         cannot be resolved (the underlying socket connect throws {@code UnresolvedAddressException},
+     *         a subclass)
      * @throws UncheckedIOException if local client/socket setup fails. Connections are established
      *         asynchronously by the SpyMemcached IO thread, so an unreachable or down server does
      *         not cause this method to fail
      */
     protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory) throws UncheckedIOException {
-        return createSpyMemcachedClient(serverUrl, AddrUtil.getAddressList(serverUrl), connFactory);
+        // Parsing validates serverUrl (IllegalArgumentException), preserving signature order.
+        final List<InetSocketAddress> serverAddresses = AddrUtil.getAddressList(serverUrl);
+        // Reject eagerly with this library's IllegalArgumentException convention instead of
+        // spymemcached's NullPointerException("Connection factory required").
+        N.checkArgNotNull(connFactory, cs.connFactory);
+
+        return createSpyMemcachedClient(serverUrl, serverAddresses, connFactory);
     }
 
     private static MemcachedClient createSpyMemcachedClient(final String serverUrl, final List<InetSocketAddress> serverAddresses,

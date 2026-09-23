@@ -251,6 +251,51 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
+     * A {@code null} logger is rejected eagerly with {@link IllegalArgumentException} before any
+     * native memory is allocated, while {@code null} serializer, deserializer, store, promotion
+     * tester, and store selector remain accepted as "use the default / feature disabled".
+     */
+    @Test
+    public void testConstructorRejectsNullLoggerBeforeAllocationButAcceptsNullOptionalCallbacks() {
+        final AtomicBoolean allocated = new AtomicBoolean();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new AbstractOffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L,
+                        AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, 0, null, null, null, false, null, null, null) {
+                    @Override
+                    protected long allocate(final long capacityInBytes) {
+                        allocated.set(true);
+                        return 0L;
+                    }
+
+                    @Override
+                    protected void deallocate() {
+                    }
+
+                    @Override
+                    protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
+                    }
+
+                    @Override
+                    protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+                    }
+                });
+
+        assertFalse(allocated.get(), "validation must fail before native memory is allocated");
+
+        final GuardedOffHeapCache cache = new GuardedOffHeapCache();
+        try {
+            assertNotNull(cache.serializer);
+            assertNotNull(cache.deserializer);
+            assertNull(cache.offHeapStore);
+            assertNull(cache.testerForLoadingItemFromDiskToMemory);
+            assertNull(cache.storeSelector);
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
      * A failure raised before the per-key atomic replacement begins (here: an exceptional
      * {@code hashCode} thrown by the map lookup itself) must fail the put BEFORE the key-only
      * backing store is mutated; the prior memory entry must survive and the store must remain

@@ -118,8 +118,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * new CaffeineCache<String, User>((Cache<String, User>) null);   // throws IllegalArgumentException (null cache)
      * }</pre>
      *
-     * @param cache the underlying Caffeine cache instance to wrap
-     * @throws IllegalArgumentException if cache is null
+     * @param cache the underlying Caffeine cache instance to wrap (must not be {@code null})
+     * @throws IllegalArgumentException if {@code cache} is {@code null}
      */
     public CaffeineCache(final Cache<K, V> cache) {
         cacheImpl = N.checkArgNotNull(cache, cs.cache);
@@ -152,7 +152,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key whose associated value is to be returned (must not be {@code null})
      * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if key is null
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public V getOrNull(final K key) {
@@ -278,7 +278,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key whose mapping is to be removed from the cache (must not be {@code null})
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if key is null
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public void remove(final K key) {
@@ -326,7 +326,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @return {@code true} if the underlying {@code asMap()} view holds a live (non-expired)
      *         mapping for the key; {@code false} otherwise
      * @throws IllegalStateException if the cache has been closed
-     * @throws IllegalArgumentException if key is null
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public boolean containsKey(final K key) {

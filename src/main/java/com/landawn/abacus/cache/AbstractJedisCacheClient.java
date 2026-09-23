@@ -145,9 +145,11 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * Parses a constructor server URL into socket addresses, shared by both concrete constructors
      * so their validation stays identical.
      *
-     * @param serverUrl the server URL(s) in {@code host1:port1,host2:port2,...} format
+     * @param serverUrl the server URL(s) in {@code host1:port1,host2:port2,...} format; must not be
+     *                  {@code null} or empty
      * @return the parsed addresses; never empty
-     * @throws IllegalArgumentException if {@code serverUrl} is malformed or yields no addresses
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, malformed, or yields
+     *         no addresses
      */
     protected static List<InetSocketAddress> resolveServerAddresses(final String serverUrl) {
         final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
