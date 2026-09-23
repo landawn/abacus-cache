@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -321,13 +322,19 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param storeSelector optional per-put routing function returning 0 (memory, disk fallback),
      *                      1 (memory only), or 2 (disk only)
      * @param logger the concrete subclass logger
-     * @throws IllegalArgumentException if a numeric argument is out of range or a required argument is {@code null}
+     * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if {@code maxBlockSize}
+     *                                  is outside {@code [1024, SEGMENT_SIZE]}, if {@code vacatingFactor}
+     *                                  is outside {@code [0.0, 1.0]} (or is NaN), or if {@code logger}
+     *                                  is {@code null}
      * @throws OutOfMemoryError if the native allocation cannot be reserved
-     * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is registered
-     * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive
-     *                           and the maintenance scheduler rejects its task (all cache-owned
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance
+     *                                    scheduler rejects its task (all cache-owned resources are
+     *                                    released before this propagates)
+     * @throws SecurityException if runtime policy denies shutdown-hook registration (all cache-owned
      *                           resources are released before this propagates)
+     * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is
+     *                               registered (all cache-owned resources are released before this
+     *                               propagates)
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
     protected AbstractOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime,
@@ -337,11 +344,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final Logger logger) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
-        N.checkArgPositive(capacityInMB, "capacityInMB");
+        N.checkArgPositive(capacityInMB, cs.capacityInMB);
         N.checkArgument(maxBlockSize >= 1024 && maxBlockSize <= SEGMENT_SIZE, "maxBlockSize must be in the range [1024, {}]: {}", SEGMENT_SIZE, maxBlockSize);
         N.checkArgument(vacatingFactor >= 0f && vacatingFactor <= 1f, "vacatingFactor must be in the range [0.0, 1.0]: {}", vacatingFactor);
 
-        this.logger = N.checkArgNotNull(logger, "logger");
+        this.logger = N.checkArgNotNull(logger, cs.logger);
         this.arrayOffset = arrayOffset;
         capacityInBytes = capacityInMB * (1024L * 1024L);
         this.maxBlockSize = roundUpToMinBlock(maxBlockSize);
@@ -426,10 +433,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param capacityInBytes the number of bytes to allocate; always positive and a multiple of
      *                        {@link #SEGMENT_SIZE}
      * @return the base address of the allocated region, used for all subsequent memory access
-     * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
      * @throws IllegalArgumentException if {@code capacityInBytes} is negative (both built-in
      *         backends reject a negative size this way; unreachable through normal construction
      *         because {@code capacityInMB} is validated to be positive first)
+     * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
      */
     protected abstract long allocate(long capacityInBytes);
 
@@ -475,24 +482,26 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * entry may be promoted back into memory when the configured promotion predicate accepts it.
      * Promotion preserves the original TTL and idle deadlines. A read that found live bytes can
      * still return its value if the entry expires while deserialization or promotion is running.
+     * An unchecked exception thrown by the {@link OffHeapStore} read (its contract for an
+     * operational read failure) or by a custom deserializer is propagated.
      *
      * @param key the key whose associated value is to be returned; must not be {@code null}
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
      *         the disk-backed entry's bytes are missing from the store, or the entry was removed
      *         concurrently
-     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws IllegalStateException if the cache has been closed, or if a value cannot be
      *                               reconstructed because the fetched size no longer matches the
      *                               recorded size (data corruption), or because a configured
      *                               deserializer returned {@code null}
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public V getOrNull(final K key) {
-        N.checkArgNotNull(key, "key");
-
         lifecycleLock.readLock().lock();
         try {
             assertNotClosed();
+
+            N.checkArgNotNull(key, cs.key);
 
             final Entry<V> entry = entries.get(key);
 
@@ -676,21 +685,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the TTL in milliseconds; {@code <= 0} means no expiration
      * @param maxIdleTime the maximum idle time in milliseconds; {@code <= 0} means no idle limit
      * @return {@code true} if the value was stored (in memory or on disk); {@code false} otherwise
+     * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or if
      *                                  {@code storeSelector} returns {@code null} or a value outside 0..2
-     * @throws IllegalStateException if the cache has been closed
-     * @throws java.util.concurrent.RejectedExecutionException if the put fails under memory
-     *                                  pressure and the shared executor rejects the vacate task
-     *                                  (possible only during JVM shutdown)
+     * @throws RejectedExecutionException if the put fails under memory pressure and the shared
+     *                                    executor rejects the vacate task (possible only during
+     *                                    JVM shutdown)
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
-        N.checkArgNotNull(key, "key");
-        N.checkArgNotNull(value, "value");
-
         lifecycleLock.readLock().lock();
         try {
             assertNotClosed();
+
+            N.checkArgNotNull(key, cs.key);
+            N.checkArgNotNull(value, cs.value);
 
             return doPut(key, value, liveTime, maxIdleTime);
         } finally {
@@ -887,16 +896,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * slots or disk bytes.
      *
      * @param key the key whose mapping is to be removed; must not be {@code null}
-     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public void remove(final K key) {
-        N.checkArgNotNull(key, "key");
-
         lifecycleLock.readLock().lock();
         try {
             assertNotClosed();
+
+            N.checkArgNotNull(key, cs.key);
 
             // Freeing inside the per-key compute serializes this entry's store-byte removal with
             // any concurrent same-key disk write: detaching first and freeing outside would let
@@ -920,14 +929,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the key to test; must not be {@code null}
      * @return {@code true} if a live mapping exists
-     * @throws IllegalArgumentException if {@code key} is {@code null}
      * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public boolean containsKey(final K key) {
-        N.checkArgNotNull(key, "key");
-
         assertNotClosed();
+
+        N.checkArgNotNull(key, cs.key);
 
         final Entry<V> entry = entries.get(key);
 

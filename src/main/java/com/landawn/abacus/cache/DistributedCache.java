@@ -241,29 +241,32 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        transition is logged once per transition — that is, on the first failure and on each later failure
      *        that follows a successful read
      * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative)
-     * @throws IllegalArgumentException if {@code client} is {@code null}, {@code maxFailuresBeforeCircuitOpen} is negative,
-     *         {@code retryDelay} is negative, or {@code keyPrefix} contains a non-printable-ASCII character,
-     *         a space, or a control character
+     * @throws IllegalArgumentException if {@code client} is {@code null}, {@code keyPrefix} contains a
+     *         non-printable-ASCII character, a space, or a control character, {@code maxFailuresBeforeCircuitOpen}
+     *         is negative, or {@code retryDelay} is negative
      */
     protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix, final int maxFailuresBeforeCircuitOpen, final long retryDelay) {
-        N.checkArgNotNull(client, "client");
-        N.checkArgNotNegative(maxFailuresBeforeCircuitOpen, "maxFailuresBeforeCircuitOpen");
-        N.checkArgNotNegative(retryDelay, "retryDelay");
+        N.checkArgNotNull(client, cs.client);
 
-        this.keyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
+        final String normalizedKeyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
 
         // The prefix is prepended verbatim to generated keys (only the key part is Base64-encoded),
         // so it must itself be key-safe for the backing store: printable ASCII without spaces or
         // control characters. Reject an invalid prefix once here instead of failing every later
         // operation when a backend with strict key rules, such as Memcached, validates the result.
-        for (int i = 0, len = this.keyPrefix.length(); i < len; i++) {
-            final char ch = this.keyPrefix.charAt(i);
+        for (int i = 0, len = normalizedKeyPrefix.length(); i < len; i++) {
+            final char ch = normalizedKeyPrefix.charAt(i);
 
             if (ch <= ' ' || ch >= 127) {
                 throw new IllegalArgumentException("keyPrefix must contain only printable ASCII characters without spaces or control characters; found char "
                         + (int) ch + " at index " + i);
             }
         }
+
+        N.checkArgNotNegative(maxFailuresBeforeCircuitOpen, cs.maxFailuresBeforeCircuitOpen);
+        N.checkArgNotNegative(retryDelay, cs.retryDelay);
+
+        this.keyPrefix = normalizedKeyPrefix;
         this.hasKeyPrefix = Strings.isNotEmpty(this.keyPrefix);
         this.client = client;
         this.maxFailuresBeforeCircuitOpen = maxFailuresBeforeCircuitOpen;
@@ -366,7 +369,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         // Validate the key up-front (cheap null check) so the documented IllegalArgumentException
         // for a null key is thrown consistently, even when the circuit breaker would otherwise
         // short-circuit to null before generateKey(key) is reached.
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         // Generate the key before consulting the breaker. Key conversion is deterministic local work;
         // allowing an open circuit to bypass it would make an invalid non-null key sometimes throw and
@@ -525,7 +528,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         return client.put(generateKey(key), value, liveTime);
     }
@@ -593,7 +596,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     public void remove(final K key) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         client.remove(generateKey(key));
     }
@@ -1044,7 +1047,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @see N#stringOf(Object)
      */
     protected String generateKey(final K key) {
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         // Fast path for String keys: skip N.stringOf (which may do reflection/formatting
         // for arbitrary types) when the key is already a String.

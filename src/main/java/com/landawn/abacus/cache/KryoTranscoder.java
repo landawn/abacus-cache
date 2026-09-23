@@ -14,6 +14,7 @@
 
 package com.landawn.abacus.cache;
 
+import com.esotericsoftware.kryo.KryoException;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.N;
@@ -100,7 +101,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     private final int maxSize;
 
     private static int checkMaxSize(final int maxSize) {
-        return N.checkArgPositive(maxSize, "maxSize");
+        return N.checkArgPositive(maxSize, cs.maxSize);
     }
 
     /**
@@ -217,7 +218,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      */
     public KryoTranscoder(final int maxSize, final KryoParser kryoParser) {
         this.maxSize = checkMaxSize(maxSize);
-        this.kryoParser = N.checkArgNotNull(kryoParser, "kryoParser");
+        this.kryoParser = N.checkArgNotNull(kryoParser, cs.kryoParser);
     }
 
     /**
@@ -287,8 +288,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * @param o the object to encode and serialize (may be {@code null})
      * @return a {@link CachedData} containing the serialized bytes and metadata; never {@code null}
+     * @throws KryoException if a Kryo serializer cannot encode the object graph, including an unsupported cyclic graph
      * @throws IllegalArgumentException if the serialized size exceeds the configured {@code maxSize}
-     * @throws RuntimeException if serialization fails due to Kryo-related errors
      * @see #decode(CachedData)
      * @see CachedData
      */
@@ -346,7 +347,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @param d the cached data to decode and deserialize; if {@code null}, {@code null} is returned
      * @return the deserialized object of type {@code T}, or {@code null} if {@code d} is
      *         {@code null}, its data is empty, or {@code null} was originally encoded
-     * @throws RuntimeException if deserialization fails (e.g., corrupt data, class not found,
+     * @throws KryoException if deserialization fails (e.g., corrupt or truncated data, class not found,
      *         or incompatible class version)
      * @see #encode(Object)
      * @see CachedData#getData()

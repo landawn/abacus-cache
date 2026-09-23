@@ -122,7 +122,9 @@ public interface DistributedCacheClient<T> {
      *
      * @param key the cache key, must not be {@code null}
      * @return the cached value, or {@code null} if not found, expired, or evicted
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction
      * @throws RuntimeException if a network error or timeout occurs
      */
     T get(String key);
@@ -158,11 +160,13 @@ public interface DistributedCacheClient<T> {
      * @param keys the cache keys to retrieve; a supporting implementation requires a non-null array
      *             with no null elements
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
+     * @throws IllegalStateException if bulk retrieval is supported and this client has been
+     *         disconnected or is being disconnected
      * @throws IllegalArgumentException if bulk retrieval is supported and {@code keys} is
      *         {@code null}, contains a null element, or contains a key rejected by the implementation
-     * @throws RuntimeException if a network error or timeout occurs
      * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
      *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
+     * @throws RuntimeException if a network error or timeout occurs
      */
     Map<String, T> getBulk(String... keys);
 
@@ -197,11 +201,13 @@ public interface DistributedCacheClient<T> {
      * @param keys the cache keys to retrieve; a supporting implementation requires a non-null
      *             collection with no null elements
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
+     * @throws IllegalStateException if bulk retrieval is supported and this client has been
+     *         disconnected or is being disconnected
      * @throws IllegalArgumentException if bulk retrieval is supported and {@code keys} is
      *         {@code null}, contains a null element, or contains a key rejected by the implementation
-     * @throws RuntimeException if a network error or timeout occurs
      * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
      *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
+     * @throws RuntimeException if a network error or timeout occurs
      */
     Map<String, T> getBulk(Collection<String> keys);
 
@@ -258,10 +264,13 @@ public interface DistributedCacheClient<T> {
      * @param value the value to cache, may be {@code null} (if supported by the implementation)
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative for no expiration)
      * @return {@code true} if the operation was successful, {@code false} otherwise
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction, or if {@code liveTime} is too large
+     *         for the implementation's expiration representation (see above)
      * @throws UnsupportedOperationException if the concrete client supplies neither a
      *         non-recursive {@code put} nor a non-recursive {@code set} implementation
+     * @throws RuntimeException if a network error or timeout occurs
      */
     @SuppressWarnings("deprecation")
     default boolean put(final String key, final T value, final long liveTime) {
@@ -297,10 +306,13 @@ public interface DistributedCacheClient<T> {
      * @param value the value to cache, may be {@code null} if supported by the implementation
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative for no expiration)
      * @return {@code true} if the operation was successful, {@code false} otherwise
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction, or if {@code liveTime} is too large
+     *         for the implementation's expiration representation (see {@link #put(String, Object, long)})
      * @throws UnsupportedOperationException if the concrete client supplies neither a
      *         non-recursive {@code put} nor a non-recursive {@code set} implementation
+     * @throws RuntimeException if a network error or timeout occurs
      * @deprecated Use {@link #put(String, Object, long)}. Retained for source and binary
      *             compatibility with clients compiled against version 2.8.4 and earlier.
      */
@@ -371,10 +383,12 @@ public interface DistributedCacheClient<T> {
      * @return {@code true} if the key existed and was removed; {@code false} if the key did not exist
      *         when the command was issued (see the per-implementation notes above for exact semantics).
      *         A network error or timeout is thrown rather than reported as a {@code false} return.
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction
      * @throws UnsupportedOperationException if the concrete client supplies neither a
      *         non-recursive {@code remove} nor a non-recursive {@code delete} implementation
+     * @throws RuntimeException if a network error or timeout occurs
      */
     @SuppressWarnings("deprecation")
     default boolean remove(final String key) {
@@ -408,10 +422,12 @@ public interface DistributedCacheClient<T> {
      *
      * @param key the cache key, must not be {@code null}
      * @return {@code true} if the key existed and was removed; {@code false} otherwise
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction
      * @throws UnsupportedOperationException if the concrete client supplies neither a
      *         non-recursive {@code remove} nor a non-recursive {@code delete} implementation
+     * @throws RuntimeException if a network error or timeout occurs
      * @deprecated Use {@link #remove(String)}. Retained for source and binary compatibility with
      *             clients compiled against version 2.8.4 and earlier.
      */
@@ -487,7 +503,9 @@ public interface DistributedCacheClient<T> {
      * @return the value after increment. For non-existent keys: Memcached returns -1
      *         (no auto-initialization); Redis creates the key (effective value after
      *         increment is 1).
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
      *         not a valid integer counter (e.g. a value previously stored via {@code put})
      */
@@ -531,8 +549,9 @@ public interface DistributedCacheClient<T> {
      * @return the value after increment. For non-existent keys: Memcached returns -1
      *         (no auto-initialization); Redis creates the key (effective value after
      *         increment is {@code delta}).
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
-     *         or {@code delta} is negative
+     *         or violates an implementation-specific key restriction, or if {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
      *         not a valid integer counter (e.g. a value previously stored via {@code put})
      */
@@ -583,7 +602,9 @@ public interface DistributedCacheClient<T> {
      * @return the value after decrement. Memcached clamps at 0 (values cannot go negative)
      *         and returns -1 if the key doesn't exist; Redis allows negative values and
      *         creates non-existent keys (effective value after decrement is -1).
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
      *         not a valid integer counter (e.g. a value previously stored via {@code put})
      */
@@ -643,8 +664,9 @@ public interface DistributedCacheClient<T> {
      * @return the value after decrement. Memcached clamps at 0 (values cannot go negative)
      *         and returns -1 if the key doesn't exist; Redis allows negative values and
      *         creates non-existent keys (effective value after decrement is {@code -delta}).
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
-     *         or {@code delta} is negative
+     *         or violates an implementation-specific key restriction, or if {@code delta} is negative
      * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
      *         not a valid integer counter (e.g. a value previously stored via {@code put})
      */
@@ -694,9 +716,11 @@ public interface DistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws IllegalStateException if flushing is supported and this client has been disconnected
+     *         or is being disconnected
      * @throws UnsupportedOperationException if the implementation does not support flushing all entries
      *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
+     * @throws RuntimeException if a network error or timeout occurs
      */
     void flushAll();
 

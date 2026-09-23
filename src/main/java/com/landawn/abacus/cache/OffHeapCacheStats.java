@@ -201,8 +201,9 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * @throws NullPointerException if {@code writeToDiskTimeStats}, {@code readFromDiskTimeStats},
      *         or {@code occupiedSlots} is {@code null}, or if {@code occupiedSlots} contains a
      *         {@code null} key, nested map, segment index, or occupied-slot count
-     * @throws IllegalArgumentException if any numeric component is negative, or if an occupied-slot
-     *                                  size is not positive
+     * @throws IllegalArgumentException if any numeric component is negative, or if {@code occupiedSlots}
+     *                                  contains a non-positive slot size, or a negative segment index
+     *                                  or occupied-slot count
      */
     public OffHeapCacheStats {
         Objects.requireNonNull(writeToDiskTimeStats, "writeToDiskTimeStats cannot be null");

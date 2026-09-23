@@ -25,6 +25,7 @@ import com.landawn.abacus.logging.LoggerFactory;
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisClientConfig;
 import redis.clients.jedis.RedisClient;
+import redis.clients.jedis.exceptions.JedisException;
 
 /**
  * A Redis-based distributed cache client implementation using Jedis with client-side sharding.
@@ -175,8 +176,8 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
     public JRedis(final String serverUrl, final long timeout) {
         super(serverUrl);
 
-        final JedisClientConfig clientConfig = buildClientConfig(timeout);
         final List<InetSocketAddress> addressList = resolveServerAddresses(serverUrl);
+        final JedisClientConfig clientConfig = buildClientConfig(timeout);
 
         final List<RedisClient> shardClients = new ArrayList<>(addressList.size());
 
@@ -251,10 +252,10 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * being used by this client. If other applications share the same Redis instances, their data will
      * also be deleted.
      *
-     * @throws RuntimeException the first exception encountered while flushing any shard (all remaining
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws JedisException the first exception encountered while flushing any shard (all remaining
      *         shards are still attempted before the exception is rethrown; later failures are attached
      *         to it as suppressed exceptions)
-     * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @see #disconnect()
      */
     @Override

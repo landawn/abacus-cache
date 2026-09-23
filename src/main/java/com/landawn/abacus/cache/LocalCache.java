@@ -98,6 +98,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param capacity the maximum number of entries the cache can hold (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative, 0 for no automatic eviction)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
+     *         its shutdown hook
      */
     public LocalCache(final int capacity, final long evictDelay) {
         this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -138,12 +140,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param defaultLiveTime the default time-to-live in milliseconds for entries (0 or negative for no TTL expiration)
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries (0 or negative for no idle timeout)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
+     *         its shutdown hook
      */
     public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
-        N.checkArgPositive(capacity, "capacity");
-        N.checkArgNotNegative(evictDelay, "evictDelay");
+        N.checkArgPositive(capacity, cs.capacity);
+        N.checkArgNotNegative(evictDelay, cs.evictDelay);
 
         pool = PoolFactory.createKeyedObjectPool(capacity, evictDelay);
     }
@@ -190,7 +194,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableAdapter<V>> pool) {
         super(defaultLiveTime, defaultMaxIdleTime);
 
-        this.pool = N.checkArgNotNull(pool, "pool");
+        this.pool = N.checkArgNotNull(pool, cs.pool);
     }
 
     /**
@@ -222,12 +226,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key whose associated value is to be returned (must not be null)
      * @return the value associated with the specified key, or {@code null} if the key is not found, has expired, or has been evicted
-     * @throws IllegalArgumentException if key is null
-     * @throws IllegalStateException if the underlying pool has been closed
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public V getOrNull(final K key) {
-        N.checkArgNotNull(key, "key");
+        assertNotClosed();
+        N.checkArgNotNull(key, cs.key);
 
         final PoolableAdapter<V> w = pool.get(key);
 
@@ -286,13 +291,14 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the time-to-live in milliseconds from entry creation (0 or negative for no TTL expiration)
      * @param maxIdleTime the maximum idle time in milliseconds since last access (0 or negative for no idle timeout)
      * @return {@code true} if the entry was successfully stored; {@code false} if the underlying pool rejected the entry
-     * @throws IllegalArgumentException if key or value is null
-     * @throws IllegalStateException if the underlying pool has been closed
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
-        N.checkArgNotNull(key, "key");
-        N.checkArgNotNull(value, "value");
+        assertNotClosed();
+        N.checkArgNotNull(key, cs.key);
+        N.checkArgNotNull(value, cs.value);
 
         // A liveTime/maxIdleTime of 0 or negative means "no expiration" per the Cache contract.
         // The underlying ActivityPrint requires strictly positive values, so translate
@@ -330,12 +336,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache (must not be null)
-     * @throws IllegalArgumentException if key is null
-     * @throws IllegalStateException if the underlying pool has been closed
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public void remove(final K key) {
-        N.checkArgNotNull(key, "key");
+        assertNotClosed();
+        N.checkArgNotNull(key, cs.key);
 
         pool.remove(key);
     }
@@ -377,12 +384,13 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key whose presence in the cache is to be tested (must not be null)
      * @return {@code true} if the cache contains a mapping for the specified key and it has not expired; {@code false} otherwise
-     * @throws IllegalArgumentException if key is null
-     * @throws IllegalStateException if the underlying pool has been closed
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
     public boolean containsKey(final K key) {
-        N.checkArgNotNull(key, "key");
+        assertNotClosed();
+        N.checkArgNotNull(key, cs.key);
 
         return pool.peek(key) != null;
     }
@@ -663,5 +671,17 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     @Override
     public boolean isClosed() {
         return pool.isClosed();
+    }
+
+    /**
+     * Verifies that this cache has not been closed, so the state check runs before argument validation.
+     * The underlying pool performs the same check again for operations that reach it.
+     *
+     * @throws IllegalStateException if the cache has been closed
+     */
+    private void assertNotClosed() {
+        if (pool.isClosed()) {
+            throw new IllegalStateException("This cache has been closed");
+        }
     }
 }

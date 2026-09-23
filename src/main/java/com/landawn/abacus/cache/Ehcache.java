@@ -111,7 +111,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if cache is null
      */
     public Ehcache(final Cache<K, V> cache) {
-        cacheImpl = N.checkArgNotNull(cache, "cache");
+        cacheImpl = N.checkArgNotNull(cache, cs.cache);
     }
 
     /**
@@ -135,15 +135,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key whose associated value is to be returned (must not be {@code null})
      * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if key is null
-     * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      */
     @Override
     public V getOrNull(final K key) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         return cacheImpl.get(key);
     }
@@ -183,16 +184,17 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *         can be reported while the mapping was not actually retained. This wrapper cannot
      *         detect that case; if it matters, configure a custom {@code ResilienceStrategy} on the
      *         Ehcache instance
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
-     * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
-        N.checkArgNotNull(value, "value");
+        N.checkArgNotNull(key, cs.key);
+        N.checkArgNotNull(value, cs.value);
 
         cacheImpl.put(key, value);
 
@@ -217,15 +219,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache (must not be {@code null})
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if key is null
-     * @throws IllegalStateException if the cache has been closed
      * @throws CacheWritingException if the cache writer fails
      */
     @Override
     public void remove(final K key) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         cacheImpl.remove(key);
     }
@@ -252,14 +255,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *         key; {@code false} otherwise. An entry that has passed its expiry is reported as absent,
      *         and the check does not count as an access for time-to-idle purposes, so it does not
      *         extend the entry's lifetime.
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if key is null
-     * @throws IllegalStateException if the cache has been closed
      */
     @Override
     public boolean containsKey(final K key) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         return cacheImpl.containsKey(key);
     }
@@ -293,16 +297,17 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key with which the specified value is to be associated (must not be {@code null})
      * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
      * @return the previous value associated with the specified key, or {@code null} if there was no mapping
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
-     * @throws IllegalStateException if the cache has been closed
      * @throws CacheLoadingException if the cache loader fails
      * @throws CacheWritingException if the cache writer fails
      */
     public V putIfAbsent(final K key, final V value) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
-        N.checkArgNotNull(value, "value");
+        N.checkArgNotNull(key, cs.key);
+        N.checkArgNotNull(value, cs.value);
 
         return cacheImpl.putIfAbsent(key, value);
     }
@@ -354,15 +359,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @return a map keyed by the requested keys, with each value being the cached value or
      *         {@code null} if the key is not present in the cache (subject to the cache-loader
      *         semantics described above)
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if keys is null or contains a null element
-     * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheLoadingException if the bulk cache loader fails
      */
     public Map<K, V> getAll(final Set<? extends K> keys) {
         assertNotClosed();
 
-        N.checkArgNotNull(keys, "keys");
-        N.checkElementNotNull(keys, "keys");
+        N.checkArgNotNull(keys, cs.keys);
+        N.checkElementNotNull(keys, cs.keys);
 
         return cacheImpl.getAll(keys);
     }
@@ -397,14 +403,15 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @param entries the map of key-value pairs to store; must not be {@code null} and must not contain
      *                a {@code null} key or {@code null} value
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code entries} is null or contains a null key or null value
-     * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
     public void putAll(final Map<? extends K, ? extends V> entries) {
         assertNotClosed();
 
-        N.checkArgNotNull(entries, "entries");
+        N.checkArgNotNull(entries, cs.entries);
         N.checkElementNotNull(entries.keySet(), "entries' keys");
         N.checkElementNotNull(entries.values(), "entries' values");
 
@@ -442,15 +449,16 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param keys the set of cache keys to remove
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if keys is null or contains a null element
-     * @throws IllegalStateException if the cache has been closed
      * @throws BulkCacheWritingException if the bulk cache writer fails
      */
     public void removeAll(final Set<? extends K> keys) {
         assertNotClosed();
 
-        N.checkArgNotNull(keys, "keys");
-        N.checkElementNotNull(keys, "keys");
+        N.checkArgNotNull(keys, cs.keys);
+        N.checkElementNotNull(keys, cs.keys);
 
         cacheImpl.removeAll(keys);
     }
@@ -565,7 +573,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * cache.getOrNull("userId123");        // returns null
      * }</pre>
      *
-     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
+     *         available (for example, it was removed from or closed with its {@code CacheManager})
      */
     @Override
     public void clear() {

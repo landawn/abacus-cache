@@ -16,6 +16,7 @@ package com.landawn.abacus.cache;
 
 import java.util.Collections;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
@@ -285,6 +286,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * miss.orElse("fallback");                   // returns "fallback"
      * }</pre>
      *
+     * @throws IllegalStateException {@inheritDoc}
+     * @throws IllegalArgumentException {@inheritDoc}
      */
     @Override
     public Optional<V> get(final K key) {
@@ -310,6 +313,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.get("k").get();                      // returns "v2"
      * }</pre>
      *
+     * @throws IllegalStateException {@inheritDoc}
+     * @throws IllegalArgumentException {@inheritDoc}
      */
     @Override
     public boolean put(final K key, final V value) {
@@ -335,6 +340,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.asyncGet("absent").get().isPresent();  // returns false
      * }</pre>
      *
+     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
+     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
      */
     @Override
     public ContinuableFuture<Optional<V>> asyncGet(final K key) {
@@ -358,6 +365,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.asyncGetOrNull("absent").get();      // returns null
      * }</pre>
      *
+     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
+     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
      */
     @Override
     public ContinuableFuture<V> asyncGetOrNull(final K key) {
@@ -383,6 +392,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.getOrNull("k");                      // returns "v2"
      * }</pre>
      *
+     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
+     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K key, final V value) {
@@ -409,6 +420,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.getOrNull("forever");                    // returns "v"
      * }</pre>
      *
+     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
+     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
      */
     @Override
     public ContinuableFuture<Boolean> asyncPut(final K key, final V value, final long liveTime, final long maxIdleTime) {
@@ -434,6 +447,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.asyncRemove("absent").get();         // returns null
      * }</pre>
      *
+     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
+     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
      */
     @Override
     public ContinuableFuture<Void> asyncRemove(final K key) {
@@ -461,6 +476,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.asyncContainsKey("absent").get();    // returns false
      * }</pre>
      *
+     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
+     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
      */
     @Override
     public ContinuableFuture<Boolean> asyncContainsKey(final K key) {
@@ -591,6 +608,8 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * Rejects property mutation on a closed cache. Property reads remain usable after close (like
      * other configuration accessors), but mutating the property bag of a closed cache is almost
      * certainly a lifecycle bug in the caller, so it fails fast like the data operations do.
+     *
+     * @throws IllegalStateException if this cache has been closed
      */
     private void assertNotClosedForPropertyMutation() {
         if (isClosed()) {

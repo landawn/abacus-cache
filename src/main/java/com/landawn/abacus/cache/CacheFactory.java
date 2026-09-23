@@ -16,6 +16,7 @@ package com.landawn.abacus.cache;
 
 import static com.landawn.abacus.cache.DistributedCacheClient.DEFAULT_TIMEOUT;
 
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.LongFunction;
 
 import com.landawn.abacus.pool.KeyedObjectPool;
@@ -105,7 +106,8 @@ public final class CacheFactory {
      * @param capacity the maximum number of entries the cache can hold (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
      * @return a new LocalCache instance with the specified configuration
-     * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws IllegalArgumentException if {@code capacity} is not positive or {@code evictDelay} is negative
+     * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers its shutdown hook
      * @see #createLocalCache(int, long, long, long)
      * @see #createLocalCache(KeyedObjectPool, long, long)
      */
@@ -143,7 +145,8 @@ public final class CacheFactory {
      * @param defaultLiveTime the default time-to-live in milliseconds for entries added without explicit TTL (0 or negative for no expiration)
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 or negative for no idle timeout)
      * @return a new LocalCache instance with the specified configuration
-     * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws IllegalArgumentException if {@code capacity} is not positive or {@code evictDelay} is negative
+     * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers its shutdown hook
      * @see #createLocalCache(int, long)
      * @see #createLocalCache(KeyedObjectPool, long, long)
      */
@@ -218,10 +221,10 @@ public final class CacheFactory {
      * @return a new OffHeapCache instance with the specified capacity
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if the native allocation cannot be reserved
-     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
+     * @throws RejectedExecutionException if the maintenance scheduler rejects the eviction task (this
+     *         overload always schedules one, using the default eviction delay)
      * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects
-     *         the eviction task (this overload always schedules one, using the default eviction delay)
+     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @see #createOffHeapCache(int, long)
      * @see #createOffHeapCache(int, long, long, long)
      * @see OffHeapCache#builder()
@@ -243,10 +246,10 @@ public final class CacheFactory {
      * @return a new OffHeapCache instance with the specified configuration
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if the native allocation cannot be reserved
-     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance
+     *         scheduler rejects its task
      * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive and
-     *         the maintenance scheduler rejects its task
+     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long, long, long)
      */
@@ -268,10 +271,10 @@ public final class CacheFactory {
      * @return a new OffHeapCache instance with the specified configuration
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if the native allocation cannot be reserved
-     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance
+     *         scheduler rejects its task
      * @throws SecurityException if runtime policy denies shutdown-hook registration
-     * @throws java.util.concurrent.RejectedExecutionException if {@code evictDelay} is positive and
-     *         the maintenance scheduler rejects its task
+     * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long)
      */
@@ -446,8 +449,9 @@ public final class CacheFactory {
      *                             (must be non-negative); {@code 0} opens it after the first recorded backend failure
      * @param retryDelay the delay in milliseconds before attempting a retry after the circuit breaker opens (must be non-negative)
      * @return a new DistributedCache instance with custom circuit breaker configuration
-     * @throws IllegalArgumentException if client is null, maxFailuresBeforeCircuitOpen is negative, retryDelay is
-     *         negative, or keyPrefix contains a non-printable-ASCII character, a space, or a control character
+     * @throws IllegalArgumentException if {@code client} is {@code null}, {@code keyPrefix} contains a
+     *         non-printable-ASCII character, a space, or a control character, {@code maxFailuresBeforeCircuitOpen}
+     *         is negative, or {@code retryDelay} is negative
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createCache(String)
@@ -550,14 +554,22 @@ public final class CacheFactory {
      * @return a new Cache instance configured according to the specification
      * @throws IllegalArgumentException if the provider string is null or empty, cannot be parsed, or has an
      *         empty class name; for the built-in providers (Memcached/Redis/RedisCluster), also if it has no
-     *         parameters, has an empty server URL, specifies an unsupported parameter layout, or specifies a
-     *         non-numeric or non-positive timeout; for custom classes, also if the class cannot
-     *         be found (checked against this library's classloader, then the thread context classloader) or
-     *         does not implement {@link Cache}. A candidate class is loaded without running its static
-     *         initializer until after this type check. A custom cache class with a no-arg constructor may be
-     *         specified without parameters, e.g. {@code "com.example.MyCache()"}
-     * @throws RuntimeException if a custom class is found but cannot be instantiated (constructor invocation
-     *         fails, security restrictions, etc.)
+     *         parameters, has an empty server URL, specifies an unsupported or (for RedisCluster) ambiguous
+     *         parameter layout or an additional RedisCluster seed node that is not a {@code host:port} endpoint,
+     *         specifies a timeout that is not an optional sign followed by decimal digits, does not fit in a
+     *         {@code long}, or is not positive, if the client constructor rejects the server URL (no valid
+     *         server address) or the timeout (a Redis/RedisCluster timeout above {@link Integer#MAX_VALUE}), or
+     *         if the key prefix contains a non-printable-ASCII character, a space, or a control character (the
+     *         already-constructed client is disconnected first); for custom classes, also if the class cannot
+     *         be found (checked against this library's classloader, then the thread context classloader), does
+     *         not implement {@link Cache}, or declares no constructor matching the specified parameters. A
+     *         candidate class is loaded without running its static initializer until after this type check. A
+     *         custom cache class with a no-arg constructor may be specified without parameters, e.g.
+     *         {@code "com.example.MyCache()"}
+     * @throws RuntimeException if a built-in client cannot be constructed (e.g. an unresolvable Memcached
+     *         hostname, a local client/socket setup failure, or a RedisCluster seed-resolution or initial
+     *         topology-discovery failure), or if a custom class is found but cannot be instantiated (constructor
+     *         invocation fails, security restrictions, etc.)
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createLocalCache(int, long)
@@ -637,6 +649,11 @@ public final class CacheFactory {
      * Resolves a custom provider class without initializing it. Type validation must happen before
      * arbitrary user-selected static initialization: otherwise even a class that does not implement
      * {@link Cache} can execute its static initializer merely by appearing in configuration.
+     *
+     * @param className the fully qualified name of the custom cache class
+     * @return the resolved, uninitialized class
+     * @throws IllegalArgumentException if the class cannot be found by this library's classloader or by the
+     *         thread context classloader
      */
     private static Class<?> loadCustomCacheClass(final String className) {
         final ClassLoader libraryClassLoader = CacheFactory.class.getClassLoader();
@@ -676,6 +693,12 @@ public final class CacheFactory {
      * must not leave a live client thread/socket behind. The most common failure is a rejected key
      * prefix (for example, one containing a space), but the cleanup applies equally to failures in
      * the no-prefix wrapper path.
+     *
+     * @param client the freshly constructed client to wrap
+     * @param keyPrefix the key prefix, or {@code null} for no prefix
+     * @return the wrapping {@link DistributedCache}
+     * @throws IllegalArgumentException if {@code client} is {@code null}, or if {@code keyPrefix} contains a
+     *         non-printable-ASCII character, a space, or a control character (the client is disconnected first)
      */
     private static <K, V> DistributedCache<K, V> newDistributedCacheOrDisconnect(final DistributedCacheClient<V> client, final String keyPrefix) {
         try {
@@ -700,6 +723,15 @@ public final class CacheFactory {
      * Shared implementation of the Memcached and Redis provider branches of
      * {@code createCache(String)}, which differ only in the client they construct and the provider
      * name in their error messages. The layout is {@code provider(serverUrl[,keyPrefix[,timeout]])}.
+     *
+     * @param provider the provider name used in error messages
+     * @param parameters the parsed provider parameters; {@code parameters[0]} is the server URL
+     * @param clientFactory creates the client for a given timeout in milliseconds
+     * @return the wrapping {@link DistributedCache}
+     * @throws IllegalArgumentException if more than three parameters are given, if the timeout token is
+     *         invalid (see {@link #parseTimeoutParameter(String)}), if {@code clientFactory} rejects the server
+     *         URL or timeout, or if the key prefix is rejected by the {@link DistributedCache} constructor
+     * @throws RuntimeException if {@code clientFactory} fails to construct the client for any other reason
      */
     private static <K, V> DistributedCache<K, V> createMemcachedOrRedisCache(final String provider, final String[] parameters,
             final LongFunction<? extends DistributedCacheClient<V>> clientFactory) {
@@ -729,6 +761,12 @@ public final class CacheFactory {
      * than as the keyPrefix. A final all-digit token is the timeout; when the token before such a
      * timeout is itself endpoint-shaped, the specification is rejected as ambiguous (extra seed
      * node vs. endpoint-shaped prefix) rather than silently resolved either way.
+     *
+     * @param parameters the parsed provider parameters; {@code parameters[0]} is the first seed-node parameter
+     * @return the seed-node server URL, key prefix ({@code null} for none), and timeout
+     * @throws IllegalArgumentException if an all-digit final token follows an endpoint-shaped token (ambiguous),
+     *         if the timeout token is invalid (see {@link #parseTimeoutParameter(String)}), if the key prefix is
+     *         not in the expected position, or if an additional seed-node parameter is not a {@code host:port} endpoint
      */
     private static RedisClusterParameters parseRedisClusterParameters(final String[] parameters) {
         final int parameterCount = parameters.length;
@@ -943,7 +981,7 @@ public final class CacheFactory {
             throw new IllegalArgumentException("Invalid timeout parameter: " + timeoutValue, e);
         }
 
-        N.checkArgPositive(timeout, "timeout");
+        N.checkArgPositive(timeout, cs.timeout);
 
         return timeout;
     }

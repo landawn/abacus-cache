@@ -19,6 +19,7 @@ package com.landawn.abacus.cache;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
@@ -132,9 +133,10 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *                     The actual capacity will be {@code capacityInMB * 1048576} bytes.
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
-     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
-     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+     * @throws RejectedExecutionException if the maintenance scheduler rejects the maintenance task (this constructor
+     *         always schedules one, using a 3000 ms eviction delay)
      * @throws SecurityException if the runtime denies shutdown-hook registration
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
      */
     ForeignMemoryOffHeapCache(final int capacityInMB) {
         this(capacityInMB, 3000);
@@ -171,9 +173,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @param evictDelay the delay between eviction runs in milliseconds. Use {@code 0} or negative to disable automatic eviction.
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
-     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
-     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
      * @throws SecurityException if the runtime denies shutdown-hook registration
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
      */
     ForeignMemoryOffHeapCache(final int capacityInMB, final long evictDelay) {
         this(capacityInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -211,9 +213,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use {@code 0} or negative for no idle timeout.
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
-     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
-     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
      * @throws SecurityException if the runtime denies shutdown-hook registration
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
      */
     ForeignMemoryOffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null,
@@ -274,11 +276,11 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *                      {@code 1} for memory only (never store to disk), or {@code 2} for disk only (always
      *                      store to disk). Use {@code null} for default behavior (always try memory first).
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if {@code maxBlockSize} is
-     *                                  outside the valid range, or if {@code vacatingFactor} is outside [0.0, 1.0]
+     *                                  outside [1024, 1048576], or if {@code vacatingFactor} is outside [0.0, 1.0]
      * @throws OutOfMemoryError if native memory allocation fails
-     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
-     * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
      * @throws SecurityException if the runtime denies shutdown-hook registration
+     * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
      */
     ForeignMemoryOffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
@@ -307,10 +309,10 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * @return the base address of the allocated {@link MemorySegment}, as reported by
      *         {@link MemorySegment#address()}. It is recorded as the base address from which
      *         {@link #copyToMemory} and {@link #copyFromMemory} derive a relative offset into the segment.
-     * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
      * @throws IllegalArgumentException if {@code capacityInBytes} is negative ({@link Arena#allocate(long)}
      *         rejects a negative size; a size of {@code 0} yields a zero-length segment). Unreachable through
      *         normal construction because {@code capacityInMB} is validated to be positive first.
+     * @throws OutOfMemoryError if the allocation fails due to insufficient native memory
      */
     @Override
     protected long allocate(final long capacityInBytes) {
@@ -799,9 +801,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192),
          *                                  or if {@code vacatingFactor} is outside [0.0, 1.0]
          * @throws OutOfMemoryError if native memory allocation fails
-         * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is registered
-         * @throws java.util.concurrent.RejectedExecutionException if the maintenance scheduler rejects a positive-delay task
-         * @throws SecurityException if the JVM denies shutdown-hook registration
+         * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
+         * @throws SecurityException if the runtime denies shutdown-hook registration
+         * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
          */
         public ForeignMemoryOffHeapCache<K, V> build() {
             return new ForeignMemoryOffHeapCache<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay,

@@ -122,7 +122,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if cache is null
      */
     public CaffeineCache(final Cache<K, V> cache) {
-        cacheImpl = N.checkArgNotNull(cache, "cache");
+        cacheImpl = N.checkArgNotNull(cache, cs.cache);
     }
 
     /**
@@ -151,14 +151,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key whose associated value is to be returned (must not be {@code null})
      * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
-     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if key is null
      */
     @Override
     public V getOrNull(final K key) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         return cacheImpl.getIfPresent(key);
     }
@@ -207,16 +207,17 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the time-to-live in milliseconds (ignored; configure expiration via the Caffeine builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored; configure expiration via the Caffeine builder)
      * @return {@code true} (this implementation always succeeds unless an exception is thrown)
+     * @throws IllegalStateException if the cache has been closed, including when {@link #close()} runs concurrently
+     *         with this put (a late write that is still current is removed before the exception is thrown)
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
-     * @throws IllegalStateException if the cache has been closed
      */
     @SuppressWarnings("unused")
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
-        N.checkArgNotNull(value, "value");
+        N.checkArgNotNull(key, cs.key);
+        N.checkArgNotNull(value, cs.value);
 
         // Expiration is configured on the wrapped Caffeine cache; its Cache API has no
         // per-write TTL/max-idle parameters to which these arguments could be delegated.
@@ -276,8 +277,8 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param key the cache key whose mapping is to be removed from the cache (must not be {@code null})
-     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if key is null
      */
     @Override
     public void remove(final K key) {
@@ -285,7 +286,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
         try {
             assertNotClosed();
 
-            N.checkArgNotNull(key, "key");
+            N.checkArgNotNull(key, cs.key);
 
             cacheImpl.invalidate(key);
         } finally {
@@ -324,14 +325,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key whose presence in the cache is to be tested (must not be {@code null})
      * @return {@code true} if the underlying {@code asMap()} view holds a live (non-expired)
      *         mapping for the key; {@code false} otherwise
-     * @throws IllegalArgumentException if key is null
      * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if key is null
      */
     @Override
     public boolean containsKey(final K key) {
         assertNotClosed();
 
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         return cacheImpl.asMap().containsKey(key);
     }

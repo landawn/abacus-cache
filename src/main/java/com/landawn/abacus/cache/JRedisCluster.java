@@ -26,6 +26,7 @@ import com.landawn.abacus.util.N;
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisClientConfig;
 import redis.clients.jedis.RedisClusterClient;
+import redis.clients.jedis.exceptions.JedisException;
 
 /**
  * A Redis-based distributed cache client implementation backed by a <b>Redis Cluster</b>.
@@ -168,8 +169,8 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
     public JRedisCluster(final String serverUrl, final long timeout) {
         super(serverUrl);
 
-        final JedisClientConfig clientConfig = buildClientConfig(timeout);
         final List<InetSocketAddress> addressList = resolveServerAddresses(serverUrl);
+        final JedisClientConfig clientConfig = buildClientConfig(timeout);
 
         final Set<HostAndPort> nodes = new LinkedHashSet<>(addressList.size());
 
@@ -196,7 +197,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
     JRedisCluster(final String serverUrl, final RedisClusterClient cluster) {
         super(serverUrl);
 
-        this.cluster = N.checkArgNotNull(cluster, "cluster");
+        this.cluster = N.checkArgNotNull(cluster, cs.cluster);
     }
 
     /**
@@ -225,9 +226,9 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * <p><b>&#9888;&#65039; Destructive operation:</b> This removes all keys from database 0 on every primary
      * node. If other applications share the cluster, their data is also deleted.
      *
-     * @throws RuntimeException if flushing one or more cluster nodes fails (typically a
-     *         {@code JedisBroadcastException} reporting the per-node outcomes)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws JedisException if flushing one or more cluster nodes fails (typically a
+     *         {@code JedisBroadcastException} reporting the per-node outcomes)
      * @see #disconnect()
      */
     @Override

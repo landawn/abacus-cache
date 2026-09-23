@@ -162,7 +162,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank
      */
     protected AbstractDistributedCacheClient(final String serverUrl) {
-        this.serverUrl = N.checkArgNotBlank(serverUrl, "serverUrl");
+        this.serverUrl = N.checkArgNotBlank(serverUrl, cs.serverUrl);
     }
 
     /**
@@ -232,8 +232,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found).
      *         This describes the contract of overriding implementations; the base-class default never
      *         returns normally and always throws {@code UnsupportedOperationException}.
-     * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected (implementation-specific)
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements (implementation-specific)
+     * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
      * @throws RuntimeException if a network error or timeout occurs (implementation-specific)
      * @see #getBulk(Collection)
      */
@@ -296,8 +297,9 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found).
      *         This describes the contract of overriding implementations; the base-class default never
      *         returns normally and always throws {@code UnsupportedOperationException}.
-     * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected (implementation-specific)
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains {@code null} elements (implementation-specific)
+     * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
      * @throws RuntimeException if a network error or timeout occurs (implementation-specific)
      * @see #getBulk(String...)
      */
@@ -358,6 +360,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * }
      * }</pre>
      *
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected (implementation-specific)
      * @throws UnsupportedOperationException if this operation is not supported by the implementation (default behavior)
      * @throws RuntimeException if a network error or timeout occurs (implementation-specific)
      */
@@ -441,7 +444,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired surrogate
      */
     protected static void checkUtf8Key(final String key) {
-        N.checkArgNotNull(key, "key");
+        N.checkArgNotNull(key, cs.key);
 
         for (int i = 0, len = key.length(); i < len; i++) {
             final char ch = key.charAt(i);
@@ -465,7 +468,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *         or contains a key with an unpaired UTF-16 surrogate
      */
     protected static void checkBulkKeys(final String... keys) {
-        N.checkArgNotNull(keys, "keys");
+        N.checkArgNotNull(keys, cs.keys);
 
         for (int i = 0, len = keys.length; i < len; i++) {
             if (keys[i] == null) {
@@ -487,7 +490,7 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      *         or contains a key with an unpaired UTF-16 surrogate
      */
     protected static void checkBulkKeys(final Collection<String> keys) {
-        N.checkArgNotNull(keys, "keys");
+        N.checkArgNotNull(keys, cs.keys);
 
         int i = 0;
         for (final String key : keys) {

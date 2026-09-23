@@ -54,6 +54,8 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * map.close();                                               // stops this cache's background eviction task
      * }</pre>
      *
+     * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
+     *         its shutdown hook
      */
     public ChronicleMap() {
         this(1024, 60_000L);
@@ -85,6 +87,8 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative;
      *                   0 disables automatic eviction)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
+     *         its shutdown hook
      */
     public ChronicleMap(final int capacity, final long evictDelay) {
         this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
@@ -127,6 +131,8 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * @param defaultMaxIdleTime default max idle time in milliseconds for entries added without
      *                           explicit expiration (0 or negative for no idle timeout)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
+     *         its shutdown hook
      */
     public ChronicleMap(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
         super(capacity, evictDelay, defaultLiveTime, defaultMaxIdleTime);

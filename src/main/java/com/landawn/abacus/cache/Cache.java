@@ -106,6 +106,9 @@ public interface Cache<K, V> {
      * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
      * @return an Optional containing a non-null cached value if present and not expired, or an empty
      *         Optional for a miss, expiration, or an explicitly cached {@code null}
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null} and the implementation rejects
+     *         {@code null} keys, as all built-in implementations do
      * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
@@ -145,6 +148,9 @@ public interface Cache<K, V> {
      *
      * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
      * @return the cached value if present and not expired, or {@code null} if the key is not found or has expired
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null} and the implementation rejects
+     *         {@code null} keys, as all built-in implementations do
      * @see #get(Object)
      * @see #asyncGetOrNull(Object)
      */
@@ -190,8 +196,12 @@ public interface Cache<K, V> {
      * @param value the value to cache; null-handling is implementation-defined
      * @return {@code true} if the implementation reports success, {@code false} if storage was rejected.
      *         Success does not guarantee retention: eviction, expiration, concurrent changes, or a
-     *         backend resilience policy may discard the entry. Backend failures may throw; a closed
-     *         cache typically throws {@link IllegalStateException}
+     *         backend resilience policy may discard the entry. Backend failures may throw an exception
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null} and the implementation
+     *         rejects that {@code null} argument; all built-in implementations reject a {@code null} key,
+     *         and all except {@link DistributedCache} (which leaves {@code null} values to its client)
+     *         also reject a {@code null} value
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
@@ -239,8 +249,12 @@ public interface Cache<K, V> {
      *                    no idle timeout where supported; this parameter may be ignored by the implementation
      * @return {@code true} if the implementation reports success, {@code false} if storage was rejected.
      *         Success does not guarantee retention: eviction, expiration, concurrent changes, or a
-     *         backend resilience policy may discard the entry. Backend failures may throw; a closed
-     *         cache typically throws {@link IllegalStateException}
+     *         backend resilience policy may discard the entry. Backend failures may throw an exception
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null} and the implementation
+     *         rejects that {@code null} argument; all built-in implementations reject a {@code null} key,
+     *         and all except {@link DistributedCache} (which leaves {@code null} values to its client)
+     *         also reject a {@code null} value
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
@@ -272,6 +286,9 @@ public interface Cache<K, V> {
      * }</pre>
      *
      * @param key the cache key to remove; null-handling is implementation-defined (most implementations reject null)
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null} and the implementation rejects
+     *         {@code null} keys, as all built-in implementations do
      * @see #clear()
      * @see #containsKey(Object)
      * @see #asyncRemove(Object)
@@ -308,6 +325,9 @@ public interface Cache<K, V> {
      * @param key the cache key to check for; null-handling is implementation-defined (most implementations reject null)
      * @return {@code true} if the implementation currently considers an entry for the key present;
      *         visibility of expired or null-valued entries is implementation-specific
+     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if {@code key} is {@code null} and the implementation rejects
+     *         {@code null} keys, as all built-in implementations do
      * @see #get(Object)
      * @see #asyncContainsKey(Object)
      */
@@ -483,6 +503,7 @@ public interface Cache<K, V> {
      * }</pre>
      *
      * @return a set of cache keys; whether expired entries are included is implementation-defined
+     * @throws IllegalStateException if the cache has been closed
      * @throws UnsupportedOperationException if the operation is not supported by this implementation
      *         (e.g., some distributed cache backends)
      * @see #size()
@@ -508,6 +529,7 @@ public interface Cache<K, V> {
      * }</pre>
      *
      * @return the number of cache entries (may be an estimate depending on implementation)
+     * @throws IllegalStateException if the cache has been closed
      * @throws UnsupportedOperationException if the operation is not supported by this implementation
      *         (e.g., some distributed cache backends)
      * @see #keySet()
@@ -537,6 +559,7 @@ public interface Cache<K, V> {
      * }
      * }</pre>
      *
+     * @throws IllegalStateException if the cache has been closed
      * @throws UnsupportedOperationException if the operation is not supported by this implementation
      *         (e.g., some distributed cache backends)
      * @see #remove(Object)
@@ -551,9 +574,10 @@ public interface Cache<K, V> {
      * {@link java.lang.AutoCloseable} contract and does not make {@code Cache} eligible for
      * try-with-resources.
      *
-     * <p>After shutdown, the cache cannot be reopened; the behavior of subsequent operations is
-     * implementation-defined (typically they throw or return as if empty). This method is expected
-     * to be idempotent — calling it more than once has no additional effect.
+     * <p>After shutdown, the cache cannot be reopened; subsequent data operations throw
+     * {@link IllegalStateException} as documented on each method (a custom implementation may
+     * instead behave as if empty). This method is expected to be idempotent — calling it more than
+     * once has no additional effect.
      *
      * <p><b>Typical resource cleanup:</b>
      * <ul>
