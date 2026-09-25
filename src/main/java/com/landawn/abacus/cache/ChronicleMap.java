@@ -14,6 +14,8 @@
 
 package com.landawn.abacus.cache;
 
+import java.util.concurrent.RejectedExecutionException;
+
 /**
  * A compatibility adapter that preserves the {@code ChronicleMap} class name.
  * <p>
@@ -54,10 +56,11 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * map.close();                                               // stops this cache's background eviction task
      * }</pre>
      *
+     * @throws RejectedExecutionException if the pool's maintenance scheduler rejects the eviction task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
      *         its shutdown hook
      */
-    public ChronicleMap() {
+    public ChronicleMap() throws RejectedExecutionException, IllegalStateException {
         this(1024, 60_000L);
     }
 
@@ -87,10 +90,11 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative;
      *                   0 disables automatic eviction)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the pool's maintenance scheduler rejects the eviction task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
      *         its shutdown hook
      */
-    public ChronicleMap(final int capacity, final long evictDelay) {
+    public ChronicleMap(final int capacity, final long evictDelay) throws IllegalArgumentException, RejectedExecutionException, IllegalStateException {
         this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
@@ -131,10 +135,12 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * @param defaultMaxIdleTime default max idle time in milliseconds for entries added without
      *                           explicit expiration (0 or negative for no idle timeout)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the pool's maintenance scheduler rejects the eviction task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
      *         its shutdown hook
      */
-    public ChronicleMap(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
+    public ChronicleMap(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime)
+            throws IllegalArgumentException, RejectedExecutionException, IllegalStateException {
         super(capacity, evictDelay, defaultLiveTime, defaultMaxIdleTime);
     }
 }

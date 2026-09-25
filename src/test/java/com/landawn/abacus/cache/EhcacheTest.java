@@ -7,8 +7,12 @@ package com.landawn.abacus.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -19,6 +23,8 @@ import org.ehcache.CacheManager;
 import org.ehcache.config.builders.CacheConfigurationBuilder;
 import org.ehcache.config.builders.CacheManagerBuilder;
 import org.ehcache.config.builders.ResourcePoolsBuilder;
+import org.ehcache.spi.loaderwriter.CacheLoaderWriter;
+import org.ehcache.spi.loaderwriter.CacheLoadingException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +36,58 @@ public class EhcacheTest {
     private static org.ehcache.Cache<String, String> newUnderlyingCache(final CacheManager cacheManager) {
         return cacheManager.createCache("c" + System.nanoTime(),
                 CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(100)));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testMissingEntriesAreLoadedByDirectAndOptionalReads() throws Exception {
+        final CacheLoaderWriter<String, String> loader = mock(CacheLoaderWriter.class);
+        when(loader.load("direct")).thenReturn("loaded-direct");
+        when(loader.load("optional")).thenReturn("loaded-optional");
+
+        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
+            final org.ehcache.Cache<String, String> underlying = manager.createCache("readThrough",
+                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10))
+                            .withLoaderWriter(loader));
+            final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
+            try {
+                assertFalse(underlying.containsKey("direct"));
+                assertFalse(underlying.containsKey("optional"));
+
+                assertEquals("loaded-direct", wrapper.getOrNull("direct"));
+                assertEquals("loaded-optional", wrapper.get("optional").orElse(null));
+                assertTrue(underlying.containsKey("direct"));
+                assertTrue(underlying.containsKey("optional"));
+                verify(loader).load("direct");
+                verify(loader).load("optional");
+            } finally {
+                wrapper.close();
+            }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testLoaderFailuresPropagateThroughDirectAndOptionalReads() throws Exception {
+        final CacheLoaderWriter<String, String> loader = mock(CacheLoaderWriter.class);
+        final Exception failure = new Exception("loader unavailable");
+        when(loader.load("direct")).thenThrow(failure);
+        when(loader.load("optional")).thenThrow(failure);
+
+        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
+            final org.ehcache.Cache<String, String> underlying = manager.createCache("failedReadThrough",
+                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10))
+                            .withLoaderWriter(loader));
+            final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
+            try {
+                assertSame(failure, assertThrows(CacheLoadingException.class, () -> wrapper.getOrNull("direct")).getCause());
+                assertSame(failure, assertThrows(CacheLoadingException.class, () -> wrapper.get("optional")).getCause());
+                assertFalse(underlying.containsKey("direct"));
+                assertFalse(underlying.containsKey("optional"));
+            } finally {
+                wrapper.close();
+            }
+        }
     }
 
     /**

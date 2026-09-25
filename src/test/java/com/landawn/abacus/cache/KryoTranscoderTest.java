@@ -65,6 +65,16 @@ public class KryoTranscoderTest extends TestBase {
         assertNull(tx.decode(cd));
     }
 
+    /** Object-array cycles use Kryo's array serializer, which does not wrap the stack overflow. */
+    @Test
+    public void testEncode_SelfReferentialObjectArrayPropagatesStackOverflowError() {
+        final KryoTranscoder<Object> tx = new KryoTranscoder<>(com.landawn.abacus.parser.ParserFactory.createKryoParser());
+        final Object[] cycle = new Object[1];
+        cycle[0] = cycle;
+
+        assertThrows(StackOverflowError.class, () -> tx.encode(cycle));
+    }
+
     @Test
     public void testEncode_EdgeCase_ExceedsMaxSize() {
         // Tiny limit so any non-trivial object exceeds it.

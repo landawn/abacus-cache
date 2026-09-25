@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import java.util.Map;
@@ -20,6 +21,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -591,6 +595,69 @@ public class CaffeineCacheTest extends TestBase {
         try {
             assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
         } finally {
+            cache.close();
+        }
+    }
+
+    /** Argument validation must not wait for a delegate callback holding the lifecycle lock. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testRemoveRejectsNullBeforeWaitingForDestructiveOperation() throws Exception {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final CountDownLatch clearing = new CountDownLatch(1);
+        final CountDownLatch finishClear = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            clearing.countDown();
+            assertTrue(finishClear.await(10, TimeUnit.SECONDS));
+            return null;
+        }).when(delegate).invalidateAll();
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            final Future<?> clear = executor.submit(cache::clear);
+            assertTrue(clearing.await(5, TimeUnit.SECONDS));
+            final Future<?> rejected = executor.submit(() -> assertThrows(IllegalArgumentException.class, () -> cache.remove(null)));
+            rejected.get(5, TimeUnit.SECONDS);
+            verify(delegate).invalidateAll();
+            org.mockito.Mockito.verifyNoMoreInteractions(delegate);
+            finishClear.countDown();
+            clear.get(5, TimeUnit.SECONDS);
+        } finally {
+            finishClear.countDown();
+            executor.shutdownNow();
+            cache.close();
+        }
+    }
+
+    /** Once close publishes its state, failed calls must not wait for its delegate cleanup. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testClosedRemoveAndClearDoNotWaitForCloseCleanup() throws Exception {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final CountDownLatch closing = new CountDownLatch(1);
+        final CountDownLatch finishClose = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            closing.countDown();
+            assertTrue(finishClose.await(10, TimeUnit.SECONDS));
+            return null;
+        }).when(delegate).invalidateAll();
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            final Future<?> close = executor.submit(cache::close);
+            assertTrue(closing.await(5, TimeUnit.SECONDS));
+            assertTrue(cache.isClosed());
+            final Future<?> rejected = executor.submit(() -> {
+                assertThrows(IllegalStateException.class, () -> cache.remove(null));
+                assertThrows(IllegalStateException.class, cache::clear);
+            });
+            rejected.get(5, TimeUnit.SECONDS);
+            verify(delegate, never()).invalidate(org.mockito.ArgumentMatchers.any());
+            finishClose.countDown();
+            close.get(5, TimeUnit.SECONDS);
+        } finally {
+            finishClose.countDown();
+            executor.shutdownNow();
             cache.close();
         }
     }

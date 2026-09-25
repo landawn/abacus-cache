@@ -482,6 +482,18 @@ public class JRedisTest {
     // ---- shard routing ----
 
     @Test
+    public void test_clientFor_rejects_null_before_single_shard_shortcut_or_hashing() {
+        final IllegalArgumentException singleShardFailure = assertThrows(IllegalArgumentException.class, () -> cache.clientFor(null));
+        assertTrue(singleShardFailure.getMessage().contains("keyBytes"));
+        Mockito.verifyNoInteractions(mockJedis);
+
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        final IllegalArgumentException multipleShardFailure = assertThrows(IllegalArgumentException.class, () -> sharded.clientFor(null));
+        assertEquals(singleShardFailure.getMessage(), multipleShardFailure.getMessage());
+        shards.forEach(Mockito::verifyNoInteractions);
+    }
+
+    @Test
     public void test_routing_same_key_is_consistent_across_calls() {
         final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
         when(shards.get(0).get(any(byte[].class))).thenReturn(null);

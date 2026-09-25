@@ -333,8 +333,6 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance
      *                                    scheduler rejects its task (all cache-owned resources are
      *                                    released before this propagates)
-     * @throws SecurityException if runtime policy denies shutdown-hook registration (all cache-owned
-     *                           resources are released before this propagates)
      * @throws IllegalStateException if the JVM is already shutting down when the shutdown hook is
      *                               registered (all cache-owned resources are released before this
      *                               propagates)
@@ -344,7 +342,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             final long defaultMaxIdleTime, final float vacatingFactor, final int arrayOffset, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
             final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector,
-            final Logger logger) {
+            final Logger logger) throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         N.checkArgPositive(capacityInMB, cs.capacityInMB);
@@ -441,40 +439,48 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *         because {@code capacityInMB} is validated to be positive first)
      * @throws OutOfMemoryError if the implementation cannot reserve the requested amount of native memory
      */
-    protected abstract long allocate(long capacityInBytes);
+    protected abstract long allocate(long capacityInBytes) throws IllegalArgumentException, OutOfMemoryError;
 
     /**
      * Releases the off-heap memory reserved by {@link #allocate(long)}. Called at most once, from
      * the lifecycle-write-locked {@link #close()} or from the constructor's failure-cleanup path
      * before the instance is published, so implementations need not be thread-safe.
+     *
+     * @throws RuntimeException if the native-memory backend fails to release its allocation
      */
-    protected abstract void deallocate();
+    protected abstract void deallocate() throws RuntimeException;
 
     /**
      * Copies bytes from a heap array into off-heap memory. May be called concurrently for
      * different (disjoint) destination regions.
      *
      * @param startPtr the destination address in off-heap memory
-     * @param bytes the source array
+     * @param bytes the source array; must not be {@code null}, including for a zero-length copy
      * @param srcOffset the zero-based source-array index, plus the {@code arrayOffset} supplied at
      *                  construction. A backend that needs an object-layout base offset must add it
      *                  using {@code long} arithmetic in this hook.
      * @param len the number of bytes to copy
+     * @throws IllegalArgumentException if {@code bytes} is {@code null}
+     * @throws RuntimeException if the backend rejects the source array, address, offset, or length,
+     *         or if its native-memory region is no longer accessible
      */
-    protected abstract void copyToMemory(long startPtr, byte[] bytes, int srcOffset, int len);
+    protected abstract void copyToMemory(long startPtr, byte[] bytes, int srcOffset, int len) throws IllegalArgumentException, RuntimeException;
 
     /**
      * Copies bytes from off-heap memory into a heap array. May be called concurrently for
      * different source regions.
      *
      * @param startPtr the source address in off-heap memory
-     * @param bytes the destination array
+     * @param bytes the destination array; must not be {@code null}, including for a zero-length copy
      * @param destOffset the zero-based destination-array index (plus the construction-time
      *                   {@code arrayOffset}), in the same convention as
      *                   {@link #copyToMemory(long, byte[], int, int)}'s {@code srcOffset}
      * @param len the number of bytes to copy
+     * @throws IllegalArgumentException if {@code bytes} is {@code null}
+     * @throws RuntimeException if the backend rejects the destination array, address, offset, or length,
+     *         or if its native-memory region is no longer accessible
      */
-    protected abstract void copyFromMemory(long startPtr, byte[] bytes, int destOffset, int len);
+    protected abstract void copyFromMemory(long startPtr, byte[] bytes, int destOffset, int len) throws IllegalArgumentException, RuntimeException;
 
     // ------------------------------------------------------------------------------------- get
 
@@ -499,9 +505,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                               recorded size (data corruption), or because a configured
      *                               deserializer returned {@code null}
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the backing-store read, value deserialization, promotion predicate,
+     *         or native-memory copy throws an unchecked exception
      */
     @Override
-    public V getOrNull(final K key) {
+    public V getOrNull(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         lifecycleLock.readLock().lock();
         try {
             assertNotClosed();
@@ -603,8 +611,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Best-effort: if no memory can be allocated or the mapping changed concurrently, the disk
      * entry simply stays in place. Promotion preserves the original creation/access timestamps,
      * expiration limits, and access count; copying the value must not restart either clock.
+     *
+     * @throws RuntimeException if the promotion predicate or native-memory copy throws an unchecked exception
      */
-    private void maybePromoteToMemory(final K key, final Entry<V> diskEntry, final byte[] bytes, final long storeReadMillis) {
+    private void maybePromoteToMemory(final K key, final Entry<V> diskEntry, final byte[] bytes, final long storeReadMillis) throws RuntimeException {
         if (testerForLoadingItemFromDiskToMemory == null
                 || !testerForLoadingItemFromDiskToMemory.test(diskEntry.activityPrint, diskEntry.size, Math.max(0L, storeReadMillis))) {
             return;
@@ -694,15 +704,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @param liveTime the TTL in milliseconds; {@code <= 0} means no expiration
      * @param maxIdleTime the maximum idle time in milliseconds; {@code <= 0} means no idle limit
      * @return {@code true} if the value was stored (in memory or on disk); {@code false} otherwise
-     * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalStateException if the cache has been closed, or memory pressure triggers
+     *         submission of a vacate task after the shared async executor has been shut down
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or if
      *                                  {@code storeSelector} returns {@code null} or a value outside 0..2
+     * @throws RuntimeException if serialization, the store selector, the native-memory copy, or the
+     *         backing-store write throws an unchecked exception
      * @throws RejectedExecutionException if the put fails under memory pressure and the shared
-     *                                    executor rejects the vacate task (possible only during
-     *                                    JVM shutdown)
+     *         executor rejects the vacate task
      */
     @Override
-    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, RejectedExecutionException {
         lifecycleLock.readLock().lock();
         try {
             assertNotClosed();
@@ -716,7 +729,17 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    private boolean doPut(final K key, final V value, final long liveTime, final long maxIdleTime) {
+    /**
+     * Serializes and stores an already-validated key and value with the requested expiration limits.
+     *
+     * @throws RuntimeException if serialization, the store selector, the native-memory copy, or the
+     *         backing-store write throws an unchecked exception
+     * @throws IllegalArgumentException if the store selector returns {@code null} or a value outside 0..2
+     * @throws IllegalStateException if memory pressure triggers a vacate task after the shared async executor has been shut down
+     * @throws RejectedExecutionException if memory pressure triggers a vacate task that the executor rejects
+     */
+    private boolean doPut(final K key, final V value, final long liveTime, final long maxIdleTime)
+            throws RuntimeException, IllegalArgumentException, IllegalStateException, RejectedExecutionException {
         // A non-positive liveTime/maxIdleTime means "no expiration" per the documented contract;
         // ActivityPrint rejects values <= 0, so translate to Long.MAX_VALUE.
         final long effectiveLiveTime = liveTime > 0 ? liveTime : Long.MAX_VALUE;
@@ -798,8 +821,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /** Validates and returns the storage routing for one put: 0 (default), 1 (memory only), or 2 (disk only). */
-    private int selectedStoreOf(final K key, final V value, final int size) {
+    /**
+     * Validates and returns the storage routing for one put: 0 (default), 1 (memory only), or 2 (disk only).
+     *
+     * @throws RuntimeException if the configured store selector throws an unchecked exception
+     * @throws IllegalArgumentException if the store selector returns {@code null} or a value outside 0..2
+     */
+    private int selectedStoreOf(final K key, final V value, final int size) throws RuntimeException, IllegalArgumentException {
         if (storeSelector == null) {
             return STORE_DEFAULT;
         }
@@ -823,8 +851,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * completely untouched.
      *
      * @return {@code true} if the value was stored and installed
+     * @throws RuntimeException if the backing-store write throws an unchecked exception
      */
-    private boolean putToDisk(final K key, final Type<V> type, final byte[] bytes, final int size, final long liveTime, final long maxIdleTime) {
+    private boolean putToDisk(final K key, final Type<V> type, final byte[] bytes, final int size, final long liveTime, final long maxIdleTime)
+            throws RuntimeException {
         // Always hand the store a private copy: `bytes` may alias a pooled serialization buffer
         // that is recycled (and reused by other threads) right after this put, or the caller's
         // own byte[]/ByteBuffer contents.
@@ -885,8 +915,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * {@code elapsedOut[0]} when disk timing is enabled. Measures only {@link OffHeapStore#put},
      * excluding serialization and the unsuccessful in-memory placement work that preceded the
      * disk fallback.
+     *
+     * @throws RuntimeException if the backing-store write throws an unchecked exception
      */
-    private boolean timedStorePut(final K key, final byte[] bytes, final long[] elapsedOut) {
+    private boolean timedStorePut(final K key, final byte[] bytes, final long[] elapsedOut) throws RuntimeException {
         final long startedAt = statsTimeOnDisk ? System.nanoTime() : 0L;
 
         final boolean ok = offHeapStore.put(key, bytes);
@@ -910,7 +942,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
-    public void remove(final K key) {
+    public void remove(final K key) throws IllegalStateException, IllegalArgumentException {
         lifecycleLock.readLock().lock();
         try {
             assertNotClosed();
@@ -943,7 +975,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
-    public boolean containsKey(final K key) {
+    public boolean containsKey(final K key) throws IllegalStateException, IllegalArgumentException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -962,7 +994,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
-    public Set<K> keySet() {
+    public Set<K> keySet() throws IllegalStateException {
         assertNotClosed();
 
         return new HashSet<>(entries.keySet());
@@ -976,7 +1008,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
-    public int size() {
+    public int size() throws IllegalStateException {
         assertNotClosed();
 
         return entries.size();
@@ -991,7 +1023,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
-    public void clear() {
+    public void clear() throws IllegalStateException {
         lifecycleLock.readLock().lock();
         try {
             assertNotClosed();
@@ -1006,7 +1038,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns whether this cache has been closed.
      *
-     * @return {@code true} if {@link #close()} has been called
+     * @return {@code true} if the cache is closed
      */
     @Override
     public boolean isClosed() {
@@ -1019,8 +1051,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * entries' bytes from the store), deallocates the native region, and closes the configured
      * {@link OffHeapStore}, if any. If the cache remains active for the application lifetime, the
      * registered shutdown hook invokes this method automatically during JVM shutdown.
-     * Every step runs even when an earlier one fails; the first failure propagates with any
-     * later ones attached as suppressed exceptions. This method is idempotent.
+     * Every entry and cleanup step is attempted even when an earlier one fails. The entry index
+     * is cleared even if an entry cannot be released. As with {@link #remove(Object)}, a
+     * {@link RuntimeException} from removing disk bytes is logged rather than propagated.
+     * Other cleanup failures propagate, with the first failure retaining later distinct failures
+     * as suppressed exceptions. This method is idempotent.
      *
      * <p><b>Reentrant callback restriction:</b> a serializer, store selector, or other callback
      * invoked from an operation holding this cache's lifecycle read lock must not close the cache
@@ -1029,11 +1064,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @throws IllegalStateException if the current thread attempts to close the cache while it is
      *                               executing a cache operation or callback
-     * @throws SecurityException if the runtime denies removal of the registered shutdown hook;
-     *                           native-memory and store cleanup is still attempted
+     * @throws RuntimeException if canceling maintenance, removing the shutdown hook, releasing an
+     *         entry, deallocating native memory, or closing the configured store throws an unchecked
+     *         exception; later distinct cleanup failures are suppressed on the first failure
      */
     @Override
-    public void close() {
+    public void close() throws IllegalStateException, RuntimeException {
         // ReentrantReadWriteLock does not support upgrading a held read lock to its write lock;
         // fail fast instead of deadlocking on ourselves.
         if (lifecycleLock.getReadHoldCount() > 0) {
@@ -1055,7 +1091,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             });
             failure = runCleanupStep(failure, this::removeShutdownHook);
-            failure = runCleanupStep(failure, () -> removeAllEntries(FreeCause.REMOVED));
+            failure = runCleanupStep(failure, this::removeAllEntriesOnClose);
             failure = runCleanupStep(failure, this::deallocate);
             failure = runCleanupStep(failure, () -> {
                 if (offHeapStore != null) {
@@ -1123,8 +1159,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @return the statistics snapshot; never {@code null}
      * @throws IllegalStateException if the cache has been closed
+     * @throws IllegalArgumentException if an accumulated counter has overflowed into a negative
+     *         value, or an overflowed disk-timing accumulator produces invalid timing statistics
      */
-    public OffHeapCacheStats stats() {
+    public OffHeapCacheStats stats() throws IllegalStateException, IllegalArgumentException {
         assertNotClosed();
 
         final long hits = hitCount.sum();
@@ -1239,6 +1277,33 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
+    /**
+     * Releases each indexed entry while close holds the lifecycle write lock, then clears the
+     * index even if a release fails. No per-key lookup is needed because cache operations have
+     * stopped; avoiding one also prevents a key's hashCode or equals implementation from blocking
+     * cleanup. The first failure is propagated after all releases have been attempted, with later
+     * distinct failures suppressed.
+     *
+     * @throws RuntimeException if releasing an entry throws an unchecked exception
+     */
+    private void removeAllEntriesOnClose() throws RuntimeException {
+        Throwable failure = null;
+
+        try {
+            for (final Map.Entry<K, Entry<V>> mapEntry : entries.entrySet()) {
+                failure = runCleanupStep(failure, () -> free(mapEntry.getKey(), mapEntry.getValue(), FreeCause.REMOVED, true));
+            }
+        } finally {
+            entries.clear();
+        }
+
+        if (failure instanceof final RuntimeException runtimeException) {
+            throw runtimeException;
+        } else if (failure instanceof final Error error) {
+            throw error;
+        }
+    }
+
     /** Removes and frees every expired entry. Called by the periodic maintenance pass. */
     private void sweepExpiredEntries() {
         for (final Map.Entry<K, Entry<V>> mapEntry : entries.entrySet()) {
@@ -1258,8 +1323,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * Debounced (a pass that finished within the last 3 s suppresses a new one) and single-flight
      * (at most one pass runs at a time). The pass holds the lifecycle read lock, so
      * {@link #close()} waits for it.
+     *
+     * @throws IllegalStateException if the shared async executor has been shut down before a vacate task is submitted
+     * @throws RejectedExecutionException if the executor rejects submission of the vacate task
      */
-    private void vacate() {
+    private void vacate() throws IllegalStateException, RejectedExecutionException {
         if (System.nanoTime() - lastVacateFinishedNanos < VACATE_DEBOUNCE_NANOS || !vacating.compareAndSet(false, true)) {
             return;
         }
@@ -1580,8 +1648,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return baseAddress + (long) segmentIndexOf(slot) * SEGMENT_SIZE + (long) slotIndexOf(slot) * slotSize;
     }
 
-    /** Copies serialized bytes into freshly allocated, still-unpublished slots. */
-    private void copyToAllocatedSlots(final int size, final long[] slots, final byte[] bytes) {
+    /**
+     * Copies serialized bytes into freshly allocated, still-unpublished slots.
+     *
+     * @throws RuntimeException if a native-memory copy hook throws an unchecked exception
+     */
+    private void copyToAllocatedSlots(final int size, final long[] slots, final byte[] bytes) throws RuntimeException {
         int copied = 0;
 
         for (int i = 0; i < slots.length; i++) {
@@ -1594,9 +1666,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Creates and fills a memory entry, returning every allocated slot if construction or copying
      * fails before the entry can be offered to the map.
+     *
+     * @throws RuntimeException if a native-memory copy hook throws an unchecked exception
      */
-    private Entry<V> createMemoryEntry(final Type<V> type, final int size, final long liveTime, final long maxIdleTime, final long[] slots,
-            final byte[] bytes) {
+    private Entry<V> createMemoryEntry(final Type<V> type, final int size, final long liveTime, final long maxIdleTime, final long[] slots, final byte[] bytes)
+            throws RuntimeException {
         try {
             // Perform the potentially expensive native copy before starting the entry's TTL/idle
             // clocks. The resulting ActivityPrint is created before map installation begins,
@@ -1609,8 +1683,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /** Reassembles an entry's serialized bytes from its slots. Caller holds the entry monitor. */
-    private void copyEntryFromMemory(final Entry<V> entry, final byte[] bytes) {
+    /**
+     * Reassembles an entry's serialized bytes from its slots. Caller holds the entry monitor.
+     *
+     * @throws RuntimeException if a native-memory copy hook throws an unchecked exception
+     */
+    private void copyEntryFromMemory(final Entry<V> entry, final byte[] bytes) throws RuntimeException {
         int copied = 0;
 
         for (int i = 0; i < entry.slots.length; i++) {
@@ -1620,9 +1698,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /** Reconstructs a non-null cache value consistently for every storage tier. */
+    /**
+     * Reconstructs a non-null cache value consistently for every storage tier.
+     *
+     * @throws RuntimeException if the configured deserializer throws an unchecked exception
+     * @throws IllegalStateException if the configured deserializer returns {@code null}
+     */
     @SuppressWarnings("unchecked")
-    private V deserializeValue(final byte[] bytes, final Type<V> type) {
+    private V deserializeValue(final byte[] bytes, final Type<V> type) throws RuntimeException, IllegalStateException {
         final V value;
 
         if (type.isPrimitiveByteArray()) {
@@ -1644,7 +1727,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
     }
 
-    private void assertNotClosed() {
+    /**
+     * Checks that this cache is open.
+     *
+     * @throws IllegalStateException if this cache has been closed
+     */
+    private void assertNotClosed() throws IllegalStateException {
         if (closed) {
             throw new IllegalStateException("This off-heap cache has been closed");
         }
@@ -1672,7 +1760,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         /** One-way flag; written under the entry monitor, read either under it or as a racy hint. */
         volatile boolean freed;
 
-        Entry(final Type<T> type, final int size, final long liveTime, final long maxIdleTime, final long[] slots) {
+        /**
+         * Creates an entry with fresh expiration metadata.
+         *
+         * @throws IllegalArgumentException if {@code liveTime} or {@code maxIdleTime} is not positive
+         */
+        Entry(final Type<T> type, final int size, final long liveTime, final long maxIdleTime, final long[] slots) throws IllegalArgumentException {
             this(type, size, new ActivityPrint(liveTime, maxIdleTime), slots);
         }
 
@@ -1727,7 +1820,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             max = count == 1 ? millis : Math.max(max, millis);
         }
 
-        synchronized MinMaxAvg snapshot() {
+        /**
+         * Captures the timing extrema and mean.
+         *
+         * @throws IllegalArgumentException if accumulator overflow produces a negative or non-finite
+         *         value, or a mean outside the recorded minimum and maximum
+         */
+        synchronized MinMaxAvg snapshot() throws IllegalArgumentException {
             return count == 0 ? new MinMaxAvg(0.0D, 0.0D, 0.0D) : new MinMaxAvg(min, max, Numbers.round((double) sum / count, 2));
         }
     }

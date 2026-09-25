@@ -188,8 +188,10 @@ public interface OffHeapStore<K> extends AutoCloseable {
      *
      * @param key the key whose associated value is to be retrieved; must not be {@code null}
      * @return the stored byte array, or {@code null} if the key is confirmed not to exist
+     * @throws RuntimeException if the implementation cannot read the stored bytes or determine
+     *         whether {@code key} exists, for example because its storage is unavailable
      */
-    byte[] get(K key);
+    byte[] get(K key) throws RuntimeException;
 
     /**
      * Stores a byte array under the specified key.
@@ -228,8 +230,10 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * @param value the byte array value to store; must not be {@code null}
      * @return {@code true} if the value was successfully stored, {@code false} if it was not stored
      *         and any previous mapping remains unchanged
+     * @throws RuntimeException if the implementation reports a failed write by throwing rather than
+     *         returning {@code false}; the previous mapping and bytes must remain unchanged
      */
-    boolean put(K key, byte[] value);
+    boolean put(K key, byte[] value) throws RuntimeException;
 
     /**
      * Removes the value associated with the specified key.
@@ -254,8 +258,10 @@ public interface OffHeapStore<K> extends AutoCloseable {
      *
      * @param key the key whose associated value is to be removed; must not be {@code null}
      * @return {@code true} if a value was removed, {@code false} if the key is confirmed not to exist
+     * @throws RuntimeException if the implementation cannot remove the stored bytes or determine
+     *         whether {@code key} exists, for example because its storage is unavailable
      */
-    boolean remove(K key);
+    boolean remove(K key) throws RuntimeException;
 
     /**
      * Releases any OS resources held by this store (file handles, memory-mapped regions, embedded

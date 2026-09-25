@@ -21,11 +21,11 @@ import java.util.zip.CRC32;
 
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
+import com.landawn.abacus.util.N;
 
 import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisClientConfig;
 import redis.clients.jedis.RedisClient;
-import redis.clients.jedis.exceptions.JedisException;
 
 /**
  * A Redis-based distributed cache client implementation using Jedis with client-side sharding.
@@ -132,7 +132,7 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      *         operation routed to that shard.
      * @see #JRedis(String, long)
      */
-    public JRedis(final String serverUrl) {
+    public JRedis(final String serverUrl) throws IllegalArgumentException, RuntimeException {
         this(serverUrl, DEFAULT_TIMEOUT);
     }
 
@@ -173,7 +173,7 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      *         operation routed to that shard.
      * @see #JRedis(String)
      */
-    public JRedis(final String serverUrl, final long timeout) {
+    public JRedis(final String serverUrl, final long timeout) throws IllegalArgumentException, RuntimeException {
         super(serverUrl);
 
         final List<InetSocketAddress> addressList = resolveServerAddresses(serverUrl);
@@ -222,9 +222,12 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      *
      * @param keyBytes the UTF-8 encoded key bytes; must not be {@code null}
      * @return the {@link RedisClient} for the shard that owns the key, never {@code null}
+     * @throws IllegalArgumentException if {@code keyBytes} is {@code null}
      */
     @Override
-    protected RedisClient clientFor(final byte[] keyBytes) {
+    protected RedisClient clientFor(final byte[] keyBytes) throws IllegalArgumentException {
+        N.checkArgNotNull(keyBytes, cs.keyBytes);
+
         final int shardCount = clients.size();
 
         if (shardCount == 1) {
@@ -253,13 +256,13 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * also be deleted.
      *
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws JedisException the first exception encountered while flushing any shard (all remaining
-     *         shards are still attempted before the exception is rethrown; later failures are attached
-     *         to it as suppressed exceptions)
+     * @throws RuntimeException if acquiring a shard connection or executing FLUSHALL fails; the first
+     *         such exception is rethrown after all remaining shards have been attempted, with later
+     *         failures attached as suppressed exceptions
      * @see #disconnect()
      */
     @Override
-    public void flushAll() {
+    public void flushAll() throws IllegalStateException, RuntimeException {
         assertNotShutdown();
 
         RuntimeException firstException = null;
@@ -299,9 +302,12 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * even on failure. Reuse of the same {@code Error} instance by multiple clients is tolerated
      * without attempting illegal self-suppression. Invoked once by the idempotent
      * {@link #disconnect()} template.
+     *
+     * @throws Error if closing a shard raises an error; all shards are attempted before the first
+     *         error is rethrown, with later distinct errors attached as suppressed exceptions
      */
     @Override
-    protected void closeClients() {
+    protected void closeClients() throws Error {
         Error firstError = null;
 
         for (int shardIndex = 0; shardIndex < clients.size(); shardIndex++) {

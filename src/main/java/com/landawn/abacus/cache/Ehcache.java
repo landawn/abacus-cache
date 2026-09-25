@@ -111,7 +111,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @param cache the underlying Ehcache instance to wrap (must not be {@code null})
      * @throws IllegalArgumentException if {@code cache} is {@code null}
      */
-    public Ehcache(final Cache<K, V> cache) {
+    public Ehcache(final Cache<K, V> cache) throws IllegalArgumentException {
         cacheImpl = N.checkArgNotNull(cache, cs.cache);
     }
 
@@ -139,10 +139,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws ClassCastException if {@code key} or a loaded value does not match the underlying cache's configured types
      * @throws CacheLoadingException if the cache loader fails
+     * @throws RuntimeException if a configured copier or resilience strategy fails while retrieving the entry
      */
     @Override
-    public V getOrNull(final K key) {
+    public V getOrNull(final K key) throws IllegalStateException, IllegalArgumentException, ClassCastException, CacheLoadingException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -191,10 +193,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
+     * @throws ClassCastException if {@code key} or {@code value} does not match the underlying cache's configured types
      * @throws CacheWritingException if the cache writer fails
+     * @throws RuntimeException if a configured copier or resilience strategy fails while storing the entry
      */
     @Override
-    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime)
+            throws IllegalStateException, IllegalArgumentException, ClassCastException, CacheWritingException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -226,10 +231,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws ClassCastException if {@code key} does not match the underlying cache's configured key type
      * @throws CacheWritingException if the cache writer fails
+     * @throws RuntimeException if a configured copier or resilience strategy fails while removing the entry
      */
     @Override
-    public void remove(final K key) {
+    public void remove(final K key) throws IllegalStateException, IllegalArgumentException, ClassCastException, CacheWritingException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -262,9 +269,11 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws ClassCastException if {@code key} does not match the underlying cache's configured key type
+     * @throws RuntimeException if a configured copier or resilience strategy fails while checking the entry
      */
     @Override
-    public boolean containsKey(final K key) {
+    public boolean containsKey(final K key) throws IllegalStateException, IllegalArgumentException, ClassCastException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -304,10 +313,13 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
+     * @throws ClassCastException if {@code key}, {@code value}, or a loaded value does not match the underlying cache's configured types
      * @throws CacheLoadingException if the cache loader fails
      * @throws CacheWritingException if the cache writer fails
+     * @throws RuntimeException if a configured copier or resilience strategy fails while conditionally storing the entry
      */
-    public V putIfAbsent(final K key, final V value) {
+    public V putIfAbsent(final K key, final V value)
+            throws IllegalStateException, IllegalArgumentException, ClassCastException, CacheLoadingException, CacheWritingException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -366,9 +378,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     * @throws ClassCastException if a key in {@code keys} or a loaded value does not match the underlying cache's configured types
      * @throws BulkCacheLoadingException if the bulk cache loader fails
+     * @throws RuntimeException if a configured copier or resilience strategy fails while retrieving the entries
      */
-    public Map<K, V> getAll(final Set<? extends K> keys) {
+    public Map<K, V> getAll(final Set<? extends K> keys)
+            throws IllegalStateException, IllegalArgumentException, ClassCastException, BulkCacheLoadingException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(keys, cs.keys);
@@ -410,9 +425,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code entries} is {@code null} or contains a {@code null} key or {@code null} value
+     * @throws ClassCastException if a key or value in {@code entries} does not match the underlying cache's configured types
      * @throws BulkCacheWritingException if the bulk cache writer fails
+     * @throws RuntimeException if a configured copier or resilience strategy fails while storing the entries
      */
-    public void putAll(final Map<? extends K, ? extends V> entries) {
+    public void putAll(final Map<? extends K, ? extends V> entries)
+            throws IllegalStateException, IllegalArgumentException, ClassCastException, BulkCacheWritingException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(entries, cs.entries);
@@ -458,9 +476,12 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element
+     * @throws ClassCastException if a key in {@code keys} does not match the underlying cache's configured key type
      * @throws BulkCacheWritingException if the bulk cache writer fails
+     * @throws RuntimeException if a configured copier or resilience strategy fails while removing the entries
      */
-    public void removeAll(final Set<? extends K> keys) {
+    public void removeAll(final Set<? extends K> keys)
+            throws IllegalStateException, IllegalArgumentException, ClassCastException, BulkCacheWritingException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(keys, cs.keys);
@@ -581,9 +602,10 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
+     * @throws RuntimeException if the configured resilience strategy fails while handling a store failure during clearing
      */
     @Override
-    public void clear() {
+    public void clear() throws IllegalStateException, RuntimeException {
         assertNotClosed();
 
         cacheImpl.clear();
@@ -670,7 +692,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @throws IllegalStateException if the cache has been closed via {@link #close()}
      */
-    protected void assertNotClosed() {
+    protected void assertNotClosed() throws IllegalStateException {
         if (isClosed) {
             throw new IllegalStateException("This cache has been closed");
         }

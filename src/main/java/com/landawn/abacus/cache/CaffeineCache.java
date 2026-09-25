@@ -121,7 +121,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param cache the underlying Caffeine cache instance to wrap (must not be {@code null})
      * @throws IllegalArgumentException if {@code cache} is {@code null}
      */
-    public CaffeineCache(final Cache<K, V> cache) {
+    public CaffeineCache(final Cache<K, V> cache) throws IllegalArgumentException {
         cacheImpl = N.checkArgNotNull(cache, cs.cache);
     }
 
@@ -155,9 +155,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @return the value associated with the specified key, or {@code null} if not found, expired, or evicted
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the configured ticker or variable-expiration callback fails while reading the entry
      */
     @Override
-    public V getOrNull(final K key) {
+    public V getOrNull(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -211,11 +212,13 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @return {@code true} (this implementation always succeeds unless an exception is thrown)
      * @throws IllegalStateException if the cache has been closed, including when {@link #close()} runs concurrently
      *         with this put (a late write that is still current is removed before the exception is thrown)
-     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
+     * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or the configured weigher returns a negative weight
+     * @throws RuntimeException if the configured ticker, weigher, or variable-expiration callback fails while storing the entry
      */
     @SuppressWarnings("unused")
     @Override
-    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -282,14 +285,19 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param key the cache key whose mapping is to be removed from the cache (must not be {@code null})
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the configured ticker fails while invalidating the entry
      */
     @Override
-    public void remove(final K key) {
+    public void remove(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
+        // Reject invalid calls before waiting for another destructive operation. The check inside
+        // the lock still catches a close that starts after this initial validation.
+        assertNotClosed();
+
+        N.checkArgNotNull(key, cs.key);
+
         destructiveOperationLock.lock();
         try {
             assertNotClosed();
-
-            N.checkArgNotNull(key, cs.key);
 
             cacheImpl.invalidate(key);
         } finally {
@@ -330,9 +338,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *         mapping for the key; {@code false} otherwise
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if {@code key} is {@code null}
+     * @throws RuntimeException if the configured ticker fails while checking the entry's expiration
      */
     @Override
-    public boolean containsKey(final K key) {
+    public boolean containsKey(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -358,7 +367,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @return this method never returns normally; it always throws
-     * @throws UnsupportedOperationException always
+     * @throws UnsupportedOperationException always, because this wrapper does not support key enumeration
      */
     @Override
     public Set<K> keySet() throws UnsupportedOperationException {
@@ -390,7 +399,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      */
     @Override
-    public int size() {
+    public int size() throws IllegalStateException {
         assertNotClosed();
 
         final long estimatedSize = cacheImpl.estimatedSize();
@@ -420,9 +429,14 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @throws IllegalStateException if the cache has been closed
+     * @throws RuntimeException if the configured ticker fails while invalidating entries
      */
     @Override
-    public void clear() {
+    public void clear() throws IllegalStateException, RuntimeException {
+        // A close may hold the lock while its delegate cleanup runs; reject an already-closed
+        // wrapper immediately, then recheck under the lock to cover a concurrent close.
+        assertNotClosed();
+
         destructiveOperationLock.lock();
         try {
             assertNotClosed();
@@ -473,9 +487,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * }
      * }</pre>
      *
+     * @throws RuntimeException if the configured ticker fails while invalidating entries; the wrapper remains closed
      */
     @Override
-    public void close() {
+    public void close() throws RuntimeException {
         destructiveOperationLock.lock();
         try {
             if (isClosed) {
@@ -613,7 +628,7 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * @throws IllegalStateException if the cache has been closed via {@link #close()}
      */
-    protected void assertNotClosed() {
+    protected void assertNotClosed() throws IllegalStateException {
         if (isClosed) {
             throw new IllegalStateException("This cache has been closed");
         }

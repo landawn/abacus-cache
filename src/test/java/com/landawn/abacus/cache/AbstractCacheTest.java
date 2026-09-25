@@ -9,8 +9,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -18,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -194,6 +198,94 @@ public class AbstractCacheTest extends TestBase {
             assertThrows(IllegalArgumentException.class, () -> props.computeIfPresent("key", null));
             assertThrows(IllegalArgumentException.class, () -> props.compute("key", null));
             assertThrows(IllegalArgumentException.class, () -> props.merge("key", "value", null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void testProperties_MergeValidatesValueBeforeFunctionWithoutChangingMapping() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> props = cache.getProperties();
+            props.put("key", "original");
+            final AtomicInteger calls = new AtomicInteger();
+
+            assertThrows(NullPointerException.class, () -> props.merge("key", null, null));
+            assertThrows(NullPointerException.class, () -> props.merge("key", null, (oldValue, newValue) -> {
+                calls.incrementAndGet();
+                return newValue;
+            }));
+            assertEquals(0, calls.get());
+            assertEquals("original", props.get("key"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void testProperties_NullNamesValuesAndRemappingResultsRemainSupported() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertNull(cache.setProperty(null, null));
+            final Properties<String, Object> props = cache.getProperties();
+            assertTrue(props.containsKey(null));
+            assertNull(cache.getProperty(null));
+
+            assertEquals("initial", props.merge(null, "initial", (oldValue, newValue) -> {
+                throw new AssertionError("A null mapping must use the incoming value directly");
+            }));
+            assertEquals("initial", cache.getProperty(null));
+            assertNull(props.merge(null, "replacement", (oldValue, newValue) -> null));
+            assertFalse(props.containsKey(null));
+
+            cache.setProperty(null, "final");
+            assertEquals("final", cache.removeProperty(null));
+            assertNull(cache.removeProperty(null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void testAsyncValidationFailuresRemainInFuture() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final ContinuableFuture<String> invalidKey = assertDoesNotThrow(() -> cache.asyncGetOrNull(null));
+            final ExecutionException invalidKeyFailure = assertThrows(ExecutionException.class,
+                    () -> invalidKey.get(5, TimeUnit.SECONDS));
+            assertTrue(invalidKeyFailure.getCause() instanceof IllegalArgumentException);
+
+            cache.close();
+            final ContinuableFuture<Boolean> closedCache = assertDoesNotThrow(() -> cache.asyncPut(null, null));
+            final ExecutionException closedFailure = assertThrows(ExecutionException.class,
+                    () -> closedCache.get(5, TimeUnit.SECONDS));
+            assertTrue(closedFailure.getCause() instanceof IllegalStateException);
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testWriteSerializationErrorsPropagateDirectlyAndThroughAsyncFutures() {
+        final DistributedCacheClient<Object> client = mock(DistributedCacheClient.class);
+        final Cache<String, Object> cache = new DistributedCache<>(client);
+        final Object value = new Object();
+        final StackOverflowError failure = new StackOverflowError("cyclic serialized value");
+        // Inject the client's documented serialization error without exhausting the test thread's stack.
+        when(client.put("a2V5", value, Cache.DEFAULT_LIVE_TIME)).thenThrow(failure);
+
+        try {
+            assertSame(failure, assertThrows(StackOverflowError.class, () -> cache.put("key", value)));
+            assertSame(failure, assertThrows(StackOverflowError.class,
+                    () -> cache.put("key", value, Cache.DEFAULT_LIVE_TIME, Cache.DEFAULT_MAX_IDLE_TIME)));
+
+            final ContinuableFuture<Boolean> defaultWrite = assertDoesNotThrow(() -> cache.asyncPut("key", value));
+            final ContinuableFuture<Boolean> explicitWrite = assertDoesNotThrow(
+                    () -> cache.asyncPut("key", value, Cache.DEFAULT_LIVE_TIME, Cache.DEFAULT_MAX_IDLE_TIME));
+            assertSame(failure, assertThrows(ExecutionException.class, () -> defaultWrite.get(5, TimeUnit.SECONDS)).getCause());
+            assertSame(failure, assertThrows(ExecutionException.class, () -> explicitWrite.get(5, TimeUnit.SECONDS)).getCause());
         } finally {
             cache.close();
         }

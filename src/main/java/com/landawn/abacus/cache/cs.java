@@ -20,6 +20,8 @@ public final class cs { // NOSONAR
 
     /** Parameter name {@code "action"}. */
     public static final String action = "action";
+    /** Parameter name {@code "bytes"}. */
+    public static final String bytes = "bytes";
     /** Parameter name {@code "cache"}. */
     public static final String cache = "cache";
     /** Parameter name {@code "capacity"}. */
@@ -48,6 +50,8 @@ public final class cs { // NOSONAR
     public static final String future = "future";
     /** Parameter name {@code "key"}. */
     public static final String key = "key";
+    /** Parameter name {@code "keyBytes"}. */
+    public static final String keyBytes = "keyBytes";
     /** Parameter name {@code "keys"}. */
     public static final String keys = "keys";
     /** Parameter name {@code "kryoParser"}. */
@@ -72,6 +76,8 @@ public final class cs { // NOSONAR
     public static final String serializer = "serializer";
     /** Parameter name {@code "serverUrl"}. */
     public static final String serverUrl = "serverUrl";
+    /** Parameter name {@code "srcBytes"}. */
+    public static final String srcBytes = "srcBytes";
     /** Parameter name {@code "storeSelector"}. */
     public static final String storeSelector = "storeSelector";
     /** Parameter name {@code "target"}. */

@@ -120,7 +120,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
      * @see #JRedisCluster(String, long)
      */
-    public JRedisCluster(final String serverUrl) {
+    public JRedisCluster(final String serverUrl) throws IllegalArgumentException, RuntimeException {
         this(serverUrl, DEFAULT_TIMEOUT);
     }
 
@@ -166,7 +166,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
      * @see #JRedisCluster(String)
      */
-    public JRedisCluster(final String serverUrl, final long timeout) {
+    public JRedisCluster(final String serverUrl, final long timeout) throws IllegalArgumentException, RuntimeException {
         super(serverUrl);
 
         final List<InetSocketAddress> addressList = resolveServerAddresses(serverUrl);
@@ -194,7 +194,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @param cluster the pre-built cluster client to use; must not be {@code null}
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}/empty/blank or {@code cluster} is {@code null}
      */
-    JRedisCluster(final String serverUrl, final RedisClusterClient cluster) {
+    JRedisCluster(final String serverUrl, final RedisClusterClient cluster) throws IllegalArgumentException {
         super(serverUrl);
 
         this.cluster = N.checkArgNotNull(cluster, cs.cluster);
@@ -232,7 +232,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @see #disconnect()
      */
     @Override
-    public void flushAll() {
+    public void flushAll() throws IllegalStateException, JedisException {
         assertNotShutdown();
 
         // RedisClusterClient.flushAll() is a broadcast command: Jedis sends FLUSHALL to every primary
@@ -244,9 +244,11 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * Closes the underlying {@link RedisClusterClient}, shutting down the connection pools for every
      * cluster node. Best-effort: a failure is logged at WARN level. Invoked once by the idempotent
      * {@link #disconnect()} template.
+     *
+     * @throws Error if closing the underlying cluster client raises an error
      */
     @Override
-    protected void closeClients() {
+    protected void closeClients() throws Error {
         try {
             cluster.close();
         } catch (final RuntimeException e) {

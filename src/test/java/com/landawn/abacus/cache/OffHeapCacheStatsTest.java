@@ -74,12 +74,46 @@ public class OffHeapCacheStatsTest {
         assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
         // putCount negative
         assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // putCountToDisk negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // getCount negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // hitCount negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // hitCountFromDisk negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
         // missCount negative
         assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // evictionCount negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // evictionCountFromDisk negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, z, z, 0, Map.of()));
+        // allocatedMemory negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, z, z, 0, Map.of()));
+        // occupiedMemory negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, 0, z, z, 0, Map.of()));
+        // dataSize negative
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, 0, z, z, 0, Map.of()));
         // segmentSize negative
         assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, -1, Map.of()));
         // dataSizeOnDisk negative
         assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, z, z, 0, Map.of()));
+    }
+
+    @Test
+    public void testRecordValidatesComponentsInSignatureOrder() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new OffHeapCacheStats(-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
+        final NullPointerException missingWriteStats = assertThrows(NullPointerException.class,
+                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
+        assertEquals("writeToDiskTimeStats cannot be null", missingWriteStats.getMessage());
+        final NullPointerException missingReadStats = assertThrows(NullPointerException.class,
+                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, null, -1, null));
+        assertEquals("readFromDiskTimeStats cannot be null", missingReadStats.getMessage());
+        assertThrows(IllegalArgumentException.class,
+                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, -1, null));
     }
 
     @Test
@@ -140,5 +174,23 @@ public class OffHeapCacheStatsTest {
         final Map<Integer, Map<Integer, Integer>> nullNested = new java.util.HashMap<>();
         nullNested.put(64, null);
         assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, nullNested));
+    }
+
+    @Test
+    public void testRecordPreservesNullPointerExceptionForNullSlotComponents() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+        final Map<Integer, Map<Integer, Integer>> slots = new LinkedHashMap<>();
+        slots.put(null, Map.of());
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
+
+        final Map<Integer, Integer> perSegment = new LinkedHashMap<>();
+        slots.clear();
+        slots.put(64, perSegment);
+        perSegment.put(null, 0);
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
+
+        perSegment.clear();
+        perSegment.put(0, null);
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
     }
 }

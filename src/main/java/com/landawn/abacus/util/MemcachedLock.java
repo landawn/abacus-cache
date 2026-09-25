@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import com.landawn.abacus.annotation.SuppressFBWarnings;
 import com.landawn.abacus.cache.SpyMemcached;
 import com.landawn.abacus.cache.cs;
+import com.landawn.abacus.exception.UncheckedIOException;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
 
@@ -139,11 +140,11 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank, contains
      *         no valid {@code host:port} addresses (e.g., a missing or out-of-range port), or names a host
      *         that cannot be resolved (rejected before any client connection resources are created)
-     * @throws RuntimeException if local client/socket setup fails. Because connections are established asynchronously
-     *         by the underlying SpyMemcached IO thread, a resolvable but unreachable or down server
+     * @throws UncheckedIOException if creating the local client selector or sockets fails. Because connections
+     *         are established asynchronously by the underlying SpyMemcached IO thread, a resolvable but unreachable or down server
      *         does <b>not</b> fail construction; operations against it fail later with timeouts.
      */
-    public MemcachedLock(final String serverUrl) {
+    public MemcachedLock(final String serverUrl) throws IllegalArgumentException, UncheckedIOException {
         N.checkArgNotBlank(serverUrl, cs.serverUrl);
 
         mc = new SpyMemcached<>(serverUrl);
@@ -207,15 +208,15 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         so composite targets whose string representation is JSON-like (maps, beans) typically need a
      *         sanitizing {@code toKey} override); or if {@code liveTime} is not positive or cannot be
      *         represented by Memcached's expiration field
-     * @throws RuntimeException if the Memcached operation fails. The lock state is then
-     *         indeterminate: the {@code add} command may have reached the server even though its
-     *         response was lost or timed out, in which case the lock IS held server-side (under this
+     * @throws RuntimeException if key conversion fails, or if the Memcached operation fails. After
+     *         command dispatch the lock state can be indeterminate: the {@code add} command may have reached
+     *         the server even though its response was lost or timed out, in which case the lock IS held server-side (under this
      *         client's marker) until the TTL expires and no caller will ever {@code tryUnlock} it.
      *         Prefer short TTLs where this matters for availability.
      * @see #tryLock(Object, Object, long)
      * @see #tryUnlock(Object)
      */
-    public boolean tryLock(final K target, final long liveTime) {
+    public boolean tryLock(final K target, final long liveTime) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         return tryLock(target, null, liveTime);
     }
 
@@ -296,17 +297,19 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         {@code value} before anything is sent (for example, spymemcached's default transcoder
      *         rejects a non-{@code Serializable} value, and either transcoder rejects an encoded form
      *         larger than its maximum size), in which case no lock was acquired
-     * @throws RuntimeException if the Memcached operation fails. The lock state is then
-     *         indeterminate: the {@code add} command may have reached the server even though its
+     * @throws RuntimeException if key conversion fails, or if the Memcached operation fails. After command
+     *         dispatch the lock state can be indeterminate: the {@code add} command may have reached the server even though its
      *         response was lost or timed out, in which case the lock IS held server-side (under this
      *         client's value) until the TTL expires and no caller will ever {@code tryUnlock} it.
      *         Prefer short TTLs where this matters for availability.
+     * @throws StackOverflowError if the bundled Kryo transcoder attempts to serialize a cyclic collection, map, or object array in {@code value}
      * @see #tryLock(Object, long)
      * @see #get(Object)
      * @see #tryUnlock(Object)
      */
     @SuppressWarnings("unchecked")
-    public boolean tryLock(final K target, final V value, final long liveTime) {
+    public boolean tryLock(final K target, final V value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertOpen();
         N.checkArgNotNull(target, cs.target);
         final String key = validatedKey(target);
@@ -389,11 +392,11 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         {@code target} (via {@code toKey}) is {@code null}, contains an unpaired UTF-16 surrogate, or
      *         is rejected by the memcached client (empty, longer than 250 bytes, or containing a space,
      *         CR, LF, or NUL byte)
-     * @throws RuntimeException if the Memcached operation fails
+     * @throws RuntimeException if key conversion fails, or if the Memcached read or value decoding fails
      * @see #tryLock(Object, long)
      * @see #tryLock(Object, Object, long)
      */
-    public boolean isLocked(final K target) {
+    public boolean isLocked(final K target) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertOpen();
         N.checkArgNotNull(target, cs.target);
 
@@ -469,12 +472,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         {@code target} (via {@code toKey}) is {@code null}, contains an unpaired UTF-16 surrogate, or
      *         is rejected by the memcached client (empty, longer than 250 bytes, or containing a space,
      *         CR, LF, or NUL byte)
-     * @throws RuntimeException if the Memcached operation fails
+     * @throws RuntimeException if key conversion fails, or if the Memcached read or value decoding fails
      * @see #tryLock(Object, Object, long)
      * @see #isLocked(Object)
      */
     @SuppressWarnings("unchecked")
-    public V get(final K target) {
+    public V get(final K target) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertOpen();
         N.checkArgNotNull(target, cs.target);
 
@@ -545,12 +548,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         {@code target} (via {@code toKey}) is {@code null}, contains an unpaired UTF-16 surrogate, or
      *         is rejected by the memcached client (empty, longer than 250 bytes, or containing a space,
      *         CR, LF, or NUL byte)
-     * @throws RuntimeException if the Memcached operation fails
+     * @throws RuntimeException if key conversion fails, or if the Memcached deletion fails
      * @see #unlockQuietly(Object)
      * @see #tryLock(Object, long)
      * @see #tryLock(Object, Object, long)
      */
-    public boolean tryUnlock(final K target) {
+    public boolean tryUnlock(final K target) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertOpen();
         N.checkArgNotNull(target, cs.target);
 
@@ -623,10 +626,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         CR, LF, or NUL byte). The key is validated eagerly, so this is
      *         thrown even when the lock client has already been closed - a deterministic programming
      *         error is never downgraded to the quiet {@code false}
+     * @throws RuntimeException if {@link #toKey(Object)} or conversion of {@code target} to a string fails
+     *         before the release attempt; only operational release failures are suppressed
      * @see #tryUnlock(Object)
      * @see #tryLock(Object, long)
      */
-    public boolean unlockQuietly(final K target) {
+    public boolean unlockQuietly(final K target) throws IllegalArgumentException, RuntimeException {
         N.checkArgNotNull(target, cs.target);
 
         // Validate before the quiet closed-state check. Otherwise an invalid key on a closed
@@ -667,14 +672,14 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalArgumentException if {@code target} is {@code null}, if the key derived from {@code target}
      *         (via {@code toKey}) is invalid as described by {@link #tryLock(Object, long)}, or if {@code liveTime}
      *         is not positive or cannot be represented by Memcached's expiration field
-     * @throws RuntimeException if the Memcached operation fails; the lock state is then indeterminate,
+     * @throws RuntimeException if key conversion fails, or if the Memcached operation fails; after dispatch the lock state may be indeterminate,
      *         as described by {@link #tryLock(Object, long)}
      * @deprecated renamed to {@link #tryLock(Object, long)} to reflect its single-attempt semantics:
      *             it performs one server round-trip but does not poll, retry, or wait for the current
      *             holder to release. This alias delegates to it and will be removed in a future release.
      */
     @Deprecated(since = "2.8.5", forRemoval = true)
-    public boolean lock(final K target, final long liveTime) {
+    public boolean lock(final K target, final long liveTime) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         return tryLock(target, liveTime);
     }
 
@@ -690,14 +695,16 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         (via {@code toKey}) is invalid as described by {@link #tryLock(Object, Object, long)}, if {@code liveTime}
      *         is not positive or cannot be represented by Memcached's expiration field, or if the client's
      *         transcoder rejects {@code value}
-     * @throws RuntimeException if the Memcached operation fails; the lock state is then indeterminate,
+     * @throws RuntimeException if key conversion fails, or if the Memcached operation fails; after dispatch the lock state may be indeterminate,
      *         as described by {@link #tryLock(Object, Object, long)}
+     * @throws StackOverflowError if the bundled Kryo transcoder attempts to serialize a cyclic collection, map, or object array in {@code value}
      * @deprecated renamed to {@link #tryLock(Object, Object, long)} to reflect its single-attempt
      *             semantics: it performs one server round-trip but does not poll, retry, or wait for
      *             the current holder to release. This alias delegates to it and will be removed in a future release.
      */
     @Deprecated(since = "2.8.5", forRemoval = true)
-    public boolean lock(final K target, final V value, final long liveTime) {
+    public boolean lock(final K target, final V value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         return tryLock(target, value, liveTime);
     }
 
@@ -709,12 +716,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalStateException if this lock client has been closed or is being closed
      * @throws IllegalArgumentException if {@code target} is {@code null}, or if the key derived from {@code target}
      *         (via {@code toKey}) is invalid as described by {@link #tryUnlock(Object)}
-     * @throws RuntimeException if the Memcached operation fails
+     * @throws RuntimeException if key conversion fails, or if the Memcached deletion fails
      * @deprecated renamed to {@link #tryUnlock(Object)} to pair with {@link #tryLock(Object, long)};
      *             this alias delegates to it and will be removed in a future release.
      */
     @Deprecated(since = "2.8.5", forRemoval = true)
-    public boolean unlock(final K target) {
+    public boolean unlock(final K target) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         return tryUnlock(target);
     }
 
@@ -727,13 +734,14 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws IllegalArgumentException if {@code target} is {@code null}, or if the key derived from {@code target}
      *         (via {@code toKey}) is invalid as described by {@link #unlockQuietly(Object)}; thrown even when
      *         this lock client has already been closed
+     * @throws RuntimeException if key conversion fails before the release attempt, as described by {@link #unlockQuietly(Object)}
      * @deprecated renamed to {@link #unlockQuietly(Object)}. The {@code try} prefix wrongly implied a
      *             non-blocking acquisition attempt, whereas this method's distinguishing behavior is
      *             swallowing communication errors on release. This alias delegates to it and will be
      *             removed in a future release.
      */
     @Deprecated(since = "2.8.5", forRemoval = true)
-    public boolean tryUnlockQuietly(final K target) {
+    public boolean tryUnlockQuietly(final K target) throws IllegalArgumentException, RuntimeException {
         return unlockQuietly(target);
     }
 
@@ -800,8 +808,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         accepted by spymemcached (non-empty, at most 250 UTF-8 bytes, and containing no space,
      *         CR, LF, or NUL byte). Keys must also contain no unpaired UTF-16 surrogates
      * @throws IllegalArgumentException if {@code target} is {@code null}
+     * @throws RuntimeException if converting {@code target} with {@link N#stringOf(Object)} fails
      */
-    protected String toKey(final K target) {
+    protected String toKey(final K target) throws IllegalArgumentException, RuntimeException {
         // Match the Javadoc contract: a null target is a programming error and must be rejected.
         // Without this check, N.stringOf(null) returns null, and the null key would fail later
         // inside the memcached client with an unhelpful NPE instead of the documented
@@ -822,8 +831,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         returned by {@code toKey} is {@code null}, contains an unpaired UTF-16 surrogate, or is rejected
      *         by {@link StringUtils#validateKey(String, boolean)} (longer than 250 bytes, empty, or containing a
      *         space, CR, LF, or NUL byte)
+     * @throws RuntimeException if {@link #toKey(Object)} or conversion of {@code target} to a string fails
      */
-    private String validatedKey(final K target) {
+    private String validatedKey(final K target) throws IllegalArgumentException, RuntimeException {
         // N.checkArg* treats a message longer than 9 characters that contains a space as the complete
         // error message (not an argument name), so the message must be a full sentence.
         final String key = N.checkArgNotNull(toKey(target), "The key returned by toKey must not be null");
@@ -952,8 +962,6 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * } // close() runs automatically here
      * }</pre>
      *
-     * @throws RuntimeException if shutting down the underlying client fails; the lock remains marked
-     *         closed and later calls to {@code close()} are no-ops
      */
     @Override
     public synchronized void close() {
@@ -967,7 +975,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
         mc.disconnect();
     }
 
-    private void assertOpen() {
+    /**
+     * Checks that the lock client has not begun closing.
+     *
+     * @throws IllegalStateException if this lock client has been closed or is being closed
+     */
+    private void assertOpen() throws IllegalStateException {
         if (isClosed) {
             throw new IllegalStateException("This MemcachedLock has been closed");
         }

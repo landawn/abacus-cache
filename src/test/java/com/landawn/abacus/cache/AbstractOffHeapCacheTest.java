@@ -5,6 +5,7 @@
 package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -19,6 +20,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -44,6 +46,35 @@ import com.landawn.abacus.util.N;
 
 @Tag("2025")
 public class AbstractOffHeapCacheTest {
+
+    @Test
+    public void testNativeCopyHooksRejectNullArraysBeforeCopying() {
+        for (final boolean useForeignMemory : new boolean[] { false, true }) {
+            final AbstractOffHeapCache<String, byte[]> cache = useForeignMemory
+                    ? ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(1).build()
+                    : OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+            try {
+                final byte[] expected = { 21 };
+                cache.copyToMemory(cache.baseAddress, expected, 0, expected.length);
+
+                // Zero-length copies never access a native address even if either null guard regresses.
+                final IllegalArgumentException missingSource = assertThrows(IllegalArgumentException.class,
+                        () -> cache.copyToMemory(cache.baseAddress, null, 0, 0));
+                assertTrue(missingSource.getMessage().contains("srcBytes"));
+                final IllegalArgumentException missingDestination = assertThrows(IllegalArgumentException.class,
+                        () -> cache.copyFromMemory(cache.baseAddress, null, 0, 0));
+                assertTrue(missingDestination.getMessage().contains("bytes"));
+
+                cache.copyToMemory(cache.baseAddress, new byte[0], 0, 0);
+                cache.copyFromMemory(cache.baseAddress, new byte[0], 0, 0);
+                final byte[] actual = new byte[expected.length];
+                cache.copyFromMemory(cache.baseAddress, actual, 0, actual.length);
+                assertArrayEquals(expected, actual);
+            } finally {
+                cache.close();
+            }
+        }
+    }
 
     private static int totalOccupiedSlots(final OffHeapCacheStats stats) {
         int total = 0;
@@ -221,6 +252,217 @@ public class AbstractOffHeapCacheTest {
             assertEquals("value", cache.getOrNull("key"));
         } finally {
             cache.close();
+        }
+    }
+
+    @Test
+    public void testCloseRemovesEveryDiskEntryWithoutRehashingKeys() throws Exception {
+        final Map<ExceptionalHashKey, byte[]> backing = new IdentityHashMap<>();
+        final AtomicBoolean removedBeforeStoreClosed = new AtomicBoolean();
+        final OffHeapStore<ExceptionalHashKey> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final ExceptionalHashKey key) {
+                return backing.get(key);
+            }
+
+            @Override
+            public boolean put(final ExceptionalHashKey key, final byte[] value) {
+                backing.put(key, value);
+                return true;
+            }
+
+            @Override
+            public boolean remove(final ExceptionalHashKey key) {
+                return backing.remove(key) != null;
+            }
+
+            @Override
+            public void close() {
+                removedBeforeStoreClosed.set(backing.isEmpty());
+            }
+        };
+        final OffHeapCache<ExceptionalHashKey, byte[]> cache = OffHeapCache.<ExceptionalHashKey, byte[]> builder()
+                .capacityInMB(1)
+                .offHeapStore(store)
+                .storeSelector((key, value, size) -> 2)
+                .build();
+        try {
+            final ExceptionalHashKey first = new ExceptionalHashKey();
+            final ExceptionalHashKey second = new ExceptionalHashKey();
+            assertTrue(cache.put(first, new byte[] { 1 }));
+            assertTrue(cache.put(second, new byte[] { 2 }));
+            first.throwOnHashCall(1);
+            second.throwOnHashCall(1);
+
+            assertDoesNotThrow(cache::close);
+
+            assertTrue(removedBeforeStoreClosed.get(), "all tracked store bytes must be removed before closing the store");
+            assertTrue(entriesOf(cache).isEmpty(), "closing must discard the entry index without invoking key hashCode");
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    public void testCloseContinuesEntryCleanupAfterAnErrorAndClearsTheIndex() throws Exception {
+        final AssertionError sharedFailure = new AssertionError("forced store cleanup failure");
+        final AtomicInteger removeAttempts = new AtomicInteger();
+        final AtomicInteger deallocateCalls = new AtomicInteger();
+        final AtomicInteger storeCloseCalls = new AtomicInteger();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return new byte[] { 1 };
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                removeAttempts.incrementAndGet();
+                throw sharedFailure;
+            }
+
+            @Override
+            public void close() {
+                storeCloseCalls.incrementAndGet();
+                throw sharedFailure;
+            }
+        };
+        final OffHeapCache<String, byte[]> cache = new OffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L,
+                60_000L, AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, null, null, store, false, null, (key, value, size) -> 2) {
+            @Override
+            protected void deallocate() {
+                deallocateCalls.incrementAndGet();
+                super.deallocate();
+            }
+        };
+        try {
+            assertTrue(cache.put("first", new byte[] { 1 }));
+            assertTrue(cache.put("second", new byte[] { 2 }));
+
+            assertSame(sharedFailure, assertThrows(AssertionError.class, cache::close));
+
+            assertEquals(2, removeAttempts.get(), "a failed entry cleanup must not skip subsequent entries");
+            assertEquals(0, sharedFailure.getSuppressed().length, "a reused failure must never suppress itself");
+            assertEquals(1, deallocateCalls.get(), "native memory must still be released after entry cleanup errors");
+            assertEquals(1, storeCloseCalls.get(), "the store must still be closed after entry cleanup errors");
+            assertTrue(cache.isClosed());
+            assertTrue(entriesOf(cache).isEmpty(), "failed cleanup must not retain cache keys and entry metadata");
+        } finally {
+            cache.close();
+        }
+        assertEquals(1, deallocateCalls.get(), "a second close must not free native memory twice");
+        assertEquals(1, storeCloseCalls.get(), "a second close must remain a no-op");
+    }
+
+    @Test
+    public void testClosePreservesDistinctEntryAndResourceCleanupFailures() throws Exception {
+        final AssertionError firstEntryFailure = new AssertionError("first disk removal failed");
+        final AssertionError secondEntryFailure = new AssertionError("second disk removal failed");
+        final IllegalStateException deallocationFailure = new IllegalStateException("native cleanup failed after releasing memory");
+        final IllegalArgumentException storeCloseFailure = new IllegalArgumentException("store close failed");
+        final AtomicInteger cleanupSteps = new AtomicInteger();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return new byte[] { 1 };
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                throw cleanupSteps.incrementAndGet() == 1 ? firstEntryFailure : secondEntryFailure;
+            }
+
+            @Override
+            public void close() {
+                assertEquals(3, cleanupSteps.getAndIncrement(), "the store must close after both disk removals and native cleanup");
+                throw storeCloseFailure;
+            }
+        };
+        final OffHeapCache<String, byte[]> cache = new OffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L,
+                60_000L, AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, null, null, store, false, null,
+                (key, value, size) -> key.equals("memory") ? 1 : 2) {
+            @Override
+            protected void deallocate() {
+                super.deallocate();
+                assertEquals(2, cleanupSteps.getAndIncrement(), "both disk removals must be attempted before native cleanup");
+                throw deallocationFailure;
+            }
+        };
+        try {
+            assertTrue(cache.put("first", new byte[] { 1 }));
+            assertTrue(cache.put("second", new byte[] { 2 }));
+            assertTrue(cache.put("memory", new byte[] { 3 }));
+            final AbstractOffHeapCache.Entry<byte[]> memoryEntry = entriesOf(cache).get("memory");
+
+            assertSame(firstEntryFailure, assertThrows(AssertionError.class, cache::close));
+
+            assertArrayEquals(new Throwable[] { secondEntryFailure, deallocationFailure, storeCloseFailure }, firstEntryFailure.getSuppressed());
+            assertTrue(memoryEntry.freed, "disk cleanup errors must not skip memory entries");
+            assertTrue(entriesOf(cache).isEmpty());
+            assertEquals(4, cleanupSteps.get());
+        } finally {
+            cache.close();
+        }
+        assertEquals(4, cleanupSteps.get(), "a second close must not retry any resource cleanup");
+    }
+
+    @Test
+    public void testCloseLogsDiskRemovalRuntimeFailuresAndStillClosesBothBackends() throws Exception {
+        for (final boolean useForeignMemory : new boolean[] { false, true }) {
+            final AtomicInteger removeAttempts = new AtomicInteger();
+            final AtomicInteger storeCloseCalls = new AtomicInteger();
+            final OffHeapStore<String> store = new OffHeapStore<>() {
+                @Override
+                public byte[] get(final String key) {
+                    return new byte[] { 1 };
+                }
+
+                @Override
+                public boolean put(final String key, final byte[] value) {
+                    return true;
+                }
+
+                @Override
+                public boolean remove(final String key) {
+                    removeAttempts.incrementAndGet();
+                    throw new IllegalStateException("store is unavailable for removal");
+                }
+
+                @Override
+                public void close() {
+                    assertEquals(2, removeAttempts.get(), "all disk entries must be attempted before the store closes");
+                    storeCloseCalls.incrementAndGet();
+                }
+            };
+            final AbstractOffHeapCache<String, byte[]> cache = useForeignMemory
+                    ? ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).offHeapStore(store)
+                            .storeSelector((key, value, size) -> 2).build()
+                    : OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).offHeapStore(store)
+                            .storeSelector((key, value, size) -> 2).build();
+            try {
+                assertTrue(cache.put("first", new byte[] { 1 }));
+                assertTrue(cache.put("second", new byte[] { 2 }));
+
+                assertDoesNotThrow(cache::close);
+
+                assertTrue(cache.isClosed());
+                assertTrue(entriesOf(cache).isEmpty());
+                assertEquals(1, storeCloseCalls.get());
+            } finally {
+                cache.close();
+            }
+            assertEquals(2, removeAttempts.get(), "a second close must not retry discarded entries");
+            assertEquals(1, storeCloseCalls.get());
         }
     }
 

@@ -84,7 +84,13 @@ public class KryoTranscoder<T> implements Transcoder<T> {
         static final KryoParser DEFAULT_KRYO_PARSER = ParserFactory.createKryoParser();
     }
 
-    private static KryoParser defaultKryoParser() {
+    /**
+     * Returns the shared parser after checking the optional dependency.
+     *
+     * @return the default Kryo parser
+     * @throws IllegalStateException if the optional Kryo dependency is unavailable
+     */
+    private static KryoParser defaultKryoParser() throws IllegalStateException {
         if (!ParserFactory.isKryoParserAvailable()) {
             throw new IllegalStateException("Kryo is required by KryoTranscoder but is not on the classpath;"
                     + " add the optional com.esotericsoftware:kryo dependency or use another transcoder");
@@ -100,7 +106,14 @@ public class KryoTranscoder<T> implements Transcoder<T> {
 
     private final int maxSize;
 
-    private static int checkMaxSize(final int maxSize) {
+    /**
+     * Validates the encoded item size limit.
+     *
+     * @param maxSize the maximum encoded size in bytes
+     * @return the validated limit
+     * @throws IllegalArgumentException if {@code maxSize} is not positive
+     */
+    private static int checkMaxSize(final int maxSize) throws IllegalArgumentException {
         return N.checkArgPositive(maxSize, cs.maxSize);
     }
 
@@ -128,7 +141,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @see #KryoTranscoder(int)
      * @see CachedData#MAX_SIZE
      */
-    public KryoTranscoder() {
+    public KryoTranscoder() throws IllegalStateException {
         this(CachedData.MAX_SIZE);
     }
 
@@ -166,7 +179,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @throws IllegalStateException if the optional Kryo dependency is unavailable
      * @see #KryoTranscoder(int, KryoParser)
      */
-    public KryoTranscoder(final int maxSize) {
+    public KryoTranscoder(final int maxSize) throws IllegalArgumentException, IllegalStateException {
         // Constructor arguments are evaluated left-to-right. Validate before touching the lazy
         // default-parser holder so an invalid size always produces the documented argument error
         // (and does not initialize Kryo unnecessarily).
@@ -189,7 +202,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @throws IllegalArgumentException if {@code kryoParser} is {@code null}
      * @see #KryoTranscoder(int, KryoParser)
      */
-    public KryoTranscoder(final KryoParser kryoParser) {
+    public KryoTranscoder(final KryoParser kryoParser) throws IllegalArgumentException {
         this(CachedData.MAX_SIZE, kryoParser);
     }
 
@@ -216,9 +229,12 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @param kryoParser the Kryo parser to use for serialization; must not be {@code null}
      * @throws IllegalArgumentException if {@code maxSize} is not positive or {@code kryoParser} is {@code null}
      */
-    public KryoTranscoder(final int maxSize, final KryoParser kryoParser) {
-        this.maxSize = checkMaxSize(maxSize);
-        this.kryoParser = N.checkArgNotNull(kryoParser, cs.kryoParser);
+    public KryoTranscoder(final int maxSize, final KryoParser kryoParser) throws IllegalArgumentException {
+        checkMaxSize(maxSize);
+        N.checkArgNotNull(kryoParser, cs.kryoParser);
+
+        this.maxSize = maxSize;
+        this.kryoParser = kryoParser;
     }
 
     /**
@@ -288,8 +304,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * @param o the object to encode and serialize (may be {@code null})
      * @return a {@link CachedData} containing the serialized bytes and metadata; never {@code null}
-     * @throws KryoException if a Kryo serializer cannot encode the object graph, including a cycle
-     *         through object fields (Kryo's field serializer wraps the resulting stack overflow)
+     * @throws RuntimeException if a Kryo serializer cannot encode {@code o}; normally a
+     *         {@link KryoException}, including for cycles through object fields
      * @throws StackOverflowError if the object graph contains a cycle made only of collections, maps,
      *         or arrays (their serializers do not wrap the overflow)
      * @throws IllegalArgumentException if the serialized size exceeds the configured {@code maxSize}
@@ -297,7 +313,7 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @see CachedData
      */
     @Override
-    public CachedData encode(final T o) {
+    public CachedData encode(final T o) throws RuntimeException, StackOverflowError, IllegalArgumentException {
         // KryoParser.encode never returns null (it always returns the ByteArrayOutputStream's bytes,
         // writing a Kryo null-marker even for a null input), so a null check here would be dead code -
         // and CachedData rejects null data anyway, which would contradict this method's "never null" contract.
@@ -350,14 +366,14 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @param d the cached data to decode and deserialize; if {@code null}, {@code null} is returned
      * @return the deserialized object of type {@code T}, or {@code null} if {@code d} is
      *         {@code null}, its data is empty, or {@code null} was originally encoded
-     * @throws KryoException if deserialization fails (e.g., corrupt or truncated data, class not found,
-     *         incompatible class version, or a payload not written by this transcoder, such as a
-     *         memcached counter's ASCII digits)
+     * @throws RuntimeException if the payload is corrupt, truncated, uses an unavailable or incompatible
+     *         class, or was not written with compatible Kryo serializers (for example, a counter's ASCII
+     *         digits); normally a {@link KryoException}
      * @see #encode(Object)
      * @see CachedData#getData()
      */
     @Override
-    public T decode(final CachedData d) {
+    public T decode(final CachedData d) throws RuntimeException {
         if (d == null) {
             return null;
         }

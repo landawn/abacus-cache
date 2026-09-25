@@ -21,8 +21,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -39,7 +41,9 @@ import net.spy.memcached.CachedData;
 import net.spy.memcached.ConnectionFactory;
 import net.spy.memcached.DefaultConnectionFactory;
 import net.spy.memcached.MemcachedClient;
+import net.spy.memcached.transcoders.SerializingTranscoder;
 import net.spy.memcached.transcoders.Transcoder;
+import net.spy.memcached.util.StringUtils;
 
 /**
  * Preserves the pre-2.8.5 JVM descriptors of asynchronous methods whose source-level return type
@@ -56,8 +60,14 @@ interface LegacySpyMemcachedAsyncApi<T> {
      * @param key the cache key whose associated value is to be retrieved
      * @return a {@link Future} that will yield the cached object of type {@code T}, or {@code null}
      *         if not found, expired, or evicted
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
+     *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
+     *         block time or the calling thread is interrupted while waiting for queue space
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or fails the memcached client's key validation (empty, longer than 250 UTF-8 bytes, or containing
+     *         a space, CR, LF, or NUL byte)
      */
-    Future<T> asyncGet(String key);
+    Future<T> asyncGet(String key) throws IllegalStateException, IllegalArgumentException;
 
     /**
      * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncGetBulk(String...)}; see
@@ -66,8 +76,14 @@ interface LegacySpyMemcachedAsyncApi<T> {
      * @param keys the cache keys whose associated values are to be retrieved
      * @return a {@link Future} that will yield the map of found key-value pairs; the map is never
      *         {@code null} but may be empty
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
+     *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
+     *         block time or the calling thread is interrupted while waiting for queue space
+     * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element or a
+     *         key with an unpaired UTF-16 surrogate, or contains a key that fails the memcached client's key
+     *         validation (empty, longer than 250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
      */
-    Future<Map<String, T>> asyncGetBulk(String... keys);
+    Future<Map<String, T>> asyncGetBulk(String... keys) throws IllegalStateException, IllegalArgumentException;
 
     /**
      * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncGetBulk(Collection)}; see
@@ -76,8 +92,14 @@ interface LegacySpyMemcachedAsyncApi<T> {
      * @param keys the collection of cache keys whose associated values are to be retrieved
      * @return a {@link Future} that will yield the map of found key-value pairs; the map is never
      *         {@code null} but may be empty
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
+     *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
+     *         block time or the calling thread is interrupted while waiting for queue space
+     * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element or a
+     *         key with an unpaired UTF-16 surrogate, or contains a key that fails the memcached client's key
+     *         validation (empty, longer than 250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
      */
-    Future<Map<String, T>> asyncGetBulk(Collection<String> keys);
+    Future<Map<String, T>> asyncGetBulk(Collection<String> keys) throws IllegalStateException, IllegalArgumentException;
 
     /**
      * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncAdd(String, Object, long)};
@@ -88,8 +110,20 @@ interface LegacySpyMemcachedAsyncApi<T> {
      * @param liveTime the time-to-live in milliseconds
      * @return a {@link Future} that will yield {@code true} if the add succeeded, or {@code false}
      *         if the key already exists
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
+     *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
+     *         block time or the calling thread is interrupted while waiting for queue space
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
+     * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
+     *         the active transcoder or its encoded form exceeds the maximum item size)
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
-    Future<Boolean> asyncAdd(String key, T value, long liveTime);
+    Future<Boolean> asyncAdd(String key, T value, long liveTime) throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError;
 
     /**
      * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncReplace(String, Object, long)};
@@ -100,16 +134,32 @@ interface LegacySpyMemcachedAsyncApi<T> {
      * @param liveTime the time-to-live in milliseconds
      * @return a {@link Future} that will yield {@code true} if the replacement succeeded, or
      *         {@code false} if the key does not exist
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
+     *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
+     *         block time or the calling thread is interrupted while waiting for queue space
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
+     * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
+     *         the active transcoder or its encoded form exceeds the maximum item size)
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
-    Future<Boolean> asyncReplace(String key, T value, long liveTime);
+    Future<Boolean> asyncReplace(String key, T value, long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError;
 
     /**
      * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncFlushAll()}; see that
      * method for the full contract.
      *
      * @return a {@link Future} that yields the final server callback's result
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
+     *         flush operations cannot be enqueued because an operation queue remains full beyond the client's
+     *         maximum block time or the calling thread is interrupted while waiting for queue space
      */
-    Future<Boolean> asyncFlushAll();
+    Future<Boolean> asyncFlushAll() throws IllegalStateException;
 
     /**
      * Legacy {@link Future}-typed descriptor of {@link SpyMemcached#asyncFlushAll(long)}; see that
@@ -117,8 +167,13 @@ interface LegacySpyMemcachedAsyncApi<T> {
      *
      * @param delay the delay in milliseconds before the flush operation is executed
      * @return a {@link Future} that yields the final server callback's result
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
+     *         flush operations cannot be enqueued because an operation queue remains full beyond the client's
+     *         maximum block time or the calling thread is interrupted while waiting for queue space
+     * @throws IllegalArgumentException if {@code delay} is large enough that its absolute expiration timestamp
+     *         would exceed memcached's 32-bit expiration limit (roughly beyond the year 2038)
      */
-    Future<Boolean> asyncFlushAll(long delay);
+    Future<Boolean> asyncFlushAll(long delay) throws IllegalStateException, IllegalArgumentException;
 }
 
 /**
@@ -294,7 +349,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         does <b>not</b> fail construction; operations against it fail later with timeouts.
      * @see #SpyMemcached(String, long)
      */
-    public SpyMemcached(final String serverUrl) {
+    public SpyMemcached(final String serverUrl) throws IllegalArgumentException, UncheckedIOException {
         this(serverUrl, DEFAULT_TIMEOUT);
     }
 
@@ -330,7 +385,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         asynchronously by the SpyMemcached IO thread — a resolvable but unreachable or down server
      *         does <b>not</b> fail construction; operations against it fail later with timeouts.
      */
-    public SpyMemcached(final String serverUrl, final long timeout) {
+    public SpyMemcached(final String serverUrl, final long timeout) throws IllegalArgumentException, UncheckedIOException {
         super(serverUrl);
 
         // The getAddressList call is the load-bearing part: it fails fast with a descriptive
@@ -427,13 +482,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or fails the memcached client's key validation (empty, longer than 250 UTF-8 bytes, or containing
      *         a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or a returned value cannot be decoded
      */
     @SuppressWarnings("unchecked")
     @Override
-    public T get(final String key) {
+    public T get(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         // Route through resultOf (rather than the client's synchronous get) so an interrupt
         // restores the thread's interrupt flag: spymemcached's sync methods wrap
         // InterruptedException in a RuntimeException WITHOUT restoring the flag, silently
@@ -481,9 +537,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @SuppressWarnings("unchecked")
     @Override
-    public ContinuableFuture<T> asyncGet(final String key) {
+    public ContinuableFuture<T> asyncGet(final String key) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         return ContinuableFuture.wrap((Future<T>) mc.asyncGet(key));
     }
 
@@ -535,11 +591,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element or a
      *         key with an unpaired UTF-16 surrogate, or contains a key that fails the memcached client's key
      *         validation (empty, longer than 250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or a returned value cannot be decoded
      */
     @SuppressWarnings("unchecked")
     @Override
-    public final Map<String, T> getBulk(final String... keys) {
+    public final Map<String, T> getBulk(final String... keys) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
         final String[] keySnapshot = snapshotBulkKeys(keys);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
@@ -596,7 +653,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @SuppressWarnings({ "unchecked", "rawtypes" })
     @Override
-    public final ContinuableFuture<Map<String, T>> asyncGetBulk(final String... keys) {
+    public final ContinuableFuture<Map<String, T>> asyncGetBulk(final String... keys) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
         final String[] keySnapshot = snapshotBulkKeys(keys);
         return wrapBulkFuture((Future) mc.asyncGetBulk(keySnapshot));
@@ -648,11 +705,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element or a
      *         key with an unpaired UTF-16 surrogate, or contains a key that fails the memcached client's key
      *         validation (empty, longer than 250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or a returned value cannot be decoded
      */
     @SuppressWarnings("unchecked")
     @Override
-    public final Map<String, T> getBulk(final Collection<String> keys) {
+    public final Map<String, T> getBulk(final Collection<String> keys) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
         final List<String> keySnapshot = snapshotBulkKeys(keys);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
@@ -704,7 +762,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     @SuppressWarnings({ "rawtypes", "unchecked" })
     @Override
-    public final ContinuableFuture<Map<String, T>> asyncGetBulk(final Collection<String> keys) {
+    public final ContinuableFuture<Map<String, T>> asyncGetBulk(final Collection<String> keys) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
         final List<String> keySnapshot = snapshotBulkKeys(keys);
         return wrapBulkFuture((Future) mc.asyncGetBulk(keySnapshot));
@@ -718,13 +776,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param keys the caller-supplied key array; must not be {@code null}
      * @return a validated private copy of {@code keys}
      * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
-     *         or contains a key with an unpaired UTF-16 surrogate
+     *         or contains a key with an unpaired UTF-16 surrogate, an empty key, a key longer than
+     *         250 UTF-8 bytes, or a key containing a space, CR, LF, or NUL byte
      */
-    private static String[] snapshotBulkKeys(final String... keys) {
+    private static String[] snapshotBulkKeys(final String... keys) throws IllegalArgumentException {
         N.checkArgNotNull(keys, cs.keys);
 
         final String[] keySnapshot = keys.clone();
         checkBulkKeys(keySnapshot);
+        for (final String key : keySnapshot) {
+            StringUtils.validateKey(key, false);
+        }
         return keySnapshot;
     }
 
@@ -737,13 +799,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param keys the caller-supplied key collection; must not be {@code null}
      * @return a validated private copy of {@code keys}
      * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
-     *         or contains a key with an unpaired UTF-16 surrogate
+     *         or contains a key with an unpaired UTF-16 surrogate, an empty key, a key longer than
+     *         250 UTF-8 bytes, or a key containing a space, CR, LF, or NUL byte
      */
-    private static List<String> snapshotBulkKeys(final Collection<String> keys) {
+    private static List<String> snapshotBulkKeys(final Collection<String> keys) throws IllegalArgumentException {
         N.checkArgNotNull(keys, cs.keys);
 
         final List<String> keySnapshot = new ArrayList<>(keys);
         checkBulkKeys(keySnapshot);
+        for (final String key : keySnapshot) {
+            StringUtils.validateKey(key, false);
+        }
         return keySnapshot;
     }
 
@@ -776,8 +842,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
             this.timeoutMillis = timeoutMillis;
         }
 
+        /**
+         * Cancels the delegate operation.
+         *
+         * @param mayInterruptIfRunning whether the delegate may interrupt work already in progress
+         * @return the delegate's cancellation result
+         * @throws RejectedExecutionException if the delegate's listener executor rejects a cancellation notification
+         */
         @Override
-        public boolean cancel(final boolean mayInterruptIfRunning) {
+        public boolean cancel(final boolean mayInterruptIfRunning) throws RejectedExecutionException {
             return delegate.cancel(mayInterruptIfRunning);
         }
 
@@ -800,9 +873,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
          * @throws InterruptedException if the calling thread is interrupted while waiting
          * @throws ExecutionException if the delegate completed exceptionally or was cancelled, or if the
          *         configured timeout elapsed first (the cause is then a {@link TimeoutException})
+         * @throws CancellationException if the delegate reports cancellation directly
          */
         @Override
-        public R get() throws InterruptedException, ExecutionException {
+        public R get() throws InterruptedException, ExecutionException, CancellationException {
             try {
                 return delegate.get(timeoutMillis, TimeUnit.MILLISECONDS);
             } catch (final TimeoutException e) {
@@ -813,8 +887,21 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
             }
         }
 
+        /**
+         * Waits using the caller-supplied timeout.
+         *
+         * @param timeout the maximum wait in {@code unit}
+         * @param unit the timeout unit
+         * @return the delegate result
+         * @throws NullPointerException if {@code unit} is {@code null}
+         * @throws InterruptedException if the waiting thread is interrupted
+         * @throws ExecutionException if the delegate operation or value decoding fails
+         * @throws CancellationException if the delegate reports cancellation directly
+         * @throws TimeoutException if the delegate cannot complete within {@code timeout}
+         */
         @Override
-        public R get(final long timeout, final TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+        public R get(final long timeout, final TimeUnit unit)
+                throws NullPointerException, InterruptedException, ExecutionException, CancellationException, TimeoutException {
             return delegate.get(timeout, unit);
         }
     }
@@ -848,8 +935,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * cache.put("app:config", config, 0);   // liveTime 0 -> 0s ("no expiration"); returns true on success
      *
      * // A null value is accepted when the Kryo transcoder is active (Kryo on the classpath, the
-     * // default for this wrapper); the stock SerializingTranscoder rejects null with a
-     * // NullPointerException. Only a null key is always rejected.
+     * // default for this wrapper); when the stock SerializingTranscoder is active, the wrapper
+     * // rejects a null value with IllegalArgumentException. A null key is always rejected.
      * cache.put("maybe-null", null, 60000); // returns true on success; stores a null value
      *
      * // Updating existing value
@@ -864,7 +951,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
      *              (the default with Kryo on the classpath). With the stock spymemcached
      *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
-     *              {@code NullPointerException}
+     *              {@code IllegalArgumentException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
      *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
@@ -874,18 +961,23 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
      * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
      *         the active transcoder or its encoded form exceeds the maximum item size), or if the operation
-     *         times out or encounters a network error
+     *         fails or is cancelled, or the response wait times out or is interrupted
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
     @Override
-    public boolean put(final String key, final T value, final long liveTime) {
+    public boolean put(final String key, final T value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
+        checkValue(value);
         return Boolean.TRUE.equals(resultOf(mc.set(key, toMemcachedExpiration(liveTime), value)));
     }
 
@@ -925,7 +1017,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
      *              (the default with Kryo on the classpath). With the stock spymemcached
      *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
-     *              {@code NullPointerException}
+     *              {@code IllegalArgumentException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
      *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
@@ -935,16 +1027,21 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
      * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
      *         the active transcoder or its encoded form exceeds the maximum item size)
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
-    public ContinuableFuture<Boolean> asyncPut(final String key, final T value, final long liveTime) {
+    public ContinuableFuture<Boolean> asyncPut(final String key, final T value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
+        checkValue(value);
         return ContinuableFuture.wrap(mc.set(key, toMemcachedExpiration(liveTime), value));
     }
 
@@ -958,17 +1055,21 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
      * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
      *         the active transcoder or its encoded form exceeds the maximum item size)
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      * @deprecated use {@link #asyncPut(String, Object, long)}; retained with its original
      *             {@link Future} return descriptor for source and binary compatibility
      */
     @Deprecated(since = "2.8.5")
-    public Future<Boolean> asyncSet(final String key, final T value, final long liveTime) {
+    public Future<Boolean> asyncSet(final String key, final T value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         return asyncPut(key, value, liveTime);
     }
 
@@ -1003,7 +1104,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
      *              (the default with Kryo on the classpath). With the stock spymemcached
      *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
-     *              {@code NullPointerException}
+     *              {@code IllegalArgumentException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
      *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
@@ -1013,17 +1114,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
      * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
      *         the active transcoder or its encoded form exceeds the maximum item size), or if the operation
-     *         times out or encounters a network error
+     *         fails or is cancelled, or the response wait times out or is interrupted
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
-    public boolean add(final String key, final T value, final long liveTime) {
+    public boolean add(final String key, final T value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
+        checkValue(value);
         return Boolean.TRUE.equals(resultOf(mc.add(key, toMemcachedExpiration(liveTime), value)));
     }
 
@@ -1065,7 +1171,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
      *              (the default with Kryo on the classpath). With the stock spymemcached
      *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
-     *              {@code NullPointerException}
+     *              {@code IllegalArgumentException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
      *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
@@ -1076,17 +1182,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
      * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
      *         the active transcoder or its encoded form exceeds the maximum item size)
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
     @Override
-    public ContinuableFuture<Boolean> asyncAdd(final String key, final T value, final long liveTime) {
+    public ContinuableFuture<Boolean> asyncAdd(final String key, final T value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
+        checkValue(value);
         return ContinuableFuture.wrap(mc.add(key, toMemcachedExpiration(liveTime), value));
     }
 
@@ -1126,7 +1237,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
      *              (the default with Kryo on the classpath). With the stock spymemcached
      *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
-     *              {@code NullPointerException}
+     *              {@code IllegalArgumentException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
      *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
@@ -1136,17 +1247,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
      * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
      *         the active transcoder or its encoded form exceeds the maximum item size), or if the operation
-     *         times out or encounters a network error
+     *         fails or is cancelled, or the response wait times out or is interrupted
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
-    public boolean replace(final String key, final T value, final long liveTime) {
+    public boolean replace(final String key, final T value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
+        checkValue(value);
         return Boolean.TRUE.equals(resultOf(mc.replace(key, toMemcachedExpiration(liveTime), value)));
     }
 
@@ -1187,7 +1303,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param value the value to cache; may be {@code null} when the Kryo transcoder is active
      *              (the default with Kryo on the classpath). With the stock spymemcached
      *              {@code SerializingTranscoder} (Kryo absent), a {@code null} value throws
-     *              {@code NullPointerException}
+     *              {@code IllegalArgumentException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative means no expiration); a
      *                 positive value is converted to seconds, rounded up if not exact; values over 30
      *                 days are stored as an absolute expiration timestamp. A TTL whose absolute
@@ -1198,17 +1314,22 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         if {@code value} is {@code null} while the stock SerializingTranscoder is active;
+     *         if {@code liveTime} exceeds the supported relative or absolute expiration range; or if
+     *         the encoded value exceeds the active transcoder's maximum item size
      * @throws RuntimeException if {@code value} cannot be serialized (for example, it is not serializable by
      *         the active transcoder or its encoded form exceeds the maximum item size)
+     * @throws StackOverflowError if the active Kryo transcoder encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
     @Override
-    public ContinuableFuture<Boolean> asyncReplace(final String key, final T value, final long liveTime) {
+    public ContinuableFuture<Boolean> asyncReplace(final String key, final T value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
+        checkValue(value);
         return ContinuableFuture.wrap(mc.replace(key, toMemcachedExpiration(liveTime), value));
     }
 
@@ -1254,12 +1375,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or fails the memcached client's key validation (empty, longer than 250 UTF-8 bytes, or containing
      *         a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted
      */
     @Override
-    public boolean remove(final String key) {
+    public boolean remove(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         return Boolean.TRUE.equals(resultOf(mc.delete(key)));
     }
 
@@ -1303,9 +1425,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         or fails the memcached client's key validation (empty, longer than 250 UTF-8 bytes, or containing
      *         a space, CR, LF, or NUL byte)
      */
-    public ContinuableFuture<Boolean> asyncRemove(final String key) {
+    public ContinuableFuture<Boolean> asyncRemove(final String key) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         return ContinuableFuture.wrap(mc.delete(key));
     }
 
@@ -1325,7 +1447,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *             return descriptor for source and binary compatibility
      */
     @Deprecated(since = "2.8.5")
-    public Future<Boolean> asyncDelete(final String key) {
+    public Future<Boolean> asyncDelete(final String key) throws IllegalStateException, IllegalArgumentException {
         return asyncRemove(key);
     }
 
@@ -1356,7 +1478,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *     pageViews = cache.incr("page:views", 1, 1); // seeds absent key with 1; returns 1
      * }
      *
-     * // Rate limiting (auto-seeding overload handles the absent-key case atomically)
+     * // Rate limiting (auto-seeding overload initializes absent keys)
      * String key = "rate:limit:" + userId;
      * long attempts = cache.incr(key, 1, 1, 60000); // seeds absent key with 1 (60s TTL); else returns value+1
      * if (attempts > MAX_ATTEMPTS) {
@@ -1375,13 +1497,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or fails the memcached client's key validation (empty, longer than 250 UTF-8 bytes, or containing
      *         a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error, or if the key holds a
-     *         value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or the key holds a value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
      */
     @Override
-    public long incr(final String key) {
+    public long incr(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
         // It also surfaces errored/cancelled operations as RuntimeException instead of the
         // ambiguous -1 the sync client returns for ANY failure, so -1 reliably means "absent".
@@ -1439,23 +1561,23 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code delta} is negative, or if {@code key} fails the memcached client's key validation
-     *         (empty, longer than 250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error, or if the key holds a
-     *         value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         or if {@code delta} is negative
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or the key holds a value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
      */
     @Override
-    public long incr(final String key, final long delta) {
+    public long incr(final String key, final long delta) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncIncr(key, delta));
     }
 
     /**
-     * Atomically increments a numeric value, initializing it to {@code defaultValue} when the key
+     * Increments a numeric value, initializing it to {@code defaultValue} when the key
      * doesn't exist. The newly-created entry will not expire (this implementation passes {@code 0}
      * as the expiration to Memcached, which means "no expiration").
      *
@@ -1468,9 +1590,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * key already exists. Values are stored as 64-bit unsigned integers in decimal string format;
      * keep seeds and accumulated values below 2<sup>63</sup> (see {@link #incr(String, long)}).
      *
-     * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
-     * Multiple concurrent increment operations are guaranteed to be serialized correctly,
-     * ensuring no increments are lost.
+     * <p><b>Thread Safety:</b> Each increment and conditional insert is atomic on the server, but
+     * the complete lookup, initialization, and retry sequence is not a transaction. A competing
+     * initialization causes one increment retry; a deletion or expiration before that retry can
+     * leave the key absent and cause this method to return {@code -1}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1499,17 +1622,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code delta} is negative, if {@code defaultValue} is negative (memcached counters are
-     *         unsigned 64-bit decimals; a negative seed would be unmutatable by native incr/decr), or if
-     *         {@code key} fails the memcached client's key validation (empty, longer than 250 UTF-8 bytes, or
-     *         containing a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error, or if the key holds a
-     *         value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         or if {@code delta} is negative or {@code defaultValue} is negative
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or the key holds a value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
      */
-    public long incr(final String key, final long delta, final long defaultValue) {
+    public long incr(final String key, final long delta, final long defaultValue) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         // Memcached counters are unsigned 64-bit decimals; a negative seed would be stored as
         // e.g. "-5", which native incr/decr cannot mutate - the same counter-poisoning (plus
@@ -1521,7 +1642,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     }
 
     /**
-     * Atomically increments a numeric value, initializing it to {@code defaultValue} with the given
+     * Increments a numeric value, initializing it to {@code defaultValue} with the given
      * expiration when the key doesn't exist. The {@code liveTime} is converted from milliseconds to
      * seconds for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an
      * absolute Unix expiration timestamp rather than a relative offset.
@@ -1535,9 +1656,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * key already exists. Values are stored as 64-bit unsigned integers in decimal string format;
      * keep seeds and accumulated values below 2<sup>63</sup> (see {@link #incr(String, long)}).
      *
-     * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
-     * Multiple concurrent increment operations are guaranteed to be serialized correctly,
-     * ensuring no increments are lost.
+     * <p><b>Thread Safety:</b> Each increment and conditional insert is atomic on the server, but
+     * the complete lookup, initialization, and retry sequence is not a transaction. A competing
+     * initialization causes one increment retry; a deletion or expiration before that retry can
+     * leave the key absent and cause this method to return {@code -1}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1573,18 +1695,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code delta} is negative, if {@code defaultValue} is negative (memcached counters are
-     *         unsigned 64-bit decimals; a negative seed would be unmutatable by native incr/decr), if
-     *         {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error, or if the key holds a
-     *         value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         or if {@code delta} is negative or {@code defaultValue} is negative; or if
+     *         {@code liveTime} exceeds the supported relative or absolute expiration range
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or the key holds a value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
      */
-    public long incr(final String key, final long delta, final long defaultValue, final long liveTime) {
+    public long incr(final String key, final long delta, final long defaultValue, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         N.checkArgNotNegative(defaultValue, cs.defaultValue); // see incr(String, long, long)
         return mutateWithAsciiSeed(true, key, delta, defaultValue, toMemcachedExpiration(liveTime));
@@ -1635,13 +1756,13 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or fails the memcached client's key validation (empty, longer than 250 UTF-8 bytes, or containing
      *         a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error, or if the key holds a
-     *         value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or the key holds a value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
      */
     @Override
-    public long decr(final String key) {
+    public long decr(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncDecr(key, 1));
     }
@@ -1697,23 +1818,23 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code delta} is negative, or if {@code key} fails the memcached client's key validation
-     *         (empty, longer than 250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error, or if the key holds a
-     *         value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         or if {@code delta} is negative
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or the key holds a value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
      */
     @Override
-    public long decr(final String key, final long delta) {
+    public long decr(final String key, final long delta) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncDecr(key, delta));
     }
 
     /**
-     * Atomically decrements a numeric value, initializing it to {@code defaultValue} when the key
+     * Decrements a numeric value, initializing it to {@code defaultValue} when the key
      * doesn't exist. The newly-created entry will not expire (this implementation passes {@code 0}
      * as the expiration to Memcached, which means "no expiration").
      *
@@ -1727,9 +1848,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * stored as 64-bit unsigned integers in decimal string format; keep seeds and accumulated values
      * below 2<sup>63</sup> (see {@link #decr(String, long)}).
      *
-     * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
-     * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
-     * ensuring no decrements are lost.
+     * <p><b>Thread Safety:</b> Each decrement and conditional insert is atomic on the server, but
+     * the complete lookup, initialization, and retry sequence is not a transaction. A competing
+     * initialization causes one decrement retry; a deletion or expiration before that retry can
+     * leave the key absent and cause this method to return {@code -1}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1760,17 +1882,15 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code delta} is negative, if {@code defaultValue} is negative (memcached counters are
-     *         unsigned 64-bit decimals; a negative seed would be unmutatable by native incr/decr), or if
-     *         {@code key} fails the memcached client's key validation (empty, longer than 250 UTF-8 bytes, or
-     *         containing a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error, or if the key holds a
-     *         value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         or if {@code delta} is negative or {@code defaultValue} is negative
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or the key holds a value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
      */
-    public long decr(final String key, final long delta, final long defaultValue) {
+    public long decr(final String key, final long delta, final long defaultValue) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         N.checkArgNotNegative(defaultValue, cs.defaultValue); // see incr(String, long, long)
         // See incr(String, long, long): Memcached's "no expiration" sentinel is 0, not -1. A -1 seed
@@ -1779,7 +1899,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     }
 
     /**
-     * Atomically decrements a numeric value, initializing it to {@code defaultValue} with the given
+     * Decrements a numeric value, initializing it to {@code defaultValue} with the given
      * expiration when the key doesn't exist. The {@code liveTime} is converted from milliseconds to
      * seconds for Memcached (rounded up if not exact). TTLs longer than 30 days are stored as an
      * absolute Unix expiration timestamp rather than a relative offset.
@@ -1794,9 +1914,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * stored as 64-bit unsigned integers in decimal string format; keep seeds and accumulated values
      * below 2<sup>63</sup> (see {@link #decr(String, long)}).
      *
-     * <p><b>Thread Safety:</b> This operation is atomic and thread-safe across all distributed cache clients.
-     * Multiple concurrent decrement operations are guaranteed to be serialized correctly,
-     * ensuring no decrements are lost.
+     * <p><b>Thread Safety:</b> Each decrement and conditional insert is atomic on the server, but
+     * the complete lookup, initialization, and retry sequence is not a transaction. A competing
+     * initialization causes one decrement retry; a deletion or expiration before that retry can
+     * leave the key absent and cause this method to return {@code -1}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1832,18 +1953,17 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if this client has been disconnected or is being disconnected, or if the
      *         operation cannot be enqueued because the operation queue remains full beyond the client's maximum
      *         block time or the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate,
-     *         if {@code delta} is negative, if {@code defaultValue} is negative (memcached counters are
-     *         unsigned 64-bit decimals; a negative seed would be unmutatable by native incr/decr), if
-     *         {@code liveTime} is so large that its absolute expiration would exceed epoch second 2^31-1
-     *         (January 2038), or if {@code key} fails the memcached client's key validation (empty, longer than
-     *         250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
-     * @throws RuntimeException if the operation times out or encounters a network error, or if the key holds a
-     *         value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte;
+     *         or if {@code delta} is negative or {@code defaultValue} is negative; or if
+     *         {@code liveTime} exceeds the supported relative or absolute expiration range
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted, or the key holds a value that is not an ASCII decimal counter (e.g. a value previously stored via {@code put})
      */
-    public long decr(final String key, final long delta, final long defaultValue, final long liveTime) {
+    public long decr(final String key, final long delta, final long defaultValue, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkUtf8Key(key);
+        checkMemcachedKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         N.checkArgNotNegative(defaultValue, cs.defaultValue); // see incr(String, long, long)
         return mutateWithAsciiSeed(false, key, delta, defaultValue, toMemcachedExpiration(liveTime));
@@ -1871,8 +1991,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * to keep seeds and values below {@code Long.MAX_VALUE}.
      *
      * @param isIncrement {@code true} for incr, {@code false} for decr
-     * @param key the counter key
-     * @param delta the mutation amount applied when the key already exists
+     * @param key the counter key, already validated by the calling public method
+     * @param delta the non-negative mutation amount, already validated by the calling public method
      * @param defaultValue the seed stored when the key is absent; already validated as non-negative
      *                     by the calling public method
      * @param expiration the memcached expiration for the seed (already converted via
@@ -1882,12 +2002,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalStateException if an operation cannot be enqueued because the underlying client is
      *         shutting down, the operation queue remains full beyond the client's maximum block time, or
      *         the calling thread is interrupted while waiting for queue space
-     * @throws IllegalArgumentException if {@code key} fails the memcached client's key validation (empty,
-     *         longer than 250 UTF-8 bytes, or containing a space, CR, LF, or NUL byte)
      * @throws RuntimeException if an operation times out, fails, or is cancelled, if the calling thread is
      *         interrupted while waiting, or if the key holds a value that is not an ASCII decimal counter
      */
-    private long mutateWithAsciiSeed(final boolean isIncrement, final String key, final long delta, final long defaultValue, final int expiration) {
+    private long mutateWithAsciiSeed(final boolean isIncrement, final String key, final long delta, final long defaultValue, final int expiration)
+            throws IllegalStateException, RuntimeException {
         // The async variants + resultOf preserve the interrupt flag and surface errored or
         // cancelled operations as RuntimeException, so -1 here reliably means "key absent".
         long result = resultOf(isIncrement ? mc.asyncIncr(key, delta) : mc.asyncDecr(key, delta));
@@ -1945,10 +2064,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         not reported successful. Note that with multiple servers, spymemcached aggregates the per-server
      *         outcomes into a single last-writer-wins flag, so one server's failure can be masked by a later
      *         server's success; the exception is therefore guaranteed only for single-server configurations
-     * @throws RuntimeException if the operation times out or encounters a network error
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted
      */
     @Override
-    public void flushAll() {
+    public void flushAll() throws IllegalStateException, RuntimeException {
         assertNotShutdown();
         if (!Boolean.TRUE.equals(resultOf(mc.flush()))) {
             throw new IllegalStateException("The Memcached flush was not reported successful");
@@ -1997,7 +2117,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         maximum block time or the calling thread is interrupted while waiting for queue space
      */
     @Override
-    public ContinuableFuture<Boolean> asyncFlushAll() {
+    public ContinuableFuture<Boolean> asyncFlushAll() throws IllegalStateException {
         assertNotShutdown();
         return ContinuableFuture.wrap(mc.flush());
     }
@@ -2044,9 +2164,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         maximum block time or the calling thread is interrupted while waiting for queue space
      * @throws IllegalArgumentException if {@code delay} is large enough that its absolute expiration timestamp
      *         would exceed memcached's 32-bit expiration limit (roughly beyond the year 2038)
-     * @throws RuntimeException if the operation times out or encounters a network error
+     * @throws RuntimeException if the operation fails or is cancelled, the response wait times out
+     *         or is interrupted
      */
-    public boolean flushAll(final long delay) {
+    public boolean flushAll(final long delay) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
         // The memcached `flush_all <delay>` argument goes through the server's realtime()
         // conversion just like storage expirations: values above 30 days are interpreted as
@@ -2100,7 +2221,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         would exceed memcached's 32-bit expiration limit (roughly beyond the year 2038)
      */
     @Override
-    public ContinuableFuture<Boolean> asyncFlushAll(final long delay) {
+    public ContinuableFuture<Boolean> asyncFlushAll(final long delay) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
         // See flushAll(long): flush_all's delay is subject to the server's 30-day absolute-vs-
         // relative rule, so it must be converted exactly like storage expirations.
@@ -2195,7 +2316,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *         {@link InterruptedException}, this method restores the calling thread's interrupt status
      *         before propagating the exception.
      */
-    public synchronized void disconnect(final long timeout) {
+    public synchronized void disconnect(final long timeout) throws IllegalArgumentException, RuntimeException {
         N.checkArgNotNegative(timeout, cs.timeout);
 
         if (!isShutdown) {
@@ -2218,6 +2339,38 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     }
 
     /**
+     * Validates a key before value encoding or backend dispatch. This client uses the ASCII protocol
+     * supplied by its {@link DefaultConnectionFactory}.
+     *
+     * @param key the key to validate
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
+     *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte
+     */
+    private static void checkMemcachedKey(final String key) throws IllegalArgumentException {
+        checkUtf8Key(key);
+        StringUtils.validateKey(key, false);
+    }
+
+    /**
+     * Rejects a null value only when the stock fallback transcoder cannot encode it. Kryo and
+     * custom transcoders retain their own null-value behavior.
+     *
+     * @param value the value to validate
+     * @throws IllegalArgumentException if {@code value} is {@code null} and the active transcoder
+     *         is exactly the stock {@link SerializingTranscoder}
+     */
+    private void checkValue(final T value) throws IllegalArgumentException {
+        if (value == null) {
+            final Transcoder<Object> transcoder = mc.getTranscoder();
+
+            // A subclass may deliberately support null, so only normalize the stock implementation.
+            if (transcoder != null && transcoder.getClass() == SerializingTranscoder.class) {
+                N.checkArgNotNull(value, cs.value);
+            }
+        }
+    }
+
+    /**
      * Rejects cache operations once either disconnect overload has begun. The explicit wrapper
      * check is intentionally performed before key/TTL validation and value serialization, giving
      * every operation the same deterministic lifecycle failure instead of relying on where the
@@ -2225,7 +2378,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      */
-    private void assertNotShutdown() {
+    private void assertNotShutdown() throws IllegalStateException {
         if (isShutdown) {
             throw new IllegalStateException("This Memcached client has been disconnected");
         }
@@ -2241,7 +2394,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code liveTime} is so large that its absolute expiration
      *         would exceed epoch second 2^31-1 (January 2038)
      */
-    private int toMemcachedExpiration(final long liveTime) {
+    private int toMemcachedExpiration(final long liveTime) throws IllegalArgumentException {
         final int seconds = toSeconds(liveTime);
 
         if (seconds <= MEMCACHED_MAX_RELATIVE_EXPIRATION_SECONDS) {
@@ -2287,7 +2440,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws RuntimeException if the {@link Future} execution fails or is cancelled, the calling
      *         thread is interrupted, or the configured operation timeout elapses
      */
-    protected <R> R resultOf(final Future<R> future) {
+    protected <R> R resultOf(final Future<R> future) throws IllegalArgumentException, RuntimeException {
         N.checkArgNotNull(future, cs.future);
 
         try {
@@ -2351,11 +2504,14 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, contains invalid
      *         addresses, or names a host that cannot be resolved (all checked before {@code connFactory}
      *         and before any client resources are created), or if {@code connFactory} is {@code null}
+     *         or supplies a non-positive operation timeout
      * @throws UncheckedIOException if local client/socket setup fails. Connections are established
      *         asynchronously by the SpyMemcached IO thread, so an unreachable or down server does
      *         not cause this method to fail
+     * @throws RuntimeException if a custom {@code connFactory} fails while creating or configuring client resources
      */
-    protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory) throws UncheckedIOException {
+    protected static MemcachedClient createSpyMemcachedClient(final String serverUrl, final ConnectionFactory connFactory)
+            throws IllegalArgumentException, UncheckedIOException, RuntimeException {
         // Parsing validates serverUrl (IllegalArgumentException), preserving signature order.
         final List<InetSocketAddress> serverAddresses = AddrUtil.getAddressList(serverUrl);
         checkResolved(serverUrl, serverAddresses);
@@ -2378,7 +2534,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @param serverAddresses the parsed addresses
      * @throws IllegalArgumentException if any address is unresolved
      */
-    private static void checkResolved(final String serverUrl, final List<InetSocketAddress> serverAddresses) {
+    private static void checkResolved(final String serverUrl, final List<InetSocketAddress> serverAddresses) throws IllegalArgumentException {
         for (final InetSocketAddress address : serverAddresses) {
             if (address.isUnresolved()) {
                 throw new IllegalArgumentException("Cannot resolve host '" + address.getHostString() + "' in: " + serverUrl);
@@ -2386,8 +2542,19 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         }
     }
 
+    /**
+     * Constructs the delegate from validated addresses and a connection factory.
+     *
+     * @param serverUrl the original server list, used in failure messages
+     * @param serverAddresses the non-empty, resolved address list
+     * @param connFactory the non-null connection factory
+     * @return the initialized Memcached client
+     * @throws IllegalArgumentException if {@code connFactory} supplies a non-positive operation timeout
+     * @throws UncheckedIOException if creating the selector or client sockets fails
+     * @throws RuntimeException if a custom {@code connFactory} fails while creating or configuring client resources
+     */
     private static MemcachedClient createSpyMemcachedClient(final String serverUrl, final List<InetSocketAddress> serverAddresses,
-            final ConnectionFactory connFactory) throws UncheckedIOException {
+            final ConnectionFactory connFactory) throws IllegalArgumentException, UncheckedIOException, RuntimeException {
         try {
             return new MemcachedClient(connFactory, serverAddresses);
         } catch (final IOException e) {

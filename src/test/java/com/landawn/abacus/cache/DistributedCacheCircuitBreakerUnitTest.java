@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -17,7 +18,14 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.UnaryOperator;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -167,6 +175,57 @@ public class DistributedCacheCircuitBreakerUnitTest {
             assertTrue(cache.put("k", null, 1_000L, 0L));
             verify(client).put(encoded, null, 1_000L);
         } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void delayedFailureCannotMoveCircuitRetryTimestampBackwards() throws Exception {
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get(anyString())).thenThrow(new IllegalStateException("backend unavailable"));
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 60_000L);
+        final AtomicReference<Object> state = new AtomicReference<>(breakerState(cache));
+        final AtomicReference<Object> controlled = mock(AtomicReference.class);
+        final AtomicBoolean firstUpdate = new AtomicBoolean(true);
+        final CountDownLatch olderFailureReachedUpdate = new CountDownLatch(1);
+        final CountDownLatch publishOlderFailure = new CountDownLatch(1);
+
+        when(controlled.get()).thenAnswer(invocation -> state.get());
+        when(controlled.getAndUpdate(any())).thenAnswer(invocation -> {
+            final UnaryOperator<Object> update = invocation.getArgument(0);
+            if (firstUpdate.compareAndSet(true, false)) {
+                olderFailureReachedUpdate.countDown();
+                assertTrue(publishOlderFailure.await(5, TimeUnit.SECONDS));
+            }
+            return state.getAndUpdate(update);
+        });
+        final Field field = DistributedCache.class.getDeclaredField("circuitBreaker");
+        field.setAccessible(true);
+        field.set(cache, controlled);
+
+        final ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            final Future<?> olderFailure = executor.submit(() -> cache.getOrNull("older"));
+            assertTrue(olderFailureReachedUpdate.await(5, TimeUnit.SECONDS));
+
+            // Force a distinct clock tick after the older failure has reached its update boundary.
+            final long reachedAt = System.nanoTime();
+            while (System.nanoTime() == reachedAt) {
+                Thread.onSpinWait();
+            }
+            assertNull(cache.getOrNull("newer"));
+            final long newerTimestamp = longField(state.get(), "lastFailedTime");
+
+            publishOlderFailure.countDown();
+            olderFailure.get(5, TimeUnit.SECONDS);
+
+            assertEquals(2, intField(state.get(), "failedCount"));
+            assertTrue(longField(state.get(), "lastFailedTime") - newerTimestamp >= 0,
+                    "Publishing a delayed failure must not shorten the newer failure's retry window");
+        } finally {
+            publishOlderFailure.countDown();
+            executor.shutdownNow();
             cache.close();
         }
     }

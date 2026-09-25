@@ -15,6 +15,8 @@
 package com.landawn.abacus.cache;
 
 import java.util.Collections;
+import java.util.ConcurrentModificationException;
+import java.util.Objects;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -99,7 +101,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     protected static final AsyncExecutor asyncExecutor = createAsyncExecutor();
 
-    private static AsyncExecutor createAsyncExecutor() {
+    /**
+     * Creates the shared executor and registers its JVM shutdown hook.
+     *
+     * @return the executor used by asynchronous cache operations
+     * @throws IllegalStateException if JVM shutdown has begun before the hook can be registered
+     */
+    private static AsyncExecutor createAsyncExecutor() throws IllegalStateException {
         final ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(//
                 N.max(64, IOUtil.CPU_CORES * 8), // coreThreadPoolSize
                 N.max(128, IOUtil.CPU_CORES * 16), // maxThreadPoolSize
@@ -162,43 +170,93 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
             return values.replace(key, oldValue, newValue);
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * @throws IllegalArgumentException if {@code action} is {@code null}
+         * @throws RuntimeException if {@code action} throws while processing an entry
+         * @throws ConcurrentModificationException if {@code action} structurally modifies this map during traversal
+         */
         @Override
-        public void forEach(final BiConsumer<? super K, ? super V> action) throws IllegalArgumentException {
+        public void forEach(final BiConsumer<? super K, ? super V> action) throws IllegalArgumentException, RuntimeException, ConcurrentModificationException {
             N.checkArgNotNull(action, cs.action);
 
             values.forEach(action);
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * @throws IllegalArgumentException if {@code function} is {@code null}
+         * @throws RuntimeException if {@code function} throws while computing a replacement value
+         * @throws ConcurrentModificationException if {@code function} structurally modifies this map during traversal
+         */
         @Override
-        public void replaceAll(final BiFunction<? super K, ? super V, ? extends V> function) throws IllegalArgumentException {
+        public void replaceAll(final BiFunction<? super K, ? super V, ? extends V> function)
+                throws IllegalArgumentException, RuntimeException, ConcurrentModificationException {
             N.checkArgNotNull(function, cs.function);
 
             values.replaceAll(function);
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * @throws IllegalArgumentException if {@code mappingFunction} is {@code null}
+         * @throws RuntimeException if {@code mappingFunction} throws while computing a missing value
+         * @throws ConcurrentModificationException if {@code mappingFunction} structurally modifies this map
+         */
         @Override
-        public V computeIfAbsent(final K key, final Function<? super K, ? extends V> mappingFunction) throws IllegalArgumentException {
+        public V computeIfAbsent(final K key, final Function<? super K, ? extends V> mappingFunction)
+                throws IllegalArgumentException, RuntimeException, ConcurrentModificationException {
             N.checkArgNotNull(mappingFunction, cs.mappingFunction);
 
             return values.computeIfAbsent(key, mappingFunction);
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * @throws IllegalArgumentException if {@code remappingFunction} is {@code null}
+         * @throws RuntimeException if {@code remappingFunction} throws while updating a present non-null value
+         * @throws ConcurrentModificationException if {@code remappingFunction} structurally modifies this map
+         */
         @Override
-        public V computeIfPresent(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction) throws IllegalArgumentException {
+        public V computeIfPresent(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction)
+                throws IllegalArgumentException, RuntimeException, ConcurrentModificationException {
             N.checkArgNotNull(remappingFunction, cs.remappingFunction);
 
             return values.computeIfPresent(key, remappingFunction);
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * @throws IllegalArgumentException if {@code remappingFunction} is {@code null}
+         * @throws RuntimeException if {@code remappingFunction} throws while computing the new mapping
+         * @throws ConcurrentModificationException if {@code remappingFunction} structurally modifies this map
+         */
         @Override
-        public V compute(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction) throws IllegalArgumentException {
+        public V compute(final K key, final BiFunction<? super K, ? super V, ? extends V> remappingFunction)
+                throws IllegalArgumentException, RuntimeException, ConcurrentModificationException {
             N.checkArgNotNull(remappingFunction, cs.remappingFunction);
 
             return values.compute(key, remappingFunction);
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * @throws NullPointerException if {@code value} is {@code null}, as required by {@link java.util.Map#merge}
+         * @throws IllegalArgumentException if {@code remappingFunction} is {@code null}
+         * @throws RuntimeException if {@code remappingFunction} throws while combining a present non-null value with {@code value}
+         * @throws ConcurrentModificationException if {@code remappingFunction} structurally modifies this map
+         */
         @Override
-        public V merge(final K key, final V value, final BiFunction<? super V, ? super V, ? extends V> remappingFunction) throws IllegalArgumentException {
+        public V merge(final K key, final V value, final BiFunction<? super V, ? super V, ? extends V> remappingFunction)
+                throws NullPointerException, IllegalArgumentException, RuntimeException, ConcurrentModificationException {
+            // Preserve Map.merge's null-value exception while validating in parameter order.
+            Objects.requireNonNull(value);
             N.checkArgNotNull(remappingFunction, cs.remappingFunction);
 
             return values.merge(key, value, remappingFunction);
@@ -288,9 +346,10 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @throws IllegalStateException {@inheritDoc}
      * @throws IllegalArgumentException {@inheritDoc}
+     * @throws RuntimeException if the delegated cache operation propagates a backend, serialization, or loading failure
      */
     @Override
-    public Optional<V> get(final K key) {
+    public Optional<V> get(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         return Optional.ofNullable(getOrNull(key));
     }
 
@@ -315,9 +374,12 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @throws IllegalStateException {@inheritDoc}
      * @throws IllegalArgumentException {@inheritDoc}
+     * @throws RuntimeException if the delegated cache operation propagates a backend write, serialization, or cache callback failure
+     * @throws StackOverflowError if the delegated Kryo-backed distributed client encounters a cycle made only of
+     *         collections, maps, or arrays while serializing {@code value}
      */
     @Override
-    public boolean put(final K key, final V value) {
+    public boolean put(final K key, final V value) throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         return put(key, value, defaultLiveTime, defaultMaxIdleTime);
     }
 
@@ -340,11 +402,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.asyncGet("absent").get().isPresent();  // returns false
      * }</pre>
      *
-     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
-     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
+     * @throws IllegalStateException if the shared {@link #asyncExecutor} has been explicitly shut down
+     * @throws RejectedExecutionException if its backing thread pool rejects the task, including during JVM shutdown
      */
     @Override
-    public ContinuableFuture<Optional<V>> asyncGet(final K key) {
+    public ContinuableFuture<Optional<V>> asyncGet(final K key) throws IllegalStateException, RejectedExecutionException {
         return asyncExecutor.execute(() -> get(key));
     }
 
@@ -365,11 +427,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.asyncGetOrNull("absent").get();      // returns null
      * }</pre>
      *
-     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
-     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
+     * @throws IllegalStateException if the shared {@link #asyncExecutor} has been explicitly shut down
+     * @throws RejectedExecutionException if its backing thread pool rejects the task, including during JVM shutdown
      */
     @Override
-    public ContinuableFuture<V> asyncGetOrNull(final K key) {
+    public ContinuableFuture<V> asyncGetOrNull(final K key) throws IllegalStateException, RejectedExecutionException {
         return asyncExecutor.execute(() -> getOrNull(key));
     }
 
@@ -392,11 +454,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.getOrNull("k");                      // returns "v2"
      * }</pre>
      *
-     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
-     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
+     * @throws IllegalStateException if the shared {@link #asyncExecutor} has been explicitly shut down
+     * @throws RejectedExecutionException if its backing thread pool rejects the task, including during JVM shutdown
      */
     @Override
-    public ContinuableFuture<Boolean> asyncPut(final K key, final V value) {
+    public ContinuableFuture<Boolean> asyncPut(final K key, final V value) throws IllegalStateException, RejectedExecutionException {
         return asyncExecutor.execute(() -> put(key, value));
     }
 
@@ -420,11 +482,12 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.getOrNull("forever");                    // returns "v"
      * }</pre>
      *
-     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
-     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
+     * @throws IllegalStateException if the shared {@link #asyncExecutor} has been explicitly shut down
+     * @throws RejectedExecutionException if its backing thread pool rejects the task, including during JVM shutdown
      */
     @Override
-    public ContinuableFuture<Boolean> asyncPut(final K key, final V value, final long liveTime, final long maxIdleTime) {
+    public ContinuableFuture<Boolean> asyncPut(final K key, final V value, final long liveTime, final long maxIdleTime)
+            throws IllegalStateException, RejectedExecutionException {
         return asyncExecutor.execute(() -> put(key, value, liveTime, maxIdleTime));
     }
 
@@ -447,11 +510,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.asyncRemove("absent").get();         // returns null
      * }</pre>
      *
-     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
-     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
+     * @throws IllegalStateException if the shared {@link #asyncExecutor} has been explicitly shut down
+     * @throws RejectedExecutionException if its backing thread pool rejects the task, including during JVM shutdown
      */
     @Override
-    public ContinuableFuture<Void> asyncRemove(final K key) {
+    public ContinuableFuture<Void> asyncRemove(final K key) throws IllegalStateException, RejectedExecutionException {
         return asyncExecutor.execute(() -> {
             remove(key);
 
@@ -476,11 +539,11 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * cache.asyncContainsKey("absent").get();    // returns false
      * }</pre>
      *
-     * @throws RejectedExecutionException if the shared {@link #asyncExecutor} rejects the task, which happens
-     *         only after its JVM exit hook has shut it down (that is, during JVM shutdown)
+     * @throws IllegalStateException if the shared {@link #asyncExecutor} has been explicitly shut down
+     * @throws RejectedExecutionException if its backing thread pool rejects the task, including during JVM shutdown
      */
     @Override
-    public ContinuableFuture<Boolean> asyncContainsKey(final K key) {
+    public ContinuableFuture<Boolean> asyncContainsKey(final K key) throws IllegalStateException, RejectedExecutionException {
         return asyncExecutor.execute(() -> containsKey(key));
     }
 
@@ -493,6 +556,10 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@code entrySet()} is not safe during concurrent mutation because the synchronized backing
      * map's mutex is not exposed; call {@link Properties#copy()} first when a stable traversal is
      * required.
+     *
+     * <p>The property bag accepts {@code null} names and values. As specified by {@link java.util.Map#merge},
+     * {@code merge} still rejects a {@code null} incoming value with {@link NullPointerException}; a
+     * {@code null} result from a remapping function removes the mapping.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -517,7 +584,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@inheritDoc}
      *
      * <p>This base implementation looks up the value in {@link #properties} and returns it
-     * via an unchecked cast to {@code T}.
+     * via an unchecked cast to {@code T}. A {@code null} property name is accepted.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -548,6 +615,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * {@link #getProperties()}) remain usable after close. The mutable map returned by
      * {@code getProperties()} is deliberately exposed directly, so callers that mutate that map
      * bypass this convenience method's lifecycle check.
+     * A {@code null} property name or value is accepted while the cache is open.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -566,7 +634,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     @SuppressWarnings("unchecked")
     @Override
-    public <T> T setProperty(final String propName, final Object propValue) {
+    public <T> T setProperty(final String propName, final Object propValue) throws IllegalStateException {
         assertNotClosedForPropertyMutation();
 
         return (T) properties.put(propName, propValue);
@@ -580,6 +648,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * this convenience mutator is lifecycle-guarded and throws {@link IllegalStateException} once
      * the cache has been closed. Removing through the mutable map returned by
      * {@link #getProperties()} bypasses this method's lifecycle check.
+     * A {@code null} property name is accepted while the cache is open.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -598,7 +667,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      */
     @SuppressWarnings("unchecked")
     @Override
-    public <T> T removeProperty(final String propName) {
+    public <T> T removeProperty(final String propName) throws IllegalStateException {
         assertNotClosedForPropertyMutation();
 
         return (T) properties.remove(propName);
@@ -611,7 +680,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * @throws IllegalStateException if this cache has been closed
      */
-    private void assertNotClosedForPropertyMutation() {
+    private void assertNotClosedForPropertyMutation() throws IllegalStateException {
         if (isClosed()) {
             throw new IllegalStateException("This cache has been closed");
         }

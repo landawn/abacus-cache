@@ -21,6 +21,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import com.landawn.abacus.util.N;
+
 /**
  * An immutable snapshot of off-heap cache statistics at a specific point in time.
  * This record provides comprehensive metrics about off-heap cache performance, including
@@ -200,21 +202,20 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * the {@link java.util.Objects} convention for record/invariant null-checks and is intentionally
      * distinct from the argument-validation helpers used elsewhere in the cache API.
      *
-     * @throws NullPointerException if {@code writeToDiskTimeStats}, {@code readFromDiskTimeStats},
-     *         or {@code occupiedSlots} is {@code null}, or if {@code occupiedSlots} contains a
-     *         {@code null} key, nested map, segment index, or occupied-slot count
      * @throws IllegalArgumentException if any numeric component is negative, or if {@code occupiedSlots}
      *                                  contains a non-positive slot size, or a negative segment index
      *                                  or occupied-slot count
+     * @throws NullPointerException if {@code writeToDiskTimeStats}, {@code readFromDiskTimeStats},
+     *         or {@code occupiedSlots} is {@code null}, or if {@code occupiedSlots} contains a
+     *         {@code null} key, nested map, segment index, or occupied-slot count
      */
     public OffHeapCacheStats {
+        N.checkArgument(capacity >= 0 && size >= 0 && sizeOnDisk >= 0 && putCount >= 0 && putCountToDisk >= 0 && getCount >= 0 && hitCount >= 0
+                && hitCountFromDisk >= 0 && missCount >= 0 && evictionCount >= 0 && evictionCountFromDisk >= 0 && allocatedMemory >= 0 && occupiedMemory >= 0
+                && dataSize >= 0 && dataSizeOnDisk >= 0, "OffHeapCacheStats numeric components must all be non-negative");
         Objects.requireNonNull(writeToDiskTimeStats, "writeToDiskTimeStats cannot be null");
         Objects.requireNonNull(readFromDiskTimeStats, "readFromDiskTimeStats cannot be null");
-        if (capacity < 0 || size < 0 || sizeOnDisk < 0 || putCount < 0 || putCountToDisk < 0 || getCount < 0 || hitCount < 0 || hitCountFromDisk < 0
-                || missCount < 0 || evictionCount < 0 || evictionCountFromDisk < 0 || allocatedMemory < 0 || occupiedMemory < 0 || dataSize < 0
-                || dataSizeOnDisk < 0 || segmentSize < 0) {
-            throw new IllegalArgumentException("OffHeapCacheStats numeric components must all be non-negative");
-        }
+        N.checkArgument(segmentSize >= 0, "OffHeapCacheStats numeric components must all be non-negative");
         occupiedSlots = immutableCopyOf(Objects.requireNonNull(occupiedSlots, "occupiedSlots cannot be null"));
     }
 
@@ -289,7 +290,14 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
         return occupiedSlots;
     }
 
-    private static Map<Integer, Map<Integer, Integer>> immutableCopyOf(final Map<Integer, Map<Integer, Integer>> occupiedSlots) {
+    /**
+     * Validates the occupied-slot entries while taking a deeply unmodifiable snapshot.
+     *
+     * @throws NullPointerException if a slot size, nested map, segment index, or occupied-slot count is {@code null}
+     * @throws IllegalArgumentException if a slot size is not positive, or a segment index or occupied-slot count is negative
+     */
+    private static Map<Integer, Map<Integer, Integer>> immutableCopyOf(final Map<Integer, Map<Integer, Integer>> occupiedSlots)
+            throws NullPointerException, IllegalArgumentException {
         if (occupiedSlots.isEmpty()) {
             return Map.of();
         }
@@ -300,10 +308,7 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
             final Integer sizeOfSlot = Objects.requireNonNull(entry.getKey(), "occupiedSlots contains a null key");
             final Map<Integer, Integer> segmentSlots = Objects.requireNonNull(entry.getValue(),
                     "occupiedSlots contains a null nested map for slot size: " + sizeOfSlot);
-
-            if (sizeOfSlot <= 0) {
-                throw new IllegalArgumentException("occupiedSlots contains a non-positive slot size: " + sizeOfSlot);
-            }
+            N.checkArgument(sizeOfSlot > 0, () -> "occupiedSlots contains a non-positive slot size: " + sizeOfSlot);
 
             final Map<Integer, Integer> segmentCopy = new LinkedHashMap<>(segmentSlots.size());
             for (final Map.Entry<Integer, Integer> segmentEntry : segmentSlots.entrySet()) {
@@ -312,10 +317,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
                 final Integer occupiedCount = Objects.requireNonNull(segmentEntry.getValue(),
                         "occupiedSlots contains a null occupied count for slot size: " + sizeOfSlot + ", segment: " + segmentIndex);
 
-                if (segmentIndex < 0 || occupiedCount < 0) {
-                    throw new IllegalArgumentException(
-                            "occupiedSlots contains a negative segment index/count for slot size " + sizeOfSlot + ": " + segmentIndex + "=" + occupiedCount);
-                }
+                N.checkArgument(segmentIndex >= 0 && occupiedCount >= 0,
+                        () -> "occupiedSlots contains a negative segment index/count for slot size " + sizeOfSlot + ": " + segmentIndex + "=" + occupiedCount);
 
                 segmentCopy.put(segmentIndex, occupiedCount);
             }
@@ -362,15 +365,16 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
             checkNonNegativeFinite(max, "max");
             checkNonNegativeFinite(avg, "avg");
 
-            if (min > max || avg < min || avg > max) {
-                throw new IllegalArgumentException("Expected min <= avg <= max but was: min=" + min + ", avg=" + avg + ", max=" + max);
-            }
+            N.checkArgument(min <= max && avg >= min && avg <= max, () -> "Expected min <= avg <= max but was: min=" + min + ", avg=" + avg + ", max=" + max);
         }
 
-        private static void checkNonNegativeFinite(final double value, final String name) {
-            if (Double.isNaN(value) || Double.isInfinite(value) || value < 0) {
-                throw new IllegalArgumentException("'" + name + "' must be a non-negative finite number but was: " + value);
-            }
+        /**
+         * Checks one timing component without changing the diagnostic name supplied by its caller.
+         *
+         * @throws IllegalArgumentException if {@code value} is negative, NaN, or infinite
+         */
+        private static void checkNonNegativeFinite(final double value, final String name) throws IllegalArgumentException {
+            N.checkArgument(Double.isFinite(value) && value >= 0, () -> "'" + name + "' must be a non-negative finite number but was: " + value);
         }
 
         /**

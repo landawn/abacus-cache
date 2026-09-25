@@ -15,6 +15,7 @@
 package com.landawn.abacus.cache;
 
 import java.util.Set;
+import java.util.concurrent.RejectedExecutionException;
 
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
@@ -98,10 +99,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param capacity the maximum number of entries the cache can hold (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative, 0 for no automatic eviction)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws RejectedExecutionException if {@code evictDelay > 0} and the shared eviction executor rejects the periodic task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
      *         its shutdown hook
      */
-    public LocalCache(final int capacity, final long evictDelay) {
+    public LocalCache(final int capacity, final long evictDelay) throws IllegalArgumentException, RejectedExecutionException, IllegalStateException {
         this(capacity, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
@@ -140,10 +142,12 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param defaultLiveTime the default time-to-live in milliseconds for entries (0 or negative for no TTL expiration)
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries (0 or negative for no idle timeout)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
+     * @throws RejectedExecutionException if {@code evictDelay > 0} and the shared eviction executor rejects the periodic task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
      *         its shutdown hook
      */
-    public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
+    public LocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime)
+            throws IllegalArgumentException, RejectedExecutionException, IllegalStateException {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         N.checkArgPositive(capacity, cs.capacity);
@@ -191,7 +195,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @param pool the pre-configured KeyedObjectPool to use for storage (must not be {@code null})
      * @throws IllegalArgumentException if {@code pool} is {@code null}
      */
-    public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableAdapter<V>> pool) {
+    public LocalCache(final long defaultLiveTime, final long defaultMaxIdleTime, final KeyedObjectPool<K, PoolableAdapter<V>> pool)
+            throws IllegalArgumentException {
         super(defaultLiveTime, defaultMaxIdleTime);
 
         this.pool = N.checkArgNotNull(pool, cs.pool);
@@ -230,7 +235,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
-    public V getOrNull(final K key) {
+    public V getOrNull(final K key) throws IllegalStateException, IllegalArgumentException {
         assertNotClosed();
         N.checkArgNotNull(key, cs.key);
 
@@ -295,7 +300,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}
      */
     @Override
-    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) throws IllegalStateException, IllegalArgumentException {
         assertNotClosed();
         N.checkArgNotNull(key, cs.key);
         N.checkArgNotNull(value, cs.value);
@@ -340,7 +345,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
-    public void remove(final K key) {
+    public void remove(final K key) throws IllegalStateException, IllegalArgumentException {
         assertNotClosed();
         N.checkArgNotNull(key, cs.key);
 
@@ -388,7 +393,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} is {@code null}
      */
     @Override
-    public boolean containsKey(final K key) {
+    public boolean containsKey(final K key) throws IllegalStateException, IllegalArgumentException {
         assertNotClosed();
         N.checkArgNotNull(key, cs.key);
 
@@ -443,7 +448,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
-    public Set<K> keySet() {
+    public Set<K> keySet() throws IllegalStateException {
         return pool.keySet();
     }
 
@@ -477,7 +482,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
-    public int size() {
+    public int size() throws IllegalStateException {
         return pool.size();
     }
 
@@ -511,7 +516,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the underlying pool has been closed
      */
     @Override
-    public void clear() {
+    public void clear() throws IllegalStateException {
         pool.clear();
     }
 
@@ -577,15 +582,17 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * @return a snapshot of current cache statistics including capacity, size, hit/miss counts, and eviction metrics
      * @throws IllegalStateException if the underlying pool has been closed
+     * @throws IllegalArgumentException if the underlying pool cannot construct a valid statistics snapshot,
+     *         for example because an operation counter overflowed or its memory accounting is inconsistent
      * @see CacheStats
      * @see PoolStats
      */
-    public CacheStats stats() {
+    public CacheStats stats() throws IllegalStateException, IllegalArgumentException {
         final PoolStats poolStats = pool.stats();
 
         // A custom pool with a time-varying memory measure can let its data-size accounting
-        // drift below zero; clamp to the -1 "not tracked" sentinel so a monitoring call
-        // never fails CacheStats validation.
+        // drift below zero; clamp to the -1 "not tracked" sentinel for CacheStats.
+        // The pool's own snapshot validation may reject inconsistent samples before this point.
         return new CacheStats(poolStats.capacity(), poolStats.size(), poolStats.putCount(), poolStats.getCount(), poolStats.hitCount(), poolStats.missCount(),
                 poolStats.evictionCount(), N.max(-1L, poolStats.maxMemory()), N.max(-1L, poolStats.dataSize()));
     }
@@ -680,7 +687,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      *
      * @throws IllegalStateException if the cache has been closed
      */
-    private void assertNotClosed() {
+    private void assertNotClosed() throws IllegalStateException {
         if (pool.isClosed()) {
             throw new IllegalStateException("This cache has been closed");
         }

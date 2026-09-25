@@ -157,10 +157,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @throws OutOfMemoryError if native memory allocation fails
      * @throws RejectedExecutionException if the maintenance scheduler rejects the maintenance task (this constructor
      *         always schedules one, using a 3000 ms eviction delay)
-     * @throws SecurityException if the runtime denies shutdown-hook registration
      * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
      */
-    OffHeapCache(final int capacityInMB) {
+    OffHeapCache(final int capacityInMB) throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
         this(capacityInMB, 3000);
     }
 
@@ -193,10 +192,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
      * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
-     * @throws SecurityException if the runtime denies shutdown-hook registration
      * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
      */
-    OffHeapCache(final int capacityInMB, final long evictDelay) {
+    OffHeapCache(final int capacityInMB, final long evictDelay)
+            throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
         this(capacityInMB, evictDelay, DEFAULT_LIVE_TIME, DEFAULT_MAX_IDLE_TIME);
     }
 
@@ -230,10 +229,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive
      * @throws OutOfMemoryError if native memory allocation fails
      * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
-     * @throws SecurityException if the runtime denies shutdown-hook registration
      * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
      */
-    OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime) {
+    OffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime)
+            throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
         this(capacityInMB, DEFAULT_MAX_BLOCK_SIZE, evictDelay, defaultLiveTime, defaultMaxIdleTime, DEFAULT_VACATING_FACTOR, null, null, null, false, null,
                 null);
     }
@@ -287,16 +286,16 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *                      only (never store to disk), or 2 for disk only (always store to disk). Use null for
      *                      default behavior (always try memory first).
      * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if {@code maxBlockSize} is
-     *                                  outside [1024, 1048576], or if {@code vacatingFactor} is outside [0.0, 1.0]
+     *                                  outside [1024, 1048576], or if {@code vacatingFactor} is NaN or outside [0.0, 1.0]
      * @throws OutOfMemoryError if native memory allocation fails
      * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
-     * @throws SecurityException if the runtime denies shutdown-hook registration
      * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
      */
     OffHeapCache(final int capacityInMB, final int maxBlockSize, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime,
             final float vacatingFactor, final BiConsumer<? super V, ByteArrayOutputStream> serializer,
             final BiFunction<byte[], Type<V>, ? extends V> deserializer, final OffHeapStore<K> offHeapStore, final boolean statsTimeOnDisk,
-            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector) {
+            final TriPredicate<ActivityPrint, Integer, Long> testerForLoadingItemFromDiskToMemory, final TriFunction<K, V, Integer, Integer> storeSelector)
+            throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
         super(capacityInMB, maxBlockSize, evictDelay, defaultLiveTime, defaultMaxIdleTime, vacatingFactor, 0, serializer, deserializer, offHeapStore,
                 statsTimeOnDisk, testerForLoadingItemFromDiskToMemory, storeSelector, logger);
     }
@@ -331,7 +330,7 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      */
     @SuppressWarnings("removal")
     @Override
-    protected long allocate(final long capacityInBytes) {
+    protected long allocate(final long capacityInBytes) throws IllegalArgumentException, OutOfMemoryError {
         return UNSAFE.allocateMemory(capacityInBytes);
     }
 
@@ -387,12 +386,17 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param srcOffset the zero-based source-array index. Must be non-negative.
      * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy), fit at the destination address,
      *            and satisfy {@code srcOffset + len <= srcBytes.length}.
+     * @throws IllegalArgumentException if {@code srcBytes} is {@code null} (including for a zero-length copy),
+     *         if {@code len} is negative, or if Unsafe rejects the computed source offset or destination
+     *         address; Unsafe's checks of numeric arguments are only best-effort
      * @see #allocate(long)
      * @see #copyFromMemory(long, byte[], int, int)
      */
     @SuppressWarnings("removal")
     @Override
-    protected void copyToMemory(final long startPtr, final byte[] srcBytes, final int srcOffset, final int len) {
+    protected void copyToMemory(final long startPtr, final byte[] srcBytes, final int srcOffset, final int len) throws IllegalArgumentException {
+        N.checkArgNotNull(srcBytes, cs.srcBytes);
+
         UNSAFE.copyMemory(srcBytes, BYTE_ARRAY_BASE + (long) srcOffset, null, startPtr, len);
     }
 
@@ -421,12 +425,17 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param destOffset the zero-based destination-array index. Must be non-negative.
      * @param len the number of bytes to copy. Must be non-negative (a value of 0 performs no copy) and must not exceed the available
      *            space in the destination array starting from destOffset.
+     * @throws IllegalArgumentException if {@code bytes} is {@code null} (including for a zero-length copy),
+     *         if {@code len} is negative, or if Unsafe rejects the source address or computed destination
+     *         offset; Unsafe's checks of numeric arguments are only best-effort
      * @see #allocate(long)
      * @see #copyToMemory(long, byte[], int, int)
      */
     @SuppressWarnings("removal")
     @Override
-    protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+    protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) throws IllegalArgumentException {
+        N.checkArgNotNull(bytes, cs.bytes);
+
         UNSAFE.copyMemory(null, startPtr, bytes, BYTE_ARRAY_BASE + (long) destOffset, len);
     }
 
@@ -813,13 +822,12 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          * @throws IllegalArgumentException if {@code capacityInMB} is not positive, if
          *                                  {@code maxBlockSizeInBytes} is non-zero and outside
          *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192),
-         *                                  or if {@code vacatingFactor} is outside [0.0, 1.0]
+         *                                  or if {@code vacatingFactor} is NaN or outside [0.0, 1.0]
          * @throws OutOfMemoryError if native memory allocation fails
          * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
-         * @throws SecurityException if the runtime denies shutdown-hook registration
          * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
          */
-        public OffHeapCache<K, V> build() {
+        public OffHeapCache<K, V> build() throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
             return new OffHeapCache<>(capacityInMB, maxBlockSizeInBytes == 0 ? DEFAULT_MAX_BLOCK_SIZE : maxBlockSizeInBytes, evictDelay, defaultLiveTime,
                     defaultMaxIdleTime, vacatingFactor, serializer, deserializer, offHeapStore, statsTimeOnDisk, testerForLoadingItemFromDiskToMemory,
                     storeSelector);

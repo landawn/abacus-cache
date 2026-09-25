@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import com.esotericsoftware.kryo.KryoException;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
@@ -103,7 +104,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the Kryo parser shared by all Jedis cache clients, never {@code null}
      * @throws IllegalStateException if Kryo is not on the classpath
      */
-    private static KryoParser createRequiredKryoParser() {
+    private static KryoParser createRequiredKryoParser() throws IllegalStateException {
         if (!ParserFactory.isKryoParserAvailable()) {
             throw new IllegalStateException("Kryo is required by the Jedis cache clients (JRedis/JRedisCluster) but is not on the classpath;"
                     + " add the optional com.esotericsoftware:kryo dependency");
@@ -120,7 +121,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @param serverUrl the server URL(s); must not be {@code null}, empty, or blank
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank
      */
-    protected AbstractJedisCacheClient(final String serverUrl) {
+    protected AbstractJedisCacheClient(final String serverUrl) throws IllegalArgumentException {
         super(serverUrl);
     }
 
@@ -133,7 +134,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalArgumentException if {@code timeout} is not positive or exceeds
      *         {@link Integer#MAX_VALUE} (the underlying Jedis API accepts an {@code int} timeout)
      */
-    protected static JedisClientConfig buildClientConfig(final long timeout) {
+    protected static JedisClientConfig buildClientConfig(final long timeout) throws IllegalArgumentException {
         N.checkArgPositive(timeout, cs.timeout);
 
         if (timeout > Integer.MAX_VALUE) {
@@ -155,7 +156,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, malformed, or yields
      *         no addresses
      */
-    protected static List<InetSocketAddress> resolveServerAddresses(final String serverUrl) {
+    protected static List<InetSocketAddress> resolveServerAddresses(final String serverUrl) throws IllegalArgumentException {
         final List<InetSocketAddress> addressList = AddrUtil.getAddressList(serverUrl);
 
         // Currently unreachable (getAddressList throws rather than returning an empty list); kept
@@ -174,10 +175,13 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * cluster client (which performs hash-slot routing internally and therefore ignores the
      * client-side mapping).
      *
-     * @param keyBytes the UTF-8 encoded key bytes; must not be {@code null}
+     * @param keyBytes the UTF-8 encoded key bytes; must not be {@code null} when the implementation
+     *                 requires client-side routing; a cluster implementation may ignore this argument
      * @return the {@link UnifiedJedis} client that owns the key, never {@code null}
+     * @throws IllegalArgumentException if {@code keyBytes} is {@code null} and the implementation
+     *         requires the key for client-side routing
      */
-    protected abstract UnifiedJedis clientFor(byte[] keyBytes);
+    protected abstract UnifiedJedis clientFor(byte[] keyBytes) throws IllegalArgumentException;
 
     /**
      * Retrieves a value from the cache by its key.
@@ -210,12 +214,13 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the cached value, or {@code null} if not found, expired, evicted, or stored as {@code null}
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
-     * @throws RuntimeException if a network error, timeout, or deserialization error occurs
+     * @throws RuntimeException if acquiring a Redis connection or executing GET fails, Redis rejects the
+     *         command, or the returned bytes cannot be decoded by the configured Kryo serializers
      * @see #put(String, Object, long)
      * @see #remove(String)
      */
     @Override
-    public T get(final String key) {
+    public T get(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
 
         final byte[] keyBytes = getKeyBytes(key);
@@ -249,12 +254,13 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
      *         or contains a key with an unpaired UTF-16 surrogate
-     * @throws RuntimeException if a network error, timeout, or deserialization error occurs
+     * @throws RuntimeException if acquiring a Redis connection or executing GET fails, Redis rejects the
+     *         command, or the returned bytes cannot be decoded by the configured Kryo serializers
      * @see #get(String)
      * @see #getBulk(Collection)
      */
     @Override
-    public Map<String, T> getBulk(final String... keys) {
+    public Map<String, T> getBulk(final String... keys) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
 
         // Work from a private snapshot. The caller owns the array and may reuse or mutate it as soon
@@ -288,12 +294,13 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
      *         or contains a key with an unpaired UTF-16 surrogate
-     * @throws RuntimeException if a network error, timeout, or deserialization error occurs
+     * @throws RuntimeException if acquiring a Redis connection or executing GET fails, Redis rejects the
+     *         command, or the returned bytes cannot be decoded by the configured Kryo serializers
      * @see #get(String)
      * @see #getBulk(String...)
      */
     @Override
-    public Map<String, T> getBulk(final Collection<String> keys) {
+    public Map<String, T> getBulk(final Collection<String> keys) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
 
         return fetchBulk(snapshotBulkKeys(keys));
@@ -309,7 +316,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
      *         or contains a key with an unpaired UTF-16 surrogate
      */
-    private List<String> snapshotBulkKeys(final Collection<String> keys) {
+    private List<String> snapshotBulkKeys(final Collection<String> keys) throws IllegalArgumentException {
         N.checkArgNotNull(keys, cs.keys);
 
         // Do not trust keys.size() for preallocation: custom/concurrent collections may report a
@@ -330,7 +337,15 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
         return keySnapshot;
     }
 
-    private Map<String, T> fetchBulk(final Collection<String> keys) {
+    /**
+     * Fetches each distinct key from an already validated snapshot.
+     *
+     * @param keys the validated key snapshot
+     * @return the found non-null values, indexed by key
+     * @throws RuntimeException if acquiring a Redis connection or executing GET fails, Redis rejects
+     *         the command, or a returned payload cannot be decoded by the configured Kryo serializers
+     */
+    private Map<String, T> fetchBulk(final Collection<String> keys) throws RuntimeException {
         // A map cannot represent duplicate requested keys. Fetch each logical key once as well:
         // besides avoiding redundant round trips, this prevents an internally inconsistent result
         // when the first GET finds a duplicate key and a later GET observes it as expired/missing.
@@ -400,7 +415,8 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @see #remove(String)
      */
     @Override
-    public boolean put(final String key, final T value, final long liveTime) {
+    public boolean put(final String key, final T value, final long liveTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
 
         final byte[] keyBytes = getKeyBytes(key);
@@ -443,12 +459,13 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *         if the key did not exist at the time the {@code DEL} command was issued
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
-     * @throws JedisException if a network error or timeout occurs
+     * @throws JedisException if acquiring a Redis connection or executing DEL fails, including a timeout
+     *         or a server response rejecting the command
      * @see #get(String)
      * @see #put(String, Object, long)
      */
     @Override
-    public boolean remove(final String key) {
+    public boolean remove(final String key) throws IllegalStateException, IllegalArgumentException, JedisException {
         assertNotShutdown();
 
         final byte[] keyBytes = getKeyBytes(key);
@@ -484,13 +501,14 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the value after increment (will be 1 if the key did not exist before)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
-     * @throws JedisException if a network error or timeout occurs, the key contains a non-integer
-     *         value, or the result exceeds Redis's signed 64-bit integer range
+     * @throws JedisException if acquiring a Redis connection or executing the counter command fails,
+     *         including a timeout, a server rejection, a non-integer value at {@code key}, or a result
+     *         outside Redis's signed 64-bit integer range
      * @see #incr(String, long)
      * @see #decr(String)
      */
     @Override
-    public long incr(final String key) {
+    public long incr(final String key) throws IllegalStateException, IllegalArgumentException, JedisException {
         assertNotShutdown();
 
         final byte[] keyBytes = getKeyBytes(key);
@@ -525,13 +543,14 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or {@code delta} is negative
-     * @throws JedisException if a network error or timeout occurs, the key contains a non-integer
-     *         value, or the result exceeds Redis's signed 64-bit integer range
+     * @throws JedisException if acquiring a Redis connection or executing the counter command fails,
+     *         including a timeout, a server rejection, a non-integer value at {@code key}, or a result
+     *         outside Redis's signed 64-bit integer range
      * @see #incr(String)
      * @see #decr(String, long)
      */
     @Override
-    public long incr(final String key, final long delta) {
+    public long incr(final String key, final long delta) throws IllegalStateException, IllegalArgumentException, JedisException {
         assertNotShutdown();
         checkUtf8Key(key);
         N.checkArgNotNegative(delta, cs.delta);
@@ -564,13 +583,14 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @return the value after decrement (can be negative in Redis, will be -1 if the key did not exist before)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null} or contains an unpaired UTF-16 surrogate
-     * @throws JedisException if a network error or timeout occurs, the key contains a non-integer
-     *         value, or the result exceeds Redis's signed 64-bit integer range
+     * @throws JedisException if acquiring a Redis connection or executing the counter command fails,
+     *         including a timeout, a server rejection, a non-integer value at {@code key}, or a result
+     *         outside Redis's signed 64-bit integer range
      * @see #decr(String, long)
      * @see #incr(String)
      */
     @Override
-    public long decr(final String key) {
+    public long decr(final String key) throws IllegalStateException, IllegalArgumentException, JedisException {
         assertNotShutdown();
 
         final byte[] keyBytes = getKeyBytes(key);
@@ -607,13 +627,14 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or {@code delta} is negative
-     * @throws JedisException if a network error or timeout occurs, the key contains a non-integer
-     *         value, or the result exceeds Redis's signed 64-bit integer range
+     * @throws JedisException if acquiring a Redis connection or executing the counter command fails,
+     *         including a timeout, a server rejection, a non-integer value at {@code key}, or a result
+     *         outside Redis's signed 64-bit integer range
      * @see #decr(String)
      * @see #incr(String, long)
      */
     @Override
-    public long decr(final String key, final long delta) {
+    public long decr(final String key, final long delta) throws IllegalStateException, IllegalArgumentException, JedisException {
         assertNotShutdown();
         checkUtf8Key(key);
         N.checkArgNotNegative(delta, cs.delta);
@@ -629,11 +650,12 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * node for {@link JRedisCluster}).
      *
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws JedisException if flushing a backend fails
+     * @throws RuntimeException if acquiring a backend connection or executing FLUSHALL fails,
+     *         including a timeout or a server response rejecting the command
      * @see #disconnect()
      */
     @Override
-    public abstract void flushAll();
+    public abstract void flushAll() throws IllegalStateException, RuntimeException;
 
     /**
      * Disconnects from all Redis instances and releases resources.
@@ -650,10 +672,12 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * <p><b>Thread Safety:</b> This method is thread-safe, but once called, no other operations should be
      * attempted on this client instance from any thread.
      *
+     * @throws Error if closing an underlying client raises an error; standalone shards are all
+     *         attempted before the first error is rethrown
      * @see #flushAll()
      */
     @Override
-    public final synchronized void disconnect() {
+    public final synchronized void disconnect() throws Error {
         // Guard with isShutdown so repeated calls are safe.
         if (isShutdown) {
             return;
@@ -669,8 +693,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * Closes the underlying Jedis client(s). Invoked at most once, by the idempotent
      * {@link #disconnect()} template. Implementations should make a best-effort attempt to close every
      * client even if one fails (logging per-client failures), rather than aborting on the first error.
+     *
+     * @throws Error if an underlying client raises an error while closing
      */
-    protected abstract void closeClients();
+    protected abstract void closeClients() throws Error;
 
     /**
      * Rejects an operation once {@link #disconnect()} has begun. Concrete topology-specific
@@ -678,7 +704,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      */
-    protected final void assertNotShutdown() {
+    protected final void assertNotShutdown() throws IllegalStateException {
         if (isShutdown) {
             throw new IllegalStateException("This Redis cache client has been disconnected");
         }
@@ -696,7 +722,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @see #encode(Object)
      * @see #decode(byte[])
      */
-    protected byte[] getKeyBytes(final String key) {
+    protected byte[] getKeyBytes(final String key) throws IllegalArgumentException {
         checkUtf8Key(key);
 
         return key.getBytes(Charsets.UTF_8);
@@ -710,10 +736,12 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param value the value to encode. May be {@code null}.
      * @return the serialized byte array, or an empty array if {@code value} is {@code null}. Never {@code null}.
-     * @throws RuntimeException if serialization fails
+     * @throws RuntimeException if a Kryo serializer cannot encode {@code value}, including a cycle
+     *         through object fields
+     * @throws StackOverflowError if {@code value} contains a cycle made only of collections, maps, or arrays
      * @see #decode(byte[])
      */
-    protected byte[] encode(final Object value) {
+    protected byte[] encode(final Object value) throws RuntimeException, StackOverflowError {
         return value == null ? N.EMPTY_BYTE_ARRAY : KRYO_PARSER.encode(value);
     }
 
@@ -736,7 +764,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *         incompatible payloads)
      * @see #encode(Object)
      */
-    protected T decode(final byte[] bytes) {
+    protected T decode(final byte[] bytes) throws RuntimeException {
         if (bytes == null || bytes.length == 0) {
             return null;
         }
@@ -760,7 +788,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
         }
 
         static RuntimeException of(final InstantiationError e) {
-            return new com.esotericsoftware.kryo.KryoException("Cannot decode the cached bytes as a Kryo payload (" + e.getMessage()
+            return new KryoException("Cannot decode the cached bytes as a Kryo payload (" + e.getMessage()
                     + "); the entry was not written by this client's Kryo encoding (e.g. an incr/decr counter)", e);
         }
     }

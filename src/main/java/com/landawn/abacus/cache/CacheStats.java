@@ -16,6 +16,8 @@
 
 package com.landawn.abacus.cache;
 
+import com.landawn.abacus.util.N;
+
 /**
  * An immutable snapshot of cache statistics at a specific point in time.
  * This record provides comprehensive metrics about cache performance and usage,
@@ -140,14 +142,15 @@ public record CacheStats(int capacity, int size, long putCount, long getCount, l
      * inconsistent under concurrent activity.
      *
      * @throws IllegalArgumentException if any non-memory component is negative, or if
-     *         {@code maxMemory}/{@code dataSize} is negative but not {@code -1}.
+     *         {@code maxMemory} or {@code dataSize} is less than {@code -1}
      */
     public CacheStats {
-        if (capacity < 0 || size < 0 || putCount < 0 || getCount < 0 || hitCount < 0 || missCount < 0 || evictionCount < 0 || maxMemory < -1 || dataSize < -1) {
-            throw new IllegalArgumentException("CacheStats components must be non-negative (maxMemory/dataSize may also be -1 for 'not tracked'); got capacity="
-                    + capacity + ", size=" + size + ", putCount=" + putCount + ", getCount=" + getCount + ", hitCount=" + hitCount + ", missCount=" + missCount
-                    + ", evictionCount=" + evictionCount + ", maxMemory=" + maxMemory + ", dataSize=" + dataSize);
-        }
+        N.checkArgument(
+                capacity >= 0 && size >= 0 && putCount >= 0 && getCount >= 0 && hitCount >= 0 && missCount >= 0 && evictionCount >= 0 && maxMemory >= -1
+                        && dataSize >= -1,
+                () -> "CacheStats components must be non-negative (maxMemory/dataSize may also be -1 for 'not tracked'); got capacity=" + capacity + ", size="
+                        + size + ", putCount=" + putCount + ", getCount=" + getCount + ", hitCount=" + hitCount + ", missCount=" + missCount
+                        + ", evictionCount=" + evictionCount + ", maxMemory=" + maxMemory + ", dataSize=" + dataSize);
     }
 
     /**

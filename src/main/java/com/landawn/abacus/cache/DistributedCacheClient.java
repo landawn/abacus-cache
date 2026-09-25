@@ -125,9 +125,10 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or violates an implementation-specific key restriction
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if submitting or executing the backend operation fails, the response
+     *         wait times out or is interrupted, or a returned value cannot be decoded (when applicable)
      */
-    T get(String key);
+    T get(String key) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Retrieves multiple values from the cache. Implementations may batch requests by server or
@@ -160,15 +161,16 @@ public interface DistributedCacheClient<T> {
      * @param keys the cache keys to retrieve; a supporting implementation requires a non-null array
      *             with no null elements
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
+     * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
+     *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
      * @throws IllegalStateException if bulk retrieval is supported and this client has been
      *         disconnected or is being disconnected
      * @throws IllegalArgumentException if bulk retrieval is supported and {@code keys} is
      *         {@code null}, contains a null element, or contains a key rejected by the implementation
-     * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
-     *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if submitting or executing the backend operation fails, the response
+     *         wait times out or is interrupted, or a returned value cannot be decoded (when applicable)
      */
-    Map<String, T> getBulk(String... keys);
+    Map<String, T> getBulk(String... keys) throws UnsupportedOperationException, IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Retrieves multiple values from the cache. Implementations may batch requests by server or
@@ -201,15 +203,16 @@ public interface DistributedCacheClient<T> {
      * @param keys the cache keys to retrieve; a supporting implementation requires a non-null
      *             collection with no null elements
      * @return a map of found key-value pairs, never {@code null} (may be empty if no keys are found)
+     * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
+     *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
      * @throws IllegalStateException if bulk retrieval is supported and this client has been
      *         disconnected or is being disconnected
      * @throws IllegalArgumentException if bulk retrieval is supported and {@code keys} is
      *         {@code null}, contains a null element, or contains a key rejected by the implementation
-     * @throws UnsupportedOperationException if the implementation does not support bulk retrieval
-     *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if submitting or executing the backend operation fails, the response
+     *         wait times out or is interrupted, or a returned value cannot be decoded (when applicable)
      */
-    Map<String, T> getBulk(Collection<String> keys);
+    Map<String, T> getBulk(Collection<String> keys) throws UnsupportedOperationException, IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Stores a key-value pair in the cache with a specified time-to-live.
@@ -264,20 +267,25 @@ public interface DistributedCacheClient<T> {
      * @param value the value to cache; may be {@code null} if supported by the implementation. Support for
      *              {@code null} values is implementation-defined: the bundled Redis clients store it as an
      *              empty payload, whereas a Memcached client using spymemcached's stock
-     *              {@code SerializingTranscoder} fails while encoding it (consult the implementation)
+     *              {@code SerializingTranscoder} rejects it with {@code IllegalArgumentException}
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative for no expiration)
      * @return {@code true} if the operation was successful, {@code false} otherwise
-     * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
-     *         or violates an implementation-specific key restriction, or if {@code liveTime} is too large
-     *         for the implementation's expiration representation (see above)
      * @throws UnsupportedOperationException if the concrete client supplies neither a
      *         non-recursive {@code put} nor a non-recursive {@code set} implementation
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction; if {@code value} is {@code null}
+     *         and the implementation rejects null values; or if {@code liveTime} is too large
+     *         for the implementation's expiration representation (see above)
      * @throws RuntimeException if {@code value} cannot be encoded by the implementation (including a
-     *         {@code null} value it does not support), or if a network error or timeout occurs
+     *         {@code null} value it does not support), a backend request fails or is cancelled, or the
+     *         response wait times out or is interrupted
+     * @throws StackOverflowError if a Kryo-backed implementation encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      */
     @SuppressWarnings("deprecation")
-    default boolean put(final String key, final T value, final long liveTime) {
+    default boolean put(final String key, final T value, final long liveTime)
+            throws UnsupportedOperationException, IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         if (!isOverridden(this, "set")) {
             throw missingCompatibilityImplementation("put", "set");
         }
@@ -311,19 +319,24 @@ public interface DistributedCacheClient<T> {
      *              {@link #put(String, Object, long)})
      * @param liveTime the time-to-live in milliseconds ({@code 0} or negative for no expiration)
      * @return {@code true} if the operation was successful, {@code false} otherwise
-     * @throws IllegalStateException if this client has been disconnected or is being disconnected
-     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
-     *         or violates an implementation-specific key restriction, or if {@code liveTime} is too large
-     *         for the implementation's expiration representation (see {@link #put(String, Object, long)})
      * @throws UnsupportedOperationException if the concrete client supplies neither a
      *         non-recursive {@code put} nor a non-recursive {@code set} implementation
+     * @throws IllegalStateException if this client has been disconnected or is being disconnected
+     * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
+     *         or violates an implementation-specific key restriction; if {@code value} is {@code null}
+     *         and the implementation rejects null values; or if {@code liveTime} is too large
+     *         for the implementation's expiration representation (see {@link #put(String, Object, long)})
      * @throws RuntimeException if {@code value} cannot be encoded by the implementation (including a
-     *         {@code null} value it does not support), or if a network error or timeout occurs
+     *         {@code null} value it does not support), a backend request fails or is cancelled, or the
+     *         response wait times out or is interrupted
+     * @throws StackOverflowError if a Kryo-backed implementation encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}
      * @deprecated Use {@link #put(String, Object, long)}. Retained for source and binary
      *             compatibility with clients compiled against version 2.8.4 and earlier.
      */
     @Deprecated(since = "2.8.5", forRemoval = false)
-    default boolean set(final String key, final T value, final long liveTime) {
+    default boolean set(final String key, final T value, final long liveTime)
+            throws UnsupportedOperationException, IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         if (!isOverridden(this, "put")) {
             throw missingCompatibilityImplementation("put", "set");
         }
@@ -389,15 +402,16 @@ public interface DistributedCacheClient<T> {
      * @return {@code true} if the key existed and was removed; {@code false} if the key did not exist
      *         when the command was issued (see the per-implementation notes above for exact semantics).
      *         A network error or timeout is thrown rather than reported as a {@code false} return.
+     * @throws UnsupportedOperationException if the concrete client supplies neither a
+     *         non-recursive {@code remove} nor a non-recursive {@code delete} implementation
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or violates an implementation-specific key restriction
-     * @throws UnsupportedOperationException if the concrete client supplies neither a
-     *         non-recursive {@code remove} nor a non-recursive {@code delete} implementation
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if submitting or executing the backend operation fails, the response
+     *         wait times out or is interrupted
      */
     @SuppressWarnings("deprecation")
-    default boolean remove(final String key) {
+    default boolean remove(final String key) throws UnsupportedOperationException, IllegalStateException, IllegalArgumentException, RuntimeException {
         if (!isOverridden(this, "delete")) {
             throw missingCompatibilityImplementation("remove", "delete");
         }
@@ -428,17 +442,18 @@ public interface DistributedCacheClient<T> {
      *
      * @param key the cache key, must not be {@code null}
      * @return {@code true} if the key existed and was removed; {@code false} otherwise
+     * @throws UnsupportedOperationException if the concrete client supplies neither a
+     *         non-recursive {@code remove} nor a non-recursive {@code delete} implementation
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or violates an implementation-specific key restriction
-     * @throws UnsupportedOperationException if the concrete client supplies neither a
-     *         non-recursive {@code remove} nor a non-recursive {@code delete} implementation
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws RuntimeException if submitting or executing the backend operation fails, the response
+     *         wait times out or is interrupted
      * @deprecated Use {@link #remove(String)}. Retained for source and binary compatibility with
      *             clients compiled against version 2.8.4 and earlier.
      */
     @Deprecated(since = "2.8.5", forRemoval = false)
-    default boolean delete(final String key) {
+    default boolean delete(final String key) throws UnsupportedOperationException, IllegalStateException, IllegalArgumentException, RuntimeException {
         if (!isOverridden(this, "remove")) {
             throw missingCompatibilityImplementation("remove", "delete");
         }
@@ -512,10 +527,11 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or violates an implementation-specific key restriction
-     * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
-     *         not a valid integer counter (e.g. a value previously stored via {@code put})
+     * @throws RuntimeException if a backend request fails or is cancelled, the response wait times out
+     *         or is interrupted, the key holds a value that is not a valid integer counter, or the
+     *         result exceeds the backend's supported counter range
      */
-    long incr(String key);
+    long incr(String key) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Atomically increments a numeric value by a specified amount.
@@ -558,10 +574,11 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or violates an implementation-specific key restriction, or if {@code delta} is negative
-     * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
-     *         not a valid integer counter (e.g. a value previously stored via {@code put})
+     * @throws RuntimeException if a backend request fails or is cancelled, the response wait times out
+     *         or is interrupted, the key holds a value that is not a valid integer counter, or the
+     *         result exceeds the backend's supported counter range
      */
-    long incr(String key, long delta);
+    long incr(String key, long delta) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Atomically decrements a numeric value by 1.
@@ -611,10 +628,11 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or violates an implementation-specific key restriction
-     * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
-     *         not a valid integer counter (e.g. a value previously stored via {@code put})
+     * @throws RuntimeException if a backend request fails or is cancelled, the response wait times out
+     *         or is interrupted, the key holds a value that is not a valid integer counter, or the
+     *         result exceeds the backend's supported counter range
      */
-    long decr(String key);
+    long decr(String key) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Atomically decrements a numeric value by a specified amount.
@@ -673,10 +691,11 @@ public interface DistributedCacheClient<T> {
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or violates an implementation-specific key restriction, or if {@code delta} is negative
-     * @throws RuntimeException if a network error or timeout occurs, or if the key holds a value that is
-     *         not a valid integer counter (e.g. a value previously stored via {@code put})
+     * @throws RuntimeException if a backend request fails or is cancelled, the response wait times out
+     *         or is interrupted, the key holds a value that is not a valid integer counter, or the
+     *         result exceeds the backend's supported counter range
      */
-    long decr(String key, long delta);
+    long decr(String key, long delta) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Requests removal of cached data in the implementation-defined backend scope.
@@ -722,13 +741,14 @@ public interface DistributedCacheClient<T> {
      * }
      * }</pre>
      *
-     * @throws IllegalStateException if flushing is supported and this client has been disconnected
-     *         or is being disconnected
      * @throws UnsupportedOperationException if the implementation does not support flushing all entries
      *         (the {@link AbstractDistributedCacheClient} base class throws this by default)
-     * @throws RuntimeException if a network error or timeout occurs
+     * @throws IllegalStateException if flushing is supported and this client has been disconnected
+     *         or is being disconnected
+     * @throws RuntimeException if submitting or executing the backend operation fails, the response
+     *         wait times out or is interrupted
      */
-    void flushAll();
+    void flushAll() throws UnsupportedOperationException, IllegalStateException, RuntimeException;
 
     /**
      * Disconnects from all cache servers and releases resources.

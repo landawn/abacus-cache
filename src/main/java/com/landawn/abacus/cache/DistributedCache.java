@@ -154,7 +154,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @param client the distributed cache client to wrap (must not be {@code null})
      * @throws IllegalArgumentException if {@code client} is {@code null}
      */
-    protected DistributedCache(final DistributedCacheClient<V> client) {
+    protected DistributedCache(final DistributedCacheClient<V> client) throws IllegalArgumentException {
         this(client, Strings.EMPTY, DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN, DEFAULT_RETRY_DELAY);
     }
 
@@ -184,7 +184,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code client} is {@code null}, or if {@code keyPrefix} contains a
      *         non-printable-ASCII character, a space, or a control character
      */
-    protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix) {
+    protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix) throws IllegalArgumentException {
         this(client, keyPrefix, DEFAULT_MAX_FAILURES_BEFORE_CIRCUIT_OPEN, DEFAULT_RETRY_DELAY);
     }
 
@@ -246,7 +246,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         non-printable-ASCII character, a space, or a control character, {@code maxFailuresBeforeCircuitOpen}
      *         is negative, or {@code retryDelay} is negative
      */
-    protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix, final int maxFailuresBeforeCircuitOpen, final long retryDelay) {
+    protected DistributedCache(final DistributedCacheClient<V> client, final String keyPrefix, final int maxFailuresBeforeCircuitOpen, final long retryDelay)
+            throws IllegalArgumentException {
         N.checkArgNotNull(client, cs.client);
 
         final String normalizedKeyPrefix = Strings.isEmpty(keyPrefix) ? Strings.EMPTY : keyPrefix;
@@ -362,11 +363,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         generated cache key (e.g. it exceeds memcached's 250-character key limit after prefixing
      *         and Base64 expansion); such validation errors are rethrown and do not affect the circuit
      *         breaker state
+     * @throws RuntimeException if converting {@code key} to a string or an overridden {@code generateKey}
+     *         fails before the backend read; these failures are not handled by the circuit breaker
      * @see #generateKey(Object)
      * @see DistributedCacheClient#get(String)
      */
     @Override
-    public V getOrNull(final K key) {
+    public V getOrNull(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotClosed();
 
         // Validate the key up-front (cheap null check) so the documented IllegalArgumentException
@@ -426,12 +429,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                     circuitBreaker.set(CLOSED_CIRCUIT);
                 }
             } else {
-                final long failedAt = System.nanoTime();
-
                 // Publish the new timestamp and capped count in one CAS update. Besides preventing
                 // a torn state, this keeps the counter from overflowing after prolonged outages.
+                // Sample the clock inside the update function so a delayed failure cannot overwrite
+                // a newer failure's timestamp with an older one and prematurely end the retry delay.
+                // A CAS retry after another update also samples the clock again.
                 final CircuitBreakerState previousState = circuitBreaker.getAndUpdate(current -> new CircuitBreakerState(
-                        current.failedCount < maxFailuresBeforeCircuitOpen ? current.failedCount + 1 : current.failedCount, failedAt, true));
+                        current.failedCount < maxFailuresBeforeCircuitOpen ? current.failedCount + 1 : current.failedCount, System.nanoTime(), true));
 
                 // Surface the closed->open transition once at WARN: while the circuit is open
                 // every read returns null with only debug-level logging, so without this the
@@ -521,15 +525,18 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         encoding (the bundled {@code SpyMemcached} client rejects a {@code liveTime} whose absolute
      *         expiration would exceed epoch second {@code 2^31-1} / January 2038, as well as any
      *         {@code liveTime} exceeding {@link Integer#MAX_VALUE} seconds / ~68 years)
-     * @throws RuntimeException if a network error or timeout occurs, if the underlying client cannot encode
+     * @throws RuntimeException if key conversion fails, if a network error or timeout occurs, if the underlying client cannot encode
      *         {@code value}, or if the server rejects {@code liveTime} (the bundled Redis clients pass the
      *         millisecond {@code liveTime} directly to Redis, which may reject an extreme value that cannot be
      *         represented as an absolute expiration); propagated from the underlying cache client
+     * @throws StackOverflowError if a client using the bundled Kryo transcoder attempts to serialize
+     *         a cyclic collection, map, or object array in {@code value}
      * @see #generateKey(Object)
      * @see DistributedCacheClient#put(String, Object, long)
      */
     @Override
-    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime) {
+    public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -591,13 +598,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if the key is null, its string representation is null or contains an
      *         unpaired UTF-16 surrogate, or the underlying client rejects the
      *         generated key (for example, because it exceeds Memcached's key-length limit)
-     * @throws RuntimeException if a network error or timeout occurs (propagated from the underlying cache client)
+     * @throws RuntimeException if key conversion fails, or if the underlying client's removal operation fails
+     *         because of a network error or timeout
      * @see #clear()
      * @see #generateKey(Object)
      * @see DistributedCacheClient#remove(String)
      */
     @Override
-    public void remove(final K key) {
+    public void remove(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotClosed();
 
         N.checkArgNotNull(key, cs.key);
@@ -667,10 +675,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if the key or its string representation is invalid, as described
      *         by {@link #getOrNull(Object)}
+     * @throws RuntimeException if converting {@code key} to a string or an overridden {@code generateKey}
+     *         fails before the backend read, as described by {@link #getOrNull(Object)}
      * @see #getOrNull(Object)
      */
     @Override
-    public boolean containsKey(final K key) {
+    public boolean containsKey(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         return getOrNull(key) != null;
     }
 
@@ -811,7 +821,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @see #remove(Object)
      */
     @Override
-    public void clear() {
+    public void clear() throws IllegalStateException, UnsupportedOperationException, RuntimeException {
         assertNotClosed();
 
         client.flushAll();
@@ -1048,10 +1058,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if key is null, or if its string representation
      *         (the key itself for a String key, otherwise {@link N#stringOf(Object)}) is null or contains
      *         an unpaired UTF-16 surrogate
+     * @throws RuntimeException if converting a non-string {@code key} with {@link N#stringOf(Object)} fails
      * @see Strings#base64Encode(byte[])
      * @see N#stringOf(Object)
      */
-    protected String generateKey(final K key) {
+    protected String generateKey(final K key) throws IllegalArgumentException, RuntimeException {
         N.checkArgNotNull(key, cs.key);
 
         // Fast path for String keys: skip N.stringOf (which may do reflection/formatting
@@ -1088,7 +1099,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @see #isClosed()
      * @see #close()
      */
-    protected void assertNotClosed() {
+    protected void assertNotClosed() throws IllegalStateException {
         if (isClosed) {
             throw new IllegalStateException("This cache has been closed");
         }

@@ -15,6 +15,7 @@
 package com.landawn.abacus.cache;
 
 import java.util.Set;
+import java.util.concurrent.RejectedExecutionException;
 
 import com.landawn.abacus.util.ContinuableFuture;
 import com.landawn.abacus.util.Properties;
@@ -72,18 +73,18 @@ public interface Cache<K, V> {
 
     /**
      * Retrieves a value from the cache wrapped in an Optional.
-     * Unlike {@link #getOrNull(Object)}, which returns the value directly (or {@code null} when the
-     * key is absent or expired), this method wraps the result in an {@link Optional}.
+     * Wraps the result of {@link #getOrNull(Object)} in an {@link Optional}, including a value
+     * supplied by a read-through cache loader when the implementation supports loading.
      *
      * <p><b>Behavior:</b>
      * <ul>
-     * <li>Returns {@code Optional.empty()} if the key does not exist</li>
-     * <li>Returns {@code Optional.empty()} if the entry has expired (TTL or idle timeout exceeded)</li>
+     * <li>Returns {@code Optional.empty()} when no value is available after any implementation-specific loading</li>
+     * <li>An absent or expired entry may trigger a cache loader; a loaded value is wrapped in the Optional</li>
      * <li>Also returns {@code Optional.empty()} for a present entry explicitly mapped to {@code null}
      *     when the implementation permits null values. Whether {@link #containsKey(Object)} can
      *     distinguish that mapping is implementation-specific</li>
      * <li>May update the last-access time for idle-timeout tracking (implementation-specific)</li>
-     * <li>Does not throw for missing keys - returns an empty Optional instead</li>
+     * <li>A missing key alone is not an error, but loading or backend access may fail as documented below</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -104,28 +105,30 @@ public interface Cache<K, V> {
      * }</pre>
      *
      * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
-     * @return an Optional containing a non-null cached value if present and not expired, or an empty
-     *         Optional for a miss, expiration, or an explicitly cached {@code null}
+     * @return an Optional containing the non-null value returned by {@code getOrNull}, whether cached
+     *         or loaded, or an empty Optional when that method returns {@code null}
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if {@code key} is {@code null} and the implementation rejects
-     *         {@code null} keys, as all built-in implementations do
+     *         {@code null} keys, as all built-in implementations do, or the key cannot be encoded for its backend
+     * @throws RuntimeException if the implementation propagates a backend read, deserialization, or cache-loader failure
      * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
-    Optional<V> get(final K key);
+    Optional<V> get(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
-     * Retrieves a value from the cache directly, returning {@code null} on a miss.
+     * Retrieves a value from the cache directly, returning {@code null} when no value is available.
      * This method is named {@code getOrNull} to coexist with {@link #get(Object)},
      * which returns {@code Optional<V>}, and avoids the overhead of allocating an
      * {@link Optional} wrapper.
+     * An implementation with read-through loading may load an absent or expired entry before returning.
      *
      * <p><b>Behavior:</b>
      * <ul>
-     * <li>Returns {@code null} if the key does not exist</li>
-     * <li>Returns {@code null} if the entry has expired (TTL or idle timeout exceeded)</li>
+     * <li>Returns {@code null} when a missing or expired entry is not replaced by a loaded value</li>
+     * <li>Also returns {@code null} for a stored null value or a suppressed backend failure where supported</li>
      * <li>May update the last-access time for idle-timeout tracking (implementation-specific)</li>
-     * <li>Does not throw for missing keys - returns {@code null} instead</li>
+     * <li>A missing key alone is not an error, but loading or backend access may fail as documented below</li>
      * </ul>
      *
      * <p><b>Usage Examples:</b>
@@ -147,14 +150,16 @@ public interface Cache<K, V> {
      * }</pre>
      *
      * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
-     * @return the cached value if present and not expired, or {@code null} if the key is not found or has expired
+     * @return the cached or loaded value, or {@code null} when no value is available; implementations
+     *         that suppress backend failures may also return {@code null} for those failures
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if {@code key} is {@code null} and the implementation rejects
-     *         {@code null} keys, as all built-in implementations do
+     *         {@code null} keys, as all built-in implementations do, or the key cannot be encoded for its backend
+     * @throws RuntimeException if the implementation propagates a backend read, deserialization, or cache-loader failure
      * @see #get(Object)
      * @see #asyncGetOrNull(Object)
      */
-    V getOrNull(final K key);
+    V getOrNull(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Stores a key-value pair in the cache using the implementation's default expiration settings.
@@ -201,11 +206,15 @@ public interface Cache<K, V> {
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null} and the implementation
      *         rejects that {@code null} argument; all built-in implementations reject a {@code null} key,
      *         and all except {@link DistributedCache} (which leaves {@code null} values to its client)
-     *         also reject a {@code null} value
+     *         also reject a {@code null} value. The implementation may also reject a key or configured
+     *         default expiration that its backend cannot encode
+     * @throws RuntimeException if the implementation propagates a backend write, serialization, or cache callback failure
+     * @throws StackOverflowError if a Kryo-backed distributed client encounters a cycle made only of
+     *         collections, maps, or arrays while serializing {@code value}
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
-    boolean put(final K key, final V value);
+    boolean put(final K key, final V value) throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError;
 
     /**
      * Stores a key-value pair in the cache with custom expiration settings.
@@ -257,10 +266,14 @@ public interface Cache<K, V> {
      *         also reject a {@code null} value. Implementations may also reject a key or {@code liveTime}
      *         their backend cannot encode (e.g. {@link DistributedCache} with a {@code liveTime} beyond
      *         the client's expiration range)
+     * @throws RuntimeException if the implementation propagates a backend write, serialization, or cache callback failure
+     * @throws StackOverflowError if a Kryo-backed distributed client encounters a cycle made only of
+     *         collections, maps, or arrays while serializing {@code value}
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
-    boolean put(final K key, final V value, long liveTime, long maxIdleTime);
+    boolean put(final K key, final V value, long liveTime, long maxIdleTime)
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError;
 
     /**
      * Removes an entry from the cache.
@@ -290,12 +303,13 @@ public interface Cache<K, V> {
      * @param key the cache key to remove; null-handling is implementation-defined (most implementations reject null)
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if {@code key} is {@code null} and the implementation rejects
-     *         {@code null} keys, as all built-in implementations do
+     *         {@code null} keys, as all built-in implementations do, or the key cannot be encoded for its backend
+     * @throws RuntimeException if the implementation propagates a backend deletion or cache-writer failure
      * @see #clear()
      * @see #containsKey(Object)
      * @see #asyncRemove(Object)
      */
-    void remove(final K key);
+    void remove(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Returns whether the cache contains an entry for the specified key.
@@ -329,11 +343,12 @@ public interface Cache<K, V> {
      *         visibility of expired or null-valued entries is implementation-specific
      * @throws IllegalStateException if the cache has been closed
      * @throws IllegalArgumentException if {@code key} is {@code null} and the implementation rejects
-     *         {@code null} keys, as all built-in implementations do
+     *         {@code null} keys, as all built-in implementations do, or the key cannot be encoded for its backend
+     * @throws RuntimeException if the implementation propagates a backend lookup, deserialization, or cache-loader failure
      * @see #get(Object)
      * @see #asyncContainsKey(Object)
      */
-    boolean containsKey(final K key);
+    boolean containsKey(final K key) throws IllegalStateException, IllegalArgumentException, RuntimeException;
 
     /**
      * Asynchronously retrieves a value from the cache wrapped in an Optional.
@@ -354,13 +369,14 @@ public interface Cache<K, V> {
      * }</pre>
      *
      * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
-     * @return a ContinuableFuture that completes with an Optional containing the cached value,
-     *         or with {@code Optional.empty()} if the key is absent or has expired. The future
-     *         completes exceptionally if the underlying {@code get} call throws.
+     * @return a ContinuableFuture that completes with the Optional returned by {@link #get(Object)},
+     *         including any loaded value. The future completes exceptionally if the underlying call throws.
+     * @throws IllegalStateException if the implementation's asynchronous executor has been shut down before submission
+     * @throws RejectedExecutionException if the executor rejects the retrieval task
      * @see #get(Object)
      * @see #asyncGetOrNull(Object)
      */
-    ContinuableFuture<Optional<V>> asyncGet(final K key);
+    ContinuableFuture<Optional<V>> asyncGet(final K key) throws IllegalStateException, RejectedExecutionException;
 
     /**
      * Asynchronously retrieves a value from the cache, returning {@code null} on a miss.
@@ -379,13 +395,15 @@ public interface Cache<K, V> {
      * }</pre>
      *
      * @param key the cache key to look up; null-handling is implementation-defined (most implementations reject null)
-     * @return a ContinuableFuture that completes with the cached value, or with {@code null}
-     *         if the key is absent or has expired. The future completes exceptionally if the
-     *         underlying {@code getOrNull} call throws.
+     * @return a ContinuableFuture that completes with the value returned by {@link #getOrNull(Object)},
+     *         including any loaded value or {@code null}. The future completes exceptionally if the
+     *         underlying call throws.
+     * @throws IllegalStateException if the implementation's asynchronous executor has been shut down before submission
+     * @throws RejectedExecutionException if the executor rejects the retrieval task
      * @see #getOrNull(Object)
      * @see #asyncGet(Object)
      */
-    ContinuableFuture<V> asyncGetOrNull(final K key);
+    ContinuableFuture<V> asyncGetOrNull(final K key) throws IllegalStateException, RejectedExecutionException;
 
     /**
      * Asynchronously stores a key-value pair using the implementation's default expiration settings.
@@ -407,10 +425,12 @@ public interface Cache<K, V> {
      * @param value the value to cache; null-handling is implementation-defined
      * @return a ContinuableFuture that completes with {@code true} on success, {@code false} otherwise.
      *         The future completes exceptionally if the underlying {@code put} call throws.
+     * @throws IllegalStateException if the implementation's asynchronous executor has been shut down before submission
+     * @throws RejectedExecutionException if the executor rejects the storage task
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
-    ContinuableFuture<Boolean> asyncPut(final K key, final V value);
+    ContinuableFuture<Boolean> asyncPut(final K key, final V value) throws IllegalStateException, RejectedExecutionException;
 
     /**
      * Asynchronously stores a key-value pair with custom expiration settings.
@@ -438,10 +458,12 @@ public interface Cache<K, V> {
      *                    no idle timeout where supported; this parameter may be ignored by the implementation
      * @return a ContinuableFuture that completes with {@code true} on success, {@code false} otherwise.
      *         The future completes exceptionally if the underlying {@code put} call throws.
+     * @throws IllegalStateException if the implementation's asynchronous executor has been shut down before submission
+     * @throws RejectedExecutionException if the executor rejects the storage task
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
-    ContinuableFuture<Boolean> asyncPut(final K key, final V value, long liveTime, long maxIdleTime);
+    ContinuableFuture<Boolean> asyncPut(final K key, final V value, long liveTime, long maxIdleTime) throws IllegalStateException, RejectedExecutionException;
 
     /**
      * Asynchronously removes an entry from the cache.
@@ -459,10 +481,12 @@ public interface Cache<K, V> {
      * @return a ContinuableFuture that completes (with a {@code null} result) when the removal
      *         has finished. The future completes exceptionally if the underlying {@code remove}
      *         call throws.
+     * @throws IllegalStateException if the implementation's asynchronous executor has been shut down before submission
+     * @throws RejectedExecutionException if the executor rejects the removal task
      * @see #remove(Object)
      * @see #asyncPut(Object, Object)
      */
-    ContinuableFuture<Void> asyncRemove(final K key);
+    ContinuableFuture<Void> asyncRemove(final K key) throws IllegalStateException, RejectedExecutionException;
 
     /**
      * Asynchronously checks if the cache contains a specific key.
@@ -479,10 +503,12 @@ public interface Cache<K, V> {
      * @param key the cache key to check for; null-handling is implementation-defined (most implementations reject null)
      * @return a ContinuableFuture that completes with the result of {@link #containsKey(Object)}.
      *         The future completes exceptionally if the underlying call throws.
+     * @throws IllegalStateException if the implementation's asynchronous executor has been shut down before submission
+     * @throws RejectedExecutionException if the executor rejects the lookup task
      * @see #containsKey(Object)
      * @see #asyncGet(Object)
      */
-    ContinuableFuture<Boolean> asyncContainsKey(final K key);
+    ContinuableFuture<Boolean> asyncContainsKey(final K key) throws IllegalStateException, RejectedExecutionException;
 
     /**
      * Returns a set of the keys currently in the cache.
@@ -511,7 +537,7 @@ public interface Cache<K, V> {
      * @see #size()
      * @see #containsKey(Object)
      */
-    Set<K> keySet();
+    Set<K> keySet() throws IllegalStateException, UnsupportedOperationException;
 
     /**
      * Returns the number of entries currently in the cache.
@@ -537,7 +563,7 @@ public interface Cache<K, V> {
      * @see #keySet()
      * @see #clear()
      */
-    int size();
+    int size() throws IllegalStateException, UnsupportedOperationException;
 
     /**
      * Removes all entries in the implementation-defined scope of this cache. For implementations
@@ -564,10 +590,11 @@ public interface Cache<K, V> {
      * @throws IllegalStateException if the cache has been closed
      * @throws UnsupportedOperationException if the operation is not supported by this implementation
      *         (e.g., some distributed cache backends)
+     * @throws RuntimeException if the implementation propagates a backend flush or entry-removal failure
      * @see #remove(Object)
      * @see #size()
      */
-    void clear();
+    void clear() throws IllegalStateException, UnsupportedOperationException, RuntimeException;
 
     /**
      * Explicitly shuts down this cache before the end of its normal owner-managed lifecycle.
@@ -600,13 +627,16 @@ public interface Cache<K, V> {
      * }
      * }</pre>
      *
+     * @throws IllegalStateException if the implementation rejects a close invoked reentrantly from a cache operation or callback
+     * @throws RuntimeException if the implementation propagates a failure while releasing cache storage or backend connections
      * @see #isClosed()
      */
-    void close();
+    void close() throws IllegalStateException, RuntimeException;
 
     /**
-     * Returns whether the cache has been closed. Once {@link #close()} has been called,
-     * this method returns {@code true} and the cache cannot be reopened.
+     * Returns whether the cache has entered its closed state. Once closed, the cache cannot be reopened.
+     * A rejected {@link #close()} call may leave it open; a cleanup failure after closure takes effect
+     * may leave it closed even though {@code close()} threw an exception.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -619,7 +649,7 @@ public interface Cache<K, V> {
      * }
      * }</pre>
      *
-     * @return {@code true} if {@link #close()} has been called, {@code false} otherwise
+     * @return {@code true} if the cache is closed, {@code false} otherwise
      * @see #close()
      */
     boolean isClosed();
@@ -707,7 +737,7 @@ public interface Cache<K, V> {
      * @see #getProperty(String)
      * @see #removeProperty(String)
      */
-    <T> T setProperty(String propName, Object propValue);
+    <T> T setProperty(String propName, Object propValue) throws IllegalStateException;
 
     /**
      * Removes a property by name. While the cache is open, this has the same map effect as
@@ -735,5 +765,5 @@ public interface Cache<K, V> {
      * @see #getProperty(String)
      * @see #setProperty(String, Object)
      */
-    <T> T removeProperty(String propName);
+    <T> T removeProperty(String propName) throws IllegalStateException;
 }

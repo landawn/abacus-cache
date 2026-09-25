@@ -19,6 +19,7 @@ import static com.landawn.abacus.cache.DistributedCacheClient.DEFAULT_TIMEOUT;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.LongFunction;
 
+import com.landawn.abacus.exception.UncheckedIOException;
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolableAdapter;
 import com.landawn.abacus.util.N;
@@ -107,11 +108,13 @@ public final class CacheFactory {
      * @param evictDelay the delay in milliseconds between eviction runs (0 to disable periodic eviction, must be non-negative)
      * @return a new LocalCache instance with the specified configuration
      * @throws IllegalArgumentException if {@code capacity} is not positive or {@code evictDelay} is negative
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the pool's maintenance scheduler rejects the eviction task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers its shutdown hook
      * @see #createLocalCache(int, long, long, long)
      * @see #createLocalCache(KeyedObjectPool, long, long)
      */
-    public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay) {
+    public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay)
+            throws IllegalArgumentException, RejectedExecutionException, IllegalStateException {
         return new LocalCache<>(capacity, evictDelay);
     }
 
@@ -146,12 +149,13 @@ public final class CacheFactory {
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries added without explicit idle time (0 or negative for no idle timeout)
      * @return a new LocalCache instance with the specified configuration
      * @throws IllegalArgumentException if {@code capacity} is not positive or {@code evictDelay} is negative
+     * @throws RejectedExecutionException if {@code evictDelay} is positive and the pool's maintenance scheduler rejects the eviction task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers its shutdown hook
      * @see #createLocalCache(int, long)
      * @see #createLocalCache(KeyedObjectPool, long, long)
      */
-    public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime,
-            final long defaultMaxIdleTime) {
+    public static <K, V> LocalCache<K, V> createLocalCache(final int capacity, final long evictDelay, final long defaultLiveTime, final long defaultMaxIdleTime)
+            throws IllegalArgumentException, RejectedExecutionException, IllegalStateException {
         return new LocalCache<>(capacity, evictDelay, defaultLiveTime, defaultMaxIdleTime);
     }
 
@@ -204,7 +208,7 @@ public final class CacheFactory {
      * @see #createLocalCache(int, long, long, long)
      */
     public static <K, V> LocalCache<K, V> createLocalCache(final KeyedObjectPool<K, PoolableAdapter<V>> pool, final long defaultLiveTime,
-            final long defaultMaxIdleTime) {
+            final long defaultMaxIdleTime) throws IllegalArgumentException {
         return new LocalCache<>(defaultLiveTime, defaultMaxIdleTime, pool);
     }
 
@@ -223,13 +227,13 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws RejectedExecutionException if the maintenance scheduler rejects the eviction task (this
      *         overload always schedules one, using the default eviction delay)
-     * @throws SecurityException if runtime policy denies shutdown-hook registration
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @see #createOffHeapCache(int, long)
      * @see #createOffHeapCache(int, long, long, long)
      * @see OffHeapCache#builder()
      */
-    public static <K, V> OffHeapCache<K, V> createOffHeapCache(final int capacityInMB) {
+    public static <K, V> OffHeapCache<K, V> createOffHeapCache(final int capacityInMB)
+            throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
         return new OffHeapCache<>(capacityInMB);
     }
 
@@ -248,12 +252,12 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance
      *         scheduler rejects its task
-     * @throws SecurityException if runtime policy denies shutdown-hook registration
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long, long, long)
      */
-    public static <K, V> OffHeapCache<K, V> createOffHeapCache(final int capacityInMB, final long evictDelay) {
+    public static <K, V> OffHeapCache<K, V> createOffHeapCache(final int capacityInMB, final long evictDelay)
+            throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
         return new OffHeapCache<>(capacityInMB, evictDelay);
     }
 
@@ -273,13 +277,12 @@ public final class CacheFactory {
      * @throws OutOfMemoryError if the native allocation cannot be reserved
      * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance
      *         scheduler rejects its task
-     * @throws SecurityException if runtime policy denies shutdown-hook registration
      * @throws IllegalStateException if shutdown-hook registration is attempted during JVM shutdown
      * @see #createOffHeapCache(int)
      * @see #createOffHeapCache(int, long)
      */
     public static <K, V> OffHeapCache<K, V> createOffHeapCache(final int capacityInMB, final long evictDelay, final long defaultLiveTime,
-            final long defaultMaxIdleTime) {
+            final long defaultMaxIdleTime) throws IllegalArgumentException, OutOfMemoryError, RejectedExecutionException, IllegalStateException {
         return new OffHeapCache<>(capacityInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime);
     }
 
@@ -294,7 +297,8 @@ public final class CacheFactory {
      * @return a new CaffeineCache wrapping the provided Caffeine instance
      * @throws IllegalArgumentException if {@code caffeineCache} is null
      */
-    public static <K, V> CaffeineCache<K, V> createCaffeineCache(final com.github.benmanes.caffeine.cache.Cache<K, V> caffeineCache) {
+    public static <K, V> CaffeineCache<K, V> createCaffeineCache(final com.github.benmanes.caffeine.cache.Cache<K, V> caffeineCache)
+            throws IllegalArgumentException {
         return new CaffeineCache<>(caffeineCache);
     }
 
@@ -309,7 +313,7 @@ public final class CacheFactory {
      * @return a new Ehcache wrapper around the provided Ehcache instance
      * @throws IllegalArgumentException if {@code ehcache} is null
      */
-    public static <K, V> Ehcache<K, V> createEhcache(final org.ehcache.Cache<K, V> ehcache) {
+    public static <K, V> Ehcache<K, V> createEhcache(final org.ehcache.Cache<K, V> ehcache) throws IllegalArgumentException {
         return new Ehcache<>(ehcache);
     }
 
@@ -348,7 +352,7 @@ public final class CacheFactory {
      * @see #createDistributedCache(DistributedCacheClient, String, int, long)
      * @see #createCache(String)
      */
-    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client) {
+    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client) throws IllegalArgumentException {
         return new DistributedCache<>(client);
     }
 
@@ -397,7 +401,8 @@ public final class CacheFactory {
      * @see #createDistributedCache(DistributedCacheClient, String, int, long)
      * @see #createCache(String)
      */
-    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client, final String keyPrefix) {
+    public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client, final String keyPrefix)
+            throws IllegalArgumentException {
         return new DistributedCache<>(client, keyPrefix);
     }
 
@@ -457,7 +462,7 @@ public final class CacheFactory {
      * @see #createCache(String)
      */
     public static <K, V> DistributedCache<K, V> createDistributedCache(final DistributedCacheClient<V> client, final String keyPrefix,
-            final int maxFailuresBeforeCircuitOpen, final long retryDelay) {
+            final int maxFailuresBeforeCircuitOpen, final long retryDelay) throws IllegalArgumentException {
         return new DistributedCache<>(client, keyPrefix, maxFailuresBeforeCircuitOpen, retryDelay);
     }
 
@@ -566,15 +571,15 @@ public final class CacheFactory {
      *         candidate class is loaded without running its static initializer until after this type check. A
      *         custom cache class with a no-arg constructor may be specified without parameters, e.g.
      *         {@code "com.example.MyCache()"}
-     * @throws RuntimeException if a built-in client cannot be constructed for another reason (e.g. a local
-     *         client/socket setup failure, or a RedisCluster seed-resolution or initial
-     *         topology-discovery failure), or if a custom class is found but cannot be instantiated (constructor
-     *         invocation fails, security restrictions, etc.)
+     * @throws UncheckedIOException if creating the Memcached client's selector or sockets fails
+     * @throws RuntimeException if Redis client-pool setup, RedisCluster seed resolution, or initial
+     *         topology discovery fails, or if reflective construction cannot access the custom cache's
+     *         matching constructor or that constructor throws
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createLocalCache(int, long)
      */
-    public static <K, V> Cache<K, V> createCache(final String provider) {
+    public static <K, V> Cache<K, V> createCache(final String provider) throws IllegalArgumentException, UncheckedIOException, RuntimeException {
         if (Strings.isEmpty(provider)) {
             throw new IllegalArgumentException("Provider specification cannot be null or empty");
         }
@@ -655,7 +660,7 @@ public final class CacheFactory {
      * @throws IllegalArgumentException if the class cannot be found by this library's classloader or by the
      *         thread context classloader
      */
-    private static Class<?> loadCustomCacheClass(final String className) {
+    private static Class<?> loadCustomCacheClass(final String className) throws IllegalArgumentException {
         final ClassLoader libraryClassLoader = CacheFactory.class.getClassLoader();
         final ClassNotFoundException primaryFailure;
 
@@ -700,7 +705,8 @@ public final class CacheFactory {
      * @throws IllegalArgumentException if {@code client} is {@code null}, or if {@code keyPrefix} contains a
      *         non-printable-ASCII character, a space, or a control character (the client is disconnected first)
      */
-    private static <K, V> DistributedCache<K, V> newDistributedCacheOrDisconnect(final DistributedCacheClient<V> client, final String keyPrefix) {
+    private static <K, V> DistributedCache<K, V> newDistributedCacheOrDisconnect(final DistributedCacheClient<V> client, final String keyPrefix)
+            throws IllegalArgumentException {
         try {
             return new DistributedCache<>(client, keyPrefix);
         } catch (final RuntimeException | Error e) {
@@ -731,10 +737,11 @@ public final class CacheFactory {
      * @throws IllegalArgumentException if more than three parameters are given, if the timeout token is
      *         invalid (see {@link #parseTimeoutParameter(String)}), if {@code clientFactory} rejects the server
      *         URL or timeout, or if the key prefix is rejected by the {@link DistributedCache} constructor
+     * @throws UncheckedIOException if the Memcached client factory cannot create its selector or sockets
      * @throws RuntimeException if {@code clientFactory} fails to construct the client for any other reason
      */
     private static <K, V> DistributedCache<K, V> createMemcachedOrRedisCache(final String provider, final String[] parameters,
-            final LongFunction<? extends DistributedCacheClient<V>> clientFactory) {
+            final LongFunction<? extends DistributedCacheClient<V>> clientFactory) throws IllegalArgumentException, UncheckedIOException, RuntimeException {
         if (parameters.length == 1) {
             return newDistributedCacheOrDisconnect(clientFactory.apply(DEFAULT_TIMEOUT), null);
         } else if (parameters.length == 2) {
@@ -768,7 +775,7 @@ public final class CacheFactory {
      *         if the timeout token is invalid (see {@link #parseTimeoutParameter(String)}), if the key prefix is
      *         not in the expected position, or if an additional seed-node parameter is not a {@code host:port} endpoint
      */
-    private static RedisClusterParameters parseRedisClusterParameters(final String[] parameters) {
+    private static RedisClusterParameters parseRedisClusterParameters(final String[] parameters) throws IllegalArgumentException {
         final int parameterCount = parameters.length;
         int keyPrefixIndex = -1;
         int seedParameterCount = parameterCount;
@@ -962,7 +969,7 @@ public final class CacheFactory {
      * @throws IllegalArgumentException if the token is not an optional sign followed by decimal
      *         digits, does not fit in a {@code long}, or is not positive
      */
-    private static long parseTimeoutParameter(final String timeoutValue) {
+    private static long parseTimeoutParameter(final String timeoutValue) throws IllegalArgumentException {
         // Accept exactly what looksLikeTimeoutParameter recognizes - an optional sign followed by
         // decimal digits - so the parser and the disambiguation predicate stay consistent.
         // Numbers.toLong alone would also accept hexadecimal forms and a trailing 'L'
