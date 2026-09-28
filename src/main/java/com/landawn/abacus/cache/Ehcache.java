@@ -309,7 +309,11 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the cache key with which the specified value is to be associated (must not be {@code null})
      * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
-     * @return the previous value associated with the specified key, or {@code null} if there was no mapping
+     * @return the previous value associated with the specified key, or {@code null} if there was no live
+     *         mapping. {@code null} does not by itself prove that {@code value} was retained: as with
+     *         {@link #put(Object, Object, long, long)}, a zero creation duration from the configured
+     *         {@code ExpiryPolicy}, or a store failure handled by Ehcache's default (robust) resilience
+     *         strategy, also yields {@code null} without retaining the value
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}

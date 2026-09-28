@@ -274,11 +274,11 @@ public abstract class AbstractDistributedCacheClient<T> implements DistributedCa
      * System.out.println("Retrieved " + users.size() + " users");                      // prints e.g. "Retrieved 2 users"
      *
      * // Using with dynamically generated keys
-     * List<Integer> productIds = Arrays.asList(101, 102, 103);                         // setup: source ids
-     * Set<String> productKeys = productIds.stream()
-     *         .map(id -> "product:" + id)
-     *         .collect(Collectors.toSet());                                            // -> {"product:101", "product:102", "product:103"}
-     * Map<String, Product> products = client.getBulk(productKeys);                     // map of found keys; missing keys are absent
+     * List<Integer> userIds = Arrays.asList(101, 102, 103);                            // setup: source ids
+     * Set<String> generatedKeys = userIds.stream()
+     *         .map(id -> "user:" + id)
+     *         .collect(Collectors.toSet());                                            // -> {"user:101", "user:102", "user:103"}
+     * Map<String, User> generatedUsers = client.getBulk(generatedKeys);                // map of found keys; missing keys are absent
      *
      * // Without a subclass override, the base-class default does not validate keys and simply throws:
      * AbstractDistributedCacheClient<User> plain = new MyDistributedCache<>("localhost:11211");  // does not override getBulk

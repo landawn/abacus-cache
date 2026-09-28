@@ -589,7 +589,7 @@ public class ForeignMemoryOffHeapCacheTest {
      */
     @Test
     public void testAllocate_failureClosesArenaAndRethrows() {
-        assertThrows(Throwable.class, () -> {
+        assertThrows(OutOfMemoryError.class, () -> {
             final ForeignMemoryOffHeapCache<String, byte[]> cache = new ForeignMemoryOffHeapCache<>(Integer.MAX_VALUE);
 
             try {

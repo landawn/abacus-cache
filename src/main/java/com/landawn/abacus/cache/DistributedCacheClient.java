@@ -147,8 +147,8 @@ public interface DistributedCacheClient<T> {
      * users.forEach((key, user) -> System.out.println(key + ": " + user.getName()));
      *
      * // Bulk get with missing key handling
-     * Map<String, Product> products = client.getBulk("prod:1", "prod:2", "prod:3");
-     * System.out.println("Found " + products.size() + " out of 3 products");
+     * Map<String, User> admins = client.getBulk("admin:1", "admin:2", "admin:3");
+     * System.out.println("Found " + admins.size() + " out of 3 admins");
      *
      * // Identify missing keys
      * String[] requestedKeys = {"user:1", "user:2", "user:3"};
@@ -189,8 +189,8 @@ public interface DistributedCacheClient<T> {
      * Map<String, User> users = client.getBulk(userKeys);
      *
      * // Using a Set (useful when keys come from various sources)
-     * Set<String> keySet = new HashSet<>(Arrays.asList("session:1", "session:2"));
-     * Map<String, Session> sessions = client.getBulk(keySet);
+     * Set<String> keySet = new HashSet<>(Arrays.asList("admin:1", "admin:2"));
+     * Map<String, User> admins = client.getBulk(keySet);
      *
      * // Dynamically built key collection
      * List<Integer> userIds = List.of(101, 102, 103);
@@ -235,10 +235,10 @@ public interface DistributedCacheClient<T> {
      * client must provide a non-recursive implementation of either this method (recommended) or
      * {@code set}. Omitting both methods, or routing both names back through these defaults, fails
      * fast with {@link UnsupportedOperationException}. The cycle guard is per-thread and
-     * per-client, not per-key: while this default is delegating to {@code set}, re-entering either
-     * name of the pair on the same thread — even for a different key — is treated as a delegation
-     * cycle and also fails fast, so an overriding {@code set} must not call back into
-     * {@code this.put(...)}.
+     * per-client, not per-key: while this default is delegating to {@code set}, any further call on
+     * the same thread that reaches a compatibility default of the pair for this client — even for a
+     * different key — is treated as a delegation cycle and also fails fast, so an overriding
+     * {@code set} must not call back into {@code this.put(...)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -249,18 +249,20 @@ public interface DistributedCacheClient<T> {
      *     System.out.println("User cached successfully");
      * }
      *
-     * // Cache session data with 30 minute TTL
-     * Session session = new Session("abc123", user);
-     * client.put("session:" + session.getId(), session, 1800000);
+     * // Cache with a 30 minute TTL
+     * User guest = new User("Guest", "guest@example.com");
+     * client.put("user:guest", guest, 1800000);
      *
      * // Cache with no expiration
-     * Config config = loadConfig();
-     * client.put("app:config", config, 0);   // No expiration
+     * User admin = loadAdminUser();
+     * client.put("user:admin", admin, 0);   // No expiration
      *
      * // Updating existing value
-     * Product product = client.get("product:456");
-     * product.setPrice(99.99);
-     * client.put("product:456", product, 7200000);   // 2 hour TTL
+     * User existing = client.get("user:456");
+     * if (existing != null) {
+     *     existing.setEmail("new@example.com");
+     *     client.put("user:456", existing, 7200000);   // 2 hour TTL
+     * }
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
@@ -310,9 +312,10 @@ public interface DistributedCacheClient<T> {
      * the other name. Every concrete client must provide a non-recursive implementation of at
      * least one member of the pair; otherwise this method fails fast with
      * {@link UnsupportedOperationException}. The cycle guard is per-thread and per-client, not
-     * per-key: while this default is delegating to {@code put}, re-entering either name of the
-     * pair on the same thread — even for a different key — is treated as a delegation cycle and
-     * also fails fast, so an overriding {@code put} must not call back into {@code this.set(...)}.
+     * per-key: while this default is delegating to {@code put}, any further call on the same thread
+     * that reaches a compatibility default of the pair for this client — even for a different key —
+     * is treated as a delegation cycle and also fails fast, so an overriding {@code put} must not
+     * call back into {@code this.set(...)}.
      *
      * @param key the cache key, must not be {@code null}
      * @param value the value to cache; may be {@code null} if supported by the implementation (see
@@ -370,10 +373,10 @@ public interface DistributedCacheClient<T> {
      * provide a non-recursive implementation of either this method (recommended) or
      * {@code delete}. Omitting both methods, or routing both names back through these defaults,
      * fails fast with {@link UnsupportedOperationException}. The cycle guard is per-thread and
-     * per-client, not per-key: while this default is delegating to {@code delete}, re-entering
-     * either name of the pair on the same thread — even for a different key — is treated as a
-     * delegation cycle and also fails fast, so an overriding {@code delete} must not call back
-     * into {@code this.remove(...)}.
+     * per-client, not per-key: while this default is delegating to {@code delete}, any further call
+     * on the same thread that reaches a compatibility default of the pair for this client — even for
+     * a different key — is treated as a delegation cycle and also fails fast, so an overriding
+     * {@code delete} must not call back into {@code this.remove(...)}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -435,10 +438,10 @@ public interface DistributedCacheClient<T> {
      * {@code remove}. Every concrete client must provide a non-recursive implementation of at
      * least one member of the pair; otherwise this method fails fast with
      * {@link UnsupportedOperationException}. The cycle guard is per-thread and per-client, not
-     * per-key: while this default is delegating to {@code remove}, re-entering either name of the
-     * pair on the same thread — even for a different key — is treated as a delegation cycle and
-     * also fails fast, so an overriding {@code remove} must not call back into
-     * {@code this.delete(...)}.
+     * per-key: while this default is delegating to {@code remove}, any further call on the same
+     * thread that reaches a compatibility default of the pair for this client — even for a
+     * different key — is treated as a delegation cycle and also fails fast, so an overriding
+     * {@code remove} must not call back into {@code this.delete(...)}.
      *
      * @param key the cache key, must not be {@code null}
      * @return {@code true} if the key existed and was removed; {@code false} otherwise
@@ -759,7 +762,9 @@ public interface DistributedCacheClient<T> {
      * owns the client. Implementations commonly pool connections, so callers should normally retain
      * and share a client and invoke this method only when that owner is permanently shutting down,
      * not after an individual request or cache operation. Implementations should make repeated calls
-     * harmless; consult the concrete implementation for exact idempotence and failure behavior.
+     * harmless; consult the concrete implementation for exact idempotence and failure behavior. Some
+     * implementations keep the JVM alive until disconnected (the bundled {@code SpyMemcached} runs a non-daemon
+     * I/O thread), so an application that relies on the JVM exiting once its own threads finish must call it.
      *
      * <p>This method is thread-safe, but once called, no other operations should be
      * attempted on this client instance.

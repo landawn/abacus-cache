@@ -704,4 +704,16 @@ public class CaffeineCacheTest extends TestBase {
             cache.close();
         }
     }
+
+    /** Caffeine accepts {@code long} maximums, so even an entry-count bound can exceed the int capacity field. */
+    @Test
+    public void testStats_CapacityClampedForLongSizeBound() {
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(Caffeine.newBuilder().maximumSize(3_000_000_000L).build());
+
+        try {
+            assertEquals(Integer.MAX_VALUE, cache.stats().capacity());
+        } finally {
+            cache.close();
+        }
+    }
 }

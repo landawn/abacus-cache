@@ -664,7 +664,31 @@ public class SpyMemcachedTest {
     public void test_disconnect_with_timeout_rejects_negative() {
         assertThrows(IllegalArgumentException.class, () -> cache.disconnect(-1));
         // The shared client must remain usable (the negative timeout was rejected before shutdown).
+        // serverUrl() alone would not prove that: it remains available after disconnect.
         assertNotNull(cache.serverUrl());
+        assertTrue(cache.put("after-negative-disconnect", "v", 60_000));
+        assertEquals("v", cache.get("after-negative-disconnect"));
+    }
+
+    /**
+     * The delegate's enqueue path waits interruptibly, so an operation started with the interrupt
+     * status already set is rejected with {@link IllegalStateException} before anything is sent,
+     * the status is preserved, and the client stays usable once the status is cleared.
+     */
+    @Test
+    public void test_operation_started_while_interrupted_fails_before_enqueue_and_keeps_status() {
+        Thread.currentThread().interrupt();
+
+        try {
+            assertThrows(IllegalStateException.class, () -> cache.put("interrupted-put", "v", 60_000));
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted(); // Do not leak the intentional interrupt into the JUnit worker.
+        }
+
+        assertNull(cache.get("interrupted-put"));
+        assertTrue(cache.put("interrupted-put", "v", 60_000));
+        assertEquals("v", cache.get("interrupted-put"));
     }
 
     @Test

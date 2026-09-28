@@ -255,7 +255,8 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
      * index as key and the number of occupied slots in that segment as value. This provides
      * detailed information about memory fragmentation and utilization.
      * A segment that has become empty may still appear with a zero count until its dedicated
-     * slot-size assignment is reclaimed by maintenance, a vacate pass, or {@code clear()}.
+     * slot-size assignment is reclaimed by an allocation that needs a free segment, maintenance, a
+     * vacate pass, or {@code clear()}.
      *
      * <p>The map returned by this accessor is deeply unmodifiable: both the outer map and
      * the nested maps are defensive copies captured during record construction.

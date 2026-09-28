@@ -211,7 +211,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws RuntimeException if key conversion fails, or if the Memcached operation fails. After
      *         command dispatch the lock state can be indeterminate: the {@code add} command may have reached
      *         the server even though its response was lost or timed out, in which case the lock IS held server-side (under this
-     *         client's marker) until the TTL expires and no caller will ever {@code tryUnlock} it.
+     *         client's marker) until the TTL expires unless something releases it (the failed caller cannot tell that it holds the lock).
      *         Prefer short TTLs where this matters for availability.
      * @see #tryLock(Object, Object, long)
      * @see #tryUnlock(Object)
@@ -300,7 +300,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws RuntimeException if key conversion fails, or if the Memcached operation fails. After command
      *         dispatch the lock state can be indeterminate: the {@code add} command may have reached the server even though its
      *         response was lost or timed out, in which case the lock IS held server-side (under this
-     *         client's value) until the TTL expires and no caller will ever {@code tryUnlock} it.
+     *         client's value) until the TTL expires unless something releases it (the failed caller cannot tell that it holds the lock).
      *         Prefer short TTLs where this matters for availability.
      * @throws StackOverflowError if the bundled Kryo transcoder attempts to serialize a cyclic collection, map, or object array in {@code value}
      * @see #tryLock(Object, long)

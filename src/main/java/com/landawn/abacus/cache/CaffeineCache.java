@@ -313,8 +313,10 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>Note that {@code asMap().containsKey()} evaluates expiration against the cache's
      * ticker (a logically expired entry reports {@code false}), but it does not record an
-     * access, update statistics, or trigger Caffeine's housekeeping task. As with any
-     * concurrent map query, a concurrent update may change the result immediately.
+     * access or update statistics. When it finds a logically expired or reference-collected
+     * entry, Caffeine schedules its maintenance task on the cache's configured executor (which
+     * runs on the calling thread for a same-thread executor such as {@code Runnable::run}).
+     * As with any concurrent map query, a concurrent update may change the result immediately.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently
      * from multiple threads.
@@ -545,8 +547,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * this wrapper. {@code capacity} is the Caffeine eviction maximum when an eviction bound is configured
      * — the maximum entry count for a size-bounded cache, or the maximum total weight for a weight-bounded
      * cache (a weight, not an entry count) — clamped to {@link Integer#MAX_VALUE} when the configured
-     * maximum exceeds it (possible for weight bounds). It is {@code 0} when the cache is unbounded, or
-     * when it is explicitly bounded at zero ({@code maximumSize(0)}). {@code maxMemory}
+     * maximum exceeds it (possible for either bound, because Caffeine accepts {@code long} maximums).
+     * It is {@code 0} when the cache is unbounded, or when it is explicitly bounded at zero
+     * ({@code maximumSize(0)}). {@code maxMemory}
      * and {@code dataSize} are reported as {@code -1} ("not tracked") because Caffeine does not expose
      * byte-level usage.
      * For the full set of Caffeine-native metrics (load counts, average load penalty, etc.), use

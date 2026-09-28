@@ -253,6 +253,22 @@ public class EhcacheTest {
         }
     }
 
+    /** A zero creation expiry makes putIfAbsent report "no previous mapping" without retaining the value. */
+    @Test
+    public void testPutIfAbsent_ZeroCreationExpiry_ReturnsNullWithoutStoring() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final org.ehcache.Cache<String, String> underlying = cm.createCache("zeroExpiry",
+                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10))
+                            .withExpiry(org.ehcache.config.builders.ExpiryPolicyBuilder.timeToLiveExpiration(java.time.Duration.ZERO)));
+            final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
+            assertNull(wrapper.putIfAbsent("k", "v"));
+            assertNull(wrapper.getOrNull("k"));
+        } finally {
+            cm.close();
+        }
+    }
+
     @Test
     public void testPutIfAbsent_EdgeCase_NullKey() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);

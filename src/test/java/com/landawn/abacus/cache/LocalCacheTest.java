@@ -91,6 +91,39 @@ public class LocalCacheTest {
         }
     }
 
+    /**
+     * Pins the dependency's overflow-safe expiration arithmetic: createdTime + Long.MAX_VALUE must
+     * not wrap around and make a "never expires" entry look expired immediately.
+     */
+    @Test
+    public void testPut_EdgeCase_MaxValueTimesDoNotOverflowIntoExpiry() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertTrue(cache.put("k", "v", Long.MAX_VALUE, Long.MAX_VALUE));
+            assertTrue(cache.containsKey("k"));
+            assertEquals("v", cache.getOrNull("k"));
+            assertEquals(0L, cache.stats().evictionCount());
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** A non-positive liveTime disables only the TTL: a positive maxIdleTime must still expire the entry. */
+    @Test
+    public void testPut_NonPositiveLiveTime_IdleTimeoutStillApplies() throws Exception {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertTrue(cache.put("k", "v", 0, 50));
+
+            Thread.sleep(200);
+
+            assertNull(cache.getOrNull("k"));
+            assertEquals(0, cache.size());
+        } finally {
+            cache.close();
+        }
+    }
+
     @Test
     public void testDefaultPutAndRemove() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);

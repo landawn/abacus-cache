@@ -57,7 +57,11 @@ import lombok.experimental.Accessors;
  *
  * <p>Important notes:
  * <ul>
- * <li>Requires the finalized Foreign Function &amp; Memory API (Java 22+; available as a preview in earlier releases)</li>
+ * <li>Uses the Foreign Function &amp; Memory API as finalized in Java 22 (JEP 454); the earlier preview
+ *     versions of that API are not supported</li>
+ * <li>Needs no JVM flags: arena allocation and {@link MemorySegment} copies are not restricted
+ *     methods, so neither {@code --sun-misc-unsafe-memory-access} nor {@code --enable-native-access}
+ *     is required</li>
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
  * <li>Memory is allocated during construction and normally retained for the application lifetime;
@@ -96,7 +100,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
     private static final Logger logger = LoggerFactory.getLogger(ForeignMemoryOffHeapCache.class);
 
     // Assigned exactly once in allocate() during construction and never reassigned
-    // afterwards (close() merely closes the Arena without nulling these). Safe
+    // afterwards (close() merely closes the Arena without nulling these). They must keep
+    // NO field initializer (not even "= null"): allocate() runs inside the super constructor,
+    // before this class's initializers, which would otherwise wipe the assignment. Safe
     // publication of the cache instance establishes the necessary happens-before,
     // so these are intentionally non-volatile to avoid a memory barrier on every
     // off-heap copy in the hot get/put paths.
@@ -291,10 +297,12 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
 
     /**
      * Allocates off-heap memory using the Foreign Memory API.
-     * Creates a shared {@link Arena} (allowing access from multiple threads) and allocates a
-     * {@link MemorySegment} of the requested size. The shared arena ensures thread-safe access
-     * to the memory segment across cache operations. This is an internal hook called automatically
-     * during cache construction and should not be invoked directly.
+     * Creates a shared {@link Arena} and allocates a {@link MemorySegment} of the requested size.
+     * A shared arena is required because the segment is accessed, and the arena later closed, from
+     * threads other than the constructing one (callers, background passes, the shutdown hook); a
+     * confined arena would reject that access with a {@link WrongThreadException}. The arena does not
+     * synchronize access to the segment's contents; the cache's own locking does. This is an internal
+     * hook called automatically during cache construction and should not be invoked directly.
      *
      * <p>The memory is allocated from the native heap and is not managed by the Java garbage collector.
      * This reduces GC pressure but requires explicit release via {@link #deallocate()} to avoid leaks.
@@ -342,9 +350,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
 
     /**
      * Deallocates the off-heap memory by closing the {@link Arena}.
-     * Called during cache shutdown to release native memory and prevent leaks.
-     * This method is automatically invoked by {@link #close()} and is an internal hook
-     * that should not be called directly.
+     * Called at most once to release native memory and prevent leaks: by {@link #close()}, or by
+     * the constructor's failure cleanup when an initialization step after the allocation fails.
+     * This is an internal hook that should not be called directly.
      *
      * <p>Once called, the memory base address becomes invalid and must not be
      * accessed. All cache operations should be stopped before calling this method. Closing the
@@ -495,7 +503,10 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      *
      * <p><b>&#9888;&#65039; Store ownership:</b> A built cache assumes ownership of its configured
      * {@link OffHeapStore} and closes it during explicit early shutdown or from the cache's JVM
-     * shutdown hook.
+     * shutdown hook. If {@link #build()} fails after the native memory was allocated (a
+     * {@link RejectedExecutionException} or {@link IllegalStateException}), the store is closed as
+     * part of that cleanup; a failure before or during the allocation (an invalid argument or an
+     * {@link OutOfMemoryError}) leaves it open and owned by the caller.
      *
      * <p><b>Default Values:</b>
      * <ul>

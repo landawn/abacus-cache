@@ -638,8 +638,105 @@ public class JRedisTest {
 
     @Test
     public void test_constructor_rejects_invalid_server_url() {
-        // No host:port in the URL → AddrUtil returns empty → IAE.
+        // An empty URL is rejected by the base-class blank check; a token without host:port by AddrUtil.
         assertThrows(IllegalArgumentException.class, () -> new JRedis<>(""));
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost"));
+        assertEquals(1, shards.size(), "only setUp's shard may exist; none is built for a malformed URL");
+    }
+
+    /** A shard-construction failure must close the shard clients that were already built. */
+    @Test
+    public void test_constructor_partialFailureClosesAlreadyBuiltShards() {
+        ctorIntercept.close();
+        final List<RedisClient> built = new ArrayList<>();
+        final RuntimeException failure = new IllegalStateException("third shard fails");
+
+        ctorIntercept = Mockito.mockConstruction(RedisClient.class, (poolMock, context) -> {
+            if (built.size() == 2) {
+                throw failure;
+            }
+
+            built.add(poolMock);
+        });
+
+        final RuntimeException thrown = assertThrows(RuntimeException.class, () -> new JRedis<>("h1:6379,h2:6379,h3:6379"));
+
+        assertTrue(thrown == failure || thrown.getCause() == failure, String.valueOf(thrown));
+        assertEquals(2, built.size());
+        verify(built.get(0)).close();
+        verify(built.get(1)).close();
+    }
+
+    /**
+     * Regression test: without Kryo on the classpath, every construction attempt must fail with the
+     * documented, actionable {@link IllegalStateException}. The check used to run in a static field
+     * initializer, so the first attempt surfaced as {@link ExceptionInInitializerError} and every
+     * later attempt as a bare {@link NoClassDefFoundError} ("Could not initialize class ...").
+     *
+     * <p>The abacus classes (including abacus-common's {@code ParserFactory}, whose Kryo probe is
+     * computed once per class loader) are reloaded in an isolated loader that hides Kryo.
+     */
+    @Test
+    public void test_missingKryo_everyConstructionFailsWithIllegalStateException() throws Exception {
+        final ClassLoader loader = new KryoHidingClassLoader(JRedisTest.class.getClassLoader());
+        // Reflect only on JRedis itself: reflecting on ParserFactory's public methods would fail on
+        // the Kryo types in their signatures. Initialization is deferred to the constructor call.
+        final Class<?> jredis = Class.forName(JRedis.class.getName(), false, loader);
+        final java.lang.reflect.Constructor<?> ctor = jredis.getConstructor(String.class);
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            final Throwable thrown = assertThrows(Throwable.class, () -> ctor.newInstance("localhost:6379"));
+            final Throwable cause = thrown instanceof java.lang.reflect.InvocationTargetException ? thrown.getCause() : thrown;
+
+            assertEquals(IllegalStateException.class, cause.getClass(), "attempt " + attempt + ": " + cause);
+            assertTrue(cause.getMessage().contains("com.esotericsoftware:kryo"), cause.getMessage());
+        }
+
+        assertEquals(1, shards.size(), "only setUp's shard may exist; none is built when Kryo is missing");
+    }
+
+    /**
+     * Child-first loader for {@code com.landawn.abacus.*} classes that makes every Kryo class
+     * ({@code com.esotericsoftware.*}) unloadable; all other classes are delegated to the parent.
+     */
+    private static final class KryoHidingClassLoader extends ClassLoader {
+        KryoHidingClassLoader(final ClassLoader parent) {
+            super(parent);
+        }
+
+        @Override
+        protected Class<?> loadClass(final String name, final boolean resolve) throws ClassNotFoundException {
+            if (name.startsWith("com.esotericsoftware.")) {
+                throw new ClassNotFoundException(name);
+            }
+
+            if (!name.startsWith("com.landawn.abacus.")) {
+                return super.loadClass(name, resolve);
+            }
+
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> cls = findLoadedClass(name);
+
+                if (cls == null) {
+                    try (java.io.InputStream in = getParent().getResourceAsStream(name.replace('.', '/') + ".class")) {
+                        if (in == null) {
+                            throw new ClassNotFoundException(name);
+                        }
+
+                        final byte[] bytes = in.readAllBytes();
+                        cls = defineClass(name, bytes, 0, bytes.length);
+                    } catch (final java.io.IOException e) {
+                        throw new ClassNotFoundException(name, e);
+                    }
+                }
+
+                if (resolve) {
+                    resolveClass(cls);
+                }
+
+                return cls;
+            }
+        }
     }
 
     @Test

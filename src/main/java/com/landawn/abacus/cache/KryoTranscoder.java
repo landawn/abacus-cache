@@ -280,8 +280,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Implementation Note:</b> The encoding step converts the object graph into a compact
      * binary representation using Kryo's optimized serialization protocol. The resulting byte
-     * array is wrapped in a {@link CachedData} with flag value {@code 0} and the configured
-     * maximum size as its declared maximum.
+     * array is wrapped in a {@link CachedData} with flag value {@code 0}; the configured maximum
+     * size is only checked here and is not recorded in the returned {@code CachedData}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -308,7 +308,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *         {@link KryoException}, including for cycles through object fields
      * @throws StackOverflowError if the object graph contains a cycle made only of collections, maps,
      *         or arrays (their serializers do not wrap the overflow)
-     * @throws IllegalArgumentException if the serialized size exceeds the configured {@code maxSize}
+     * @throws IllegalArgumentException if the serialized size exceeds the configured {@code maxSize},
+     *         or if the parser's Kryo registrations assign one registration ID to two different classes
      * @see #decode(CachedData)
      * @see CachedData
      */

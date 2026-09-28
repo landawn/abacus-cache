@@ -67,11 +67,11 @@ import com.landawn.abacus.util.function.TriPredicate;
  * of that size. A value whose serialized form fits in {@code maxBlockSize} occupies a single slot
  * of the smallest sufficient size class; a larger value is split into {@code maxBlockSize}-sized
  * chunks, each in its own slot (the final, possibly smaller chunk uses the smallest sufficient
- * class). A segment whose slots are all freed is reclaimed &mdash; by the periodic maintenance
- * pass, a vacate pass, or {@link #clear()} &mdash; and can then be re-dedicated to a different
- * slot size. A value that could not be placed even in an otherwise empty region &mdash; because
- * its serialized form, or the whole segments its slot-rounded chunks require, exceed the capacity
- * &mdash; never attempts in-memory placement.
+ * class). A segment whose slots are all freed is reclaimed &mdash; by an allocation that finds no
+ * free segment, the periodic maintenance pass, a vacate pass, or {@link #clear()} &mdash; and can
+ * then be re-dedicated to a different slot size. A value that could not be placed even in an
+ * otherwise empty region &mdash; because its serialized form, or the whole segments its
+ * slot-rounded chunks require, exceed the capacity &mdash; never attempts in-memory placement.
  *
  * <p><b>Concurrency.</b> Four mechanisms, with the lock order map bin &rarr; entry monitor
  * &rarr; allocator lock (no code path acquires them in any other order):
@@ -96,7 +96,8 @@ import com.landawn.abacus.util.function.TriPredicate;
  *
  * <p><b>Memory pressure.</b> When slot allocation fails for a value that could fit, the put
  * falls back to the disk store when one is configured. If no store absorbs the value — because
- * none is configured or because its write was rejected — the put returns {@code false} and
+ * none is configured, because the {@code storeSelector} restricted the value to memory, or
+ * because the store write was rejected — the put returns {@code false} and
  * schedules an asynchronous, debounced vacate pass that evicts the least-recently-accessed
  * ~{@code vacatingFactor} of memory-resident entries and reclaims their now-empty segments.
  *
@@ -240,6 +241,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private final Deque<Segment>[] segmentQueues;
     /** Lower bound for the next free-segment scan. */
     private int nextFreeSegmentHint = 0;
+    /** Number of dedicated segments with no occupied slot; lets reclamation skip a futile scan. */
+    private int emptyDedicatedSegmentCount = 0;
 
     // --- statistics ------------------------------------------------------------------------
 
@@ -758,9 +761,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 bytes = (byte[]) value;
                 size = bytes.length;
             } else if (type.isByteBuffer()) {
-                // ByteBufferType.byteArrayOf temporarily moves the supplied buffer's position to
-                // zero, which invalidates its mark even though the position is restored. Operate
-                // on a duplicate so put() is observationally read-only for the caller's buffer.
+                // Moving a buffer's position to zero to read [0, position) would invalidate its
+                // mark. Operate on a duplicate so put() is observationally read-only for the
+                // caller's buffer, independent of ByteBufferType's own (currently duplicating)
+                // implementation.
                 bytes = ByteBufferType.byteArrayOf(((ByteBuffer) value).duplicate());
                 size = bytes.length;
             } else {
@@ -1449,7 +1453,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             if (segment.used < slotsPerSegment) {
                 final int slotIndex = segment.slotBits.nextClearBit(0);
                 segment.slotBits.set(slotIndex);
-                segment.used++;
+
+                if (segment.used++ == 0) {
+                    emptyDedicatedSegmentCount--;
+                }
 
                 // Keep segments with vacancies near the front so later allocations find them fast;
                 // full segments naturally drift toward the back.
@@ -1463,7 +1470,15 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         // Every dedicated segment of this class is full; dedicate a fresh segment if one is free.
-        final int segmentIndex = dedicatedSegments.nextClearBit(nextFreeSegmentHint);
+        int segmentIndex = dedicatedSegments.nextClearBit(nextFreeSegmentHint);
+
+        if (segmentIndex >= segments.length && emptyDedicatedSegmentCount > 0) {
+            // Segments emptied by remove/replace/expiry stay dedicated to their old class until
+            // reclaimed. Reclaim them on demand here: otherwise this put would fail (spilling to
+            // disk, or scheduling a vacate that evicts live entries) although memory is free.
+            reclaimEmptySegmentsLocked();
+            segmentIndex = dedicatedSegments.nextClearBit(nextFreeSegmentHint);
+        }
 
         if (segmentIndex >= segments.length) {
             return -1;
@@ -1488,8 +1503,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Releases raw slot handles for a retired entry. Unlike {@link #discardUninstalledSlots(long[])},
-     * segments emptied here are not reclaimed immediately; that is left to the maintenance pass,
-     * a vacate pass, or {@link #clear()}.
+     * segments emptied here are not reclaimed immediately (so same-class puts can reuse them);
+     * that is left to the next allocation that finds no free segment, the maintenance pass, a
+     * vacate pass, or {@link #clear()}.
      */
     private void releaseSlots(final long[] slots) {
         synchronized (allocatorLock) {
@@ -1518,12 +1534,16 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private void releaseSlotLocked(final long slot) {
         final Segment segment = segments[segmentIndexOf(slot)];
         segment.slotBits.clear(slotIndexOf(slot));
-        segment.used--;
+
+        if (--segment.used == 0) {
+            emptyDedicatedSegmentCount++;
+        }
     }
 
     /**
      * Returns fully empty segments to the free pool so they can be re-dedicated to any slot size.
-     * Called by the maintenance pass, the vacate pass, and {@link #clear()}.
+     * Called by the maintenance pass, the vacate pass, and {@link #clear()}; allocation calls
+     * {@link #reclaimEmptySegmentsLocked()} directly.
      */
     private void reclaimEmptySegments() {
         synchronized (allocatorLock) {
@@ -1533,6 +1553,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /** Returns all empty dedicated segments to the free pool. Caller holds the allocator lock. */
     private void reclaimEmptySegmentsLocked() {
+        if (emptyDedicatedSegmentCount == 0) {
+            return;
+        }
+
         for (final Deque<Segment> queue : segmentQueues) {
             for (final Iterator<Segment> it = queue.iterator(); it.hasNext();) {
                 final Segment segment = it.next();
@@ -1541,6 +1565,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     it.remove();
                     dedicatedSegments.clear(segment.index);
                     segment.slotSize = 0;
+                    emptyDedicatedSegmentCount--;
 
                     if (segment.index < nextFreeSegmentHint) {
                         nextFreeSegmentHint = segment.index;

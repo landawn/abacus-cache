@@ -45,7 +45,7 @@ import redis.clients.jedis.params.SetParams;
  * client-side sharding ({@link JRedis}) and Redis Cluster ({@link JRedisCluster}) share identical
  * command, serialization, and key-encoding logic.
  *
- * <p>In Jedis 7.x both the standalone client ({@code RedisClient}) and the cluster client
+ * <p>Since Jedis 7, both the standalone client ({@code RedisClient}) and the cluster client
  * ({@code RedisClusterClient}) extend {@link UnifiedJedis}, so the GET/SET/DEL/INCR/DECR command
  * bodies are the same regardless of topology. The concrete subclass decides routing:
  * <ul>
@@ -92,25 +92,29 @@ import redis.clients.jedis.params.SetParams;
 abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClient<T> {
 
     /**
-     * The Kryo wire format is this client family's documented serialization contract, so unlike
-     * the backends that fall back to another format, a missing Kryo dependency must fail — but
-     * with an actionable message instead of a bare {@code NoClassDefFoundError} at class load.
+     * Holds the Kryo parser shared by all Jedis cache clients, created on first access. It must not
+     * be a static field of this class: a throwing static initializer surfaces as an
+     * {@link ExceptionInInitializerError} on the first construction and as a bare
+     * {@link NoClassDefFoundError} ("Could not initialize class ...") on every later one. Every
+     * instance passes {@link #requireKryoAvailable()} before it can reach this holder.
      */
-    private static final KryoParser KRYO_PARSER = createRequiredKryoParser();
+    private static final class KryoParserHolder {
+        /** The shared parser, created on first access of this holder class. */
+        static final KryoParser KRYO_PARSER = ParserFactory.createKryoParser();
+    }
 
     /**
-     * Creates the shared Kryo parser, failing with an actionable message when Kryo is absent.
+     * Rejects construction when Kryo is absent. The Kryo wire format is this client family's
+     * documented serialization contract, so unlike the backends that fall back to another format,
+     * a missing Kryo dependency must fail — with an actionable message, on every attempt.
      *
-     * @return the Kryo parser shared by all Jedis cache clients, never {@code null}
      * @throws IllegalStateException if Kryo is not on the classpath
      */
-    private static KryoParser createRequiredKryoParser() throws IllegalStateException {
+    private static void requireKryoAvailable() throws IllegalStateException {
         if (!ParserFactory.isKryoParserAvailable()) {
             throw new IllegalStateException("Kryo is required by the Jedis cache clients (JRedis/JRedisCluster) but is not on the classpath;"
                     + " add the optional com.esotericsoftware:kryo dependency");
         }
-
-        return ParserFactory.createKryoParser();
     }
 
     private volatile boolean isShutdown = false;
@@ -120,9 +124,13 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param serverUrl the server URL(s); must not be {@code null}, empty, or blank
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath
      */
     protected AbstractJedisCacheClient(final String serverUrl) throws IllegalArgumentException {
         super(serverUrl);
+
+        // Before any subclass builds its pool-owning Jedis clients.
+        requireKryoAvailable();
     }
 
     /**
@@ -207,7 +215,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * // Negative: a counter key created by incr()/decr() cannot be deserialized by get()
      * cache.incr("page:views");
-     * cache.get("page:views");                                      // throws RuntimeException (Kryo decode)
+     * cache.get("page:views");                                      // throws KryoException (decode failure)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be retrieved. Must not be {@code null}.
@@ -494,7 +502,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * // Negative: incrementing a non-integer value fails on the server
      * cache.put("name", "Alice", 0);
-     * cache.incr("name");                                        // throws RuntimeException
+     * cache.incr("name");                                        // throws JedisDataException (a JedisException)
      * }</pre>
      *
      * @param key the cache key whose associated value is to be incremented. Must not be {@code null}.
@@ -742,7 +750,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * @see #decode(byte[])
      */
     protected byte[] encode(final Object value) throws RuntimeException, StackOverflowError {
-        return value == null ? N.EMPTY_BYTE_ARRAY : KRYO_PARSER.encode(value);
+        return value == null ? N.EMPTY_BYTE_ARRAY : KryoParserHolder.KRYO_PARSER.encode(value);
     }
 
     /**
@@ -770,7 +778,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
         }
 
         try {
-            return KRYO_PARSER.decode(bytes);
+            return KryoParserHolder.KRYO_PARSER.decode(bytes);
         } catch (final InstantiationError e) {
             throw KryoDecodeFailure.of(e);
         }

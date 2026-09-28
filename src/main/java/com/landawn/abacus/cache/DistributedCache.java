@@ -198,7 +198,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * <ul>
      * <li>{@code maxFailuresBeforeCircuitOpen}: Number of consecutive failures before the circuit opens
      *     ({@code 0} means the first recorded failure)</li>
-     * <li>{@code retryDelay}: Milliseconds to wait before attempting retry after circuit opens</li>
+     * <li>{@code retryDelay}: Milliseconds an open circuit fails fast, measured from the most recent recorded failure</li>
      * </ul>
      *
      * <p>This constructor is {@code protected}; external callers should obtain instances
@@ -240,7 +240,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        {@code retryDelay} ms; in that mode the failure counter stays at 0, and the closed-to-open WARN
      *        transition is logged once per transition — that is, on the first failure and on each later failure
      *        that follows a successful read
-     * @param retryDelay delay in milliseconds before attempting retry after circuit opens (must be non-negative);
+     * @param retryDelay delay in milliseconds, measured from the most recent recorded failure, before an open circuit
+     *        lets reads attempt the backend again (must be non-negative);
      *        {@code 0} disables fail-fast entirely, so every read attempts the backend (failures are still counted)
      * @throws IllegalArgumentException if {@code client} is {@code null}, {@code keyPrefix} contains a
      *         non-printable-ASCII character, a space, or a control character, {@code maxFailuresBeforeCircuitOpen}
@@ -495,13 +496,13 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     System.out.println("Failed to cache user (underlying client reported failure, e.g. cache full / write rejected)");   // prints when put returned false
      * }
      *
-     * // Session caching with 30 minute TTL
-     * Session session = new Session("abc123");
-     * cache.put("session:" + session.getId(), session, 1800000, 1800000);   // returns true; idle time ignored
+     * // 30 minute TTL; the 30 minute maxIdleTime argument is ignored
+     * User guest = new User("Guest");
+     * cache.put("user:guest", guest, 1800000, 1800000);   // returns true; idle time ignored
      *
      * // No expiration (permanent until manually deleted or evicted)
-     * Config config = loadConfig();
-     * cache.put("app:config", config, 0, 0);            // returns true; liveTime 0 = no expiration
+     * User admin = loadAdminUser();
+     * cache.put("user:admin", admin, 0, 0);             // returns true; liveTime 0 = no expiration
      *
      * // Update existing cache entry with new TTL
      * User updated = cache.getOrNull("user:123");       // returns the previously cached User
@@ -521,7 +522,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if the key is null, its string representation is null or contains an
      *         unpaired UTF-16 surrogate, if the underlying client rejects the generated
      *         cache key (e.g. it exceeds memcached's 250-character key limit after prefixing and Base64
-     *         expansion), or if {@code liveTime} is too large for the underlying client's expiration
+     *         expansion), if the underlying client rejects {@code value} (the bundled {@code SpyMemcached}
+     *         client rejects a {@code null} value while spymemcached's stock {@code SerializingTranscoder} is
+     *         active, and an encoded value larger than the transcoder's maximum item size), or if
+     *         {@code liveTime} is too large for the underlying client's expiration
      *         encoding (the bundled {@code SpyMemcached} client rejects a {@code liveTime} whose absolute
      *         expiration would exceed epoch second {@code 2^31-1} / January 2038, as well as any
      *         {@code liveTime} exceeding {@link Integer#MAX_VALUE} seconds / ~68 years)
@@ -651,9 +655,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * }
      *
      * // Conditional caching
-     * if (!cache.containsKey("config:settings")) {      // returns false when absent
-     *     Config config = loadConfigFromFile();
-     *     cache.put("config:settings", config, 0, 0);   // returns true; populates the missing entry
+     * if (!cache.containsKey("user:admin")) {           // returns false when absent
+     *     User admin = loadAdminUser();
+     *     cache.put("user:admin", admin, 0, 0);         // returns true; populates the missing entry
      * }
      *
      * // INEFFICIENT - performs GET twice:
@@ -839,7 +843,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>This is an optional terminal lifecycle operation for an application-scoped cache. Cache
      * wrappers and their pooled clients should normally be retained and shared; do not call this
-     * method after each request or cache operation.
+     * method after each request or cache operation. Note that the bundled {@code SpyMemcached} client runs a
+     * non-daemon I/O thread, so an application that relies on the JVM exiting once its own threads finish
+     * (rather than on {@code System.exit} or a signal) must close the cache for the JVM to exit.
      *
      * <p><b>Lifecycle effects:</b>
      * <ul>
@@ -1024,6 +1030,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
+     * // generateKey is protected: these calls run in a subclass or in same-package code. Sharing one
+     * // client among the wrappers below is only for illustrating the key format; in an application
+     * // each wrapper owns its client (see the class documentation).
+     *
      * // With prefix "myapp:"
      * DistributedCache<String, User> cache = CacheFactory.createDistributedCache(client, "myapp:");
      * String cacheKey = cache.generateKey("user:123");

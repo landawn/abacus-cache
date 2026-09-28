@@ -2104,10 +2104,96 @@ public class AbstractOffHeapCacheTest {
             // two-segment cache, so the memory attempt is genuinely made.)
             assertTrue(cache.put("spill", new byte[512 * 1024 + 1]));
             assertEquals(1L, cache.stats().sizeOnDisk());
+            // Allocation also reclaims empty segments on demand, so pin the rollback's own
+            // reclamation directly: the attempted class must not keep the emptied segment.
+            assertFalse(cache.stats().occupiedSlots().containsKey(512 * 1024), "the rollback must return the emptied segment to the free pool");
 
             assertTrue(cache.put("small", new byte[] { 7 }), "the rollback must make the emptied segment immediately reusable");
             assertArrayEquals(new byte[] { 7 }, cache.getOrNull("small"));
             assertArrayEquals(new byte[100], cache.getOrNull("filler"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * A segment emptied by an explicit {@code remove()} stays dedicated to its slot class until it
+     * is reclaimed. When a differently sized put finds no free segment, the allocator must reclaim
+     * that empty segment on demand rather than fail the put - which, without a disk store, would
+     * also schedule a vacate pass that evicts unrelated live entries.
+     */
+    @Test
+    public void testAllocationReclaimsEmptySegmentOfAnotherClassOnDemand() throws InterruptedException {
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(2).evictDelay(0).build();
+        try {
+            assertTrue(cache.put("live", new byte[100])); // segment 0: 128-byte class
+            assertTrue(cache.put("removed", new byte[100 * 8192])); // segment 1: 8192-byte class
+            cache.remove("removed"); // segment 1 is now empty but still dedicated to the 8192-byte class
+
+            assertTrue(cache.put("other-class", new byte[1000]), "the empty segment must be re-dedicated to the 1024-byte class on demand");
+            assertArrayEquals(new byte[1000], cache.getOrNull("other-class"));
+
+            // Give an (erroneously) scheduled vacate pass time to run before checking for collateral eviction.
+            Thread.sleep(200);
+            assertArrayEquals(new byte[100], cache.getOrNull("live"), "no live entry may be evicted when an empty segment was available");
+            assertEquals(0L, cache.stats().evictionCount());
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * With a disk store, a put that finds only an empty segment dedicated to another slot class
+     * must reuse that segment instead of spilling a value that fits the (empty) memory region.
+     */
+    @Test
+    public void testEmptySegmentOfAnotherClassIsReusedInsteadOfSpillingToDisk() {
+        final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newInMemoryStore(backing))
+                .build();
+        try {
+            assertTrue(cache.put("first", new byte[100])); // the only segment: 128-byte class
+            cache.remove("first");
+
+            assertTrue(cache.put("other-class", new byte[1000]));
+
+            assertEquals(0L, cache.stats().sizeOnDisk(), "a value that fits the empty memory region must not spill to disk");
+            assertTrue(backing.isEmpty());
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * The on-demand reclaim is driven by a count of empty-but-dedicated segments, which must stay
+     * exact across allocation, release, reuse of an empty segment by its own class, and reclamation.
+     */
+    @Test
+    public void testEmptyDedicatedSegmentCountStaysExact() throws Exception {
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(2).evictDelay(0).build();
+        final Field countField = AbstractOffHeapCache.class.getDeclaredField("emptyDedicatedSegmentCount");
+        countField.setAccessible(true);
+        try {
+            assertTrue(cache.put("a", new byte[100]));
+            assertTrue(cache.put("b", new byte[1000]));
+            assertEquals(0, countField.getInt(cache));
+
+            cache.remove("a");
+            assertEquals(1, countField.getInt(cache));
+
+            assertTrue(cache.put("a2", new byte[100])); // same class reuses its own empty segment
+            assertEquals(0, countField.getInt(cache));
+
+            cache.remove("a2");
+            cache.remove("b");
+            assertEquals(2, countField.getInt(cache));
+
+            cache.clear();
+            assertEquals(0, countField.getInt(cache));
+            assertTrue(cache.stats().occupiedSlots().isEmpty());
         } finally {
             cache.close();
         }

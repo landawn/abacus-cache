@@ -211,6 +211,15 @@ interface LegacySpyMemcachedAsyncApi<T> {
  * validates its argument, so a negative timeout is rejected even after shutdown.
  * Instances own network resources and are intended to be long-lived and application-scoped;
  * optionally disconnect a shared instance once during application shutdown, not after each use.
+ * The delegate's network I/O thread is a non-daemon thread, so an application that relies on the
+ * JVM exiting when its own threads finish (rather than on {@link System#exit(int)} or a termination
+ * signal) must disconnect the client first.
+ *
+ * <p><b>Interruption:</b> the delegate's enqueue path waits interruptibly, so an operation
+ * invoked while the calling thread's interrupt status is already set fails with
+ * {@link IllegalStateException} before anything is enqueued, even when the queue has room; the
+ * interrupt status is preserved. An interrupt during a synchronous method's response wait cancels
+ * the operation, restores the interrupt status, and surfaces as a {@link RuntimeException}.
  *
  * <p><b>Key validation:</b> every key must be non-null and contain well-formed UTF-16; unpaired
  * surrogates are rejected before encoding because UTF-8 replacement would alias a different key.
@@ -1988,7 +1997,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * {@code NumberFormatException} inside the client's IO thread, which tears down (and
      * reconnects) the whole connection on every access to that key. Validation here cannot prevent
      * accumulated increments from crossing that bound, so the public counter docs instruct callers
-     * to keep seeds and values below {@code Long.MAX_VALUE}.
+     * to keep seeds and values below 2<sup>63</sup> (at most {@code Long.MAX_VALUE}).
      *
      * @param isIncrement {@code true} for incr, {@code false} for decr
      * @param key the counter key, already validated by the calling public method
@@ -2234,7 +2243,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * operations will fail. This method delegates to {@link MemcachedClient#shutdown()} (the no-arg
      * overload), which initiates an <b>immediate</b> shutdown — in-flight operations are not awaited.
      * Use {@link #disconnect(long)} if you need a bounded graceful shutdown that lets pending
-     * operations complete. This method is idempotent: calling it multiple times has no additional effect.
+     * operations complete. Operations still pending when the delegate shuts down are neither
+     * completed nor cancelled by it; a thread waiting on one, synchronously or through a returned
+     * future, is released only when its wait bound (the operation timeout by default) elapses.
+     * This method is idempotent: calling it multiple times has no additional effect.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and uses synchronization to ensure only
      * one disconnect occurs. It publishes the terminal state before delegate shutdown begins, so

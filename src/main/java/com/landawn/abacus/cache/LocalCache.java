@@ -111,8 +111,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * Creates a new LocalCache with fully customized parameters.
      * This constructor allows complete control over cache behavior including
      * capacity, eviction timing, and default expiration settings. Entries exceeding
-     * either the TTL or idle timeout will be automatically evicted during the periodic
-     * eviction process.
+     * either the TTL or idle timeout are reclaimed when next accessed via
+     * {@link #getOrNull(Object)} or {@link #containsKey(Object)}, and otherwise during the
+     * periodic eviction process (only if {@code evictDelay > 0}).
      *
      * <p>The defaultLiveTime and defaultMaxIdleTime parameters set the default expiration
      * behavior for entries added using {@link #put(Object, Object)}. Individual entries
@@ -287,9 +288,11 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * {@code GenericKeyedObjectPool}) removes and destroys an existing mapping <i>before</i>
      * checking whether its replacement can be stored. If the pool then rejects the new entry
      * (capacity or memory limit, or the entry expiring by the time the pool re-checks it under its
-     * lock), this method returns {@code false} and the previous mapping is no longer present. By contrast, if the new entry is rejected up front because it is already
-     * expired at the pool's initial check (only possible with a millisecond-scale {@code liveTime}),
-     * any previous mapping is retained.
+     * lock), this method returns {@code false} and the previous mapping is no longer present.
+     * By contrast, if the new entry is rejected up front because it is already expired at the
+     * pool's initial check (only possible with a millisecond-scale {@code liveTime} or
+     * {@code maxIdleTime}, both measured from the moment the entry is created), any previous
+     * mapping is retained.
      *
      * @param key the cache key with which the specified value is to be associated (must not be null)
      * @param value the cache value to be associated with the specified key (must not be null)
@@ -537,7 +540,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <li><b>capacity</b> - Maximum number of entries the cache can hold</li>
      * <li><b>size</b> - Current number of entries in the cache (may include expired entries)</li>
      * <li><b>putCount</b> - Total number of successful put operations since cache creation
-     *     (puts rejected by the pool's capacity or memory limit are not counted)</li>
+     *     (puts rejected by the pool, e.g. by its capacity or memory limit or because the entry
+     *     had already expired, are not counted)</li>
      * <li><b>getCount</b> - Total number of get operations (hits + misses)</li>
      * <li><b>hitCount</b> - Number of successful cache hits (entry found and not expired)</li>
      * <li><b>missCount</b> - Number of cache misses (entry not found or expired)</li>

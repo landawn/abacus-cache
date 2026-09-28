@@ -117,6 +117,8 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      *
      * @param serverUrl the Redis Cluster seed node(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath (checked
+     *         before the cluster client is built)
      * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
      * @see #JRedisCluster(String, long)
      */
@@ -163,6 +165,8 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath (checked
+     *         after {@code serverUrl} is found non-blank and before the cluster client is built)
      * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
      * @see #JRedisCluster(String)
      */
@@ -193,6 +197,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @param serverUrl the seed node URL(s) to report via {@link #serverUrl()}; must not be {@code null}, empty, or blank
      * @param cluster the pre-built cluster client to use; must not be {@code null}
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}/empty/blank or {@code cluster} is {@code null}
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath
      */
     JRedisCluster(final String serverUrl, final RedisClusterClient cluster) throws IllegalArgumentException {
         super(serverUrl);

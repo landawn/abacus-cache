@@ -16,6 +16,7 @@ package com.landawn.abacus.cache;
 
 import static com.landawn.abacus.cache.DistributedCacheClient.DEFAULT_TIMEOUT;
 
+import java.lang.reflect.Modifier;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.LongFunction;
 
@@ -567,10 +568,13 @@ public final class CacheFactory {
      *         timeout above {@link Integer#MAX_VALUE}), or if the key prefix contains a non-printable-ASCII character, a space, or a control character (the
      *         already-constructed client is disconnected first); for custom classes, also if the class cannot
      *         be found (checked against this library's classloader, then the thread context classloader), does
-     *         not implement {@link Cache}, or declares no constructor matching the specified parameters. A
+     *         not implement {@link Cache}, is an interface or abstract class, or declares no constructor matching
+     *         the specified parameters. A
      *         candidate class is loaded without running its static initializer until after this type check. A
      *         custom cache class with a no-arg constructor may be specified without parameters, e.g.
      *         {@code "com.example.MyCache()"}
+     * @throws IllegalStateException for the Redis and RedisCluster providers, if the optional Kryo dependency
+     *         (required by the Jedis cache clients) is not on the classpath
      * @throws UncheckedIOException if creating the Memcached client's selector or sockets fails
      * @throws RuntimeException if Redis client-pool setup, RedisCluster seed resolution, or initial
      *         topology discovery fails, or if reflective construction cannot access the custom cache's
@@ -642,6 +646,13 @@ public final class CacheFactory {
 
             if (!Cache.class.isAssignableFrom(cls)) {
                 throw new IllegalArgumentException("Custom cache class must implement Cache: " + className);
+            }
+
+            // An interface or abstract class is a configuration error like a non-Cache type. Without
+            // this check, a matching constructor on an abstract class would be found and invoked,
+            // surfacing as a RuntimeException wrapping InstantiationException instead of an IAE.
+            if (Modifier.isAbstract(cls.getModifiers())) {
+                throw new IllegalArgumentException("Custom cache class must be a concrete class: " + className);
             }
 
             @SuppressWarnings("unchecked")

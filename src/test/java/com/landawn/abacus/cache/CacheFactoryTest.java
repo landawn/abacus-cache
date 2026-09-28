@@ -221,9 +221,9 @@ public class CacheFactoryTest extends TestBase {
 
     @Test
     public void testCreateCache_Memcached_EdgeCase_BlankTimeoutRejected() {
-        // A trailing comma yields a blank third parameter. Numbers.toLong("") silently returns 0,
-        // so the factory must still reject it via the "timeout must be positive" guard rather than
-        // silently constructing a client with a zero timeout.
+        // A trailing comma yields an empty third parameter. The strict decimal-token check must
+        // reject it ("Invalid timeout parameter") rather than silently constructing a client with a
+        // zero or default timeout.
         try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
             assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,prefix:,)"));
         }
@@ -723,6 +723,27 @@ public class CacheFactoryTest extends TestBase {
             assertEquals("v", cache.getOrNull("k"));
         } finally {
             cache.close();
+        }
+    }
+
+    /** An abstract {@link Cache} that declares a matching {@code (String)} constructor but cannot be instantiated. */
+    public abstract static class AbstractProviderCache<K, V> extends DummyProviderCache<K, V> {
+        public AbstractProviderCache(final String serverUrl) {
+            super(serverUrl);
+        }
+    }
+
+    /**
+     * Regression: an abstract custom provider with a matching constructor was reflectively invoked and
+     * failed with a plain RuntimeException wrapping InstantiationException, unlike every other
+     * unusable-class configuration error, which is reported as IllegalArgumentException.
+     */
+    @Test
+    public void testCreateCache_EdgeCase_AbstractOrInterfaceCustomClassRejectedWithIae() {
+        for (final String provider : new String[] { AbstractProviderCache.class.getName() + "(localhost:9999)", AbstractProviderCache.class.getName() + "()",
+                Cache.class.getName() + "()", Cache.class.getName() + "(localhost:9999)" }) {
+            final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache(provider), provider);
+            assertTrue(ex.getMessage().contains("must be a concrete class"), provider + ": " + ex.getMessage());
         }
     }
 

@@ -65,8 +65,10 @@ import lombok.experimental.Accessors;
  * </ul>
  *
  * <p>Required JVM flag on JDK 24+ (JEP 498) — permits the {@code sun.misc.Unsafe} memory-access
- * methods this cache is built on. Without it, JDK 24+ prints a one-time warning when this class is
- * initialized (its static initializer is the first {@code Unsafe} memory-access call). Under
+ * methods this cache is built on. Without it, JDK 24+ (default mode {@code warn}) prints the JVM's
+ * single {@code Unsafe} memory-access warning when this class is initialized (its static initializer
+ * is the first {@code Unsafe} memory-access call), unless another library already triggered that
+ * one-time warning earlier. Under
  * {@code --sun-misc-unsafe-memory-access=deny} (selectable today, and the JDK's planned future
  * default) that call throws {@code UnsupportedOperationException}, so class initialization fails
  * with an {@link ExceptionInInitializerError} caused by it:
@@ -336,9 +338,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
 
     /**
      * Deallocates the off-heap memory allocated by allocate().
-     * Called during cache shutdown to release native memory and prevent memory leaks.
-     * This method is automatically invoked by close(). This is an internal method
-     * and should not be called directly.
+     * Called to release native memory and prevent memory leaks: by {@link #close()}, or by the
+     * constructor's failure cleanup when an initialization step after the allocation fails.
+     * This is an internal method and should not be called directly.
      *
      * <p>Once called, the base memory address becomes invalid and must not be accessed.
      * All cache operations should be stopped before calling this method. The method uses
@@ -347,8 +349,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * <p><b>Memory Management:</b>
      * This method uses {@link sun.misc.Unsafe#freeMemory(long)} to return the allocated native memory
      * to the operating system. After deallocation, any attempt to access the memory address will result
-     * in undefined behavior (likely a JVM crash). The parent class ensures this method is only called
-     * once during shutdown.
+     * in undefined behavior (likely a JVM crash). The parent class ensures this method is called at
+     * most once, so the region is never freed twice.
      *
      * @see #close()
      * @see #allocate(long)
@@ -494,7 +496,10 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      *
      * <p><b>&#9888;&#65039; Store ownership:</b> A built cache assumes ownership of its configured
      * {@link OffHeapStore} and closes it during explicit early shutdown or from the cache's JVM
-     * shutdown hook.
+     * shutdown hook. If {@link #build()} fails after the native memory was allocated (a
+     * {@link RejectedExecutionException} or {@link IllegalStateException}), the store is closed as
+     * part of that cleanup; a failure before or during the allocation (an invalid argument or an
+     * {@link OutOfMemoryError}) leaves it open and owned by the caller.
      *
      * <p><b>Default Values:</b>
      * <ul>
