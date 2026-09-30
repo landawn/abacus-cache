@@ -2,6 +2,8 @@ package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
@@ -144,6 +146,66 @@ public class MemcachedLockValidationUnitTest {
         assertTrue(lock.tryLock("target", null, 1_000L));
         assertTrue(stored.getValue() instanceof byte[]);
         assertEquals(0, ((byte[]) stored.getValue()).length);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void nonPositiveLiveTimeIsRejectedBeforeAnyNetworkOperation() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
+
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", 0L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", -1L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", "holder", 0L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", "holder", Long.MIN_VALUE));
+        verifyNoInteractions(delegate);
+    }
+
+    /** Client failures: IAE propagates unchanged, others are wrapped (tryLock/tryUnlock) or swallowed (unlockQuietly). */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void clientFailuresArePropagatedWrappedOrSwallowedAsDocumented() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
+
+        final IllegalArgumentException tooLarge = new IllegalArgumentException("Cannot cache data larger than 8 bytes");
+        when(delegate.add("rejected", "holder", 1_000L)).thenThrow(tooLarge);
+        assertSame(tooLarge, assertThrows(IllegalArgumentException.class, () -> lock.tryLock("rejected", "holder", 1_000L)));
+
+        final RuntimeException timeout = new RuntimeException("timed out");
+        when(delegate.add("slow", "holder", 1_000L)).thenThrow(timeout);
+        final RuntimeException wrappedLock = assertThrows(RuntimeException.class, () -> lock.tryLock("slow", "holder", 1_000L));
+        assertSame(timeout, wrappedLock.getCause());
+
+        final IllegalStateException queueFull = new IllegalStateException("queue full");
+        when(delegate.remove("slow")).thenThrow(queueFull);
+        final RuntimeException wrappedUnlock = assertThrows(RuntimeException.class, () -> lock.tryUnlock("slow"));
+        assertSame(queueFull, wrappedUnlock.getCause());
+        assertFalse(lock.unlockQuietly("slow"));
+
+        when(delegate.remove("held")).thenReturn(true);
+        assertTrue(lock.tryUnlock("held"));
+        assertTrue(lock.unlockQuietly("held"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void getNormalizesTheValueLessMarkerAndIsLockedReportsPresence() throws Exception {
+        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
+        final MemcachedLock<String, Object> lock = mock(MemcachedLock.class, CALLS_REAL_METHODS);
+        final Field clientField = MemcachedLock.class.getDeclaredField("mc");
+        clientField.setAccessible(true);
+        clientField.set(lock, delegate);
+
+        when(delegate.get("valueless")).thenReturn(new byte[0]);
+        when(delegate.get("valued")).thenReturn("holder");
+
+        assertTrue(lock.isLocked("valueless"));
+        assertNull(lock.get("valueless"));
+        assertTrue(lock.isLocked("valued"));
+        assertEquals("holder", lock.get("valued"));
+        assertFalse(lock.isLocked("absent"));
+        assertNull(lock.get("absent"));
     }
 
     @SuppressWarnings("unchecked")

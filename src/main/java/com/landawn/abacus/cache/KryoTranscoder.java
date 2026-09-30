@@ -92,8 +92,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      */
     private static KryoParser defaultKryoParser() throws IllegalStateException {
         if (!ParserFactory.isKryoParserAvailable()) {
-            throw new IllegalStateException("Kryo is required by KryoTranscoder but is not on the classpath;"
-                    + " add the optional com.esotericsoftware:kryo dependency or use another transcoder");
+            throw new IllegalStateException("Kryo is required by KryoTranscoder but is not available;"
+                    + " add the optional com.esotericsoftware:kryo dependency, make sure abacus-common's KryoParser can be"
+                    + " initialized (on JDK 17+ it may need --add-opens for java.base packages), or use another transcoder");
         }
 
         // Touch the lazy holder only after the normal-method availability check. Throwing from the
@@ -367,6 +368,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @param d the cached data to decode and deserialize; if {@code null}, {@code null} is returned
      * @return the deserialized object of type {@code T}, or {@code null} if {@code d} is
      *         {@code null}, its data is empty, or {@code null} was originally encoded
+     * @throws IllegalArgumentException if the parser's Kryo registrations assign one registration ID to
+     *         two different classes
      * @throws RuntimeException if the payload is corrupt, truncated, uses an unavailable or incompatible
      *         class, or was not written with compatible Kryo serializers (for example, a counter's ASCII
      *         digits); normally a {@link KryoException}

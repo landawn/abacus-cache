@@ -45,7 +45,7 @@ import com.landawn.abacus.util.N;
  * <ul>
  * <li>Multi-tier storage (on-heap, off-heap, disk)</li>
  * <li>Cache-through and cache-aside patterns with loaders/writers</li>
- * <li>Bulk operations for improved performance</li>
+ * <li>Bulk operations ({@code getAll}, {@code putAll}, {@code removeAll})</li>
  * <li>Atomic operations like putIfAbsent</li>
  * <li>JSR-107 (JCache) compliance (through Ehcache's separate JCache provider; this wrapper itself
  *     takes a native {@code org.ehcache.Cache}, not a {@code javax.cache.Cache})</li>
@@ -212,7 +212,9 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Removes the mapping for a key from the cache if it is present.
-     * This operation is idempotent - removing a non-existent key has no effect.
+     * This operation is idempotent - removing a non-existent key leaves the cache unchanged and does
+     * not throw. If a cache writer is configured, a delete for that key is still issued to it
+     * (synchronously with write-through; queued and delivered later with write-behind).
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
      * concurrent removal of cache entries.
@@ -333,9 +335,19 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Retrieves multiple values from the cache in a single bulk operation.
-     * This is significantly more efficient than multiple individual get operations, particularly
-     * when fetching many entries or when using remote storage tiers.
+     * Retrieves multiple values from the cache in a single bulk call.
+     * Ehcache's built-in stores still process the requested keys one at a time.
+     *
+     * <p>How a configured cache loader is consulted for missing keys depends on its Ehcache
+     * configuration:
+     * <ul>
+     *   <li>Without write-behind: its {@code loadAll} is invoked once per missing key, rather than
+     *       once for the whole set.</li>
+     *   <li>With write-behind (batched or not): its individual {@code load} is invoked once per
+     *       missing key, except that a key whose write or delete is still queued for the writer is
+     *       answered from that pending operation (its value, or {@code null} for a pending delete)
+     *       without consulting the loader.</li>
+     * </ul>
      *
      * <p>The shape of the returned map depends on whether a cache loader is configured on the
      * underlying Ehcache instance:
@@ -355,7 +367,7 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * {@link BulkCacheLoadingException} before deciding whether to retry.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
-     * providing optimized batch retrieval capabilities.
+     * delegating to Ehcache's native {@code getAll}.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
      * concurrent bulk operations.
@@ -397,17 +409,26 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Stores multiple key-value pairs in the cache in a single bulk operation.
-     * This is significantly more efficient than multiple individual put operations, particularly
-     * when storing many entries or when using remote storage tiers. All key-value pairs are stored
-     * in a single batch operation for optimal performance. If a cache writer is configured, all
-     * writes are performed in a single batch. Existing entries are overwritten.
+     * Stores multiple key-value pairs in the cache in a single bulk call.
+     * Ehcache's built-in stores still process the entries one key at a time. Existing entries are
+     * overwritten.
+     *
+     * <p>How a configured cache writer sees the entries depends on its Ehcache configuration:
+     * <ul>
+     *   <li>Write-through (the default): its {@code writeAll} is invoked synchronously once per
+     *       entry, rather than once for the whole map.</li>
+     *   <li>Write-behind without batching: the writes are queued and delivered asynchronously as
+     *       individual {@code write} calls.</li>
+     *   <li>Write-behind with batching: the writes are queued and delivered asynchronously in
+     *       {@code writeAll} batches of up to the configured batch size, which may combine entries
+     *       from several calls (and, with coalescing, keep only the latest operation per key).</li>
+     * </ul>
      *
      * <p><b>&#9888;&#65039; Partial write:</b> A {@link BulkCacheWritingException} can report
      * both successful and failed entries; the operation is not all-or-nothing.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
-     * providing optimized batch storage capabilities.
+     * delegating to Ehcache's native {@code putAll}.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
      * concurrent bulk operations.
@@ -447,17 +468,27 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Removes multiple keys from the cache in a single bulk operation.
-     * This is significantly more efficient than multiple individual remove operations, particularly
-     * when removing many entries or when using remote storage tiers. All keys are removed in a single
-     * batch operation for optimal performance. The operation is idempotent - non-existent keys are
-     * silently ignored. If a cache writer is configured, all deletions are performed in a single batch.
+     * Removes multiple keys from the cache in a single bulk call.
+     * Ehcache's built-in stores still process the keys one at a time. The operation is idempotent -
+     * non-existent keys leave the cache unchanged and do not cause an exception.
+     *
+     * <p>A configured cache writer receives a delete for every requested key, including keys that
+     * are not present. How the deletes arrive depends on its Ehcache configuration:
+     * <ul>
+     *   <li>Write-through (the default): its {@code deleteAll} is invoked synchronously once per
+     *       key, rather than once for the whole set.</li>
+     *   <li>Write-behind without batching: the deletes are queued and delivered asynchronously as
+     *       individual {@code delete} calls.</li>
+     *   <li>Write-behind with batching: the deletes are queued and delivered asynchronously in
+     *       {@code deleteAll} batches of up to the configured batch size, which may combine keys
+     *       from several calls (and, with coalescing, keep only the latest operation per key).</li>
+     * </ul>
      *
      * <p><b>&#9888;&#65039; Partial removal:</b> A {@link BulkCacheWritingException} can report
      * both successful and failed removals; the operation is not all-or-nothing.
      *
      * <p><b>Note:</b> This is an Ehcache-specific method not present in the base Cache interface,
-     * providing optimized batch removal capabilities.
+     * delegating to Ehcache's native {@code removeAll}.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe. Ehcache guarantees thread-safe
      * concurrent bulk operations.

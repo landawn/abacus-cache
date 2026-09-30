@@ -529,6 +529,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *         encoding (the bundled {@code SpyMemcached} client rejects a {@code liveTime} whose absolute
      *         expiration would exceed epoch second {@code 2^31-1} / January 2038, as well as any
      *         {@code liveTime} exceeding {@link Integer#MAX_VALUE} seconds / ~68 years)
+     * @throws UnsupportedOperationException if the underlying client implements neither
+     *         {@link DistributedCacheClient#put(String, Object, long)} nor its deprecated {@code set} alias
      * @throws RuntimeException if key conversion fails, if a network error or timeout occurs, if the underlying client cannot encode
      *         {@code value}, or if the server rejects {@code liveTime} (the bundled Redis clients pass the
      *         millisecond {@code liveTime} directly to Redis, which may reject an extreme value that cannot be
@@ -602,6 +604,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if the key is null, its string representation is null or contains an
      *         unpaired UTF-16 surrogate, or the underlying client rejects the
      *         generated key (for example, because it exceeds Memcached's key-length limit)
+     * @throws UnsupportedOperationException if the underlying client implements neither
+     *         {@link DistributedCacheClient#remove(String)} nor its deprecated {@code delete} alias
      * @throws RuntimeException if key conversion fails, or if the underlying client's removal operation fails
      *         because of a network error or timeout
      * @see #clear()

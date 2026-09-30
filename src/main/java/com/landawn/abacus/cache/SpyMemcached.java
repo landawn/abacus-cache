@@ -833,7 +833,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         return ContinuableFuture.wrap(new DefaultTimeoutFuture<>(future, operationTimeoutMillis));
     }
 
-    /** Delegating future that changes only the default wait bound. */
+    /**
+     * Delegating future that bounds only the no-argument {@code get()}: an expired default wait
+     * cancels the delegate and is reported as an {@link ExecutionException}. Every other method,
+     * including the caller-timed {@code get}, passes straight through.
+     */
     private static final class DefaultTimeoutFuture<R> implements Future<R> {
 
         private final Future<R> delegate;
@@ -2399,7 +2403,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     /**
      * Converts a millisecond TTL (or flush delay) to memcached's expiration encoding: {@code 0} for
      * no expiration, relative seconds (rounded up) up to 30 days, and an absolute Unix timestamp
-     * beyond that.
+     * beyond that. The absolute form is computed from this client's clock while the server compares
+     * it with its own, so clock skew between the two shifts such an expiration by the same amount.
      *
      * @param liveTime the time-to-live in milliseconds; {@code 0} or negative means no expiration
      * @return the memcached expiration value
@@ -2509,11 +2514,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * }</pre>
      *
      * @param serverUrl one or more {@code host:port} addresses separated by commas, whitespace,
-     *                  or both; must not be {@code null} or empty
+     *                  or both; must not be {@code null}, empty, or blank
      * @param connFactory the connection factory configured with timeout and transcoder settings;
      *                    must not be {@code null}
      * @return a configured {@link MemcachedClient} instance
-     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, contains invalid
+     * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, contains invalid
      *         addresses, or names a host that cannot be resolved (all checked before {@code connFactory}
      *         and before any client resources are created), or if {@code connFactory} is {@code null}
      *         or supplies a non-positive operation timeout

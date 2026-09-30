@@ -14,15 +14,23 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.ehcache.CacheManager;
 import org.ehcache.config.builders.CacheConfigurationBuilder;
 import org.ehcache.config.builders.CacheManagerBuilder;
 import org.ehcache.config.builders.ResourcePoolsBuilder;
+import org.ehcache.config.builders.WriteBehindConfigurationBuilder;
 import org.ehcache.spi.loaderwriter.CacheLoaderWriter;
 import org.ehcache.spi.loaderwriter.CacheLoadingException;
 import org.junit.jupiter.api.Tag;
@@ -563,6 +571,213 @@ public class EhcacheTest {
             assertThrows(IllegalStateException.class, () -> wrapper.removeAll(new HashSet<>()));
         } finally {
             cm.close();
+        }
+    }
+
+    /**
+     * Records each loader/writer callback as one string, e.g. {@code "load m"} or {@code "writeAll [a, b, c]"}.
+     * Loads resolve every key to {@code "loaded-" + key}.
+     */
+    private static final class RecordingWriter implements CacheLoaderWriter<String, String> {
+        final List<String> calls = new CopyOnWriteArrayList<>();
+        private final CountDownLatch expectedCalls;
+
+        RecordingWriter(final int expectedCallCount) {
+            expectedCalls = new CountDownLatch(expectedCallCount);
+        }
+
+        private void record(final String call) {
+            calls.add(call);
+            expectedCalls.countDown();
+        }
+
+        @Override
+        public String load(final String key) {
+            record("load " + key);
+            return "loaded-" + key;
+        }
+
+        @Override
+        public Map<String, String> loadAll(final Iterable<? extends String> keys) {
+            final List<String> sortedKeys = new ArrayList<>();
+            keys.forEach(sortedKeys::add);
+            Collections.sort(sortedKeys);
+            record("loadAll " + sortedKeys);
+
+            final Map<String, String> loaded = new HashMap<>();
+            sortedKeys.forEach(k -> loaded.put(k, "loaded-" + k));
+            return loaded;
+        }
+
+        @Override
+        public void write(final String key, final String value) {
+            record("write " + key);
+        }
+
+        @Override
+        public void writeAll(final Iterable<? extends Map.Entry<? extends String, ? extends String>> entries) {
+            final List<String> keys = new ArrayList<>();
+            entries.forEach(e -> keys.add(e.getKey()));
+            Collections.sort(keys);
+            record("writeAll " + keys);
+        }
+
+        @Override
+        public void delete(final String key) {
+            record("delete " + key);
+        }
+
+        @Override
+        public void deleteAll(final Iterable<? extends String> keys) {
+            final List<String> sortedKeys = new ArrayList<>();
+            keys.forEach(sortedKeys::add);
+            Collections.sort(sortedKeys);
+            record("deleteAll " + sortedKeys);
+        }
+
+        /** Waits for the expected callbacks (write-behind delivers them on Ehcache's own threads) and returns them sorted. */
+        List<String> awaitSortedCalls() throws InterruptedException {
+            assertTrue(expectedCalls.await(10, TimeUnit.SECONDS), () -> "writer callbacks so far: " + calls);
+            return sortedCalls();
+        }
+
+        /** Returns the callbacks recorded so far, sorted. Loads run synchronously on the caller's thread. */
+        List<String> sortedCalls() {
+            final List<String> sorted = new ArrayList<>(calls);
+            Collections.sort(sorted);
+            return sorted;
+        }
+    }
+
+    private static Map<String, String> entriesOf(final String... keys) {
+        final Map<String, String> entries = new HashMap<>();
+
+        for (final String key : keys) {
+            entries.put(key, "v-" + key);
+        }
+
+        return entries;
+    }
+
+    private static List<String> runBulkWritesThroughWriter(final RecordingWriter writer,
+            final CacheConfigurationBuilder<String, String> config) throws InterruptedException {
+        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
+            final Ehcache<String, String> wrapper = new Ehcache<>(manager.createCache("writer" + System.nanoTime(), config.withLoaderWriter(writer)));
+
+            try {
+                wrapper.putAll(entriesOf("a", "b", "c"));
+                wrapper.removeAll(new HashSet<>(Arrays.asList("x", "y", "z"))); // absent keys still reach the writer
+
+                return writer.awaitSortedCalls();
+            } finally {
+                wrapper.close();
+            }
+        }
+    }
+
+    private static CacheConfigurationBuilder<String, String> heapConfig() {
+        return CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(100));
+    }
+
+    @Test
+    public void testBulkOps_WriteThroughWriter_ReceivesOneBulkCallPerKey() throws Exception {
+        final RecordingWriter writer = new RecordingWriter(6);
+
+        assertEquals(Arrays.asList("deleteAll [x]", "deleteAll [y]", "deleteAll [z]", "writeAll [a]", "writeAll [b]", "writeAll [c]"),
+                runBulkWritesThroughWriter(writer, heapConfig()));
+    }
+
+    @Test
+    public void testBulkOps_UnbatchedWriteBehindWriter_ReceivesIndividualWritesAndDeletes() throws Exception {
+        final RecordingWriter writer = new RecordingWriter(6);
+
+        assertEquals(Arrays.asList("delete x", "delete y", "delete z", "write a", "write b", "write c"),
+                runBulkWritesThroughWriter(writer, heapConfig().withService(WriteBehindConfigurationBuilder.newUnBatchedWriteBehindConfiguration())));
+    }
+
+    @Test
+    public void testBulkOps_BatchedWriteBehindWriter_ReceivesMultiKeyBatches() throws Exception {
+        // One stripe and a batch size equal to each call's key count: each batch is submitted as soon as it
+        // fills (the one-minute max delay never elapses), so every call's keys arrive in a single callback.
+        final RecordingWriter writer = new RecordingWriter(2);
+
+        assertEquals(Arrays.asList("deleteAll [x, y, z]", "writeAll [a, b, c]"),
+                runBulkWritesThroughWriter(writer,
+                        heapConfig().withService(WriteBehindConfigurationBuilder.newBatchedWriteBehindConfiguration(1, TimeUnit.MINUTES, 3).concurrencyLevel(1))));
+    }
+
+    private static Map<String, String> expectedLoadedValues(final String presentKey, final String... missingKeys) {
+        final Map<String, String> expected = new HashMap<>();
+        expected.put(presentKey, "v-" + presentKey);
+
+        for (final String key : missingKeys) {
+            expected.put(key, "loaded-" + key);
+        }
+
+        return expected;
+    }
+
+    @Test
+    public void testGetAll_WithoutWriteBehind_LoaderReceivesOneLoadAllPerMissingKey() throws Exception {
+        final RecordingWriter loader = new RecordingWriter(0);
+
+        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
+            final Ehcache<String, String> wrapper = new Ehcache<>(manager.createCache("readThroughAll", heapConfig().withLoaderWriter(loader)));
+
+            try {
+                wrapper.put("a", "v-a");
+                loader.calls.clear(); // drop the write-through "write a"
+
+                assertEquals(expectedLoadedValues("a", "m1", "m2"), wrapper.getAll(new HashSet<>(Arrays.asList("a", "m1", "m2"))));
+                assertEquals(Arrays.asList("loadAll [m1]", "loadAll [m2]"), loader.sortedCalls());
+            } finally {
+                wrapper.close();
+            }
+        }
+    }
+
+    @Test
+    public void testGetAll_UnbatchedWriteBehind_LoaderReceivesIndividualLoads() throws Exception {
+        final RecordingWriter loader = new RecordingWriter(1);
+
+        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
+            final Ehcache<String, String> wrapper = new Ehcache<>(manager.createCache("writeBehindReads",
+                    heapConfig().withLoaderWriter(loader).withService(WriteBehindConfigurationBuilder.newUnBatchedWriteBehindConfiguration())));
+
+            try {
+                wrapper.put("a", "v-a");
+                assertEquals(Arrays.asList("write a"), loader.awaitSortedCalls()); // the queued write has been delivered
+                loader.calls.clear();
+
+                assertEquals(expectedLoadedValues("a", "m1", "m2"), wrapper.getAll(new HashSet<>(Arrays.asList("a", "m1", "m2"))));
+                assertEquals(Arrays.asList("load m1", "load m2"), loader.sortedCalls());
+            } finally {
+                wrapper.close();
+            }
+        }
+    }
+
+    @Test
+    public void testGetAll_BatchedWriteBehind_PendingDeleteAnsweredWithoutLoader() throws Exception {
+        final RecordingWriter loader = new RecordingWriter(0);
+
+        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
+            // A batch size of 10 and a one-minute max delay keep the single delete queued for the whole test.
+            final Ehcache<String, String> wrapper = new Ehcache<>(manager.createCache("pendingDeleteReads", heapConfig().withLoaderWriter(loader)
+                    .withService(WriteBehindConfigurationBuilder.newBatchedWriteBehindConfiguration(1, TimeUnit.MINUTES, 10).concurrencyLevel(1))));
+
+            try {
+                wrapper.remove("p");
+
+                final Map<String, String> result = wrapper.getAll(new HashSet<>(Arrays.asList("p", "m")));
+
+                assertTrue(result.containsKey("p"));
+                assertNull(result.get("p"));
+                assertEquals("loaded-m", result.get("m"));
+                assertEquals(Arrays.asList("load m"), loader.sortedCalls()); // no loader call for "p", and no loadAll
+            } finally {
+                wrapper.close();
+            }
         }
     }
 }

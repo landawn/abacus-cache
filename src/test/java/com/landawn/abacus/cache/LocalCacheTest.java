@@ -369,6 +369,30 @@ public class LocalCacheTest {
         assertThrows(IllegalStateException.class, cache::stats);
     }
 
+    /**
+     * Pins the documented replacement semantics against the default pool: replacing an existing key
+     * in a full cache detaches the old mapping first, so the replacement is admitted without a
+     * capacity rejection and without evicting an unrelated entry.
+     */
+    @Test
+    public void testPut_ReplaceExistingKeyAtFullCapacity_SucceedsWithoutEvictingOthers() {
+        final LocalCache<String, String> cache = new LocalCache<>(2, 0);
+        try {
+            assertTrue(cache.put("a", "1"));
+            assertTrue(cache.put("b", "2"));
+
+            assertTrue(cache.put("a", "1b"));
+
+            assertEquals(2, cache.size());
+            assertEquals("1b", cache.getOrNull("a"));
+            assertEquals("2", cache.getOrNull("b"));
+            assertEquals(0L, cache.stats().evictionCount());
+            assertEquals(3L, cache.stats().putCount());
+        } finally {
+            cache.close();
+        }
+    }
+
     /** The state check runs before argument validation: a closed cache reports ISE even for a null key/value. */
     @Test
     public void testKeyOperations_AfterClose_NullArgs_ThrowIllegalStateExceptionFirst() {

@@ -493,7 +493,9 @@ public final class CacheFactory {
      * <li>{@code RedisCluster(serverUrl)} - Creates JRedisCluster client (client-side routing to Redis Cluster hash slots) with default timeout (1000ms); serverUrl is a comma-separated list of cluster seed nodes</li>
      * <li>{@code RedisCluster(serverUrl,keyPrefix)} - With key prefix for namespace isolation and default timeout</li>
      * <li>{@code RedisCluster(serverUrl,keyPrefix,timeout)} - With key prefix and custom timeout in milliseconds</li>
-     * <li>{@code com.example.CustomCache(params...)} - Custom implementation with fully qualified class name</li>
+     * <li>{@code com.example.CustomCache(params...)} - Custom implementation with fully qualified class name
+     *     (a nested class may be named by its binary name, {@code com.example.Outer$CustomCache}, or its
+     *     canonical name, {@code com.example.Outer.CustomCache})</li>
      * </ul>
      *
      * <p><b>Numeric second parameter (Memcached/Redis):</b> in the two-parameter forms, an all-digit
@@ -574,7 +576,7 @@ public final class CacheFactory {
      *         custom cache class with a no-arg constructor may be specified without parameters, e.g.
      *         {@code "com.example.MyCache()"}
      * @throws IllegalStateException for the Redis and RedisCluster providers, if the optional Kryo dependency
-     *         (required by the Jedis cache clients) is not on the classpath
+     *         (required by the Jedis cache clients) is not on the classpath or cannot be initialized
      * @throws UncheckedIOException if creating the Memcached client's selector or sockets fails
      * @throws RuntimeException if Redis client-pool setup, RedisCluster seed resolution, or initial
      *         topology discovery fails, or if reflective construction cannot access the custom cache's
@@ -676,7 +678,7 @@ public final class CacheFactory {
         final ClassNotFoundException primaryFailure;
 
         try {
-            return Class.forName(className, false, libraryClassLoader);
+            return forNameWithoutInitializing(className, libraryClassLoader);
         } catch (final ClassNotFoundException e) {
             primaryFailure = e;
         }
@@ -689,7 +691,7 @@ public final class CacheFactory {
 
         if (contextClassLoader != null && contextClassLoader != libraryClassLoader) {
             try {
-                return Class.forName(className, false, contextClassLoader);
+                return forNameWithoutInitializing(className, contextClassLoader);
             } catch (final ClassNotFoundException contextFailure) {
                 // Custom/layered class loaders are allowed to reuse exception instances.
                 // Guard against Throwable's illegal self-suppression edge case.
@@ -700,6 +702,42 @@ public final class CacheFactory {
         }
 
         throw new IllegalArgumentException("Cannot find class: " + className, primaryFailure);
+    }
+
+    /**
+     * Loads a class through {@code classLoader} without initializing it, accepting a nested class by
+     * either its binary name ({@code com.example.Caches$MyCache}) or its canonical, dot-separated name
+     * ({@code com.example.Caches.MyCache}).
+     *
+     * @param className the binary or canonical class name
+     * @param classLoader the class loader to use
+     * @return the resolved, uninitialized class
+     * @throws ClassNotFoundException if no spelling of {@code className} can be loaded; this is the
+     *         failure for the name exactly as given
+     */
+    private static Class<?> forNameWithoutInitializing(final String className, final ClassLoader classLoader) throws ClassNotFoundException {
+        try {
+            return Class.forName(className, false, classLoader);
+        } catch (final ClassNotFoundException e) {
+            // Class.forName accepts only binary names, but the DSL accepted the canonical spelling of a
+            // nested class while resolution went through ClassUtil.forName, and TypeAttrParser itself
+            // normalizes "Owner<...>.Member" to the dotted "Owner.Member". Retry with the rightmost
+            // remaining '.' turned into '$', innermost nesting level first, as ClassUtil.forName does.
+            String binaryName = className;
+            int lastPeriodIndex;
+
+            while ((lastPeriodIndex = binaryName.lastIndexOf('.')) > 0) {
+                binaryName = binaryName.substring(0, lastPeriodIndex) + '$' + binaryName.substring(lastPeriodIndex + 1);
+
+                try {
+                    return Class.forName(binaryName, false, classLoader);
+                } catch (final ClassNotFoundException ignored) {
+                    // try the next enclosing level
+                }
+            }
+
+            throw e;
+        }
     }
 
     /**

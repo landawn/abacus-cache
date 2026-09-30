@@ -127,7 +127,7 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      *
      * @param serverUrl the Redis server URL(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses
-     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath (checked
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath or cannot be initialized (checked
      *         before any shard client is built)
      * @throws RuntimeException if a shard's client pool cannot be constructed. Note that an
      *         unresolvable hostname does NOT fail construction: the failure surfaces on the first
@@ -170,7 +170,7 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
-     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath (checked
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath or cannot be initialized (checked
      *         after {@code serverUrl} is found non-blank and before any shard client is built)
      * @throws RuntimeException if a shard's client pool cannot be constructed. Note that an
      *         unresolvable hostname does NOT fail construction: the failure surfaces on the first

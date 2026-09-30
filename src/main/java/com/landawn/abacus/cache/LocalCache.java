@@ -287,8 +287,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <p><b>&#9888;&#65039; Replacement failure:</b> The underlying pool (including the default
      * {@code GenericKeyedObjectPool}) removes and destroys an existing mapping <i>before</i>
      * checking whether its replacement can be stored. If the pool then rejects the new entry
-     * (capacity or memory limit, or the entry expiring by the time the pool re-checks it under its
-     * lock), this method returns {@code false} and the previous mapping is no longer present.
+     * (for example a memory limit configured on a custom pool, or the entry expiring by the time the
+     * pool re-checks it under its lock), this method returns {@code false} and the previous mapping
+     * is no longer present. The default pool never rejects a same-key replacement for capacity,
+     * because detaching the previous mapping frees its slot.
      * By contrast, if the new entry is rejected up front because it is already expired at the
      * pool's initial check (only possible with a millisecond-scale {@code liveTime} or
      * {@code maxIdleTime}, both measured from the moment the entry is created), any previous

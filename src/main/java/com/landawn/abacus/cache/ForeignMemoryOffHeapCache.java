@@ -419,7 +419,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
     /**
      * Copies bytes from a Java array to off-heap memory using the {@link MemorySegment} API.
      * This provides type-safe memory access compared with {@code Unsafe} operations. It is an
-     * internal hook called automatically during cache put operations and should not be called directly.
+     * internal hook called automatically during cache put operations (and when a disk-backed value is
+     * promoted back into memory) and should not be called directly.
      *
      * <p>The method performs a low-level copy via {@link MemorySegment#copy}, which is type-safe and
      * efficient. The relative offset within the buffer is computed by subtracting the region's base

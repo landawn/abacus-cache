@@ -111,13 +111,15 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * <p><b>Implementation note:</b> if topology discovery fails partway (after Jedis has created
      * per-node connection pools internally but before the client is fully constructed), the
      * builder throws and this wrapper receives no handle it could close, so any pools created
-     * during the failed discovery are stranded inside Jedis until they are garbage-collected.
-     * This is internal to Jedis and cannot be remediated from this wrapper; avoid tight
+     * during the failed discovery are stranded inside Jedis. They are not reclaimed by garbage
+     * collection: with the default pool configuration, commons-pool registers each pool with the
+     * platform MBean server, which keeps the pool (and its scheduled idle-eviction task) alive until
+     * JVM exit. This is internal to Jedis and cannot be remediated from this wrapper; avoid tight
      * construction-retry loops against a partially unavailable cluster.
      *
      * @param serverUrl the Redis Cluster seed node(s) in format "host1:port1,host2:port2,...". Must not be {@code null}, empty, or blank.
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses
-     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath (checked
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath or cannot be initialized (checked
      *         before the cluster client is built)
      * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
      * @see #JRedisCluster(String, long)
@@ -165,7 +167,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @param timeout the connection and socket timeout in milliseconds. Must be positive and must not exceed {@link Integer#MAX_VALUE} (since the underlying Jedis API accepts an {@code int} timeout).
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, blank, or contains no valid server addresses,
      *         or if {@code timeout} is not positive or exceeds {@link Integer#MAX_VALUE}
-     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath (checked
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath or cannot be initialized (checked
      *         after {@code serverUrl} is found non-blank and before the cluster client is built)
      * @throws RuntimeException if seed resolution, initial topology discovery, or client construction fails
      * @see #JRedisCluster(String)
@@ -197,7 +199,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
      * @param serverUrl the seed node URL(s) to report via {@link #serverUrl()}; must not be {@code null}, empty, or blank
      * @param cluster the pre-built cluster client to use; must not be {@code null}
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}/empty/blank or {@code cluster} is {@code null}
-     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath or cannot be initialized
      */
     JRedisCluster(final String serverUrl, final RedisClusterClient cluster) throws IllegalArgumentException {
         super(serverUrl);

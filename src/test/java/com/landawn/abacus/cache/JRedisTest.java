@@ -340,6 +340,36 @@ public class JRedisTest {
         verify(mockJedis, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
     }
 
+    /** A negative liveTime means "no expiration" too: plain SET, never SET ... PX with a negative value. */
+    @Test
+    public void test_set_negativeTtl_uses_plain_set() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
+
+        assertTrue(cache.put("forever", "value", -1));
+        assertTrue(cache.put("forever", "value", Long.MIN_VALUE));
+
+        verify(mockJedis, times(2)).set(eq(utf8("forever")), any(byte[].class));
+        verify(mockJedis, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
+    }
+
+    /**
+     * The deprecated {@code set}/{@code delete} names are interface compatibility defaults. They must
+     * bridge to the {@code put}/{@code remove} implementations, which are declared on the
+     * package-private {@code AbstractJedisCacheClient} rather than on {@code JRedis} itself.
+     */
+    @SuppressWarnings("deprecation")
+    @Test
+    public void test_legacySetAndDelete_bridgeToPutAndRemove() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+        when(mockJedis.del(any(byte[].class))).thenReturn(1L);
+
+        assertTrue(cache.set("legacy", "v", 60_000));
+        assertTrue(cache.delete("legacy"));
+
+        verify(mockJedis).set(eq(utf8("legacy")), any(byte[].class), eq(SetParams.setParams().px(60_000L)));
+        verify(mockJedis).del(utf8("legacy"));
+    }
+
     @Test
     public void test_set_returns_false_when_server_does_not_say_OK() {
         when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("NOT_OK");

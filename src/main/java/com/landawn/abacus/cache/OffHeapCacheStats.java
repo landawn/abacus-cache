@@ -183,8 +183,9 @@ public record OffHeapCacheStats(int capacity, int size, long sizeOnDisk, long pu
         Map<Integer, Map<Integer, Integer>> occupiedSlots) {
 
     /**
-     * Canonical constructor that validates the time-statistics arguments and stores a deeply
-     * unmodifiable defensive copy of {@code occupiedSlots}.
+     * Canonical constructor that validates every component (numeric ranges, non-{@code null}
+     * references, and the {@code occupiedSlots} entries) and stores a deeply unmodifiable
+     * defensive copy of {@code occupiedSlots}.
      *
      * <p>All numeric components must be non-negative per the field documentation. The
      * cross-component invariants between counters (e.g. {@code getCount == hitCount + missCount})

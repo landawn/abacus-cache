@@ -1,12 +1,15 @@
 package com.landawn.abacus.cache;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.inOrder;
@@ -22,6 +25,7 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.nio.channels.UnresolvedAddressException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -34,6 +38,7 @@ import java.util.function.Consumer;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 import net.spy.memcached.CachedData;
@@ -41,6 +46,8 @@ import net.spy.memcached.DefaultConnectionFactory;
 import net.spy.memcached.MemcachedClient;
 import net.spy.memcached.internal.GetFuture;
 import net.spy.memcached.internal.OperationFuture;
+import net.spy.memcached.ops.OperationErrorType;
+import net.spy.memcached.ops.OperationException;
 import net.spy.memcached.transcoders.SerializingTranscoder;
 import net.spy.memcached.transcoders.Transcoder;
 
@@ -421,6 +428,133 @@ public class SpyMemcachedFutureUnitTest {
         assertFalse(error instanceof UnresolvedAddressException, "rejected by the wrapper, not by a failed socket connect");
         verify(factory, never()).createConnection(anyList());
         assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>(serverUrl, 1_000L));
+    }
+
+    /**
+     * Store and flush paths share one TTL conversion: a non-positive value means "no expiration"
+     * ({@code 0}; a negative memcached expiration would mean "already expired"), positive
+     * milliseconds round up to whole seconds, exactly 30 days stays relative, anything longer
+     * becomes an absolute Unix timestamp, and a timestamp beyond 2^31-1 is rejected before dispatch.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void expirationConversionHonorsThirtyDayBoundaryForStoresAndFlushes() throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class);
+        final OperationFuture<Boolean> accepted = mock(OperationFuture.class);
+        when(accepted.get(25L, TimeUnit.MILLISECONDS)).thenReturn(true);
+        when(accepted.get()).thenReturn(true);
+        when(delegate.set(anyString(), anyInt(), any())).thenReturn(accepted);
+        when(delegate.flush(anyInt())).thenReturn(accepted);
+        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+        final long thirtyDaysMillis = 30L * 24 * 60 * 60 * 1000;
+
+        for (final long liveTime : new long[] { Long.MIN_VALUE, -1, 0, 1, 1_000, 1_001, thirtyDaysMillis }) {
+            assertTrue(cache.put("relative", "v", liveTime));
+        }
+
+        final ArgumentCaptor<Integer> relative = ArgumentCaptor.forClass(Integer.class);
+        verify(delegate, times(7)).set(eq("relative"), relative.capture(), eq("v"));
+        assertEquals(List.of(0, 0, 0, 1, 1, 2, 2_592_000), relative.getAllValues());
+
+        final long before = System.currentTimeMillis() / 1000L;
+        assertTrue(cache.put("absolute", "v", thirtyDaysMillis + 1));
+        final long after = System.currentTimeMillis() / 1000L;
+        final ArgumentCaptor<Integer> absolute = ArgumentCaptor.forClass(Integer.class);
+        verify(delegate).set(eq("absolute"), absolute.capture(), eq("v"));
+        assertTrue(absolute.getValue() >= before + 2_592_001 && absolute.getValue() <= after + 2_592_001, "absolute = " + absolute.getValue());
+
+        assertTrue(cache.flushAll(-1));
+        assertTrue(cache.flushAll(1_500));
+        assertTrue(cache.asyncFlushAll(thirtyDaysMillis).get());
+        final ArgumentCaptor<Integer> delays = ArgumentCaptor.forClass(Integer.class);
+        verify(delegate, times(3)).flush(delays.capture());
+        assertEquals(List.of(0, 2, 2_592_000), delays.getAllValues());
+
+        final MemcachedClient untouched = mock(MemcachedClient.class);
+        final SpyMemcached<Object> rejecting = clientWithDelegate(untouched);
+        // Relative seconds overflow int, and an int-sized relative value whose absolute form passes 2038.
+        for (final long tooLong : new long[] { Long.MAX_VALUE, 2_000_000_000_000L }) {
+            assertThrows(IllegalArgumentException.class, () -> rejecting.put("k", "v", tooLong));
+            assertThrows(IllegalArgumentException.class, () -> rejecting.asyncAdd("k", "v", tooLong));
+            assertThrows(IllegalArgumentException.class, () -> rejecting.flushAll(tooLong));
+            assertThrows(IllegalArgumentException.class, () -> rejecting.incr("k", 1, 0, tooLong));
+            assertThrows(IllegalArgumentException.class, () -> rejecting.decr("k", 1, 0, tooLong));
+        }
+        verifyNoInteractions(untouched);
+    }
+
+    /**
+     * An absent counter is seeded through a raw-ASCII transcoder (never the client's default,
+     * Kryo-backed one, whose bytes native incr/decr cannot mutate) and the default is returned
+     * without applying the delta; an existing counter returns the mutation result without seeding.
+     */
+    @Test
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    public void seededCounterMissStoresRawAsciiSeedAndExistingCounterSkipsSeeding() throws Exception {
+        for (final boolean increment : new boolean[] { true, false }) {
+            final MemcachedClient delegate = mock(MemcachedClient.class);
+            final OperationFuture<Long> miss = mock(OperationFuture.class);
+            final OperationFuture<Long> hit = mock(OperationFuture.class);
+            final OperationFuture<Boolean> seeded = mock(OperationFuture.class);
+            when(miss.get(25L, TimeUnit.MILLISECONDS)).thenReturn(-1L);
+            when(hit.get(25L, TimeUnit.MILLISECONDS)).thenReturn(12L);
+            when(seeded.get(25L, TimeUnit.MILLISECONDS)).thenReturn(true);
+            when(delegate.add(eq("counter"), eq(0), eq("7"), any())).thenReturn(seeded);
+
+            if (increment) {
+                when(delegate.asyncIncr("counter", 5L)).thenReturn(miss, hit);
+            } else {
+                when(delegate.asyncDecr("counter", 5L)).thenReturn(miss, hit);
+            }
+
+            final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+
+            assertEquals(7L, increment ? cache.incr("counter", 5, 7) : cache.decr("counter", 5, 7));
+            assertEquals(12L, increment ? cache.incr("counter", 5, 7) : cache.decr("counter", 5, 7));
+
+            if (increment) {
+                verify(delegate, times(2)).asyncIncr("counter", 5L);
+            } else {
+                verify(delegate, times(2)).asyncDecr("counter", 5L);
+            }
+
+            final ArgumentCaptor<Transcoder> seedTranscoder = ArgumentCaptor.forClass(Transcoder.class);
+            verify(delegate).add(eq("counter"), eq(0), eq("7"), seedTranscoder.capture());
+            verifyNoMoreInteractions(delegate);
+
+            final CachedData encoded = seedTranscoder.getValue().encode("7");
+            assertEquals(0, encoded.getFlags());
+            assertArrayEquals("7".getBytes(StandardCharsets.US_ASCII), encoded.getData());
+        }
+    }
+
+    /**
+     * A failed mutation (for example a CLIENT_ERROR on a non-numeric value) must surface as an
+     * exception. spymemcached's own synchronous counters report every failure as {@code -1}, which
+     * would be indistinguishable from "absent" and would make the seeding overloads try to seed.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void failedCounterMutationThrowsInsteadOfReturningMinusOneOrSeeding() throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class);
+        final OperationFuture<Long> failed = mock(OperationFuture.class);
+        final OperationException failure = new OperationException(OperationErrorType.CLIENT, "CLIENT_ERROR cannot increment or decrement non-numeric value");
+        when(failed.get(25L, TimeUnit.MILLISECONDS)).thenThrow(new ExecutionException(failure));
+        when(delegate.asyncIncr("counter", 1)).thenReturn(failed);
+        when(delegate.asyncIncr("counter", 1L)).thenReturn(failed);
+        when(delegate.asyncDecr("counter", 1)).thenReturn(failed);
+        when(delegate.asyncDecr("counter", 1L)).thenReturn(failed);
+        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+
+        final List<Consumer<SpyMemcached<Object>>> counters = List.of(c -> c.incr("counter"), c -> c.incr("counter", 1),
+                c -> c.incr("counter", 1, 0), c -> c.incr("counter", 1, 0, 1_000), c -> c.decr("counter"), c -> c.decr("counter", 1),
+                c -> c.decr("counter", 1, 0), c -> c.decr("counter", 1, 0, 1_000));
+
+        for (final Consumer<SpyMemcached<Object>> counter : counters) {
+            assertSame(failure, assertThrows(RuntimeException.class, () -> counter.accept(cache)).getCause());
+        }
+
+        verify(delegate, never()).add(anyString(), anyInt(), any(), any());
     }
 
     @Test

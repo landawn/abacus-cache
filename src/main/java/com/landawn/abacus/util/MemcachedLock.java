@@ -297,9 +297,11 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         {@code value} before anything is sent (for example, spymemcached's default transcoder
      *         rejects a non-{@code Serializable} value, and either transcoder rejects an encoded form
      *         larger than its maximum size), in which case no lock was acquired
-     * @throws RuntimeException if key conversion fails, or if the Memcached operation fails. After command
-     *         dispatch the lock state can be indeterminate: the {@code add} command may have reached the server even though its
-     *         response was lost or timed out, in which case the lock IS held server-side (under this
+     * @throws RuntimeException if key conversion fails; if the client's transcoder fails to serialize
+     *         {@code value} for another reason (for example, a {@code KryoException} for a cycle through
+     *         object fields), in which case nothing was sent and no lock was acquired; or if the Memcached
+     *         operation fails. After command dispatch the lock state can be indeterminate: the {@code add}
+     *         command may have reached the server even though its response was lost or timed out, in which case the lock IS held server-side (under this
      *         client's value) until the TTL expires unless something releases it (the failed caller cannot tell that it holds the lock).
      *         Prefer short TTLs where this matters for availability.
      * @throws StackOverflowError if the bundled Kryo transcoder attempts to serialize a cyclic collection, map, or object array in {@code value}
@@ -695,8 +697,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *         (via {@code toKey}) is invalid as described by {@link #tryLock(Object, Object, long)}, if {@code liveTime}
      *         is not positive or cannot be represented by Memcached's expiration field, or if the client's
      *         transcoder rejects {@code value}
-     * @throws RuntimeException if key conversion fails, or if the Memcached operation fails; after dispatch the lock state may be indeterminate,
-     *         as described by {@link #tryLock(Object, Object, long)}
+     * @throws RuntimeException if key conversion or serialization of {@code value} fails, or if the Memcached operation fails; after
+     *         dispatch the lock state may be indeterminate, as described by {@link #tryLock(Object, Object, long)}
      * @throws StackOverflowError if the bundled Kryo transcoder attempts to serialize a cyclic collection, map, or object array in {@code value}
      * @deprecated renamed to {@link #tryLock(Object, Object, long)} to reflect its single-attempt
      *             semantics: it performs one server round-trip but does not poll, retry, or wait for
@@ -947,17 +949,21 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *
      * // Example 3: Multiple locks with single client
      * try (MemcachedLock<String, String> multiLock = new MemcachedLock<>("localhost:11211")) {
-     *     boolean lock1 = multiLock.tryLock("resource1", 30000);
-     *     boolean lock2 = multiLock.tryLock("resource2", 30000);
+     *     boolean lock1 = false;
+     *     boolean lock2 = false;
      *
      *     try {
-     *         if (lock1 && lock2) {
+     *         // Acquire inside the try so a failure acquiring the second lock still releases the first.
+     *         lock1 = multiLock.tryLock("resource1", 30000);
+     *         lock2 = lock1 && multiLock.tryLock("resource2", 30000);
+     *
+     *         if (lock2) {
      *             // Both locks acquired
      *             performOperation();                      // your exclusive work runs here
      *         }
      *     } finally {
-     *         if (lock1) multiLock.unlockQuietly("resource1");
      *         if (lock2) multiLock.unlockQuietly("resource2");
+     *         if (lock1) multiLock.unlockQuietly("resource1");
      *     }
      * } // close() runs automatically here
      * }</pre>

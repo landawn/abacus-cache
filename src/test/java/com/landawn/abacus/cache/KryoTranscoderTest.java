@@ -177,6 +177,21 @@ public class KryoTranscoderTest extends TestBase {
         }
     }
 
+    /** Sweep of counter-shaped payloads: every one must fail as a KryoException, never as an Error or other type. */
+    @Test
+    public void testDecode_ForeignCounterPayloadSweep_AlwaysKryoException() {
+        final KryoTranscoder<Object> tx = new KryoTranscoder<>();
+
+        for (int i = 0; i < 10_000; i++) {
+            final String counter = Integer.toString(i);
+            final CachedData cd = new CachedData(0, counter.getBytes(java.nio.charset.StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
+            assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> tx.decode(cd), counter);
+        }
+
+        final CachedData maxCounter = new CachedData(0, "18446744073709551615".getBytes(java.nio.charset.StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
+        assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> tx.decode(maxCounter));
+    }
+
     /** The caller-supplied-parser constructors: round-trip through a custom parser, and null rejection. */
     @Test
     public void testConstructor_CustomParser() {

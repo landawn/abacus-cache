@@ -581,6 +581,42 @@ public class ForeignMemoryOffHeapCacheTest {
     }
 
     /**
+     * Documented full-constructor contract: unlike {@code Builder.build()}, the constructor performs no
+     * {@code 0}-to-default substitution for {@code maxBlockSize}, so {@code 0} is rejected. The
+     * invalid argument is detected before the arena is created, so the supplied store stays open
+     * and owned by the caller.
+     */
+    @Test
+    public void testFullConstructor_zeroMaxBlockSize_rejectedWithoutClosingStore() {
+        final java.util.concurrent.atomic.AtomicBoolean storeClosed = new java.util.concurrent.atomic.AtomicBoolean();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return false;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                storeClosed.set(true);
+            }
+        };
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new ForeignMemoryOffHeapCache<String, byte[]>(1, 0, 0, 0, 0, 0f, null, null, store, false, null, null));
+        assertFalse(storeClosed.get());
+    }
+
+    /**
      * A capacity of {@code Integer.MAX_VALUE} MB (~2 PB) is impossible to satisfy, so construction
      * must fail rather than return a half-built cache. (It currently fails while sizing the
      * base-class segment table, before {@code allocate()} is reached; the arena-cleanup branch of

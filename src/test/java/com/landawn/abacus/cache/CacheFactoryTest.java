@@ -726,6 +726,44 @@ public class CacheFactoryTest extends TestBase {
         }
     }
 
+    /** A concrete custom provider declared as a nested class. */
+    public static class NestedProviderCache<K, V> extends DummyProviderCache<K, V> {
+        public NestedProviderCache(final String serverUrl) {
+            super(serverUrl);
+        }
+    }
+
+    /**
+     * Regression: a nested custom provider named by its canonical (dot-separated) name, which
+     * {@code ClassUtil.forName} used to resolve and {@code TypeAttrParser} itself produces for
+     * {@code Owner<...>.Member} specifications, was reported as "Cannot find class" once class
+     * loading switched to the non-initializing {@code Class.forName}, which accepts only binary names.
+     */
+    @Test
+    public void testCreateCache_NestedCustomClassByCanonicalOrBinaryName() {
+        for (final String className : new String[] { NestedProviderCache.class.getCanonicalName(), NestedProviderCache.class.getName() }) {
+            final Cache<String, Object> cache = CacheFactory.createCache(className + "(localhost:9999)");
+            try {
+                assertTrue(cache instanceof NestedProviderCache, className);
+                assertEquals("localhost:9999", ((NestedProviderCache<String, Object>) cache).serverUrl());
+            } finally {
+                cache.close();
+            }
+        }
+
+        // The canonical-name retry must stay non-initializing and keep the type check authoritative.
+        nonCacheProviderInitialized = false;
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> CacheFactory.createCache(NonCacheProviderWithInitializer.class.getCanonicalName() + "()"));
+        assertTrue(ex.getMessage().contains("must implement Cache"), ex.getMessage());
+        assertFalse(nonCacheProviderInitialized, "type validation must not run an invalid provider's static initializer");
+
+        // A name that matches no spelling still reports the name exactly as given.
+        final IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> CacheFactory.createCache(CacheFactoryTest.class.getName() + ".NoSuchNestedCache(localhost:9999)"));
+        assertTrue(missing.getMessage().contains("Cannot find class: " + CacheFactoryTest.class.getName() + ".NoSuchNestedCache"), missing.getMessage());
+    }
+
     /** An abstract {@link Cache} that declares a matching {@code (String)} constructor but cannot be instantiated. */
     public abstract static class AbstractProviderCache<K, V> extends DummyProviderCache<K, V> {
         public AbstractProviderCache(final String serverUrl) {

@@ -77,8 +77,9 @@ import com.landawn.abacus.util.function.TriPredicate;
  * &rarr; allocator lock (no code path acquires them in any other order):
  * <ul>
  * <li>Entries live in a {@link ConcurrentHashMap}; every same-key mutation (put, disk spill,
- *     promotion, removal) runs inside the map's atomic per-key {@code compute}/{@code remove},
- *     so no two mutations of one key can interleave.</li>
+ *     promotion, removal) runs inside the map's atomic per-key {@code compute}, so no two
+ *     mutations of one key can interleave. Only {@link #close()} empties the map outside
+ *     {@code compute}, while it holds the lifecycle write lock.</li>
  * <li>Each entry's monitor guards its resources: readers copy native memory (or fetch store
  *     bytes) under it, and every path that frees or overwrites those resources holds it first, so
  *     a read can never observe freed memory or another entry's bytes.</li>
@@ -218,7 +219,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /** Maximum size of a single memory block in bytes, rounded up to a multiple of {@link #MIN_BLOCK_SIZE}. */
     final int maxBlockSize;
 
-    /** All entries, both memory-backed and disk-backed. Same-key mutations use atomic compute/remove. */
+    /** All entries, both memory-backed and disk-backed. Same-key mutations use the map's atomic per-key compute. */
     private final ConcurrentHashMap<K, Entry<V>> entries = new ConcurrentHashMap<>();
 
     /**
@@ -332,7 +333,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *                                  is outside {@code [1024, SEGMENT_SIZE]}, if {@code vacatingFactor}
      *                                  is outside {@code [0.0, 1.0]} (or is NaN), or if {@code logger}
      *                                  is {@code null}
-     * @throws OutOfMemoryError if the native allocation cannot be reserved
+     * @throws OutOfMemoryError if the Java heap cannot hold the per-segment bookkeeping (one
+     *                          {@code Segment} per MB, created before any native memory is requested;
+     *                          possible for a very large {@code capacityInMB}), or if the native
+     *                          allocation cannot be reserved
      * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance
      *                                    scheduler rejects its task (all cache-owned resources are
      *                                    released before this propagates)

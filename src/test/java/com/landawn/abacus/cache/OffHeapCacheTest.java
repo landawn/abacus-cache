@@ -1206,6 +1206,41 @@ public class OffHeapCacheTest {
     }
 
     /**
+     * Documented full-constructor contract: unlike {@code Builder.build()}, the constructor performs no
+     * {@code 0}-to-default substitution for {@code maxBlockSize}, so {@code 0} is rejected. The
+     * invalid argument is detected before the native allocation, so the supplied store stays open
+     * and owned by the caller.
+     */
+    @Test
+    public void testFullConstructor_zeroMaxBlockSize_rejectedWithoutClosingStore() {
+        final AtomicBoolean storeClosed = new AtomicBoolean();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return false;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                storeClosed.set(true);
+            }
+        };
+
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCache<String, byte[]>(1, 0, 0, 0, 0, 0f, null, null, store, false, null, null));
+        assertFalse(storeClosed.get());
+    }
+
+    /**
      * Documented {@code allocate} contract: {@code Unsafe.allocateMemory} rejects a negative size
      * with {@link IllegalArgumentException}, and the rejected call leaves the live cache untouched.
      */

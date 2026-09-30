@@ -108,12 +108,17 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      * documented serialization contract, so unlike the backends that fall back to another format,
      * a missing Kryo dependency must fail — with an actionable message, on every attempt.
      *
-     * @throws IllegalStateException if Kryo is not on the classpath
+     * <p>{@link ParserFactory#isKryoParserAvailable()} also reports {@code false} when Kryo is on the
+     * classpath but a {@link KryoParser} cannot be created (for example, when the JVM denies the
+     * reflective access Kryo needs on JDK 17+), so the message covers both causes.
+     *
+     * @throws IllegalStateException if Kryo is not on the classpath or its parser cannot be initialized
      */
     private static void requireKryoAvailable() throws IllegalStateException {
         if (!ParserFactory.isKryoParserAvailable()) {
-            throw new IllegalStateException("Kryo is required by the Jedis cache clients (JRedis/JRedisCluster) but is not on the classpath;"
-                    + " add the optional com.esotericsoftware:kryo dependency");
+            throw new IllegalStateException("Kryo is required by the Jedis cache clients (JRedis/JRedisCluster) but is not available;"
+                    + " add the optional com.esotericsoftware:kryo dependency, or, if it is already on the classpath, make sure"
+                    + " abacus-common's KryoParser can be initialized (on JDK 17+ it may need --add-opens for java.base packages)");
         }
     }
 
@@ -124,7 +129,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * @param serverUrl the server URL(s); must not be {@code null}, empty, or blank
      * @throws IllegalArgumentException if {@code serverUrl} is {@code null}, empty, or blank
-     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath
+     * @throws IllegalStateException if the optional Kryo dependency is not on the classpath or cannot be initialized
      */
     protected AbstractJedisCacheClient(final String serverUrl) throws IllegalArgumentException {
         super(serverUrl);

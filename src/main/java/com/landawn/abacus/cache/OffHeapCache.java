@@ -260,7 +260,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * @param maxBlockSize maximum size of a single memory block in bytes for memory allocation efficiency.
      *                     Must be between 1024 and SEGMENT_SIZE (1,048,576). The value is rounded up to the
      *                     nearest multiple of MIN_BLOCK_SIZE (64 bytes). Values larger than maxBlockSize
-     *                     will be split across multiple blocks. Default is 8192 bytes.
+     *                     will be split across multiple blocks. Unlike {@link Builder#build()}, this
+     *                     constructor performs no {@code 0}-to-default substitution; pass 8192 for the
+     *                     conventional block size.
      * @param evictDelay the delay between eviction runs in milliseconds. Use 0 or negative to disable automatic eviction.
      * @param defaultLiveTime default time-to-live for entries in milliseconds. Use 0 or negative for no TTL expiration.
      * @param defaultMaxIdleTime default maximum idle time for entries in milliseconds. Use 0 or negative for no idle timeout.
@@ -317,9 +319,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * from the operating system. The memory remains allocated until explicitly freed. Unlike heap memory,
      * this allocation does not trigger garbage collection or affect heap usage statistics.
      *
-     * @param capacityInBytes the number of bytes to allocate. Must be positive. This is always a multiple
-     *                        of SEGMENT_SIZE (1,048,576 bytes), since the region is sized as
-     *                        {@code capacityInMB * 1048576}.
+     * @param capacityInBytes the number of bytes to allocate. Must be positive. Through normal construction
+     *                        this is always a multiple of SEGMENT_SIZE (1,048,576 bytes), since the region
+     *                        is sized as {@code capacityInMB * 1048576}.
      * @return the base address (pointer) of the allocated memory block in native memory. This address is
      *         used for all subsequent memory access operations via copyToMemory and copyFromMemory.
      * @throws IllegalArgumentException if {@code capacityInBytes} is negative
@@ -368,7 +370,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * Copies bytes from a Java array to off-heap memory.
      * Uses unsafe operations for efficient memory transfer, bypassing standard
      * Java array access for maximum performance. This is an internal method
-     * called automatically during cache put operations and should not be called directly.
+     * called automatically during cache put operations (and when a disk-backed value is promoted
+     * back into memory) and should not be called directly.
      *
      * <p>The method performs a low-level memory copy using sun.misc.Unsafe.copyMemory, which is
      * significantly faster than manual byte-by-byte copying. The supplied {@code srcOffset} is a

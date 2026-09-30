@@ -570,7 +570,7 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      *
      * // The same backing instance is returned on each call and reflects later writes.
      * cache.setProperty("region", "us-east");    // returns null (no previous mapping)
-     * cache.getProperties() == props;            // returns true (same instance)
+     * boolean same = cache.getProperties() == props;   // true (same instance)
      * cache.getProperties().get("region");       // returns "us-east"
      * }</pre>
      *
