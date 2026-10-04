@@ -64,6 +64,11 @@ import lombok.experimental.Accessors;
  *     is required</li>
  * <li>Not designed for tiny objects (&lt; 128 bytes after serialization)</li>
  * <li>Objects are copied, so modifications don't affect cached values</li>
+ * <li>{@link java.nio.ByteBuffer} values store bytes from index 0 to the current position. Reads
+ *     return independent writable, array-backed heap buffers for all inputs, including direct,
+ *     read-only, and file-mapped buffers. Directness, read-only status, and the original file mapping
+ *     are not preserved. Use {@code ByteBuffer} as the cache's buffer value type;
+ *     {@code V = MappedByteBuffer} is unsupported because that subtype is not preserved</li>
  * <li>Memory is allocated during construction and normally retained for the application lifetime;
  *     a registered JVM shutdown hook releases it at process shutdown, and {@link #close()} is
  *     available for deliberate early decommissioning</li>

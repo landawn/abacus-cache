@@ -2246,10 +2246,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * After this method returns, the cache client must not be used again; any subsequent
      * operations will fail. This method delegates to {@link MemcachedClient#shutdown()} (the no-arg
      * overload), which initiates an <b>immediate</b> shutdown — in-flight operations are not awaited.
-     * Use {@link #disconnect(long)} if you need a bounded graceful shutdown that lets pending
-     * operations complete. Operations still pending when the delegate shuts down are neither
-     * completed nor cancelled by it; a thread waiting on one, synchronously or through a returned
-     * future, is released only when its wait bound (the operation timeout by default) elapses.
+     * Use {@link #disconnect(long)} to allow a graceful response wait for pending operations;
+     * its timeout bounds that wait, not the entire shutdown call. Operations still pending when the
+     * delegate shuts down are neither completed nor cancelled by it; a thread waiting on one,
+     * synchronously or through a returned future, is released only when its wait bound
+     * (the operation timeout by default) elapses.
      * This method is idempotent: calling it multiple times has no additional effect.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and uses synchronization to ensure only
@@ -2292,12 +2293,20 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     }
 
     /**
-     * Disconnects from all Memcached servers, waiting up to the given timeout for pending
-     * operations to complete.
-     * After the timeout elapses, any remaining operations are abandoned and connections are
-     * closed. After this method returns, the cache client must not be used again; any subsequent
-     * operations will fail. For a non-negative timeout this method is idempotent: calling it
-     * multiple times has no additional effect.
+     * Disconnects from all Memcached servers, optionally waiting for responses to pending operations.
+     * During the first shutdown with a positive timeout, the delegate first enqueues a no-op command
+     * for each server, then waits up to {@code timeout} milliseconds for those commands to complete.
+     * Once that response wait completes or times out, remaining operations are abandoned and
+     * connections are closed. After this method returns, the cache client must not be used again;
+     * any subsequent operations will fail. For a non-negative timeout this method is idempotent:
+     * calling it multiple times has no additional effect.
+     *
+     * <p><b>Timeout scope:</b> the timeout bounds only the response wait, not the total duration of
+     * this method. Enqueueing the no-op commands can additionally block for up to the client's maximum
+     * queue block time per server (10 seconds with this client's connection settings). Waiting to enter
+     * this synchronized method behind another disconnect, and resource teardown afterward, are also
+     * outside that bound. A zero timeout skips the graceful enqueueing and response wait; it does not
+     * guarantee an immediate method return.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and uses synchronization to ensure only
      * one disconnect occurs. It publishes the terminal state before the graceful queue wait begins,
@@ -2306,25 +2315,28 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *
      * <p>This optional terminal operation is intended for lifecycle shutdown of the application or
      * component that owns this shared client, not per-operation cleanup. It releases connections,
-     * thread pools, and other resources while allowing pending operations to complete within the
-     * supplied bound. Repeated calls with a valid timeout are no-ops after the first shutdown; the
-     * timeout argument is still validated on every call, so a negative value always throws.
+     * thread pools, and other resources after the optional graceful response wait. Repeated calls
+     * with a valid timeout are no-ops after the first shutdown; the timeout argument is still
+     * validated on every call, so a negative value always throws.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
-     * // Optional application shutdown with graceful timeout
+     * // Optional application shutdown with a graceful response timeout
      * public void shutdown() {
      *     logger.info("Shutting down cache client");     // emitted before the graceful shutdown
-     *     cache.disconnect(10000);                       // waits up to 10000ms for pending ops to finish
+     *     cache.disconnect(10000);                       // response wait: up to 10s; queueing and teardown add time
      *     logger.info("Cache client shutdown complete"); // emitted after disconnect returns
      * }
      *
+     * cache.disconnect(0);  // skips the graceful wait; synchronization and teardown can still take time
      * cache.disconnect(-1); // throws IllegalArgumentException (timeout must not be negative)
      * }</pre>
      *
-     * @param timeout the maximum time, in milliseconds, to wait for shutdown; must not be negative.
-     *                A value of {@code 0} returns immediately without waiting for pending operations
-     *                (unlike the constructor's operation {@code timeout}, which must be strictly positive).
+     * @param timeout the maximum response-wait time, in milliseconds, after the graceful no-op commands
+     *                have been enqueued; must not be negative. A value of {@code 0} skips graceful
+     *                enqueueing and waiting for pending operations. Synchronization, queue admission,
+     *                and resource teardown are outside this bound (unlike the constructor's operation
+     *                {@code timeout}, this parameter permits zero).
      * @throws IllegalArgumentException if {@code timeout} is negative
      * @throws RuntimeException if the calling thread is interrupted during the graceful wait, or if the
      *         no-op operations used for that wait cannot be enqueued ({@link IllegalStateException});

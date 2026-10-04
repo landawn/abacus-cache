@@ -14,9 +14,15 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.foreign.Arena;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
@@ -37,6 +43,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.pool.ActivityPrint;
@@ -1013,21 +1020,156 @@ public class AbstractOffHeapCacheTest {
         assertSame(raw, result, "primitive byte[] must be returned as-is without copying");
     }
 
-    /** {@code DESERIALIZER} wraps the supplied bytes in a {@link ByteBuffer} for a ByteBuffer type. */
+    /** Every buffer type reconstructs as a writable heap buffer, including direct implementation classes. */
     @Test
     public void testDeserializer_ByteBuffer() {
         final byte[] raw = "byte-buffer-payload".getBytes();
-        final Type<?> type = N.typeOf(ByteBuffer.class);
-
-        final Object result = AbstractOffHeapCache.DESERIALIZER.apply(raw, type);
-
-        assertTrue(result instanceof ByteBuffer, "ByteBuffer type must deserialize to a ByteBuffer");
-        assertArrayEquals(raw, ByteBufferType.byteArrayOf((ByteBuffer) result));
+        for (final Class<?> bufferType : new Class<?>[] { ByteBuffer.class, MappedByteBuffer.class, ByteBuffer.allocateDirect(1).getClass(),
+                ByteBuffer.allocateDirect(1).asReadOnlyBuffer().getClass() }) {
+            final Object result = AbstractOffHeapCache.DESERIALIZER.apply(raw, N.typeOf(bufferType));
+            assertTrue(result instanceof ByteBuffer, "ByteBuffer type must deserialize to a ByteBuffer");
+            assertHeapBufferContent(raw, (ByteBuffer) result);
+        }
     }
 
     // --- ByteBuffer value round-trips through each storage form ---------------------------------
     // Exercise the ByteBuffer serialization branch in put() and the ByteBuffer read branch for
     // each entry form (single-slot, multi-slot, and disk-backed).
+
+    @Test
+    public void testMappedByteBufferMemoryReadsReturnHeapBuffers(@TempDir final Path directory) throws Exception {
+        assertMappedByteBufferRoundTrip(directory, false);
+    }
+
+    @Test
+    public void testMappedByteBufferDiskReadsAndPromotionReturnHeapBuffers(@TempDir final Path directory) throws Exception {
+        assertMappedByteBufferRoundTrip(directory, true);
+    }
+
+    private static void assertMappedByteBufferRoundTrip(final Path directory, final boolean diskOnly) throws Exception {
+        for (final boolean useForeignMemory : new boolean[] { false, true }) {
+            for (final int size : new int[] { 3, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE + 1 }) {
+                final byte[] expected = new byte[size];
+                for (int i = 0; i < size; i++) {
+                    expected[i] = (byte) (i * 31 + 7);
+                }
+                final Path file = directory.resolve("mapped-" + useForeignMemory + "-" + size);
+                Files.write(file, expected);
+                final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+                final AbstractOffHeapCache<String, ByteBuffer> cache = useForeignMemory
+                        ? ForeignMemoryOffHeapCache.<String, ByteBuffer> builder().capacityInMB(2)
+                                .offHeapStore(newInMemoryStore(backing)).storeSelector((key, value, bytes) -> diskOnly ? 2 : 1)
+                                .testerForLoadingItemFromDiskToMemory((activity, bytes, elapsed) -> true).build()
+                        : OffHeapCache.<String, ByteBuffer> builder().capacityInMB(2)
+                                .offHeapStore(newInMemoryStore(backing)).storeSelector((key, value, bytes) -> diskOnly ? 2 : 1)
+                                .testerForLoadingItemFromDiskToMemory((activity, bytes, elapsed) -> true).build();
+                try {
+                    // A real, read-only file mapping exercises the public subtype without depending
+                    // on its hidden implementation class. Closing the arena also proves put copied it.
+                    try (Arena arena = Arena.ofConfined(); FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+                        final MappedByteBuffer input = (MappedByteBuffer) channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena).asByteBuffer();
+                        input.position(1).mark().position(size);
+                        assertTrue(cache.put("mapped", input));
+                        assertEquals(size, input.position());
+                        input.reset();
+                        assertEquals(1, input.position());
+                    }
+
+                    assertEquals(diskOnly ? 1L : 0L, cache.stats().sizeOnDisk());
+                    // Buffer values preserve content, not the mapped subtype or original mapping.
+                    final ByteBuffer first = cache.getOrNull("mapped");
+                    assertHeapBufferContent(expected, first);
+                    assertEquals(0L, cache.stats().sizeOnDisk(), "a disk read must promote the copied bytes");
+                    first.array()[0] = 99;
+                    assertHeapBufferContent(expected, cache.getOrNull("mapped"));
+                } finally {
+                    cache.close();
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testDirectByteBufferMemoryReadsReturnHeapBuffers() {
+        assertDirectByteBufferRoundTrip(false, false);
+    }
+
+    @Test
+    public void testDirectByteBufferDiskReadsAndPromotionReturnHeapBuffers() {
+        assertDirectByteBufferRoundTrip(true, false);
+        assertDirectByteBufferRoundTrip(true, true);
+    }
+
+    private static void assertDirectByteBufferRoundTrip(final boolean diskOnly, final boolean promote) {
+        for (final boolean useForeignMemory : new boolean[] { false, true }) {
+            for (final boolean readOnly : new boolean[] { false, true }) {
+                for (final int size : new int[] { 3, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE + 1 }) {
+                    final byte[] expected = new byte[size];
+                    for (int i = 0; i < size; i++) {
+                        expected[i] = (byte) (i * 31 + 7);
+                    }
+                    final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+                    final AbstractOffHeapCache<String, ByteBuffer> cache = useForeignMemory
+                            ? ForeignMemoryOffHeapCache.<String, ByteBuffer> builder().capacityInMB(2)
+                                    .offHeapStore(newInMemoryStore(backing)).storeSelector((key, value, bytes) -> diskOnly ? 2 : 1)
+                                    .testerForLoadingItemFromDiskToMemory((activity, bytes, elapsed) -> promote).build()
+                            : OffHeapCache.<String, ByteBuffer> builder().capacityInMB(2)
+                                    .offHeapStore(newInMemoryStore(backing)).storeSelector((key, value, bytes) -> diskOnly ? 2 : 1)
+                                    .testerForLoadingItemFromDiskToMemory((activity, bytes, elapsed) -> promote).build();
+                    try {
+                        // Ordinary direct buffers share the mapped-buffer superclass on this JDK.
+                        // They must still read back on the heap without a native allocation per get.
+                        final ByteBuffer writable = ByteBuffer.allocateDirect(size).put(expected);
+                        final ByteBuffer input = readOnly ? writable.asReadOnlyBuffer() : writable;
+                        input.position(1).mark().position(size);
+                        assertTrue(cache.put("direct", input));
+                        assertEquals(size, input.position());
+                        assertEquals(size, input.limit());
+                        input.reset();
+                        assertEquals(1, input.position());
+                        writable.put(0, (byte) 99);
+
+                        assertEquals(diskOnly ? 1L : 0L, cache.stats().sizeOnDisk());
+                        final ByteBuffer first = cache.getOrNull("direct");
+                        assertHeapBufferContent(expected, first);
+                        assertEquals(diskOnly && !promote ? 1L : 0L, cache.stats().sizeOnDisk());
+                        first.array()[0] = 99;
+                        assertHeapBufferContent(expected, cache.getOrNull("direct"));
+                    } finally {
+                        cache.close();
+                    }
+                }
+            }
+        }
+    }
+
+    private static void assertHeapBufferContent(final byte[] expected, final ByteBuffer result) {
+        assertNotNull(result);
+        assertFalse(result.isDirect(), "buffer reads must not allocate direct memory");
+        assertFalse(result.isReadOnly());
+        assertTrue(result.hasArray());
+        assertEquals(expected.length, result.position());
+        assertEquals(expected.length, result.limit());
+        assertArrayEquals(expected, result.array());
+        assertArrayEquals(expected, ByteBufferType.byteArrayOf(result));
+    }
+
+    @Test
+    public void testHeapByteBufferStillReconstructsOnHeapForBothBackends() {
+        for (final boolean useForeignMemory : new boolean[] { false, true }) {
+            final AbstractOffHeapCache<String, ByteBuffer> cache = useForeignMemory
+                    ? ForeignMemoryOffHeapCache.<String, ByteBuffer> builder().capacityInMB(1).build()
+                    : OffHeapCache.<String, ByteBuffer> builder().capacityInMB(1).build();
+            try {
+                final byte[] expected = { 4, 5, 6 };
+                assertTrue(cache.put("heap", bufferOf(expected)));
+                final ByteBuffer result = cache.getOrNull("heap");
+                assertHeapBufferContent(expected, result);
+            } finally {
+                cache.close();
+            }
+        }
+    }
 
     /** Small ByteBuffer value: stored in a single slot and read back from memory. */
     @Test

@@ -114,7 +114,11 @@ import com.landawn.abacus.util.function.TriPredicate;
  *
  * <p><b>Value handling.</b> {@code byte[]} values are stored raw (exactly {@code array.length}
  * bytes); {@link ByteBuffer} values store the bytes from index 0 up to the current position
- * (position, limit, and mark are left untouched); all other types go through the configured
+ * (position, limit, and mark are left untouched). All buffer inputs, including direct, read-only,
+ * and file-mapped buffers, read back as independent writable, array-backed heap buffers. Directness,
+ * read-only status, and the original file mapping are not preserved. Use {@code ByteBuffer} as the
+ * cache's buffer value type; {@code V = MappedByteBuffer} is unsupported because the
+ * {@link java.nio.MappedByteBuffer} subtype is not preserved. All other types go through the configured
  * serializer/deserializer, defaulting to Kryo when available, otherwise JSON. For disk reads that
  * may be promoted to memory, the deserializer receives a private copy so even an in-place decoder
  * cannot alter the bytes installed in the memory tier.
@@ -142,8 +146,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Default deserializer used when no custom deserializer is configured.
-     * Returns the raw bytes for {@code byte[]} types, wraps them in a {@link ByteBuffer}
-     * for {@code ByteBuffer} types, and otherwise delegates to {@link #PARSER}.
+     * Returns the raw bytes for {@code byte[]} types, reconstructs a writable, array-backed heap
+     * {@link ByteBuffer} for buffer types, and otherwise delegates to {@link #PARSER}.
      */
     static final BiFunction<byte[], Type<?>, Object> DESERIALIZER = (bytes, type) -> {
         if (type.isPrimitiveByteArray()) {
@@ -1740,6 +1744,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         if (type.isPrimitiveByteArray()) {
             value = (V) bytes;
         } else if (type.isByteBuffer()) {
+            // Even ordinary allocateDirect() buffers extend MappedByteBuffer on this JDK.
+            // Preserve heap reconstruction for all buffer inputs instead of allocating native
+            // memory on every read based on that shared implementation superclass.
             value = (V) ByteBufferType.valueOf(bytes);
         } else {
             value = deserializer.apply(bytes, type);

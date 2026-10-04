@@ -24,13 +24,16 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.net.InetSocketAddress;
 import java.nio.channels.UnresolvedAddressException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -44,6 +47,8 @@ import org.mockito.InOrder;
 import net.spy.memcached.CachedData;
 import net.spy.memcached.DefaultConnectionFactory;
 import net.spy.memcached.MemcachedClient;
+import net.spy.memcached.MemcachedConnection;
+import net.spy.memcached.NodeLocator;
 import net.spy.memcached.internal.GetFuture;
 import net.spy.memcached.internal.OperationFuture;
 import net.spy.memcached.ops.OperationErrorType;
@@ -54,6 +59,61 @@ import net.spy.memcached.transcoders.Transcoder;
 /** Service-free regression coverage for future handling and pre-dispatch validation. */
 @Tag("2025")
 public class SpyMemcachedFutureUnitTest {
+
+    /** The delegate starts its timed response wait only after synchronous queue admission finishes. */
+    @Test
+    public void gracefulDisconnectTimeoutDoesNotBoundQueueAdmission() throws Exception {
+        final MemcachedConnection connection = mock(MemcachedConnection.class);
+        final NodeLocator locator = mock(NodeLocator.class);
+        when(connection.getLocator()).thenReturn(locator);
+        when(locator.getAll()).thenReturn(List.of());
+
+        final CountDownLatch broadcastStarted = new CountDownLatch(1);
+        final CountDownLatch releaseBroadcast = new CountDownLatch(1);
+        when(connection.broadcastOperation(any(), any())).thenAnswer(invocation -> {
+            broadcastStarted.countDown();
+            if (!releaseBroadcast.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Test did not release the queue-admission gate");
+            }
+            return new CountDownLatch(0);
+        });
+
+        final DefaultConnectionFactory factory = new DefaultConnectionFactory() {
+            @Override
+            public MemcachedConnection createConnection(final List<InetSocketAddress> addresses) {
+                return connection; // No selector, socket, or network thread is created.
+            }
+        };
+        final MemcachedClient delegate = new MemcachedClient(factory, List.of(new InetSocketAddress("127.0.0.1", 11211)));
+        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+        final FutureTask<Void> shutdown = new FutureTask<>(() -> {
+            cache.disconnect(1);
+            return null;
+        });
+        final Thread worker = Thread.ofPlatform().daemon(true).unstarted(shutdown);
+
+        try {
+            worker.start();
+            assertTrue(broadcastStarted.await(5, TimeUnit.SECONDS));
+            assertThrows(TimeoutException.class, () -> shutdown.get(50, TimeUnit.MILLISECONDS),
+                    "The 1 ms response timeout cannot expire while queue admission is still blocked");
+            verify(connection, never()).shutdown();
+
+            releaseBroadcast.countDown();
+            shutdown.get(5, TimeUnit.SECONDS);
+            verify(connection).shutdown();
+        } finally {
+            releaseBroadcast.countDown();
+            worker.join(5_000);
+            if (worker.isAlive()) {
+                worker.interrupt();
+                worker.join(5_000);
+            }
+            delegate.shutdown();
+        }
+
+        assertFalse(worker.isAlive(), "The shutdown probe must leave no worker running");
+    }
 
     @Test
     @SuppressWarnings("unchecked")
