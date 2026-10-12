@@ -14,10 +14,17 @@
 
 package com.landawn.abacus.cache;
 
+import java.io.IOException;
+import java.io.OutputStream;
+
 import com.esotericsoftware.kryo.KryoException;
+import com.landawn.abacus.exception.UncheckedIOException;
 import com.landawn.abacus.parser.KryoParser;
+import com.landawn.abacus.parser.KryoSerConfig;
 import com.landawn.abacus.parser.ParserFactory;
+import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.N;
+import com.landawn.abacus.util.Objectory;
 
 import net.spy.memcached.CachedData;
 import net.spy.memcached.transcoders.Transcoder;
@@ -102,6 +109,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
         // ExceptionInInitializerError and permanently poison this class-init path.
         return DefaultParserHolder.DEFAULT_KRYO_PARSER;
     }
+
+    /** Makes the streaming {@link KryoParser#serialize} write the same bytes as {@link KryoParser#encode}. */
+    private static final KryoSerConfig ENCODING_CONFIG = new KryoSerConfig().setWriteClass(true);
 
     private final KryoParser kryoParser;
 
@@ -281,8 +291,14 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p><b>Implementation Note:</b> The encoding step converts the object graph into a compact
      * binary representation using Kryo's optimized serialization protocol. The resulting byte
-     * array is wrapped in a {@link CachedData} with flag value {@code 0}; the configured maximum
-     * size is only checked here and is not recorded in the returned {@code CachedData}.
+     * array is wrapped in a {@link CachedData} with flag value {@code 0}. The maximum size is
+     * enforced while writing the payload, so an oversized value need not be fully serialized or
+     * copied before rejection; the exception message therefore reports the size reached when
+     * serialization stopped, a lower bound of the full encoded size. If a serializer catches the
+     * rejection and then fails in another way, that failure is attached to the
+     * {@code IllegalArgumentException} as a suppressed exception. Kryo's intermediate output buffer
+     * and allocations made by custom serializers are separate from this encoded-payload limit. The
+     * limit is not recorded in the returned {@code CachedData}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -306,7 +322,8 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * @param o the object to encode and serialize (may be {@code null})
      * @return a {@link CachedData} containing the serialized bytes and metadata; never {@code null}
      * @throws RuntimeException if a Kryo serializer cannot encode {@code o}; normally a
-     *         {@link KryoException}, including for cycles through object fields
+     *         {@link KryoException}, including for cycles through object fields and for a serializer that
+     *         fails with an I/O cause (for example, Kryo's {@code JavaSerializer} meeting a non-serializable field)
      * @throws StackOverflowError if the object graph contains a cycle made only of collections, maps,
      *         or arrays (their serializers do not wrap the overflow)
      * @throws IllegalArgumentException if the serialized size exceeds the configured {@code maxSize},
@@ -316,14 +333,90 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      */
     @Override
     public CachedData encode(final T o) throws RuntimeException, StackOverflowError, IllegalArgumentException {
-        // KryoParser.encode never returns null (it always returns the ByteArrayOutputStream's bytes,
-        // writing a Kryo null-marker even for a null input), so a null check here would be dead code -
-        // and CachedData rejects null data anyway, which would contradict this method's "never null" contract.
-        final byte[] encoded = kryoParser.encode(o);
-        if (encoded.length > maxSize) {
-            throw new IllegalArgumentException("Encoded data size (" + encoded.length + " bytes) exceeds maxSize (" + maxSize + " bytes)");
+        final ByteArrayOutputStream bytes = Objectory.createByteArrayOutputStream();
+        final SizeLimitedOutputStream output = new SizeLimitedOutputStream(bytes, maxSize);
+
+        try {
+            // writeClass=true preserves KryoParser.encode's wire format, while the streaming path
+            // stops oversized values before they can grow an unrestricted buffer and a full copy.
+            kryoParser.serialize(o, ENCODING_CONFIG, output);
+            output.throwIfRejected(); // A custom serializer may have swallowed a rejected write.
+            return new CachedData(0, bytes.toByteArray(), maxSize);
+        } catch (final RuntimeException e) {
+            final IllegalArgumentException sizeFailure = output.sizeFailure;
+
+            // Field serializers can wrap the stream's rejection in a KryoException. Retain the
+            // transcoder's IllegalArgumentException contract without changing unrelated failures,
+            // and keep a different failure (raised after a serializer swallowed the rejection).
+            if (sizeFailure != null) {
+                if (!isCausedBy(e, sizeFailure)) {
+                    sizeFailure.addSuppressed(e);
+                }
+                throw sizeFailure;
+            }
+
+            // The streaming overload reports a KryoException that has an IOException cause as an
+            // UncheckedIOException. This stream never throws IOException, so the cause came from a
+            // serializer (e.g. Java serialization of a non-Serializable field), which encode has
+            // always reported as a KryoException.
+            if (e instanceof UncheckedIOException && e.getCause() instanceof IOException) {
+                throw KryoFailures.ofEncode(o, (IOException) e.getCause());
+            }
+
+            throw e;
+        } finally {
+            Objectory.recycle(bytes);
         }
-        return new CachedData(0, encoded, maxSize);
+    }
+
+    private static boolean isCausedBy(final Throwable e, final Throwable cause) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t == cause) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Limits writes before the pooled buffer grows; the usual small-entry buffer remains reusable. */
+    private static final class SizeLimitedOutputStream extends OutputStream {
+        private final ByteArrayOutputStream bytes;
+        private final int maxSize;
+        private IllegalArgumentException sizeFailure;
+
+        SizeLimitedOutputStream(final ByteArrayOutputStream bytes, final int maxSize) {
+            this.bytes = bytes;
+            this.maxSize = maxSize;
+        }
+
+        @Override
+        public void write(final int value) {
+            checkSize(1);
+            bytes.write(value);
+        }
+
+        @Override
+        public void write(final byte[] data, final int offset, final int length) {
+            checkSize(length);
+            bytes.write(data, offset, length);
+        }
+
+        private void checkSize(final int length) {
+            if (sizeFailure == null && length > maxSize - bytes.size()) {
+                // Serialization stops here, so the full size is unknown; report what it reached.
+                sizeFailure = new IllegalArgumentException(
+                        "Encoded data size (at least " + ((long) bytes.size() + length) + " bytes) exceeds maxSize (" + maxSize + " bytes)");
+            }
+
+            throwIfRejected();
+        }
+
+        void throwIfRejected() {
+            if (sizeFailure != null) {
+                throw sizeFailure;
+            }
+        }
     }
 
     /**
@@ -393,22 +486,28 @@ public class KryoTranscoder<T> implements Transcoder<T> {
             // payload whose leading bytes resolve to an abstract registered class (e.g. the ASCII
             // digits '6'/'9' of a memcached counter -> InputStream/OutputStream) surfaces as a
             // LinkageError rather than the documented KryoException.
-            throw KryoDecodeFailure.of(e);
+            throw KryoFailures.ofDecode(e);
         }
     }
 
     /**
-     * Builds the {@link KryoException} for a decode failure. Kept in a nested class so the only
-     * bytecode reference to the Kryo exception type is resolved lazily, at the moment of such a
-     * failure: a {@code throw new KryoException(...)} in {@link #decode(CachedData)} itself would make
-     * the verifier load the Kryo class when linking this class, replacing the actionable
-     * {@link IllegalStateException} raised when Kryo is absent with a bare {@code NoClassDefFoundError}.
+     * Builds the {@link KryoException}s for encode and decode failures. Kept in a nested class so
+     * the only bytecode reference to the Kryo exception type is resolved lazily, at the moment of
+     * such a failure: a {@code throw new KryoException(...)} in {@link #encode(Object)} or
+     * {@link #decode(CachedData)} itself would make the verifier load the Kryo class when linking
+     * this class, replacing the actionable {@link IllegalStateException} raised when Kryo is absent
+     * with a bare {@code NoClassDefFoundError}.
      */
-    private static final class KryoDecodeFailure {
-        private KryoDecodeFailure() {
+    private static final class KryoFailures {
+        private KryoFailures() {
         }
 
-        static RuntimeException of(final InstantiationError e) {
+        static RuntimeException ofEncode(final Object value, final IOException cause) {
+            return new KryoException("A Kryo serializer failed with an I/O error while encoding a value of type "
+                    + (value == null ? "null" : value.getClass().getName()) + ": " + cause, cause);
+        }
+
+        static RuntimeException ofDecode(final InstantiationError e) {
             return new KryoException("Cannot decode the cached bytes as a Kryo payload (" + e.getMessage()
                     + "); the entry was not written by a compatible KryoTranscoder (e.g. an incr/decr counter)", e);
         }

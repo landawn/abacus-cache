@@ -148,10 +148,10 @@ public class AbstractOffHeapCacheTest {
     }
 
     /**
-     * Exercises allocation across multiple slot-size classes, which depends on every size-class queue
-     * in {@code _segmentQueues} being present. Those queues are now populated eagerly in the
-     * constructor (instead of via unsafe lazy double-checked locking), so writes spanning several size
-     * classes must all succeed and round-trip.
+     * Exercises allocation across multiple slot-size classes, each with its own vacancy queue in
+     * {@code segmentQueues}. Those queues are created on a class's first use, under the allocator
+     * lock (not via the unsafe lazy double-checked locking of an old version), so writes spanning
+     * several size classes must all succeed and round-trip.
      */
     @Test
     public void testAllocationAcrossMultipleSizeClasses() {

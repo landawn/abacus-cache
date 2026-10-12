@@ -498,7 +498,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public T get(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         // Route through resultOf (rather than the client's synchronous get) so an interrupt
         // restores the thread's interrupt flag: spymemcached's sync methods wrap
         // InterruptedException in a RuntimeException WITHOUT restoring the flag, silently
@@ -548,7 +548,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public ContinuableFuture<T> asyncGet(final String key) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         return ContinuableFuture.wrap((Future<T>) mc.asyncGet(key));
     }
 
@@ -989,7 +989,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public boolean put(final String key, final T value, final long liveTime)
             throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         checkValue(value);
         return Boolean.TRUE.equals(resultOf(mc.set(key, toMemcachedExpiration(liveTime), value)));
     }
@@ -1053,7 +1053,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public ContinuableFuture<Boolean> asyncPut(final String key, final T value, final long liveTime)
             throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         checkValue(value);
         return ContinuableFuture.wrap(mc.set(key, toMemcachedExpiration(liveTime), value));
     }
@@ -1141,7 +1141,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public boolean add(final String key, final T value, final long liveTime)
             throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         checkValue(value);
         return Boolean.TRUE.equals(resultOf(mc.add(key, toMemcachedExpiration(liveTime), value)));
     }
@@ -1209,7 +1209,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public ContinuableFuture<Boolean> asyncAdd(final String key, final T value, final long liveTime)
             throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         checkValue(value);
         return ContinuableFuture.wrap(mc.add(key, toMemcachedExpiration(liveTime), value));
     }
@@ -1274,7 +1274,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public boolean replace(final String key, final T value, final long liveTime)
             throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         checkValue(value);
         return Boolean.TRUE.equals(resultOf(mc.replace(key, toMemcachedExpiration(liveTime), value)));
     }
@@ -1341,7 +1341,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public ContinuableFuture<Boolean> asyncReplace(final String key, final T value, final long liveTime)
             throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         checkValue(value);
         return ContinuableFuture.wrap(mc.replace(key, toMemcachedExpiration(liveTime), value));
     }
@@ -1394,7 +1394,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public boolean remove(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         return Boolean.TRUE.equals(resultOf(mc.delete(key)));
     }
 
@@ -1440,7 +1440,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public ContinuableFuture<Boolean> asyncRemove(final String key) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         return ContinuableFuture.wrap(mc.delete(key));
     }
 
@@ -1516,7 +1516,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public long incr(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
         // It also surfaces errored/cancelled operations as RuntimeException instead of the
         // ambiguous -1 the sync client returns for ANY failure, so -1 reliably means "absent".
@@ -1583,7 +1583,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public long incr(final String key, final long delta) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncIncr(key, delta));
@@ -1643,7 +1643,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public long incr(final String key, final long delta, final long defaultValue) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         // Memcached counters are unsigned 64-bit decimals; a negative seed would be stored as
         // e.g. "-5", which native incr/decr cannot mutate - the same counter-poisoning (plus
@@ -1718,7 +1718,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public long incr(final String key, final long delta, final long defaultValue, final long liveTime)
             throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         N.checkArgNotNegative(defaultValue, cs.defaultValue); // see incr(String, long, long)
         return mutateWithAsciiSeed(true, key, delta, defaultValue, toMemcachedExpiration(liveTime));
@@ -1775,7 +1775,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public long decr(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncDecr(key, 1));
     }
@@ -1840,7 +1840,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public long decr(final String key, final long delta) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
         return resultOf(mc.asyncDecr(key, delta));
@@ -1903,7 +1903,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      */
     public long decr(final String key, final long delta, final long defaultValue) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         N.checkArgNotNegative(defaultValue, cs.defaultValue); // see incr(String, long, long)
         // See incr(String, long, long): Memcached's "no expiration" sentinel is 0, not -1. A -1 seed
@@ -1976,7 +1976,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public long decr(final String key, final long delta, final long defaultValue, final long liveTime)
             throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
-        checkMemcachedKey(key);
+        checkKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         N.checkArgNotNegative(defaultValue, cs.defaultValue); // see incr(String, long, long)
         return mutateWithAsciiSeed(false, key, delta, defaultValue, toMemcachedExpiration(liveTime));
@@ -2367,14 +2367,23 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     }
 
     /**
-     * Validates a key before value encoding or backend dispatch. This client uses the ASCII protocol
-     * supplied by its {@link DefaultConnectionFactory}.
+     * Validates a key exactly as this client does before value encoding or backend dispatch, for
+     * the ASCII protocol supplied by its {@link DefaultConnectionFactory}. Code that sends keys
+     * through a {@code SpyMemcached}, such as {@link com.landawn.abacus.util.MemcachedLock}, can
+     * call it to reject a key up front with the same rules and messages.
+     *
+     * <p><b>Usage Examples:</b>
+     * <pre>{@code
+     * SpyMemcached.checkKey("user:42");                       // passes
+     * SpyMemcached.checkKey("user 42");                       // throws IllegalArgumentException (contains a space)
+     * SpyMemcached.checkKey(String.valueOf((char) 0xD800));   // throws IllegalArgumentException (unpaired surrogate)
+     * }</pre>
      *
      * @param key the key to validate
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16
      *         surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space, CR, LF, or NUL byte
      */
-    private static void checkMemcachedKey(final String key) throws IllegalArgumentException {
+    public static void checkKey(final String key) throws IllegalArgumentException {
         checkUtf8Key(key);
         StringUtils.validateKey(key, false);
     }

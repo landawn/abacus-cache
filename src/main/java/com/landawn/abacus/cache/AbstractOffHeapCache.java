@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
@@ -242,7 +243,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /** Marks which segments are currently dedicated to a slot-size class. */
     private final BitSet dedicatedSegments = new BitSet();
     private final Segment[] segments;
-    /** Per size class, the segments currently dedicated to it (segments with vacancies near the front). */
+    /**
+     * Per size class, only the dedicated segments with free slots; full segments stay indexed by
+     * dedicatedSegments. A class's queue is created on its first use and is {@code null} until then.
+     */
     private final Deque<Segment>[] segmentQueues;
     /** Lower bound for the next free-segment scan. */
     private int nextFreeSegmentHint = 0;
@@ -379,11 +383,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             segments[i] = new Segment(i);
         }
 
+        // Queues are created on first use (see vacancyQueueOf): most of the possible size classes
+        // (up to 16384 per cache) are never used.
         segmentQueues = new Deque[this.maxBlockSize / MIN_BLOCK_SIZE];
-
-        for (int i = 0, len = segmentQueues.length; i < len; i++) {
-            segmentQueues[i] = new ArrayDeque<>();
-        }
 
         baseAddress = allocate(capacityInBytes);
 
@@ -1450,31 +1452,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /** Allocates one slot of the given class. Caller holds the allocator lock. */
     private long allocateSlotLocked(final int slotSize) {
         final Deque<Segment> queue = segmentQueues[slotSize / MIN_BLOCK_SIZE - 1];
-        final int slotsPerSegment = SEGMENT_SIZE / slotSize;
+        final Segment available = queue == null ? null : queue.peekFirst();
 
-        int scanned = 0;
+        if (available != null) {
+            final int slotIndex = available.slotBits.nextClearBit(0);
+            available.slotBits.set(slotIndex);
 
-        for (final Iterator<Segment> it = queue.iterator(); it.hasNext();) {
-            final Segment segment = it.next();
-            scanned++;
-
-            if (segment.used < slotsPerSegment) {
-                final int slotIndex = segment.slotBits.nextClearBit(0);
-                segment.slotBits.set(slotIndex);
-
-                if (segment.used++ == 0) {
-                    emptyDedicatedSegmentCount--;
-                }
-
-                // Keep segments with vacancies near the front so later allocations find them fast;
-                // full segments naturally drift toward the back.
-                if (scanned > 1) {
-                    it.remove();
-                    queue.addFirst(segment);
-                }
-
-                return packSlot(segment.index, slotIndex);
+            if (available.used++ == 0) {
+                emptyDedicatedSegmentCount--;
             }
+
+            // Removing full segments keeps selection constant-time even when a class spans
+            // many thousands of full segments. The first release puts the segment back.
+            if (available.used == available.slotCount) {
+                queue.removeFirst();
+            }
+
+            return packSlot(available.index, slotIndex);
         }
 
         // Every dedicated segment of this class is full; dedicate a fresh segment if one is free.
@@ -1497,11 +1491,28 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
         final Segment segment = segments[segmentIndex];
         segment.slotSize = slotSize;
+        segment.slotCount = SEGMENT_SIZE / slotSize;
         segment.slotBits.set(0);
         segment.used = 1;
-        queue.addFirst(segment);
+
+        if (segment.slotCount > 1) {
+            vacancyQueueOf(slotSize).addFirst(segment);
+        }
 
         return packSlot(segmentIndex, 0);
+    }
+
+    /** Returns the vacancy queue of a slot-size class, creating it on first use. Caller holds the allocator lock. */
+    private Deque<Segment> vacancyQueueOf(final int slotSize) {
+        final int classIndex = slotSize / MIN_BLOCK_SIZE - 1;
+        Deque<Segment> queue = segmentQueues[classIndex];
+
+        if (queue == null) {
+            queue = new ArrayDeque<>();
+            segmentQueues[classIndex] = queue;
+        }
+
+        return queue;
     }
 
     /** Releases every slot held by a memory entry. Safe to call at most once per entry. */
@@ -1541,7 +1552,26 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     private void releaseSlotLocked(final long slot) {
         final Segment segment = segments[segmentIndexOf(slot)];
-        segment.slotBits.clear(slotIndexOf(slot));
+        final int slotIndex = slotIndexOf(slot);
+
+        // A stale or duplicate handle (its slot is already free, possibly in a since-reclaimed
+        // segment) must not decrement the count: a segment whose count reached zero while slots
+        // were still live would be reclaimed and re-dedicated underneath them. Ignoring it also
+        // lets the caller go on to release the rest of an entry's slots. It is an internal bug,
+        // so the assertion makes it fail loudly wherever assertions are enabled (the test suite).
+        if (!segment.slotBits.get(slotIndex)) {
+            assert false : "release of an unallocated off-heap slot (segment " + segment.index + ", slot " + slotIndex + ")";
+            logger.warn("Ignoring release of an off-heap slot that is not allocated (segment " + segment.index + ", slot " + slotIndex + ")");
+            return;
+        }
+
+        segment.slotBits.clear(slotIndex);
+
+        // A full segment is absent from its vacancy queue; add it exactly once when its first
+        // slot is freed. This also covers single-slot segments and partial-allocation rollback.
+        if (segment.used == segment.slotCount) {
+            vacancyQueueOf(segment.slotSize).addFirst(segment);
+        }
 
         if (--segment.used == 0) {
             emptyDedicatedSegmentCount++;
@@ -1565,7 +1595,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             return;
         }
 
+        // Every empty segment has free slots and is therefore in its class's vacancy queue.
         for (final Deque<Segment> queue : segmentQueues) {
+            if (queue == null || queue.isEmpty()) {
+                continue;
+            }
+
             for (final Iterator<Segment> it = queue.iterator(); it.hasNext();) {
                 final Segment segment = it.next();
 
@@ -1573,6 +1608,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     it.remove();
                     dedicatedSegments.clear(segment.index);
                     segment.slotSize = 0;
+                    segment.slotCount = 0;
                     emptyDedicatedSegmentCount--;
 
                     if (segment.index < nextFreeSegmentHint) {
@@ -1580,27 +1616,24 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     }
                 }
             }
+
+            if (emptyDedicatedSegmentCount == 0) {
+                return;
+            }
         }
     }
 
     /** Builds the per-class, per-segment occupied-slot detail for {@link #stats()}. */
     @SuppressWarnings("unused")
     private Map<Integer, Map<Integer, Integer>> snapshotOccupiedSlots() {
-        final Map<Integer, Map<Integer, Integer>> result = new LinkedHashMap<>();
+        final Map<Integer, Map<Integer, Integer>> result = new TreeMap<>();
 
         synchronized (allocatorLock) {
-            for (final Deque<Segment> queue : segmentQueues) {
-                if (queue.isEmpty()) {
-                    continue;
-                }
-
-                // Order segments by index within the class for a stable, readable snapshot.
-                final List<Segment> ordered = new ArrayList<>(queue);
-                ordered.sort((a, b) -> Integer.compare(a.index, b.index));
-
-                for (final Segment segment : ordered) {
-                    result.computeIfAbsent(segment.slotSize, k -> new LinkedHashMap<>()).put(segment.index, segment.used);
-                }
+            // Vacancy queues omit full segments. Traverse the dedication index instead so every
+            // segment is reported, already ordered by index without per-class sorting buffers.
+            for (int index = dedicatedSegments.nextSetBit(0); index >= 0; index = dedicatedSegments.nextSetBit(index + 1)) {
+                final Segment segment = segments[index];
+                result.computeIfAbsent(segment.slotSize, k -> new LinkedHashMap<>()).put(segment.index, segment.used);
             }
         }
 
@@ -1831,6 +1864,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         final int index;
         /** Current slot size; meaningful only while the segment is dedicated. */
         int slotSize;
+        /** Slots per segment at the current slot size ({@code SEGMENT_SIZE / slotSize}); 0 while not dedicated. */
+        int slotCount;
         final BitSet slotBits = new BitSet();
         int used;
 

@@ -16,16 +16,12 @@
 
 package com.landawn.abacus.util;
 
-import java.nio.charset.StandardCharsets;
-
 import com.landawn.abacus.annotation.SuppressFBWarnings;
 import com.landawn.abacus.cache.SpyMemcached;
 import com.landawn.abacus.cache.cs;
 import com.landawn.abacus.exception.UncheckedIOException;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
-
-import net.spy.memcached.util.StringUtils;
 
 /**
  * A distributed lock implementation using Memcached as the coordination service.
@@ -830,19 +826,16 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @param target the non-null lock target whose key is derived via {@link #toKey(Object)}
      * @return the validated key returned by {@code toKey}
      * @throws IllegalArgumentException if {@code target} is {@code null} (default {@code toKey}), or if the key
-     *         returned by {@code toKey} is {@code null}, contains an unpaired UTF-16 surrogate, or is rejected
-     *         by {@link StringUtils#validateKey(String, boolean)} (longer than 250 bytes, empty, or containing a
-     *         space, CR, LF, or NUL byte)
+     *         returned by {@code toKey} is {@code null} or is rejected by {@link SpyMemcached#checkKey(String)}
+     *         (contains an unpaired UTF-16 surrogate, is empty, exceeds 250 UTF-8 bytes, or contains a space,
+     *         CR, LF, or NUL byte)
      * @throws RuntimeException if {@link #toKey(Object)} or conversion of {@code target} to a string fails
      */
     private String validatedKey(final K target) throws IllegalArgumentException, RuntimeException {
         // N.checkArg* treats a message longer than 9 characters that contains a space as the complete
         // error message (not an argument name), so the message must be a full sentence.
         final String key = N.checkArgNotNull(toKey(target), "The key returned by toKey must not be null");
-        if (!StandardCharsets.UTF_8.newEncoder().canEncode(key)) {
-            throw new IllegalArgumentException("The key returned by toKey contains an unpaired UTF-16 surrogate");
-        }
-        StringUtils.validateKey(key, false);
+        SpyMemcached.checkKey(key);
         return key;
     }
 

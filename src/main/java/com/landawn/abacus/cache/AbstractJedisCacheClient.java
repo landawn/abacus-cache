@@ -15,11 +15,10 @@
 package com.landawn.abacus.cache;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -276,14 +275,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     public Map<String, T> getBulk(final String... keys) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
 
-        // Work from a private snapshot. The caller owns the array and may reuse or mutate it as soon
-        // as this method starts; validating one view and later fetching from the caller's live array
-        // could otherwise issue commands for keys that were never validated.
         N.checkArgNotNull(keys, cs.keys);
-        final String[] keySnapshot = keys.clone();
-        checkBulkKeys(keySnapshot);
 
-        return fetchBulk(Arrays.asList(keySnapshot));
+        return fetchBulk(snapshotBulkKeys(Arrays.asList(keys)));
     }
 
     /**
@@ -320,21 +314,22 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     }
 
     /**
-     * Copies and validates a collection in one pass. Besides insulating the operation from later
+     * Copies and validates distinct keys in one pass. Besides insulating the operation from later
      * caller mutations, the single pass avoids the validate-then-iterate time-of-check/time-of-use
      * gap that would otherwise be observable for concurrent or custom collections.
      *
      * @param keys the keys to copy and validate; must not be {@code null} or contain {@code null} elements
-     * @return a private snapshot of the validated keys, in iteration order, never {@code null}
+     * @return a private snapshot of the distinct validated keys, in first-occurrence order, never {@code null}
      * @throws IllegalArgumentException if {@code keys} is {@code null}, contains a {@code null} element,
      *         or contains a key with an unpaired UTF-16 surrogate
      */
-    private List<String> snapshotBulkKeys(final Collection<String> keys) throws IllegalArgumentException {
+    private Set<String> snapshotBulkKeys(final Collection<String> keys) throws IllegalArgumentException {
         N.checkArgNotNull(keys, cs.keys);
 
-        // Do not trust keys.size() for preallocation: custom/concurrent collections may report a
-        // stale or adversarially large size. ArrayList will grow according to elements actually seen.
-        final List<String> keySnapshot = new ArrayList<>();
+        // Deduplicate while snapshotting so a large request for the same few keys does not retain
+        // every occurrence. Grow from observed keys, without trusting a custom collection's size().
+        // LinkedHashSet preserves the first-occurrence order used by the individual GET commands.
+        final Set<String> keySnapshot = new LinkedHashSet<>();
         int index = 0;
 
         for (final String key : keys) {
@@ -342,8 +337,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
                 throw new IllegalArgumentException("'keys' cannot contain a null element at index: " + index);
             }
 
-            checkUtf8Key(key);
-            keySnapshot.add(key);
+            if (keySnapshot.add(key)) {
+                checkUtf8Key(key);
+            }
             index++;
         }
 
@@ -353,23 +349,15 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     /**
      * Fetches each distinct key from an already validated snapshot.
      *
-     * @param keys the validated key snapshot
+     * @param keys the private, validated snapshot of distinct keys
      * @return the found non-null values, indexed by key
      * @throws RuntimeException if acquiring a Redis connection or executing GET fails, Redis rejects
      *         the command, or a returned payload cannot be decoded by the configured Kryo serializers
      */
-    private Map<String, T> fetchBulk(final Collection<String> keys) throws RuntimeException {
-        // A map cannot represent duplicate requested keys. Fetch each logical key once as well:
-        // besides avoiding redundant round trips, this prevents an internally inconsistent result
-        // when the first GET finds a duplicate key and a later GET observes it as expired/missing.
-        final Set<String> fetchedKeys = new HashSet<>();
+    private Map<String, T> fetchBulk(final Set<String> keys) throws RuntimeException {
         final Map<String, T> result = new HashMap<>();
 
         for (final String key : keys) {
-            if (!fetchedKeys.add(key)) {
-                continue;
-            }
-
             final byte[] keyBytes = getKeyBytes(key);
 
             final T value = decode(clientFor(keyBytes).get(keyBytes));
