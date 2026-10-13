@@ -627,7 +627,7 @@ public class CaffeineCacheTest extends TestBase {
         final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = Caffeine.newBuilder()
                 .maximumSize(1)
                 .executor(Runnable::run)
-                .<String, String>removalListener((key, value, cause) -> {
+                .<String, String> removalListener((key, value, cause) -> {
                     if (!cause.wasEvicted()) {
                         return;
                     }

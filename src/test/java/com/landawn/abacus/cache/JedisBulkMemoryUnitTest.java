@@ -133,7 +133,8 @@ public class JedisBulkMemoryUnitTest {
         private final UnifiedJedis backend = mock(UnifiedJedis.class, withSettings().stubOnly());
         private final Map<String, String> values = new HashMap<>();
         private final List<String> reads = new ArrayList<>();
-        private Runnable onRead = () -> { };
+        private Runnable onRead = () -> {
+        };
 
         private RecordingClient() {
             super("localhost:6379");

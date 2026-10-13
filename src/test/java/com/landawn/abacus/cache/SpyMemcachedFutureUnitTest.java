@@ -290,15 +290,13 @@ public class SpyMemcachedFutureUnitTest {
     public void unpairedSurrogatesAreRejectedByEveryKeyedOperationBeforeDispatch() throws Exception {
         final MemcachedClient delegate = mock(MemcachedClient.class);
         final SpyMemcached<Object> cache = clientWithDelegate(delegate);
-        final List<Consumer<String>> operations = List.of(cache::get, cache::asyncGet,
-                key -> cache.getBulk("valid", key), key -> cache.getBulk(List.of("valid", key)),
-                key -> cache.asyncGetBulk("valid", key), key -> cache.asyncGetBulk(List.of("valid", key)),
-                key -> cache.put(key, "value", 1_000), key -> cache.asyncPut(key, "value", 1_000),
-                key -> cache.asyncSet(key, "value", 1_000), key -> cache.add(key, "value", 1_000),
-                key -> cache.asyncAdd(key, "value", 1_000), key -> cache.replace(key, "value", 1_000),
-                key -> cache.asyncReplace(key, "value", 1_000), cache::remove, cache::asyncRemove, cache::asyncDelete,
-                cache::incr, key -> cache.incr(key, 1), key -> cache.incr(key, 1, 0), key -> cache.incr(key, 1, 0, 1_000),
-                cache::decr, key -> cache.decr(key, 1), key -> cache.decr(key, 1, 0), key -> cache.decr(key, 1, 0, 1_000));
+        final List<Consumer<String>> operations = List.of(cache::get, cache::asyncGet, key -> cache.getBulk("valid", key),
+                key -> cache.getBulk(List.of("valid", key)), key -> cache.asyncGetBulk("valid", key), key -> cache.asyncGetBulk(List.of("valid", key)),
+                key -> cache.put(key, "value", 1_000), key -> cache.asyncPut(key, "value", 1_000), key -> cache.asyncSet(key, "value", 1_000),
+                key -> cache.add(key, "value", 1_000), key -> cache.asyncAdd(key, "value", 1_000), key -> cache.replace(key, "value", 1_000),
+                key -> cache.asyncReplace(key, "value", 1_000), cache::remove, cache::asyncRemove, cache::asyncDelete, cache::incr, key -> cache.incr(key, 1),
+                key -> cache.incr(key, 1, 0), key -> cache.incr(key, 1, 0, 1_000), cache::decr, key -> cache.decr(key, 1), key -> cache.decr(key, 1, 0),
+                key -> cache.decr(key, 1, 0, 1_000));
 
         for (final String malformed : List.of("key" + (char) 0xD800, "key" + (char) 0xDC00, "key" + (char) 0xD800 + "x")) {
             for (final Consumer<String> operation : operations) {
@@ -315,8 +313,10 @@ public class SpyMemcachedFutureUnitTest {
 
         for (final String key : List.of("", "bad key", "key\r", "key\n", "key\0", "x".repeat(251), "\u00e9".repeat(126))) {
             final IllegalArgumentException keyFailure = assertThrows(IllegalArgumentException.class, () -> cache.get(key));
-            assertEquals(keyFailure.getMessage(), assertThrows(IllegalArgumentException.class, () -> cache.put(key, new Object(), Long.MAX_VALUE)).getMessage());
-            assertEquals(keyFailure.getMessage(), assertThrows(IllegalArgumentException.class, () -> cache.asyncAdd(key, new Object(), Long.MAX_VALUE)).getMessage());
+            assertEquals(keyFailure.getMessage(),
+                    assertThrows(IllegalArgumentException.class, () -> cache.put(key, new Object(), Long.MAX_VALUE)).getMessage());
+            assertEquals(keyFailure.getMessage(),
+                    assertThrows(IllegalArgumentException.class, () -> cache.asyncAdd(key, new Object(), Long.MAX_VALUE)).getMessage());
             assertEquals(keyFailure.getMessage(), assertThrows(IllegalArgumentException.class, () -> cache.incr(key, -1, -1, Long.MAX_VALUE)).getMessage());
             assertEquals(keyFailure.getMessage(), assertThrows(IllegalArgumentException.class, () -> cache.decr(key, -1, -1, Long.MAX_VALUE)).getMessage());
             assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
@@ -362,11 +362,9 @@ public class SpyMemcachedFutureUnitTest {
         assertTrue(assertThrows(IllegalArgumentException.class, () -> cache.put(null, null, Long.MAX_VALUE)).getMessage().contains("key"));
         verifyNoInteractions(delegate);
 
-        final List<Consumer<SpyMemcached<Object>>> writes = List.of(c -> c.put("key", null, Long.MAX_VALUE),
-                c -> c.set("key", null, Long.MAX_VALUE), c -> c.asyncPut("key", null, Long.MAX_VALUE),
-                c -> c.asyncSet("key", null, Long.MAX_VALUE), c -> c.add("key", null, Long.MAX_VALUE),
-                c -> c.asyncAdd("key", null, Long.MAX_VALUE), c -> c.replace("key", null, Long.MAX_VALUE),
-                c -> c.asyncReplace("key", null, Long.MAX_VALUE));
+        final List<Consumer<SpyMemcached<Object>>> writes = List.of(c -> c.put("key", null, Long.MAX_VALUE), c -> c.set("key", null, Long.MAX_VALUE),
+                c -> c.asyncPut("key", null, Long.MAX_VALUE), c -> c.asyncSet("key", null, Long.MAX_VALUE), c -> c.add("key", null, Long.MAX_VALUE),
+                c -> c.asyncAdd("key", null, Long.MAX_VALUE), c -> c.replace("key", null, Long.MAX_VALUE), c -> c.asyncReplace("key", null, Long.MAX_VALUE));
 
         for (final Consumer<SpyMemcached<Object>> write : writes) {
             assertTrue(assertThrows(IllegalArgumentException.class, () -> write.accept(cache)).getMessage().contains("value"));
@@ -482,8 +480,7 @@ public class SpyMemcachedFutureUnitTest {
         final DefaultConnectionFactory factory = spy(new DefaultConnectionFactory());
         final String serverUrl = "localhost:11211,spymemcached-unit-test-host.invalid:11211";
 
-        final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> SpyMemcached.createSpyMemcachedClient(serverUrl, factory));
+        final IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient(serverUrl, factory));
 
         assertFalse(error instanceof UnresolvedAddressException, "rejected by the wrapper, not by a failed socket connect");
         verify(factory, never()).createConnection(anyList());
@@ -606,9 +603,9 @@ public class SpyMemcachedFutureUnitTest {
         when(delegate.asyncDecr("counter", 1L)).thenReturn(failed);
         final SpyMemcached<Object> cache = clientWithDelegate(delegate);
 
-        final List<Consumer<SpyMemcached<Object>>> counters = List.of(c -> c.incr("counter"), c -> c.incr("counter", 1),
-                c -> c.incr("counter", 1, 0), c -> c.incr("counter", 1, 0, 1_000), c -> c.decr("counter"), c -> c.decr("counter", 1),
-                c -> c.decr("counter", 1, 0), c -> c.decr("counter", 1, 0, 1_000));
+        final List<Consumer<SpyMemcached<Object>>> counters = List.of(c -> c.incr("counter"), c -> c.incr("counter", 1), c -> c.incr("counter", 1, 0),
+                c -> c.incr("counter", 1, 0, 1_000), c -> c.decr("counter"), c -> c.decr("counter", 1), c -> c.decr("counter", 1, 0),
+                c -> c.decr("counter", 1, 0, 1_000));
 
         for (final Consumer<SpyMemcached<Object>> counter : counters) {
             assertSame(failure, assertThrows(RuntimeException.class, () -> counter.accept(cache)).getCause());

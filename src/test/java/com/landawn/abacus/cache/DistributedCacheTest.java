@@ -4,6 +4,8 @@
 
 package com.landawn.abacus.cache;
 
+import static com.landawn.abacus.cache.DistributedCacheBreakerAccess.failedCounter;
+import static com.landawn.abacus.cache.DistributedCacheBreakerAccess.setBreakerState;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -13,7 +15,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -546,24 +547,6 @@ public class DistributedCacheTest extends TestBase {
     }
 
     // --- reflection helpers for the atomically-paired circuit-breaker state --------------------
-
-    @SuppressWarnings("unchecked")
-    private static void setBreakerState(final DistributedCache<?, ?> cache, final int failedCount, final long lastFailedTime) throws Exception {
-        final Field stateField = DistributedCache.class.getDeclaredField("circuitBreaker");
-        stateField.setAccessible(true);
-        final AtomicReference<Object> stateRef = (AtomicReference<Object>) stateField.get(cache);
-        final Class<?> stateType = Class.forName(DistributedCache.class.getName() + "$CircuitBreakerState");
-        final Constructor<?> constructor = stateType.getDeclaredConstructor(int.class, long.class, boolean.class);
-        constructor.setAccessible(true);
-        stateRef.set(constructor.newInstance(failedCount, lastFailedTime, true));
-    }
-
-    private static int failedCounter(final DistributedCache<?, ?> cache) throws Exception {
-        final Field stateField = DistributedCache.class.getDeclaredField("circuitBreaker");
-        stateField.setAccessible(true);
-        final Object state = ((AtomicReference<?>) stateField.get(cache)).get();
-        final Field countField = state.getClass().getDeclaredField("failedCount");
-        countField.setAccessible(true);
-        return countField.getInt(state);
-    }
+    // (setBreakerState and failedCounter are shared with DistributedCacheCircuitBreakerUnitTest
+    // via DistributedCacheBreakerAccess)
 }

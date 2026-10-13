@@ -104,16 +104,14 @@ public class OffHeapCacheStatsTest {
     public void testRecordValidatesComponentsInSignatureOrder() {
         final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
 
-        assertThrows(IllegalArgumentException.class,
-                () -> new OffHeapCacheStats(-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
         final NullPointerException missingWriteStats = assertThrows(NullPointerException.class,
                 () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
         assertEquals("writeToDiskTimeStats cannot be null", missingWriteStats.getMessage());
         final NullPointerException missingReadStats = assertThrows(NullPointerException.class,
                 () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, null, -1, null));
         assertEquals("readFromDiskTimeStats cannot be null", missingReadStats.getMessage());
-        assertThrows(IllegalArgumentException.class,
-                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, -1, null));
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, -1, null));
     }
 
     @Test

@@ -431,8 +431,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 sweepExpiredEntries();
                 reclaimEmptySegments();
             }
-        } catch (final Exception e) {
+        } catch (final Throwable e) {
             // Swallowed so the scheduled task keeps running; the pass retries on the next cycle.
+            // scheduleWithFixedDelay silently suppresses every future run once any throwable
+            // escapes. That includes an Error, and a checked exception thrown undeclared by a
+            // user-supplied OffHeapStore or key (e.g. one written in Kotlin), so catch Throwable.
             logger.warn("Off-heap cache maintenance pass failed; will retry on the next scheduled run", e);
         } finally {
             lifecycleLock.readLock().unlock();
@@ -670,8 +673,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                     return memoryEntry;
                 }
             });
-        } catch (final RuntimeException | Error e) {
+        } catch (final Throwable e) {
             // Copy failures and a throwing key hashCode/equals must release unpublished slots.
+            // Throwable rather than RuntimeException | Error so an undeclared checked exception
+            // (Kotlin, sneaky throws) cannot strand the slots until close(); still rethrown.
             if (!installed[0]) {
                 runCleanupStep(e, () -> discardUninstalledSlots(slots));
             }
@@ -806,9 +811,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                             install(entry);
                             return entry;
                         });
-                    } catch (final RuntimeException | Error e) {
+                    } catch (final Throwable e) {
                         // A throwing key hashCode/equals aborts the compute before the lambda
-                        // installs the entry; release its freshly allocated slots.
+                        // installs the entry; release its freshly allocated slots. Throwable, as in
+                        // runMaintenance: code written in Kotlin (or using sneaky throws) can throw a
+                        // checked exception undeclared, and it must not strand the slots either.
+                        // Rethrown afterwards, so nothing is swallowed.
                         discardUninstalledMemoryEntry(entry);
                         throw e;
                     }
@@ -949,7 +957,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes the cache entry associated with the specified key, if present, releasing its memory
      * slots or disk bytes. The mapping is removed even if the {@link OffHeapStore} fails to remove
-     * the disk bytes; such a failure is logged rather than propagated.
+     * the disk bytes; such a failure is logged rather than propagated. An {@link Error} thrown by
+     * the store propagates instead and leaves the entry in place, so the removal can be retried.
      *
      * @param key the key whose mapping is to be removed; must not be {@code null}
      * @throws IllegalStateException if the cache has been closed
@@ -1031,8 +1040,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Removes all entries, releasing their memory slots and disk bytes, and reclaims the
      * now-empty segments for reuse by any slot size. As with {@link #remove(Object)}, a failure of
-     * the {@link OffHeapStore} to remove an entry's disk bytes is logged rather than propagated.
-     * Entries put concurrently with this call may survive it.
+     * the {@link OffHeapStore} to remove an entry's disk bytes is logged rather than propagated,
+     * while an {@link Error} thrown by the store propagates and leaves that entry, and any not yet
+     * visited, in place. Entries put concurrently with this call may survive it.
      *
      * @throws IllegalStateException if the cache has been closed
      */
@@ -1066,8 +1076,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * {@link OffHeapStore}, if any. If the cache remains active for the application lifetime, the
      * registered shutdown hook invokes this method automatically during JVM shutdown.
      * Every entry and cleanup step is attempted even when an earlier one fails. The entry index
-     * is cleared even if an entry cannot be released. As with {@link #remove(Object)}, a
-     * {@link RuntimeException} from removing disk bytes is logged rather than propagated.
+     * is cleared even if an entry cannot be released. As with {@link #remove(Object)}, an
+     * exception other than an {@link Error} from removing disk bytes is logged rather than propagated.
      * Other cleanup failures propagate, with the first failure retaining later distinct failures
      * as suppressed exceptions. This method is idempotent.
      *
@@ -1218,6 +1228,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * under its monitor (excluding in-flight readers), releases its memory slots or disk bytes,
      * and reverses the counters that {@link #install(Entry)} updated.
      *
+     * <p>An exception from the store's {@code remove} is logged and the entry is freed anyway (only
+     * store space leaks). An {@link Error} from it propagates and leaves the entry live, with its
+     * counters untouched. Callers free inside a map {@code compute}, which the Error aborts, so the
+     * entry is still mapped and must stay readable and removable by a later attempt. (The one
+     * exception, {@link #close()}, clears the map regardless.)
+     *
      * @param removeDiskBytes for a disk-backed entry, whether its store bytes are removed; a
      *                        caller that has just overwritten the bytes under the same key
      *                        passes {@code false}
@@ -1228,17 +1244,27 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 return;
             }
 
-            entry.freed = true;
-
             if (entry.isMemory()) {
+                // Marked before the release: the slots go back to the allocator here, so the entry
+                // must never be read again, even if releasing them fails part-way.
+                entry.freed = true;
                 releaseSlots(entry);
-            } else if (removeDiskBytes) {
-                try {
-                    offHeapStore.remove(key);
-                } catch (final RuntimeException e) {
-                    // The mapping is gone either way; a failed byte removal only leaks store space.
-                    logger.warn("Failed to remove the backing bytes of an off-heap cache entry from the OffHeapStore", e);
+            } else {
+                if (removeDiskBytes) {
+                    try {
+                        offHeapStore.remove(key);
+                    } catch (final Exception e) {
+                        // The mapping is gone either way; a failed byte removal only leaks store space.
+                        // Exception, not RuntimeException: a store written in Kotlin (or using sneaky
+                        // throws) can raise a checked exception that its signature does not declare.
+                        logger.warn("Failed to remove the backing bytes of an off-heap cache entry from the OffHeapStore", e);
+                    }
                 }
+
+                // Marked only after the store call returns. An Error from it aborts the caller's
+                // compute, which keeps this entry mapped; marking it first would strand a freed
+                // entry in the map, invisible to reads and skipped by every later sweep.
+                entry.freed = true;
             }
         }
 
@@ -1354,9 +1380,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         evictLeastRecentlyAccessed();
                         reclaimEmptySegments();
                     }
-                } catch (final Exception e) {
+                } catch (final Throwable e) {
                     // The task's future is never read; without this catch a failed pass would
-                    // abort silently. The next put under pressure schedules a fresh one.
+                    // abort silently. Throwable, as in runMaintenance: an Error or an undeclared
+                    // checked exception from a key must be logged too. The next put under
+                    // pressure schedules a fresh pass.
                     logger.warn("Off-heap cache vacate pass failed; a later put under memory pressure will retry", e);
                 } finally {
                     lifecycleLock.readLock().unlock();

@@ -74,8 +74,7 @@ public class KryoTranscoderMemoryUnitTest extends TestBase {
         final KryoTranscoder<Object> transcoder = new KryoTranscoder<>(64, parser);
 
         assertThrows(IllegalArgumentException.class, () -> transcoder.encode(new PayloadHolder()));
-        assertTrue(chunksWritten.get() < ChunkedPayload.CHUNKS,
-                "Kryo's field-serializer exception wrapping must not disable early size enforcement");
+        assertTrue(chunksWritten.get() < ChunkedPayload.CHUNKS, "Kryo's field-serializer exception wrapping must not disable early size enforcement");
     }
 
     @Test
@@ -85,8 +84,8 @@ public class KryoTranscoderMemoryUnitTest extends TestBase {
         final HashMap<String, Object> map = new HashMap<>();
         map.put("number", 42L);
         map.put("unicode", "cache \uD83D\uDE03 \u4E2D");
-        final List<Object> values = Arrays.asList(null, "text", "\uD83D\uDE03\u4E2D", 42L, new byte[0],
-                new byte[16_500], new int[] { Integer.MIN_VALUE, 0, Integer.MAX_VALUE }, map);
+        final List<Object> values = Arrays.asList(null, "text", "\uD83D\uDE03\u4E2D", 42L, new byte[0], new byte[16_500],
+                new int[] { Integer.MIN_VALUE, 0, Integer.MAX_VALUE }, map);
 
         for (final Object value : values) {
             final byte[] originalFormat = parser.encode(value);

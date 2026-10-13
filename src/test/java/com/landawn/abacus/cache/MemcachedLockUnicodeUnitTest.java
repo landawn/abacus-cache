@@ -28,8 +28,8 @@ public class MemcachedLockUnicodeUnitTest extends TestBase {
         final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
         final String firstSupplementary = new String(Character.toChars(Character.MIN_SUPPLEMENTARY_CODE_POINT));
         final String lastSupplementary = new String(Character.toChars(Character.MAX_CODE_POINT));
-        final List<String> keys = List.of(firstSupplementary, lastSupplementary, firstSupplementary + lastSupplementary,
-                "a".repeat(246) + lastSupplementary, "prefix" + firstSupplementary + "suffix");
+        final List<String> keys = List.of(firstSupplementary, lastSupplementary, firstSupplementary + lastSupplementary, "a".repeat(246) + lastSupplementary,
+                "prefix" + firstSupplementary + "suffix");
 
         for (final String key : keys) {
             when(delegate.add(key, "holder", 1_000L)).thenReturn(true);
@@ -46,8 +46,8 @@ public class MemcachedLockUnicodeUnitTest extends TestBase {
     public void rejectsMalformedSurrogateSequencesBeforeEveryOperation() throws Exception {
         final SpyMemcached<String> delegate = mock(SpyMemcached.class);
         final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
-        final List<String> invalid = List.of("\uD800", "\uDBFF", "\uDC00", "\uDFFF", "\uDC00\uD800", "a\uD800x",
-                "\uD800\uD800\uDC00", "\uD800\uDC00\uDC00", "\uD800\uDC00\uDBFF", "a".repeat(247) + "\uDBFF\uDFFF");
+        final List<String> invalid = List.of("\uD800", "\uDBFF", "\uDC00", "\uDFFF", "\uDC00\uD800", "a\uD800x", "\uD800\uD800\uDC00", "\uD800\uDC00\uDC00",
+                "\uD800\uDC00\uDBFF", "a".repeat(247) + "\uDBFF\uDFFF");
 
         for (final String key : invalid) {
             assertThrows(IllegalArgumentException.class, () -> lock.tryLock(key, "holder", 1_000L));

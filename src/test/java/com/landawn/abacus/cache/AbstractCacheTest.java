@@ -252,14 +252,12 @@ public class AbstractCacheTest extends TestBase {
         final LocalCache<String, String> cache = newCache();
         try {
             final ContinuableFuture<String> invalidKey = assertDoesNotThrow(() -> cache.asyncGetOrNull(null));
-            final ExecutionException invalidKeyFailure = assertThrows(ExecutionException.class,
-                    () -> invalidKey.get(5, TimeUnit.SECONDS));
+            final ExecutionException invalidKeyFailure = assertThrows(ExecutionException.class, () -> invalidKey.get(5, TimeUnit.SECONDS));
             assertTrue(invalidKeyFailure.getCause() instanceof IllegalArgumentException);
 
             cache.close();
             final ContinuableFuture<Boolean> closedCache = assertDoesNotThrow(() -> cache.asyncPut(null, null));
-            final ExecutionException closedFailure = assertThrows(ExecutionException.class,
-                    () -> closedCache.get(5, TimeUnit.SECONDS));
+            final ExecutionException closedFailure = assertThrows(ExecutionException.class, () -> closedCache.get(5, TimeUnit.SECONDS));
             assertTrue(closedFailure.getCause() instanceof IllegalStateException);
         } finally {
             cache.close();
@@ -278,8 +276,7 @@ public class AbstractCacheTest extends TestBase {
 
         try {
             assertSame(failure, assertThrows(StackOverflowError.class, () -> cache.put("key", value)));
-            assertSame(failure, assertThrows(StackOverflowError.class,
-                    () -> cache.put("key", value, Cache.DEFAULT_LIVE_TIME, Cache.DEFAULT_MAX_IDLE_TIME)));
+            assertSame(failure, assertThrows(StackOverflowError.class, () -> cache.put("key", value, Cache.DEFAULT_LIVE_TIME, Cache.DEFAULT_MAX_IDLE_TIME)));
 
             final ContinuableFuture<Boolean> defaultWrite = assertDoesNotThrow(() -> cache.asyncPut("key", value));
             final ContinuableFuture<Boolean> explicitWrite = assertDoesNotThrow(

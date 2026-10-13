@@ -55,8 +55,7 @@ public class EhcacheTest {
 
         try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
             final org.ehcache.Cache<String, String> underlying = manager.createCache("readThrough",
-                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10))
-                            .withLoaderWriter(loader));
+                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10)).withLoaderWriter(loader));
             final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
             try {
                 assertFalse(underlying.containsKey("direct"));
@@ -84,8 +83,7 @@ public class EhcacheTest {
 
         try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
             final org.ehcache.Cache<String, String> underlying = manager.createCache("failedReadThrough",
-                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10))
-                            .withLoaderWriter(loader));
+                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10)).withLoaderWriter(loader));
             final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
             try {
                 assertSame(failure, assertThrows(CacheLoadingException.class, () -> wrapper.getOrNull("direct")).getCause());
@@ -659,8 +657,8 @@ public class EhcacheTest {
         return entries;
     }
 
-    private static List<String> runBulkWritesThroughWriter(final RecordingWriter writer,
-            final CacheConfigurationBuilder<String, String> config) throws InterruptedException {
+    private static List<String> runBulkWritesThroughWriter(final RecordingWriter writer, final CacheConfigurationBuilder<String, String> config)
+            throws InterruptedException {
         try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
             final Ehcache<String, String> wrapper = new Ehcache<>(manager.createCache("writer" + System.nanoTime(), config.withLoaderWriter(writer)));
 
@@ -701,9 +699,8 @@ public class EhcacheTest {
         // fills (the one-minute max delay never elapses), so every call's keys arrive in a single callback.
         final RecordingWriter writer = new RecordingWriter(2);
 
-        assertEquals(Arrays.asList("deleteAll [x, y, z]", "writeAll [a, b, c]"),
-                runBulkWritesThroughWriter(writer,
-                        heapConfig().withService(WriteBehindConfigurationBuilder.newBatchedWriteBehindConfiguration(1, TimeUnit.MINUTES, 3).concurrencyLevel(1))));
+        assertEquals(Arrays.asList("deleteAll [x, y, z]", "writeAll [a, b, c]"), runBulkWritesThroughWriter(writer,
+                heapConfig().withService(WriteBehindConfigurationBuilder.newBatchedWriteBehindConfiguration(1, TimeUnit.MINUTES, 3).concurrencyLevel(1))));
     }
 
     private static Map<String, String> expectedLoadedValues(final String presentKey, final String... missingKeys) {

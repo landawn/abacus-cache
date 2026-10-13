@@ -291,7 +291,8 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * The circuit breaker has two effective states (there is no canonical "half-open" single-probe gate):
      * <ul>
      * <li><b>Closed (Normal):</b> Operations proceed normally. Each failure increments the counter
-     *     and updates the last-failure timestamp; each success resets both.</li>
+     *     and updates the last-failure timestamp; each success resets both, except for a failure recorded
+     *     concurrently after the success (see State Transitions below).</li>
      * <li><b>Open (Failing Fast):</b> When at least one failure has been recorded, the recorded failure count is at least
      *     {@code maxFailuresBeforeCircuitOpen}, AND the time since the last failure is less than {@code retryDelay}
      *     milliseconds (so a {@code retryDelay} of {@code 0} never fails fast), this method returns
@@ -302,7 +303,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *
      * <p><b>State Transitions:</b>
      * <ul>
-     * <li>Successful operation: Atomically resets the failure count to 0 and clears the recorded-failure marker (closes circuit)</li>
+     * <li>Successful operation: Atomically resets the failure count to 0 and clears the recorded-failure marker
+     *     (closes circuit), unless concurrent reads recorded failures after this read's successful response.
+     *     The most recent of those failures is fresher availability information: it is kept, with its timestamp,
+     *     as a run of one consecutive failure, while the failures counted before the success are discarded</li>
      * <li>Failed operation: Atomically increments the failure count (capped at the threshold) and records the failure
      *     time using a monotonic clock ({@code System.nanoTime()}), so wall-clock adjustments cannot affect the window</li>
      * <li>Local key conversion/validation runs before the circuit check, so an invalid application key
@@ -396,9 +400,11 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         // TRUE = success, FALSE = availability failure, null = client-side validation error
         // (rethrown; must neither reset nor advance the breaker).
         Boolean isOK = null;
+        long successNanos = 0L;
 
         try {
             result = client.get(cacheKey);
+            successNanos = System.nanoTime();
             isOK = Boolean.TRUE;
         } catch (final IllegalArgumentException e) {
             // A deterministic client-side validation error (e.g. the generated key exceeding
@@ -424,10 +430,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                 // Validation error: leave the breaker state untouched.
             } else if (isOK) {
                 // Steady-state fast path: skip the atomic write when the circuit is already closed.
-                // The atomic set is used only during recovery; it linearizes the reset with concurrent
-                // failure updates, so count and timestamp can never be torn apart.
                 if (circuitBreaker.get() != CLOSED_CIRCUIT) {
-                    circuitBreaker.set(CLOSED_CIRCUIT);
+                    // Clears only failures recorded before this response (see stateAfterSuccess).
+                    final long successTime = successNanos;
+                    circuitBreaker.getAndUpdate(current -> stateAfterSuccess(current, successTime));
                 }
             } else {
                 // Publish the new timestamp and capped count in one CAS update. Besides preventing
@@ -1117,6 +1123,32 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         if (isClosed) {
             throw new IllegalStateException("This cache has been closed");
         }
+    }
+
+    /**
+     * Returns the breaker state that a successful read, whose response arrived at {@code successNanos},
+     * publishes over {@code current}.
+     *
+     * <p>Failures recorded before the response are superseded by it, so the circuit closes. A plain
+     * reset would also erase a failure that a concurrent read recorded after the response (success at
+     * t1, failure at t2 &gt; t1, reset at t3 &gt; t2), restarting the count with stale availability
+     * information. Keeping {@code current} unchanged would be wrong the other way: the failures counted
+     * before t1 belong to a run that this success interrupted, and keeping them could open the circuit
+     * on a single failure after the success. The state cannot tell how many counted failures postdate
+     * the response, so it keeps the one that certainly does, with its timestamp. That is a lower
+     * bound, but the window between the response and this update is only a few instructions wide.
+     */
+    private static CircuitBreakerState stateAfterSuccess(final CircuitBreakerState current, final long successNanos) {
+        if (!current.hasFailure) {
+            return current;
+        }
+
+        // Subtract rather than compare directly: System.nanoTime() values may wrap around.
+        if (current.lastFailedTime - successNanos < 0) {
+            return CLOSED_CIRCUIT;
+        }
+
+        return current.failedCount <= 1 ? current : new CircuitBreakerState(1, current.lastFailedTime, true);
     }
 
     /**
