@@ -248,6 +248,10 @@ if (lock.lock("resource1", 30_000)) {   // 30s lock TTL guards against a crashed
   | Caffeine wrapper | [Caffeine](https://github.com/ben-manes/caffeine) |
   | Ehcache wrapper | [Ehcache 3.x](https://www.ehcache.org/) |
 
+## Testing
+
+Run `mvn test` for the isolated unit suite, or launch `AbacusCacheTestSuite` as a JUnit test in your IDE. See the [testing guide](docs/TESTING.md) for IDE VM options, integration tests, performance workloads, coverage, and test conventions.
+
 ## Links
 
 - **User guide:** [Wiki](https://github.com/landawn/abacus-cache/wiki)

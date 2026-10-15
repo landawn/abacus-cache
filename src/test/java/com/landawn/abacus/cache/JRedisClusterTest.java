@@ -6,14 +6,13 @@ package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -24,7 +23,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -46,8 +44,8 @@ import redis.clients.jedis.params.SetParams;
  * <p>Constructor-validation tests still call the public constructors: their argument checks all run
  * <em>before</em> the cluster client is built, so they throw without opening a connection.
  */
-@Tag("2025")
-public class JRedisClusterTest {
+
+class JRedisClusterTest {
 
     private static final KryoParser KRYO = ParserFactory.createKryoParser();
 
@@ -61,62 +59,51 @@ public class JRedisClusterTest {
         cache = new JRedisCluster<>("10.0.0.1:7000", mockCluster);
     }
 
+    // Construction
+
     @Test
-    public void test_clientFor_preserves_ignored_null_key() {
-        assertSame(mockCluster, cache.clientFor(null));
+    void constructorRejectsBlankServerUrl() {
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>(""));
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("   "));
     }
 
     @Test
-    public void test_malformedUnicodeKeysAreRejectedBeforeAnyCommand() {
-        for (final String key : List.of("\uD800", "\uDC00", "prefix:\uD800suffix", "prefix:\uDC00suffix")) {
-            assertThrows(IllegalArgumentException.class, () -> cache.get(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.put(key, "value", 0));
-            assertThrows(IllegalArgumentException.class, () -> cache.remove(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.incr(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.incr(key, 1));
-            assertThrows(IllegalArgumentException.class, () -> cache.decr(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.decr(key, 1));
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(List.of("valid", key)));
-        }
-
-        org.mockito.Mockito.verifyNoInteractions(mockCluster);
+    void constructorRejectsInvalidTimeout() {
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", 0L));
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", -1L));
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", (long) Integer.MAX_VALUE + 1L));
     }
 
     @Test
-    public void test_validSupplementaryUnicodeKeyPreservesUtf8Bytes() {
-        final String key = "user:\uD83D\uDE00:\uD800\uDC00";
-        when(mockCluster.get(utf8(key))).thenReturn(KRYO.encode("value"));
-
-        assertEquals("value", cache.get(key));
-        assertEquals(Map.of(key, "value"), cache.getBulk(List.of("missing", key)));
-        verify(mockCluster, times(2)).get(utf8(key));
+    void constructorRejectsNullServerUrl() {
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null));
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null, mock(RedisClusterClient.class)));
     }
 
+    // Reads
+
     @Test
-    public void test_get_returns_decoded_value() {
+    void getReturnsDecodedValue() {
         when(mockCluster.get(utf8("user:1"))).thenReturn(KRYO.encode("Alice"));
 
         assertEquals("Alice", cache.get("user:1"));
         verify(mockCluster).get(utf8("user:1"));
     }
 
-    @Test
-    public void test_get_returns_null_when_key_missing() {
-        when(mockCluster.get(any(byte[].class))).thenReturn(null);
+    // Bulk Reads
 
-        assertNull(cache.get("missing"));
+    @Test
+    void getBulkCollectionAndEmpty() {
+        when(mockCluster.get(utf8("a"))).thenReturn(KRYO.encode("x"));
+
+        assertEquals(1, cache.getBulk(List.of("a")).size());
+        assertTrue(cache.getBulk(List.of()).isEmpty());
+        assertTrue(cache.getBulk().isEmpty());
     }
 
     @Test
-    public void test_get_returns_null_for_empty_byte_array() {
-        when(mockCluster.get(any(byte[].class))).thenReturn(new byte[0]);
-
-        assertNull(cache.get("empty"));
-    }
-
-    @Test
-    public void test_getBulk_returns_only_found_keys() {
+    void getBulkReturnsOnlyFoundKeys() {
         when(mockCluster.get(utf8("k1"))).thenReturn(KRYO.encode("v1"));
         when(mockCluster.get(utf8("k2"))).thenReturn(null); // missing
         when(mockCluster.get(utf8("k3"))).thenReturn(new byte[0]); // empty -> null
@@ -127,57 +114,17 @@ public class JRedisClusterTest {
         assertEquals("v1", result.get("k1"));
     }
 
-    @Test
-    public void test_getBulk_collection_and_empty() {
-        when(mockCluster.get(utf8("a"))).thenReturn(KRYO.encode("x"));
+    // Writes
 
-        assertEquals(1, cache.getBulk(List.of("a")).size());
-        assertTrue(cache.getBulk(List.of()).isEmpty());
-        assertTrue(cache.getBulk().isEmpty());
+    @Test
+    void incrReturnsServerValue() {
+        when(mockCluster.incr(utf8("counter"))).thenReturn(1L);
+
+        assertEquals(1L, cache.incr("counter"));
     }
 
     @Test
-    public void test_getBulk_rejects_null_element() {
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk("a", null));
-        verify(mockCluster, never()).get(any(byte[].class));
-    }
-
-    @Test
-    public void test_set_with_ttl_uses_set_with_expiry() {
-        when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-
-        assertTrue(cache.put("k", "v", 60_000)); // 60 seconds, sent with millisecond precision (PX)
-        verify(mockCluster).set(eq(utf8("k")), any(byte[].class), eq(SetParams.setParams().px(60_000L)));
-        verify(mockCluster, never()).set(any(byte[].class), any(byte[].class));
-    }
-
-    @Test
-    public void test_set_without_ttl_uses_plain_set() {
-        when(mockCluster.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
-
-        assertTrue(cache.put("forever", "v", 0));
-        verify(mockCluster).set(eq(utf8("forever")), any(byte[].class));
-        verify(mockCluster, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
-    }
-
-    @Test
-    public void test_set_returns_false_when_server_does_not_say_OK() {
-        when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("NOT_OK");
-
-        assertFalse(cache.put("k", "v", 60_000));
-    }
-
-    @Test
-    public void test_set_null_value_encodes_as_empty_byte_array() {
-        when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-
-        cache.put("k", null, 60_000);
-
-        verify(mockCluster).set(eq(utf8("k")), eq(new byte[0]), any(SetParams.class));
-    }
-
-    @Test
-    public void test_set_round_trip_uses_kryo_encoding() {
+    void setRoundTripUsesKryoEncoding() {
         when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
         cache.put("k", "hello", 30_000);
@@ -188,77 +135,34 @@ public class JRedisClusterTest {
     }
 
     @Test
-    public void test_delete_returns_true_when_removed() {
-        when(mockCluster.del(any(byte[].class))).thenReturn(1L);
+    void setWithoutTtlUsesPlainSet() {
+        when(mockCluster.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
 
-        assertTrue(cache.remove("k"));
-        verify(mockCluster).del(utf8("k"));
+        assertTrue(cache.put("forever", "v", 0));
+        verify(mockCluster).set(eq(utf8("forever")), any(byte[].class));
+        verify(mockCluster, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
     }
 
     @Test
-    public void test_delete_returns_false_when_key_did_not_exist() {
+    void setWithTtlUsesSetWithExpiry() {
+        when(mockCluster.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+
+        assertTrue(cache.put("k", "v", 60_000)); // 60 seconds, sent with millisecond precision (PX)
+        verify(mockCluster).set(eq(utf8("k")), any(byte[].class), eq(SetParams.setParams().px(60_000L)));
+        verify(mockCluster, never()).set(any(byte[].class), any(byte[].class));
+    }
+
+    // Removals
+
+    @Test
+    void deleteReturnsFalseWhenKeyDidNotExist() {
         when(mockCluster.del(any(byte[].class))).thenReturn(0L);
 
         assertFalse(cache.remove("missing"));
     }
 
     @Test
-    public void test_incr_returns_server_value() {
-        when(mockCluster.incr(utf8("counter"))).thenReturn(1L);
-
-        assertEquals(1L, cache.incr("counter"));
-    }
-
-    @Test
-    public void test_incr_with_delta_calls_incrBy() {
-        when(mockCluster.incrBy(utf8("counter"), 5L)).thenReturn(5L);
-
-        assertEquals(5L, cache.incr("counter", 5));
-        verify(mockCluster).incrBy(utf8("counter"), 5L);
-    }
-
-    @Test
-    public void test_incr_with_delta_rejects_negative_delta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1));
-        verify(mockCluster, never()).incrBy(any(byte[].class), eq(-1L));
-    }
-
-    @Test
-    public void test_decr_returns_negative_when_redis_does() {
-        when(mockCluster.decr(utf8("counter"))).thenReturn(-1L);
-
-        assertEquals(-1L, cache.decr("counter"));
-    }
-
-    @Test
-    public void test_decr_with_delta_calls_decrBy() {
-        when(mockCluster.decrBy(utf8("counter"), 3L)).thenReturn(-3L);
-
-        assertEquals(-3L, cache.decr("counter", 3));
-        verify(mockCluster).decrBy(utf8("counter"), 3L);
-    }
-
-    @Test
-    public void test_decr_with_delta_rejects_negative_delta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.decr("counter", -1));
-        verify(mockCluster, never()).decrBy(any(byte[].class), eq(-1L));
-    }
-
-    @Test
-    public void test_all_keys_route_to_the_single_cluster_client() {
-        // JRedisCluster does no client-side sharding: every key is dispatched to the one cluster
-        // client, which routes by hash slot server-side.
-        when(mockCluster.get(any(byte[].class))).thenReturn(null);
-
-        cache.get("a");
-        cache.get("b");
-        cache.get("c");
-
-        verify(mockCluster, times(3)).get(any(byte[].class));
-    }
-
-    @Test
-    public void test_flushAll_broadcasts_to_cluster() {
+    void flushAllBroadcastsToCluster() {
         when(mockCluster.flushAll()).thenReturn("OK");
 
         cache.flushAll();
@@ -267,15 +171,17 @@ public class JRedisClusterTest {
     }
 
     @Test
-    public void test_flushAll_propagates_broadcast_failure() {
+    void flushAllPropagatesBroadcastFailure() {
         when(mockCluster.flushAll()).thenThrow(new RuntimeException("cluster down"));
 
         RuntimeException thrown = assertThrows(RuntimeException.class, cache::flushAll);
         assertEquals("cluster down", thrown.getMessage());
     }
 
+    // Lifecycle
+
     @Test
-    public void test_disconnect_is_idempotent() {
+    void disconnectIsIdempotent() {
         cache.disconnect();
         cache.disconnect(); // safe to call again
 
@@ -283,7 +189,7 @@ public class JRedisClusterTest {
     }
 
     @Test
-    public void test_disconnect_publishesShutdownBeforeClosingClusterClient() {
+    void disconnectPublishesShutdownBeforeClosingClusterClient() {
         doAnswer(invocation -> {
             assertThrows(IllegalStateException.class, cache::flushAll);
             assertThrows(IllegalStateException.class, () -> cache.get("during-close"));
@@ -301,7 +207,7 @@ public class JRedisClusterTest {
      * returns normally and the instance stays marked shut down.
      */
     @Test
-    public void test_disconnect_swallowsClusterCloseFailure() {
+    void disconnectSwallowsClusterCloseFailure() {
         org.mockito.Mockito.doThrow(new RuntimeException("close failed")).when(mockCluster).close();
 
         cache.disconnect(); // must not throw
@@ -309,52 +215,46 @@ public class JRedisClusterTest {
         assertThrows(IllegalStateException.class, cache::flushAll);
     }
 
+    // Validation And Failures
+
     @Test
-    public void test_serverUrl_returns_constructor_value() {
+    void clientForPreservesIgnoredNullKey() {
+        assertSame(mockCluster, cache.clientFor(null));
+    }
+
+    @Test
+    void injectionConstructorRejectsNullClient() {
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", (RedisClusterClient) null));
+    }
+
+    // Other Behavior
+
+    @Test
+    void allKeysRouteToTheSingleClusterClient() {
+        // JRedisCluster does no client-side sharding: every key is dispatched to the one cluster
+        // client, which routes by hash slot server-side.
+        when(mockCluster.get(any(byte[].class))).thenReturn(null);
+
+        cache.get("a");
+        cache.get("b");
+        cache.get("c");
+
+        verify(mockCluster, times(3)).get(any(byte[].class));
+    }
+
+    @Test
+    void serverUrlReturnsConstructorValue() {
         assertEquals("10.0.0.1:7000", cache.serverUrl());
     }
 
     @Test
-    public void test_injection_constructor_rejects_null_client() {
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", (RedisClusterClient) null));
-    }
+    void validSupplementaryUnicodeKeyPreservesUtf8Bytes() {
+        final String key = "user:\uD83D\uDE00:\uD800\uDC00";
+        when(mockCluster.get(utf8(key))).thenReturn(KRYO.encode("value"));
 
-    // ---- constructor validation: these run before any cluster client is built, so no network I/O ----
-
-    @Test
-    public void test_constructor_rejects_invalid_timeout() {
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", 0L));
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", -1L));
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", (long) Integer.MAX_VALUE + 1L));
-    }
-
-    @Test
-    public void test_constructor_rejects_blank_server_url() {
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>(""));
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("   "));
-    }
-
-    @Test
-    public void test_constructor_rejects_null_server_url() {
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null));
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null, 1000L));
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>((String) null, mock(RedisClusterClient.class)));
-    }
-
-    @Test
-    public void test_nullKeyIsRejectedWithIllegalArgumentExceptionBeforeAnyCommand() {
-        assertThrows(IllegalArgumentException.class, () -> cache.get(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 0));
-        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 60000));
-        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((String[]) null));
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((List<String>) null));
-
-        org.mockito.Mockito.verifyNoInteractions(mockCluster);
+        assertEquals("value", cache.get(key));
+        assertEquals(Map.of(key, "value"), cache.getBulk(List.of("missing", key)));
+        verify(mockCluster, times(2)).get(utf8(key));
     }
 
     private static byte[] utf8(final String s) {

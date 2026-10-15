@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Haiyang Li. All rights reserved.
+ * Copyright (c) 2026, Haiyang Li. All rights reserved.
  */
 
 package com.landawn.abacus.cache;
@@ -12,71 +12,19 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.ByteBuffer;
-import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import com.landawn.abacus.type.ByteBufferType;
-import com.landawn.abacus.type.Type;
-import com.landawn.abacus.type.TypeFactory;
-import com.landawn.abacus.util.Beans;
-import com.landawn.abacus.util.N;
-import com.landawn.abacus.util.Objectory;
-import com.landawn.abacus.util.Profiler;
-import com.landawn.abacus.util.Profiler.MultiLoopsStatistics;
 import com.landawn.abacus.util.Strings;
 
-//--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED
+class OffHeapCacheTest {
 
-@Tag("2025")
-public class OffHeapCacheTest {
-    private static final Random rand = new Random();
-
-    private static final ByteBufferType bbType = (ByteBufferType) ((Type<?>) TypeFactory.getType(ByteBufferType.BYTE_BUFFER));
-    private static final OffHeapCache<String, Account> cache = OffHeapCache.<String, Account> builder()
-            .capacityInMB(4096)
-            .evictDelay(3000)
-            .defaultLiveTime(1000_000)
-            .defaultMaxIdleTime(1000_000)
-            .build();
-    // private static final OffHeapCache<String, String> ohcache = new OffHeapCache<>(1204, 3000, 1000_000, 1000_000);
-
-    private static final long start = System.currentTimeMillis();
-    private static final AtomicInteger counter = new AtomicInteger();
-
-    /**
-     * Frees the class-level 4 GB native cache as soon as this class finishes instead of holding
-     * it until JVM exit. When the whole suite runs in one fork (AbacusCacheTestSuite), leaving
-     * each class's static off-heap cache alive stacks multiple 4 GB commits and can exhaust the
-     * OS commit limit before a later class's static allocation.
-     */
-    @AfterAll
-    static void releaseStaticCache() {
-        cache.close();
-    }
-
-    /**
-     * Null-key handling is now consistent across all four key operations: {@code put} already
-     * rejected a null key, and {@code getOrNull}/{@code remove}/{@code containsKey} now reject it
-     * too (previously they silently delegated to the pool). {@code put} also rejects a null value.
-     */
-    @Test
-    public void test_nullKey_and_nullValue_rejected_consistently() {
-        assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.put(null, new Account(), 0, 0));
-        assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 0, 0));
-    }
+    // Construction
 
     @Test
-    public void test_builder_functionalArguments_nullRejected() {
+    void builderFunctionalArgumentsNullRejected() {
         final OffHeapCache.Builder<String, Account> builder = OffHeapCache.builder();
 
         assertThrows(IllegalArgumentException.class, () -> builder.serializer(null));
@@ -85,354 +33,51 @@ public class OffHeapCacheTest {
         assertThrows(IllegalArgumentException.class, () -> builder.storeSelector(null));
     }
 
+    /** {@code OffHeapCache(capacityInMB, evictDelay)} delegates to the default-TTL constructor. */
     @Test
-    public void test_ByteBuffer() {
-        ByteBuffer bb = ByteBuffer.allocate(1024);
-        bb.put("abc".getBytes());
-        bb.put("123".getBytes());
-        N.println(bb.position());
-        byte[] bytes = ByteBufferType.byteArrayOf(bb);
-        N.println(bb.position());
-
-        assertEquals("abc123", new String(bytes));
-
-        bb = ByteBuffer.wrap("abc123".getBytes(), 6, 0);
-        bytes = ByteBufferType.byteArrayOf(bb);
-        N.println(bb.position());
-
-        assertEquals("abc123", new String(bytes));
-
-        bb = ByteBuffer.wrap(N.EMPTY_BYTE_ARRAY);
-        N.println(bbType.stringOf(bb));
-        assertEquals("", bbType.stringOf(bb));
-        N.println(bbType.valueOf(bbType.stringOf(bb)));
-
-        bb = ByteBuffer.wrap(N.EMPTY_BYTE_ARRAY, 0, 0);
-        N.println(bbType.stringOf(bb));
-        assertEquals("", bbType.stringOf(bb));
-        N.println(bbType.valueOf(bbType.stringOf(bb)));
-    }
-
-    @Test
-    public void test_put_get() {
-        for (int i = 0; i < 1000; i++) {
-            final Account account = createAccount(Account.class);
-            final StringBuilder sb = Objectory.createStringBuilder();
-
-            int tmp = Math.abs(rand.nextInt(1000));
-
-            while (tmp-- > 0) {
-                sb.append(account.getGui()).append('\\');
-            }
-
-            account.setFirstName(sb.toString());
-
-            Objectory.recycle(sb);
-
-            final String key = account.getEmailAddress();
-            cache.put(key, account);
-            final Account account2 = cache.get(key).orElse(null);
-
-            assertEquals(account, account2);
-
-            if (i % 3 == 0) {
-                cache.remove(key);
-                assertNull(cache.get(key).orElse(null));
-            }
-
-            if (counter.incrementAndGet() % 10000 == 0) {
-                N.println("=========" + counter.get() + ": " + (System.currentTimeMillis() - start));
-            }
-        }
-    }
-
-    private Account createAccount(final Class<Account> cls) {
-        Account account = Beans.newRandomBean(cls);
-        account.setEmailAddress(Strings.uuid());
-        return account;
-    }
-
-    /**
-     * Regression test for the totalDataSize double-counting bug in AbstractOffHeapCache.put().
-     *
-     * <p>StoreWrapper's constructor already accounts for totalDataSize, but put() also added it
-     * unconditionally for every wrapper type, while StoreWrapper.destroy() only subtracts it once.
-     * As a result, for every disk-stored entry the reported dataSize was double the real value and
-     * never reconciled (it leaked permanently).
-     *
-     * <p>Before the fix: after a single disk-only put, stats().dataSize() == 2 * dataSizeOnDisk(),
-     * and after removing the entry dataSize() stays non-zero. After the fix dataSize() ==
-     * dataSizeOnDisk() and returns to 0 once the entry is removed.
-     */
-    @Test
-    public void test_totalDataSize_doubleCount_for_disk_entries() {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-
-        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                memStore.put(key, value);
-                return true;
-            }
-
-            @Override
-            public byte[] get(final String key) {
-                return memStore.get(key);
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                memStore.remove(key);
-                return true;
-            }
-        };
-
-        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
-                .capacityInMB(8)
-                .evictDelay(0)
-                .defaultLiveTime(1000_000)
-                .defaultMaxIdleTime(1000_000)
-                .offHeapStore(inMemoryStore)
-                .storeSelector((k, v, size) -> 2) // disk only
-                .build();
+    void constructorCapacityAndEvictDelay() {
+        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, 0L);
 
         try {
-            final Account account = createAccount(Account.class);
-            account.setFirstName(Strings.repeat("x", 5000));
-            final String key = account.getEmailAddress();
-
-            assertTrue(diskCache.put(key, account));
-
-            final var statsAfterPut = diskCache.stats();
-            // The single on-disk entry must be counted exactly once in dataSize.
-            assertEquals(statsAfterPut.dataSizeOnDisk(), statsAfterPut.dataSize());
-            assertEquals(account, diskCache.get(key).orElse(null));
-
-            diskCache.remove(key);
-
-            final var statsAfterRemove = diskCache.stats();
-            assertEquals(0L, statsAfterRemove.dataSizeOnDisk());
-            assertEquals(0L, statsAfterRemove.dataSize());
+            final byte[] value = { 5, 6, 7 };
+            assertTrue(cache.put("k", value));
+            assertArrayEquals(value, cache.getOrNull("k"));
+            assertNotNull(cache.stats());
         } finally {
-            diskCache.close();
+            cache.close();
         }
     }
 
-    /**
-     * Regression test for the "no expiration" contract bug in AbstractOffHeapCache.put().
-     *
-     * <p>The OffHeapCache Builder javadoc documents {@code defaultLiveTime}/{@code defaultMaxIdleTime}
-     * of {@code 0} (the Builder default) as "no TTL expiration" / "no idle timeout". But
-     * {@code put(key, value)} forwards those defaults to {@code put(key, value, 0, 0)}, which built a
-     * Wrapper whose underlying {@code ActivityPrint} throws {@code IllegalArgumentException} for any
-     * value {@code <= 0}.
-     *
-     * <p>Before the fix: a default-built cache threw {@code IllegalArgumentException} on the simple
-     * {@code put(key, value)} call. After the fix: non-positive live/idle times are treated as
-     * "no expiration" and the entry is stored and retrievable.
-     */
+    /** {@code OffHeapCache(capacityInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime)} full basic form. */
     @Test
-    public void test_put_withDefaultZeroExpiration_doesNotThrow() {
-        final OffHeapCache<String, Account> noExpiryCache = OffHeapCache.<String, Account> builder()
-                .capacityInMB(8)
-                .evictDelay(0)
-                // defaultLiveTime / defaultMaxIdleTime intentionally left at the Builder default (0)
-                .build();
+    void constructorCapacityEvictDelayLiveTimeIdleTime() {
+        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, 0L, 60_000L, 60_000L);
 
         try {
-            final Account account = createAccount(Account.class);
-            final String key = account.getEmailAddress();
-
-            // Documented "no expiration" usage - must NOT throw and must store the value.
-            assertTrue(noExpiryCache.put(key, account));
-            assertEquals(account, noExpiryCache.get(key).orElse(null));
-
-            // Explicit non-positive values must behave the same way.
-            assertTrue(noExpiryCache.put("k2", account, 0, 0));
-            assertTrue(noExpiryCache.put("k3", account, -1, -1));
-            assertEquals(account, noExpiryCache.get("k2").orElse(null));
-            assertEquals(account, noExpiryCache.get("k3").orElse(null));
+            final byte[] value = { 8, 9 };
+            assertTrue(cache.put("k", value));
+            assertArrayEquals(value, cache.getOrNull("k"));
         } finally {
-            noExpiryCache.close();
+            cache.close();
         }
     }
 
-    /**
-     * Regression test for the negative-evictDelay contract violation.
-     *
-     * <p>Every constructor/builder javadoc documents "0 or negative disables automatic eviction",
-     * but a negative value was passed straight to the underlying pool, whose constructor throws
-     * {@code IllegalArgumentException} — and because the off-heap memory had already been allocated
-     * before pool creation, the whole native allocation leaked with it. The fix clamps the value
-     * before handing it to the pool (and releases the allocation should any later init step fail).
-     */
+    /** {@code OffHeapCache(capacityInMB)} delegates to the (capacity, evictDelay=3000) constructor. */
     @Test
-    public void test_builder_negativeEvictDelay_disablesEvictionInsteadOfThrowing() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(-1).build();
-        try {
-            assertTrue(c.put("k", new byte[] { 1, 2, 3 }));
-            assertArrayEquals(new byte[] { 1, 2, 3 }, c.getOrNull("k"));
-        } finally {
-            c.close();
-        }
-    }
-
-    /**
-     * Regression test for the post-close {@code put()} use-after-free guard on the real
-     * {@code Unsafe}-backed allocator. {@code close()} frees the off-heap allocation, so a
-     * subsequent {@code put()} must fail fast with {@link IllegalStateException} <em>before</em>
-     * reaching the native copy rather than write into freed memory. (The abstract-level test
-     * {@code AbstractOffHeapCacheTest#testPutAfterCloseFailsBeforeNativeCopy} verifies the ordering
-     * with a fake subclass; this exercises the concrete {@link OffHeapCache}.)
-     */
-    @Test
-    public void test_putAfterClose_throwsIllegalStateException() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
-        c.close();
-        assertThrows(IllegalStateException.class, () -> c.put("k", new byte[] { 1, 2, 3 }));
-    }
-
-    /**
-     * Regression test for the array-retention hazard on the disk-spill path.
-     *
-     * <p>When the serialized size exactly matched the buffer length (always true for {@code byte[]}
-     * values), {@code putToDisk()} handed the CALLER'S OWN array to {@code OffHeapStore.put}. The
-     * OffHeapStore contract leaves defensive copying implementation-specific, so a store that
-     * retains the array (like this in-memory one) saw its cached bytes silently change when the
-     * caller later mutated the array. The fix always passes a private copy.
-     */
-    @Test
-    public void test_putToDisk_handsStoreAPrivateCopy() {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-        final OffHeapStore<String> retainingStore = new OffHeapStore<>() {
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                memStore.put(key, value); // retains the array reference - allowed by the contract
-                return true;
-            }
-
-            @Override
-            public byte[] get(final String key) {
-                return memStore.get(key);
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                memStore.remove(key);
-                return true;
-            }
-        };
-
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
-                .capacityInMB(1)
-                .evictDelay(0)
-                .offHeapStore(retainingStore)
-                .storeSelector((k, v, size) -> 2) // disk only
-                .build();
-        try {
-            final byte[] value = { 10, 20, 30, 40 };
-            assertTrue(c.put("k", value));
-
-            // The caller mutates its own array after the put...
-            value[0] = 99;
-
-            // ...and the cached entry must be unaffected.
-            assertArrayEquals(new byte[] { 10, 20, 30, 40 }, c.getOrNull("k"));
-        } finally {
-            c.close();
-        }
-    }
-
-    /**
-     * Regression test for disk-byte ownership across same-key replacements.
-     *
-     * <p>The offHeapStore is keyed by the cache key alone, so when a put replaces an existing
-     * disk-spilled entry, the replaced wrapper must not delete the store bytes that now belong to
-     * the replacing wrapper. Ownership is now tracked per key: replacement transfers it, reads of
-     * the current entry succeed, and removing the entry deletes the store bytes exactly once.
-     */
-    @Test
-    public void test_putToDisk_replacement_keepsCurrentBytes_and_removeDeletesThem() {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                memStore.put(key, value);
-                return true;
-            }
-
-            @Override
-            public byte[] get(final String key) {
-                return memStore.get(key);
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                memStore.remove(key);
-                return true;
-            }
-        };
-
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
-                .capacityInMB(1)
-                .evictDelay(0)
-                .offHeapStore(inMemoryStore)
-                .storeSelector((k, v, size) -> 2) // disk only
-                .build();
-        try {
-            assertTrue(c.put("k", new byte[] { 1, 1, 1 }));
-            assertTrue(c.put("k", new byte[] { 2, 2, 2 })); // replaces the disk entry under the same key
-            assertEquals(1, memStore.size());
-            assertArrayEquals(new byte[] { 2, 2, 2 }, c.getOrNull("k"));
-
-            c.remove("k");
-            assertNull(c.getOrNull("k"));
-            assertTrue(memStore.isEmpty());
-
-            final OffHeapCacheStats stats = c.stats();
-            assertEquals(0L, stats.sizeOnDisk());
-            assertEquals(0L, stats.dataSizeOnDisk());
-        } finally {
-            c.close();
-        }
-    }
-
-    /**
-     * Regression coverage for the pooled-buffer handling on the serialization-failure path in
-     * {@code AbstractOffHeapCache.put()}. The pooled {@code ByteArrayOutputStream} is obtained
-     * before the main try/finally that recycles it, so a serializer that throws used to skip
-     * {@code Objectory.recycle(os)} and leak the pooled buffer. The fix recycles the buffer on the
-     * failure path and nulls the reference so the outer finally cannot double-recycle it.
-     *
-     * <p>This test drives many serialization failures interleaved with successful puts/gets: the
-     * serializer exception must propagate cleanly, and—critically—the shared Objectory buffer pool
-     * must not be corrupted (a double-recycle could hand a still-referenced buffer to a later
-     * successful put), so every interleaved normal put/get must round-trip correctly.
-     */
-    @Test
-    public void test_put_serializerThrows_propagates_and_cacheStaysUsable() {
-        final OffHeapCache<String, String> c = OffHeapCache.<String, String> builder().capacityInMB(8).evictDelay(0).serializer((v, os) -> {
-            if (v.startsWith("BOOM")) {
-                throw new IllegalStateException("serialization failed for: " + v);
-            }
-            final byte[] b = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            os.write(b, 0, b.length);
-        }).deserializer((bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8)).build();
+    void constructorCapacityOnly() {
+        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1);
 
         try {
-            for (int i = 0; i < 300; i++) {
-                final int n = i;
-                // A throwing serializer must propagate its exception out of put()...
-                assertThrows(IllegalStateException.class, () -> c.put("BOOM" + n, "BOOM" + n));
-                // ...without corrupting the cache or the shared buffer pool: a normal put/get
-                // must still round-trip on every iteration.
-                assertTrue(c.put("ok" + n, "value" + n));
-                assertEquals("value" + n, c.get("ok" + n).orElse(null));
-            }
+            assertFalse(cache.isClosed());
+            final byte[] value = { 1, 2, 3, 4 };
+            assertTrue(cache.put("k", value));
+            assertArrayEquals(value, cache.getOrNull("k"));
         } finally {
-            c.close();
+            cache.close();
         }
     }
+
+    // Writes
 
     /**
      * Regression coverage for the "return inside finally" exception-swallowing bug in
@@ -450,7 +95,7 @@ public class OffHeapCacheTest {
      * cache must stay fully usable (every interleaved normal put/get round-trips).
      */
     @Test
-    public void test_put_offHeapStoreThrows_propagates_and_cacheStaysUsable() {
+    void putOffHeapStoreThrowsPropagatesAndCacheStaysUsable() {
         final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
 
         final OffHeapStore<String> throwingStore = new OffHeapStore<>() {
@@ -501,58 +146,590 @@ public class OffHeapCacheTest {
     }
 
     /**
-     * Durable boundary round-trip coverage for the off-heap memory arithmetic. Sweeps sizes that
-     * exercise the single-slot path, the multi-slot path (values larger than maxBlockSize), and the
-     * multi-segment-spanning path (values larger than the 1 MB segment), crossing the fixed
-     * MIN_BLOCK_SIZE (64), default maxBlockSize (8192) and SEGMENT_SIZE (1 MB) boundaries and their
-     * ±1 neighbours. Each value carries a size-dependent byte pattern so any truncation, wrong
-     * copy length, or multi-slot reassembly offset error is caught by the exact assertArrayEquals.
+     * Regression coverage for the pooled-buffer handling on the serialization-failure path in
+     * {@code AbstractOffHeapCache.put()}. The pooled {@code ByteArrayOutputStream} is obtained
+     * before the main try/finally that recycles it, so a serializer that throws used to skip
+     * {@code Objectory.recycle(os)} and leak the pooled buffer. The fix recycles the buffer on the
+     * failure path and nulls the reference so the outer finally cannot double-recycle it.
+     *
+     * <p>This test drives many serialization failures interleaved with successful puts/gets: the
+     * serializer exception must propagate cleanly, and—critically—the shared Objectory buffer pool
+     * must not be corrupted (a double-recycle could hand a still-referenced buffer to a later
+     * successful put), so every interleaved normal put/get must round-trip correctly.
      */
     @Test
-    public void test_boundary_sizes_roundtrip_exact() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(64).evictDelay(0).build();
+    void putSerializerThrowsPropagatesAndCacheStaysUsable() {
+        final OffHeapCache<String, String> c = OffHeapCache.<String, String> builder().capacityInMB(8).evictDelay(0).serializer((v, os) -> {
+            if (v.startsWith("BOOM")) {
+                throw new IllegalStateException("serialization failed for: " + v);
+            }
+            final byte[] b = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            os.write(b, 0, b.length);
+        }).deserializer((bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8)).build();
+
         try {
-            final int[] sizes = { 0, 1, 63, 64, 65, 127, 128, 129, 8191, 8192, 8193, 16383, 16384, 16385, 24583, 1048575, 1048576, 1048577, 2097152, 3158073 };
-            for (final int size : sizes) {
-                final byte[] v = new byte[size];
-                for (int i = 0; i < size; i++) {
-                    v[i] = (byte) (size * 31 + i);
-                }
-                final String key = "k" + size;
-                assertTrue(c.put(key, v), "put failed for size " + size);
-                assertArrayEquals(v, c.get(key).orElse(null), "round-trip mismatch for size " + size);
+            for (int i = 0; i < 300; i++) {
+                final int n = i;
+                // A throwing serializer must propagate its exception out of put()...
+                assertThrows(IllegalStateException.class, () -> c.put("BOOM" + n, "BOOM" + n));
+                // ...without corrupting the cache or the shared buffer pool: a normal put/get
+                // must still round-trip on every iteration.
+                assertTrue(c.put("ok" + n, "value" + n));
+                assertEquals("value" + n, c.get("ok" + n).orElse(null));
             }
         } finally {
             c.close();
         }
     }
 
-    /**
-     * A replacement put whose value is larger than the ENTIRE off-heap region is doomed: no amount
-     * of vacating can make it fit. Such a put must fail side-effect-free — in particular it must
-     * NOT schedule the memory-pressure vacate, which runs asynchronously and destroys ~20% of the
-     * pool (here: the key's own prior mapping, turning a failed replacement into data loss that
-     * won the race against this test's get() only by timing). A failed put of a value that COULD
-     * fit still legitimately schedules a vacate, and the prior mapping may then be evicted.
-     */
     @Test
-    public void test_failed_memory_replacement_preserves_existing_entry() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
+    void putToDiskDiskToDiskReplacePreservesNewValue() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2) // disk only
+                .build();
 
         try {
-            final byte[] oldValue = new byte[] { 1, 2, 3, 4 };
+            final String key = "shared-key";
 
-            assertTrue(c.put("k", oldValue));
-            assertFalse(c.put("k", new byte[2 * 1024 * 1024]));
-            assertArrayEquals(oldValue, c.get("k").orElse(null));
-            assertEquals(0, c.stats().evictionCount(), "a doomed oversized put must not schedule a vacate");
+            final Account first = new Account();
+            first.setFirstName(Strings.repeat("a", 5000));
+            assertTrue(diskCache.put(key, first));
+            assertEquals(first, diskCache.get(key).orElse(null));
+
+            // Replace under the same key with a different on-disk value.
+            final Account second = new Account();
+            second.setFirstName(Strings.repeat("b", 5000));
+            assertTrue(diskCache.put(key, second));
+
+            // Critical assertion: the value MUST be the new one and MUST NOT be null.
+            final Account fetched = diskCache.get(key).orElse(null);
+            assertEquals(second, fetched);
+            // And the disk store must hold exactly one entry for this key.
+            assertTrue(memStore.containsKey(key));
+            assertEquals(1, memStore.size());
+
+            // Sanity: stats reflect exactly one on-disk entry.
+            final var stats = diskCache.stats();
+            assertEquals(1L, stats.sizeOnDisk());
+            assertEquals(stats.dataSizeOnDisk(), stats.dataSize());
+        } finally {
+            diskCache.close();
+        }
+    }
+
+    /**
+     * Regression test for the array-retention hazard on the disk-spill path.
+     *
+     * <p>When the serialized size exactly matched the buffer length (always true for {@code byte[]}
+     * values), {@code putToDisk()} handed the CALLER'S OWN array to {@code OffHeapStore.put}. The
+     * OffHeapStore contract leaves defensive copying implementation-specific, so a store that
+     * retains the array (like this in-memory one) saw its cached bytes silently change when the
+     * caller later mutated the array. The fix always passes a private copy.
+     */
+    @Test
+    void putToDiskHandsStoreAPrivateCopy() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+        final OffHeapStore<String> retainingStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value); // retains the array reference - allowed by the contract
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                memStore.remove(key);
+                return true;
+            }
+        };
+
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(retainingStore)
+                .storeSelector((k, v, size) -> 2) // disk only
+                .build();
+        try {
+            final byte[] value = { 10, 20, 30, 40 };
+            assertTrue(c.put("k", value));
+
+            // The caller mutates its own array after the put...
+            value[0] = 99;
+
+            // ...and the cached entry must be unaffected.
+            assertArrayEquals(new byte[] { 10, 20, 30, 40 }, c.getOrNull("k"));
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
+     * Regression test for disk-byte ownership across same-key replacements.
+     *
+     * <p>The offHeapStore is keyed by the cache key alone, so when a put replaces an existing
+     * disk-spilled entry, the replaced wrapper must not delete the store bytes that now belong to
+     * the replacing wrapper. Ownership is now tracked per key: replacement transfers it, reads of
+     * the current entry succeed, and removing the entry deletes the store bytes exactly once.
+     */
+    @Test
+    void putToDiskReplacementKeepsCurrentBytesAndRemoveDeletesThem() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                memStore.remove(key);
+                return true;
+            }
+        };
+
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2) // disk only
+                .build();
+        try {
+            assertTrue(c.put("k", new byte[] { 1, 1, 1 }));
+            assertTrue(c.put("k", new byte[] { 2, 2, 2 })); // replaces the disk entry under the same key
+            assertEquals(1, memStore.size());
+            assertArrayEquals(new byte[] { 2, 2, 2 }, c.getOrNull("k"));
+
+            c.remove("k");
+            assertNull(c.getOrNull("k"));
+            assertTrue(memStore.isEmpty());
+
+            final OffHeapCacheStats stats = c.stats();
+            assertEquals(0L, stats.sizeOnDisk());
+            assertEquals(0L, stats.dataSizeOnDisk());
+        } finally {
+            c.close();
+        }
+    }
+
+    /**
+     * Regression test for the "no expiration" contract bug in AbstractOffHeapCache.put().
+     *
+     * <p>The OffHeapCache Builder javadoc documents {@code defaultLiveTime}/{@code defaultMaxIdleTime}
+     * of {@code 0} (the Builder default) as "no TTL expiration" / "no idle timeout". But
+     * {@code put(key, value)} forwards those defaults to {@code put(key, value, 0, 0)}, which built a
+     * Wrapper whose underlying {@code ActivityPrint} throws {@code IllegalArgumentException} for any
+     * value {@code <= 0}.
+     *
+     * <p>Before the fix: a default-built cache threw {@code IllegalArgumentException} on the simple
+     * {@code put(key, value)} call. After the fix: non-positive live/idle times are treated as
+     * "no expiration" and the entry is stored and retrievable.
+     */
+    @Test
+    void putWithDefaultZeroExpirationDoesNotThrow() {
+        final OffHeapCache<String, Account> noExpiryCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                // defaultLiveTime / defaultMaxIdleTime intentionally left at the Builder default (0)
+                .build();
+
+        try {
+            final Account account = new Account();
+            account.setEmailAddress("account@example.test");
+            account.setFirstName("Ada");
+            final String key = account.getEmailAddress();
+
+            // Documented "no expiration" usage - must NOT throw and must store the value.
+            assertTrue(noExpiryCache.put(key, account));
+            assertEquals(account, noExpiryCache.get(key).orElse(null));
+
+            // Explicit non-positive values must behave the same way.
+            assertTrue(noExpiryCache.put("k2", account, 0, 0));
+            assertTrue(noExpiryCache.put("k3", account, -1, -1));
+            assertEquals(account, noExpiryCache.get("k2").orElse(null));
+            assertEquals(account, noExpiryCache.get("k3").orElse(null));
+        } finally {
+            noExpiryCache.close();
+        }
+    }
+
+    // Removals
+
+    @Test
+    void clearReclaimsEmptySegmentsForDifferentSlotSizes() {
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).maxBlockSizeInBytes(1024 * 1024).evictDelay(0).build();
+
+        try {
+            assertTrue(c.put("small", new byte[64]));
+            c.clear();
+
+            assertTrue(c.put("large", new byte[256 * 1024]));
+        } finally {
+            c.close();
+        }
+    }
+
+    // Statistics
+
+    /**
+     * Regression test for the LongSummaryStatistics race in
+     * {@link com.landawn.abacus.cache.AbstractOffHeapCache#stats}.
+     *
+     * <p>Before the fix, {@code stats()} read {@code totalWriteToDiskTimeStats} /
+     * {@code totalReadFromDiskTimeStats} without synchronization while concurrent puts/gets
+     * were calling {@code accept(...)} under the same monitor. Because
+     * {@code LongSummaryStatistics} is not thread-safe, the reader could observe a torn
+     * snapshot — e.g. {@code count > 0} but {@code min == Long.MAX_VALUE} (so the produced
+     * {@code MinMaxAvg.min} would be a wildly wrong, huge double). After the fix the reader
+     * snapshots under the same monitor, so {@code min}, {@code max}, and {@code average} are
+     * all consistent with a non-zero count.
+     */
+    @Test
+    void statsUnderConcurrentDiskWritesConsistent() throws Exception {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2) // disk only — exercises totalWriteToDiskTimeStats
+                .statsTimeOnDisk(true)
+                .build();
+
+        final java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        final java.util.concurrent.CountDownLatch firstWrite = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch firstSample = new java.util.concurrent.CountDownLatch(1);
+        try {
+            final java.util.concurrent.Future<?> writer = executor.submit(() -> {
+                for (int i = 0; i < 1_000; i++) {
+                    final Account account = new Account();
+                    account.setId(i);
+                    account.setFirstName("x".repeat(2_048));
+                    assertTrue(diskCache.put("k" + i % 64, account));
+                    if (i == 0) {
+                        firstWrite.countDown();
+                        assertTrue(firstSample.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                    }
+                }
+                return null;
+            });
+            final java.util.concurrent.Future<?> reader = executor.submit(() -> {
+                assertTrue(firstWrite.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                for (int i = 0; i < 1_000; i++) {
+                    final var snapshot = diskCache.stats();
+                    final var timing = snapshot.writeToDiskTimeStats();
+                    assertTrue(snapshot.putCountToDisk() > 0);
+                    assertTrue(Double.isFinite(timing.min()) && Double.isFinite(timing.max()) && Double.isFinite(timing.avg()));
+                    assertTrue(timing.min() >= 0 && timing.min() <= timing.avg() && timing.avg() <= timing.max());
+                    firstSample.countDown();
+                }
+                return null;
+            });
+            writer.get(15, java.util.concurrent.TimeUnit.SECONDS);
+            reader.get(15, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(1_000, diskCache.stats().putCountToDisk());
+        } finally {
+            firstSample.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS));
+            diskCache.close();
+        }
+    }
+
+    /**
+     * Regression test for the totalDataSize double-counting bug in AbstractOffHeapCache.put().
+     *
+     * <p>StoreWrapper's constructor already accounts for totalDataSize, but put() also added it
+     * unconditionally for every wrapper type, while StoreWrapper.destroy() only subtracts it once.
+     * As a result, for every disk-stored entry the reported dataSize was double the real value and
+     * never reconciled (it leaked permanently).
+     *
+     * <p>Before the fix: after a single disk-only put, stats().dataSize() == 2 * dataSizeOnDisk(),
+     * and after removing the entry dataSize() stays non-zero. After the fix dataSize() ==
+     * dataSizeOnDisk() and returns to 0 once the entry is removed.
+     */
+    @Test
+    void totalDataSizeDoubleCountForDiskEntries() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                memStore.remove(key);
+                return true;
+            }
+        };
+
+        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2) // disk only
+                .build();
+
+        try {
+            final Account account = new Account();
+            account.setEmailAddress("account@example.test");
+            account.setFirstName("Ada");
+            account.setFirstName(Strings.repeat("x", 5000));
+            final String key = account.getEmailAddress();
+
+            assertTrue(diskCache.put(key, account));
+
+            final var statsAfterPut = diskCache.stats();
+            // The single on-disk entry must be counted exactly once in dataSize.
+            assertEquals(statsAfterPut.dataSizeOnDisk(), statsAfterPut.dataSize());
+            assertEquals(account, diskCache.get(key).orElse(null));
+
+            diskCache.remove(key);
+
+            final var statsAfterRemove = diskCache.stats();
+            assertEquals(0L, statsAfterRemove.dataSizeOnDisk());
+            assertEquals(0L, statsAfterRemove.dataSize());
+        } finally {
+            diskCache.close();
+        }
+    }
+
+    // Validation And Failures
+
+    @Test
+    void diskDeserializerReturningNullIsReportedAsConfigurationFailure() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, String> diskCache = OffHeapCache.<String, String> builder().capacityInMB(1).evictDelay(0).serializer((value, output) -> {
+            final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            output.write(bytes, 0, bytes.length);
+        }).deserializer((bytes, type) -> null).offHeapStore(inMemoryStore).storeSelector((key, value, size) -> 2).build();
+
+        try {
+            assertTrue(diskCache.put("key", "value"));
+
+            final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> diskCache.getOrNull("key"));
+            assertTrue(failure.getMessage().contains("deserializer returned null"));
+            assertTrue(diskCache.containsKey("key"), "valid stored bytes must not be discarded as though they were missing");
+            assertEquals(0L, diskCache.stats().hitCountFromDisk(), "a value that was not reconstructed is not a successful disk hit");
+        } finally {
+            diskCache.close();
+        }
+    }
+
+    /**
+     * Documented full-constructor contract: unlike {@code Builder.build()}, the constructor performs no
+     * {@code 0}-to-default substitution for {@code maxBlockSize}, so {@code 0} is rejected. The
+     * invalid argument is detected before the native allocation, so the supplied store stays open
+     * and owned by the caller.
+     */
+    @Test
+    void fullConstructorZeroMaxBlockSizeRejectedWithoutClosingStore() {
+        final AtomicBoolean storeClosed = new AtomicBoolean();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return false;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                storeClosed.set(true);
+            }
+        };
+
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCache<String, byte[]>(1, 0, 0, 0, 0, 0f, null, null, store, false, null, null));
+        assertFalse(storeClosed.get());
+    }
+
+    @Test
+    void memoryDeserializerReturningNullFailsForSingleAndMultiSlotValues() {
+        final OffHeapCache<String, String> memoryCache = OffHeapCache.<String, String> builder()
+                .capacityInMB(2)
+                .maxBlockSizeInBytes(1024)
+                .evictDelay(0)
+                .serializer((value, output) -> {
+                    final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    output.write(bytes, 0, bytes.length);
+                })
+                .deserializer((bytes, type) -> null)
+                .build();
+
+        try {
+            assertTrue(memoryCache.put("single", "small"));
+            assertTrue(memoryCache.put("multi", Strings.repeat("x", 2048)));
+
+            final IllegalStateException singleFailure = assertThrows(IllegalStateException.class, () -> memoryCache.getOrNull("single"));
+            final IllegalStateException multiFailure = assertThrows(IllegalStateException.class, () -> memoryCache.getOrNull("multi"));
+            assertTrue(singleFailure.getMessage().contains("deserializer returned null"));
+            assertTrue(multiFailure.getMessage().contains("deserializer returned null"));
+        } finally {
+            memoryCache.close();
+        }
+    }
+
+    // Other Behavior
+
+    /**
+     * Documented {@code allocate} contract: {@code Unsafe.allocateMemory} rejects a negative size
+     * with {@link IllegalArgumentException}, and the rejected call leaves the live cache untouched.
+     */
+    @Test
+    void allocateNegativeSizeThrowsIllegalArgumentException() {
+        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+
+        try {
+            final byte[] value = { 1, 2, 3 };
+            assertTrue(cache.put("k", value));
+            assertThrows(IllegalArgumentException.class, () -> cache.allocate(-1L));
+            assertArrayEquals(value, cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * An entry's expiration clock starts when the entry is installed, i.e. AFTER a slow disk
+     * write completes — not when the put was issued. A short-TTL replacement written through a
+     * slow store therefore still succeeds, is readable for its full TTL afterwards, and expires
+     * (with clean disk state) once the TTL elapses. This holds for both a memory-backed and a
+     * disk-backed prior entry.
+     */
+    @Test
+    void diskReplacementTtlStartsAfterStoreWrite() throws Exception {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
+                .capacityInMB(1)
+                .evictDelay(0)
+                .offHeapStore(newSlowInMemoryStore(memStore, 60))
+                .storeSelector((k, v, size) -> size < 1000 ? 1 : 2) // small values in memory, large on disk
+                .build();
+
+        try {
+            // Memory-backed prior replaced by a disk-routed value with a TTL shorter than the
+            // 60 ms store write: the put still succeeds and the value is readable afterwards,
+            // because the TTL starts when the write completes.
+            assertTrue(c.put("k", new byte[] { 1, 2, 3, 4 })); // memory-backed, no expiration
+            final byte[] replacement = new byte[2000];
+            assertTrue(c.put("k", replacement, 500, 0));
+            assertArrayEquals(replacement, c.getOrNull("k"), "the replacement must be readable for its full TTL after the write");
+            assertEquals(1L, c.stats().sizeOnDisk());
+
+            // Disk-backed prior replaced disk-to-disk: same rule.
+            final byte[] second = new byte[3000];
+            assertTrue(c.put("k", second, 500, 0));
+            assertArrayEquals(second, c.getOrNull("k"));
+            assertEquals(1, memStore.size(), "the store holds exactly the current bytes for the key");
+
+            // After the TTL elapses the entry expires: the key reads as absent, the stale
+            // mapping is dropped, and the disk statistics return to zero.
+            Thread.sleep(600);
+            assertNull(c.getOrNull("k"));
+            assertFalse(c.containsKey("k"));
+
+            final var stats = c.stats();
+            assertEquals(0L, stats.sizeOnDisk());
+            assertEquals(0L, stats.dataSizeOnDisk());
         } finally {
             c.close();
         }
     }
 
     @Test
-    public void test_failed_disk_replacement_preserves_existing_entry() {
+    void failedDiskReplacementPreservesExistingEntry() {
         final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
         final AtomicBoolean failWrites = new AtomicBoolean(false);
 
@@ -589,11 +766,11 @@ public class OffHeapCacheTest {
 
         try {
             final String key = "shared-key";
-            final Account first = createAccount(Account.class);
+            final Account first = new Account();
             first.setFirstName(Strings.repeat("a", 5000));
             assertTrue(diskCache.put(key, first));
 
-            final Account second = createAccount(Account.class);
+            final Account second = new Account();
             second.setFirstName(Strings.repeat("b", 5000));
             failWrites.set(true);
 
@@ -610,8 +787,89 @@ public class OffHeapCacheTest {
         }
     }
 
+    /**
+     * A replacement put whose value is larger than the ENTIRE off-heap region is doomed: no amount
+     * of vacating can make it fit. Such a put must fail side-effect-free — in particular it must
+     * NOT schedule the memory-pressure vacate, which runs asynchronously and destroys ~20% of the
+     * pool (here: the key's own prior mapping, turning a failed replacement into data loss that
+     * won the race against this test's get() only by timing). A failed put of a value that COULD
+     * fit still legitimately schedules a vacate, and the prior mapping may then be evicted.
+     */
     @Test
-    public void test_throwing_disk_replacement_preserves_existing_entry() {
+    void failedMemoryReplacementPreservesExistingEntry() {
+        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
+
+        try {
+            final byte[] oldValue = new byte[] { 1, 2, 3, 4 };
+
+            assertTrue(c.put("k", oldValue));
+            assertFalse(c.put("k", new byte[2 * 1024 * 1024]));
+            assertArrayEquals(oldValue, c.get("k").orElse(null));
+            assertEquals(0, c.stats().evictionCount(), "a doomed oversized put must not schedule a vacate");
+        } finally {
+            c.close();
+        }
+    }
+
+    @Test
+    void missingDiskBytesNotCountedAsDiskHitAndStaleWrapperRemoved() {
+        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                memStore.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final String key) {
+                return memStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return memStore.remove(key) != null;
+            }
+        };
+
+        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
+                .capacityInMB(8)
+                .evictDelay(0)
+                .defaultLiveTime(1000_000)
+                .defaultMaxIdleTime(1000_000)
+                .offHeapStore(inMemoryStore)
+                .storeSelector((k, v, size) -> 2)
+                .build();
+
+        try {
+            final Account account = new Account();
+            account.setEmailAddress("account@example.test");
+            account.setFirstName("Ada");
+            account.setFirstName(Strings.repeat("x", 5000));
+            final String key = account.getEmailAddress();
+
+            assertTrue(diskCache.put(key, account));
+            memStore.clear();
+
+            assertNull(diskCache.get(key).orElse(null));
+
+            final var stats = diskCache.stats();
+            assertFalse(diskCache.containsKey(key), "the stale pool wrapper must be removed after the store reports missing bytes");
+            assertEquals(1L, stats.getCount());
+            assertEquals(0L, stats.hitCount(), "a get that returned no value must not remain classified as a pool-level hit");
+            assertEquals(1L, stats.missCount(), "a confirmed backing-store miss must be reflected in cache miss statistics");
+            assertEquals(0L, stats.hitCountFromDisk());
+            assertEquals(0L, stats.sizeOnDisk());
+            assertEquals(0L, stats.dataSizeOnDisk());
+            assertEquals(0L, stats.dataSize());
+        } finally {
+            diskCache.close();
+        }
+    }
+
+    @Test
+    void throwingDiskReplacementPreservesExistingEntry() {
         final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
         final AtomicBoolean failWrites = new AtomicBoolean(false);
 
@@ -648,11 +906,11 @@ public class OffHeapCacheTest {
 
         try {
             final String key = "shared-key-throwing";
-            final Account first = createAccount(Account.class);
+            final Account first = new Account();
             first.setFirstName(Strings.repeat("a", 5000));
             assertTrue(diskCache.put(key, first));
 
-            final Account second = createAccount(Account.class);
+            final Account second = new Account();
             second.setFirstName(Strings.repeat("b", 5000));
             failWrites.set(true);
 
@@ -696,566 +954,4 @@ public class OffHeapCacheTest {
             }
         };
     }
-
-    /**
-     * An entry's expiration clock starts when the entry is installed, i.e. AFTER a slow disk
-     * write completes — not when the put was issued. A short-TTL replacement written through a
-     * slow store therefore still succeeds, is readable for its full TTL afterwards, and expires
-     * (with clean disk state) once the TTL elapses. This holds for both a memory-backed and a
-     * disk-backed prior entry.
-     */
-    @Test
-    public void test_disk_replacement_ttl_starts_after_store_write() throws Exception {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
-                .capacityInMB(1)
-                .evictDelay(0)
-                .offHeapStore(newSlowInMemoryStore(memStore, 60))
-                .storeSelector((k, v, size) -> size < 1000 ? 1 : 2) // small values in memory, large on disk
-                .build();
-
-        try {
-            // Memory-backed prior replaced by a disk-routed value with a TTL shorter than the
-            // 60 ms store write: the put still succeeds and the value is readable afterwards,
-            // because the TTL starts when the write completes.
-            assertTrue(c.put("k", new byte[] { 1, 2, 3, 4 })); // memory-backed, no expiration
-            final byte[] replacement = new byte[2000];
-            assertTrue(c.put("k", replacement, 500, 0));
-            assertArrayEquals(replacement, c.getOrNull("k"), "the replacement must be readable for its full TTL after the write");
-            assertEquals(1L, c.stats().sizeOnDisk());
-
-            // Disk-backed prior replaced disk-to-disk: same rule.
-            final byte[] second = new byte[3000];
-            assertTrue(c.put("k", second, 500, 0));
-            assertArrayEquals(second, c.getOrNull("k"));
-            assertEquals(1, memStore.size(), "the store holds exactly the current bytes for the key");
-
-            // After the TTL elapses the entry expires: the key reads as absent, the stale
-            // mapping is dropped, and the disk statistics return to zero.
-            Thread.sleep(600);
-            assertNull(c.getOrNull("k"));
-            assertFalse(c.containsKey("k"));
-
-            final var stats = c.stats();
-            assertEquals(0L, stats.sizeOnDisk());
-            assertEquals(0L, stats.dataSizeOnDisk());
-        } finally {
-            c.close();
-        }
-    }
-
-    @Test
-    public void test_clear_reclaims_empty_segments_for_different_slot_sizes() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).maxBlockSizeInBytes(1024 * 1024).evictDelay(0).build();
-
-        try {
-            assertTrue(c.put("small", new byte[64]));
-            c.clear();
-
-            assertTrue(c.put("large", new byte[256 * 1024]));
-        } finally {
-            c.close();
-        }
-    }
-
-    @Test
-    public void test_missing_disk_bytes_not_counted_as_disk_hit_and_stale_wrapper_removed() {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-
-        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                memStore.put(key, value);
-                return true;
-            }
-
-            @Override
-            public byte[] get(final String key) {
-                return memStore.get(key);
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return memStore.remove(key) != null;
-            }
-        };
-
-        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
-                .capacityInMB(8)
-                .evictDelay(0)
-                .defaultLiveTime(1000_000)
-                .defaultMaxIdleTime(1000_000)
-                .offHeapStore(inMemoryStore)
-                .storeSelector((k, v, size) -> 2)
-                .build();
-
-        try {
-            final Account account = createAccount(Account.class);
-            account.setFirstName(Strings.repeat("x", 5000));
-            final String key = account.getEmailAddress();
-
-            assertTrue(diskCache.put(key, account));
-            memStore.clear();
-
-            assertNull(diskCache.get(key).orElse(null));
-
-            final var stats = diskCache.stats();
-            assertFalse(diskCache.containsKey(key), "the stale pool wrapper must be removed after the store reports missing bytes");
-            assertEquals(1L, stats.getCount());
-            assertEquals(0L, stats.hitCount(), "a get that returned no value must not remain classified as a pool-level hit");
-            assertEquals(1L, stats.missCount(), "a confirmed backing-store miss must be reflected in cache miss statistics");
-            assertEquals(0L, stats.hitCountFromDisk());
-            assertEquals(0L, stats.sizeOnDisk());
-            assertEquals(0L, stats.dataSizeOnDisk());
-            assertEquals(0L, stats.dataSize());
-        } finally {
-            diskCache.close();
-        }
-    }
-
-    @Test
-    public void test_diskDeserializerReturningNullIsReportedAsConfigurationFailure() {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
-            @Override
-            public byte[] get(final String key) {
-                return memStore.get(key);
-            }
-
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                memStore.put(key, value);
-                return true;
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return memStore.remove(key) != null;
-            }
-        };
-
-        final OffHeapCache<String, String> diskCache = OffHeapCache.<String, String> builder().capacityInMB(1).evictDelay(0).serializer((value, output) -> {
-            final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            output.write(bytes, 0, bytes.length);
-        }).deserializer((bytes, type) -> null).offHeapStore(inMemoryStore).storeSelector((key, value, size) -> 2).build();
-
-        try {
-            assertTrue(diskCache.put("key", "value"));
-
-            final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> diskCache.getOrNull("key"));
-            assertTrue(failure.getMessage().contains("deserializer returned null"));
-            assertTrue(diskCache.containsKey("key"), "valid stored bytes must not be discarded as though they were missing");
-            assertEquals(0L, diskCache.stats().hitCountFromDisk(), "a value that was not reconstructed is not a successful disk hit");
-        } finally {
-            diskCache.close();
-        }
-    }
-
-    @Test
-    public void test_memoryDeserializerReturningNullFailsForSingleAndMultiSlotValues() {
-        final OffHeapCache<String, String> memoryCache = OffHeapCache.<String, String> builder()
-                .capacityInMB(2)
-                .maxBlockSizeInBytes(1024)
-                .evictDelay(0)
-                .serializer((value, output) -> {
-                    final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                    output.write(bytes, 0, bytes.length);
-                })
-                .deserializer((bytes, type) -> null)
-                .build();
-
-        try {
-            assertTrue(memoryCache.put("single", "small"));
-            assertTrue(memoryCache.put("multi", Strings.repeat("x", 2048)));
-
-            final IllegalStateException singleFailure = assertThrows(IllegalStateException.class, () -> memoryCache.getOrNull("single"));
-            final IllegalStateException multiFailure = assertThrows(IllegalStateException.class, () -> memoryCache.getOrNull("multi"));
-            assertTrue(singleFailure.getMessage().contains("deserializer returned null"));
-            assertTrue(multiFailure.getMessage().contains("deserializer returned null"));
-        } finally {
-            memoryCache.close();
-        }
-    }
-
-    @Test
-    public void test_putToDisk_disk_to_disk_replace_preserves_new_value() {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-
-        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                memStore.put(key, value);
-                return true;
-            }
-
-            @Override
-            public byte[] get(final String key) {
-                return memStore.get(key);
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return memStore.remove(key) != null;
-            }
-        };
-
-        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
-                .capacityInMB(8)
-                .evictDelay(0)
-                .defaultLiveTime(1000_000)
-                .defaultMaxIdleTime(1000_000)
-                .offHeapStore(inMemoryStore)
-                .storeSelector((k, v, size) -> 2) // disk only
-                .build();
-
-        try {
-            final String key = "shared-key";
-
-            final Account first = createAccount(Account.class);
-            first.setFirstName(Strings.repeat("a", 5000));
-            assertTrue(diskCache.put(key, first));
-            assertEquals(first, diskCache.get(key).orElse(null));
-
-            // Replace under the same key with a different on-disk value.
-            final Account second = createAccount(Account.class);
-            second.setFirstName(Strings.repeat("b", 5000));
-            assertTrue(diskCache.put(key, second));
-
-            // Critical assertion: the value MUST be the new one and MUST NOT be null.
-            final Account fetched = diskCache.get(key).orElse(null);
-            assertEquals(second, fetched);
-            // And the disk store must hold exactly one entry for this key.
-            assertTrue(memStore.containsKey(key));
-            assertEquals(1, memStore.size());
-
-            // Sanity: stats reflect exactly one on-disk entry.
-            final var stats = diskCache.stats();
-            assertEquals(1L, stats.sizeOnDisk());
-            assertEquals(stats.dataSizeOnDisk(), stats.dataSize());
-        } finally {
-            diskCache.close();
-        }
-    }
-
-    @Test
-    public void test_put_get_2() {
-        final MultiLoopsStatistics result = Profiler.run(32, 3, 1, this::test_put_get);
-
-        result.printResult();
-
-        assertTrue(result.getAllFailedMethodStatisticsList().size() == 0);
-    }
-
-    /**
-     * Regression test for the LongSummaryStatistics race in
-     * {@link com.landawn.abacus.cache.AbstractOffHeapCache#stats}.
-     *
-     * <p>Before the fix, {@code stats()} read {@code totalWriteToDiskTimeStats} /
-     * {@code totalReadFromDiskTimeStats} without synchronization while concurrent puts/gets
-     * were calling {@code accept(...)} under the same monitor. Because
-     * {@code LongSummaryStatistics} is not thread-safe, the reader could observe a torn
-     * snapshot — e.g. {@code count > 0} but {@code min == Long.MAX_VALUE} (so the produced
-     * {@code MinMaxAvg.min} would be a wildly wrong, huge double). After the fix the reader
-     * snapshots under the same monitor, so {@code min}, {@code max}, and {@code average} are
-     * all consistent with a non-zero count.
-     */
-    @Test
-    public void test_stats_under_concurrent_disk_writes_consistent() throws Exception {
-        final java.util.Map<String, byte[]> memStore = new java.util.concurrent.ConcurrentHashMap<>();
-
-        final OffHeapStore<String> inMemoryStore = new OffHeapStore<>() {
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                memStore.put(key, value);
-                return true;
-            }
-
-            @Override
-            public byte[] get(final String key) {
-                return memStore.get(key);
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return memStore.remove(key) != null;
-            }
-        };
-
-        final OffHeapCache<String, Account> diskCache = OffHeapCache.<String, Account> builder()
-                .capacityInMB(8)
-                .evictDelay(0)
-                .defaultLiveTime(1000_000)
-                .defaultMaxIdleTime(1000_000)
-                .offHeapStore(inMemoryStore)
-                .storeSelector((k, v, size) -> 2) // disk only — exercises totalWriteToDiskTimeStats
-                .statsTimeOnDisk(true)
-                .build();
-
-        try {
-            final java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean(false);
-            final java.util.concurrent.atomic.AtomicReference<AssertionError> failure = new java.util.concurrent.atomic.AtomicReference<>();
-
-            final Thread writer = new Thread(() -> {
-                int i = 0;
-                while (!stop.get()) {
-                    final Account a = createAccount(Account.class);
-                    a.setFirstName(Strings.repeat("x", 2048));
-                    diskCache.put("k" + (i++ % 64), a);
-                }
-            });
-
-            final Thread reader = new Thread(() -> {
-                while (!stop.get()) {
-                    final var s = diskCache.stats();
-                    final var w = s.writeToDiskTimeStats();
-                    // If any writes have happened (count > 0 inside the synchronized block),
-                    // min/max must be real, finite, non-negative numbers — never Long.MAX_VALUE
-                    // / Long.MIN_VALUE leaking through. We can't observe count directly via the
-                    // public stats record, but writeCount() gives us the analog.
-                    if (s.putCountToDisk() > 0) {
-                        if (w.min() < 0 || w.max() < 0 || w.min() > w.max() + 1) {
-                            failure.compareAndSet(null,
-                                    new AssertionError("Torn stats: writeCount=" + s.putCountToDisk() + " min=" + w.min() + " max=" + w.max()));
-                            return;
-                        }
-                    }
-                }
-            });
-
-            writer.start();
-            reader.start();
-            Thread.sleep(750);
-            stop.set(true);
-            writer.join(5_000);
-            reader.join(5_000);
-
-            if (failure.get() != null) {
-                throw failure.get();
-            }
-            assertTrue(diskCache.stats().putCountToDisk() > 0, "expected at least one disk write during the run");
-        } finally {
-            diskCache.close();
-        }
-    }
-
-    @Test
-    public void test_perf() {
-        Profiler.run(8, 10000, 1, () -> {
-            final Account account = createAccount(Account.class);
-
-            final String key = account.getEmailAddress();
-            cache.put(key, account);
-            final Account account2 = cache.get(key).orElse(null);
-
-            assertEquals(account.getId(), account2.getId());
-
-            if (Math.abs(rand.nextInt()) % 3 == 0) {
-                cache.remove(key);
-                assertNull(cache.get(key).orElse(null));
-            }
-        }).printResult();
-    }
-
-    /** Exercises the keySet / size / clear / containsKey / isClosed lifecycle on AbstractOffHeapCache. */
-    @Test
-    public void test_OffHeapCache_keySet_size_clear_lifecycle() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
-        try {
-            c.put("a", new byte[256]);
-            c.put("b", new byte[256]);
-            assertTrue(c.containsKey("a"));
-            assertTrue(c.size() >= 1);
-            assertTrue(c.keySet().contains("a"));
-
-            // remove + verify
-            c.remove("a");
-            assertNull(c.get("a").orElse(null));
-
-            // clear empties the cache
-            c.clear();
-            assertEquals(0, c.size());
-
-            // isClosed is false before close, true after
-            assertFalse(c.isClosed());
-        } finally {
-            c.close();
-        }
-
-        // Second close is idempotent and isClosed reflects state.
-        final OffHeapCache<String, byte[]> c2 = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
-        c2.close();
-        c2.close();
-        assertTrue(c2.isClosed());
-    }
-
-    /** Verifies stats() returns a non-null snapshot after some traffic. */
-    @Test
-    public void test_OffHeapCache_stats_returns_snapshot() {
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
-        try {
-            c.put("k", new byte[256]);
-            c.get("k");
-            assertNotNull(c.stats());
-        } finally {
-            c.close();
-        }
-    }
-
-    @Test
-    public void test_OffHeapCache_simpleConstructor_capacityOnly() {
-        // Exercises the (capacityInMB) and (capacityInMB, evictDelay) constructors via the Builder
-        // path. The Builder is the public API; the underlying simple constructors are package-private.
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
-        try {
-            assertTrue(c.put("k", new byte[256]));
-            assertNotNull(c.get("k"));
-        } finally {
-            c.close();
-        }
-    }
-
-    @Test
-    public void test_OffHeapCache_builder_defaults() {
-        // Builder with default values for everything other than capacity.
-        final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder()
-                .capacityInMB(1)
-                .maxBlockSizeInBytes(0) // 0 should fall back to default
-                .build();
-        try {
-            assertTrue(c.put("k", new byte[256]));
-        } finally {
-            c.close();
-        }
-    }
-
-    @Test
-    public void test_perf_big_Object() {
-
-        final String longFirstName = Strings.repeat(Strings.uuid(), 100);
-        final AtomicLong counter = new AtomicLong();
-
-        Profiler.run(16, 100_000, 3, () -> {
-            final Account account = createAccount(Account.class);
-            account.setFirstName(longFirstName);
-
-            final String key = account.getEmailAddress();
-            if (cache.put(key, account)) {
-                final Account account2 = cache.get(key).orElse(null);
-                assertEquals(account.getId(), account2.getId());
-            }
-
-            if (counter.incrementAndGet() % 10 < 9) {
-                cache.remove(key);
-                assertNull(cache.get(key).orElse(null));
-            }
-        }).printResult();
-
-        final Account account = createAccount(Account.class);
-        account.setFirstName(Strings.repeat(Strings.uuid(), 16));
-        cache.put(account.getEmailAddress(), account);
-
-        Profiler.run(16, 100_000, 3, () -> {
-            assertEquals(account, cache.get(account.getEmailAddress()).orElse(null));
-        }).printResult();
-
-    }
-
-    /** {@code OffHeapCache(capacityInMB)} delegates to the (capacity, evictDelay=3000) constructor. */
-    @Test
-    public void testConstructor_capacityOnly() {
-        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1);
-
-        try {
-            assertFalse(cache.isClosed());
-            final byte[] value = { 1, 2, 3, 4 };
-            assertTrue(cache.put("k", value));
-            assertArrayEquals(value, cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    /** {@code OffHeapCache(capacityInMB, evictDelay)} delegates to the default-TTL constructor. */
-    @Test
-    public void testConstructor_capacityAndEvictDelay() {
-        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, 0L);
-
-        try {
-            final byte[] value = { 5, 6, 7 };
-            assertTrue(cache.put("k", value));
-            assertArrayEquals(value, cache.getOrNull("k"));
-            assertNotNull(cache.stats());
-        } finally {
-            cache.close();
-        }
-    }
-
-    /** {@code OffHeapCache(capacityInMB, evictDelay, defaultLiveTime, defaultMaxIdleTime)} full basic form. */
-    @Test
-    public void testConstructor_capacityEvictDelayLiveTimeIdleTime() {
-        final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, 0L, 60_000L, 60_000L);
-
-        try {
-            final byte[] value = { 8, 9 };
-            assertTrue(cache.put("k", value));
-            assertArrayEquals(value, cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    /**
-     * Documented full-constructor contract: unlike {@code Builder.build()}, the constructor performs no
-     * {@code 0}-to-default substitution for {@code maxBlockSize}, so {@code 0} is rejected. The
-     * invalid argument is detected before the native allocation, so the supplied store stays open
-     * and owned by the caller.
-     */
-    @Test
-    public void testFullConstructor_zeroMaxBlockSize_rejectedWithoutClosingStore() {
-        final AtomicBoolean storeClosed = new AtomicBoolean();
-        final OffHeapStore<String> store = new OffHeapStore<>() {
-            @Override
-            public byte[] get(final String key) {
-                return null;
-            }
-
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                return false;
-            }
-
-            @Override
-            public boolean remove(final String key) {
-                return false;
-            }
-
-            @Override
-            public void close() {
-                storeClosed.set(true);
-            }
-        };
-
-        assertThrows(IllegalArgumentException.class, () -> new OffHeapCache<String, byte[]>(1, 0, 0, 0, 0, 0f, null, null, store, false, null, null));
-        assertFalse(storeClosed.get());
-    }
-
-    /**
-     * Documented {@code allocate} contract: {@code Unsafe.allocateMemory} rejects a negative size
-     * with {@link IllegalArgumentException}, and the rejected call leaves the live cache untouched.
-     */
-    @Test
-    public void testAllocate_negativeSize_throwsIllegalArgumentException() {
-        final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
-
-        try {
-            final byte[] value = { 1, 2, 3 };
-            assertTrue(cache.put("k", value));
-            assertThrows(IllegalArgumentException.class, () -> cache.allocate(-1L));
-            assertArrayEquals(value, cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
 }

@@ -11,14 +11,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import com.landawn.abacus.cache.OffHeapCacheStats;
 import com.landawn.abacus.cache.OffHeapCacheStats.MinMaxAvg;
 
-@Tag("2025")
-public class OffHeapCacheStatsTest {
+class OffHeapCacheStatsTest {
+
+    // Statistics
+
+    @Test
+    void minMaxAvgRejectsInconsistentOrdering() {
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(2, 1, 1.5));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(1, 3, 0.5));
+        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(1, 3, 3.5));
+    }
 
     /**
      * {@link MinMaxAvg} tracks disk-I/O timings (milliseconds), which can never be negative, so the
@@ -26,7 +32,7 @@ public class OffHeapCacheStatsTest {
      * {@link IllegalArgumentException}.
      */
     @Test
-    public void testMinMaxAvgRejectsNegativeValues() {
+    void minMaxAvgRejectsNegativeValues() {
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(-1, 0, 0));
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, -1, 0));
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, 0, -1));
@@ -40,7 +46,7 @@ public class OffHeapCacheStatsTest {
      * computed statistic fails fast instead of silently violating the invariant.
      */
     @Test
-    public void testMinMaxAvgRejectsNonFiniteValues() {
+    void minMaxAvgRejectsNonFiniteValues() {
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(Double.NaN, 0, 0));
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, Double.NaN, 0));
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, 0, Double.NaN));
@@ -50,10 +56,22 @@ public class OffHeapCacheStatsTest {
     }
 
     @Test
-    public void testMinMaxAvgRejectsInconsistentOrdering() {
-        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(2, 1, 1.5));
-        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(1, 3, 0.5));
-        assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(1, 3, 3.5));
+    void ratesCounterSumDoesNotOverflow() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, Long.MAX_VALUE, Long.MAX_VALUE, 0, Long.MAX_VALUE, 0, 0, 0, 0, 0, 0, z, z, 0,
+                Map.of());
+
+        assertEquals(0.5D, stats.hitRate());
+        assertEquals(0.5D, stats.missRate());
+    }
+
+    @Test
+    void recordAllZerosOk() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of());
+        assertEquals(0, stats.capacity());
+        assertEquals(0, stats.segmentSize());
+        assertTrue(stats.occupiedSlots().isEmpty());
     }
 
     /**
@@ -64,7 +82,7 @@ public class OffHeapCacheStatsTest {
      * and {@code occupiedSlots}. The compact constructor now rejects any negative numeric input.
      */
     @Test
-    public void testRecord_NegativeComponentRejected() {
+    void recordNegativeComponentRejected() {
         final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
         // capacity negative
         assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of()));
@@ -100,31 +118,44 @@ public class OffHeapCacheStatsTest {
         assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, z, z, 0, Map.of()));
     }
 
+    /**
+     * The documented (deliberate) NPE-for-null-components convention: reference components are
+     * rejected with NullPointerException via Objects.requireNonNull, unlike the IAE used for
+     * out-of-range numerics.
+     */
     @Test
-    public void testRecordValidatesComponentsInSignatureOrder() {
+    void recordNullComponentsThrowNPE() {
         final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
 
-        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
-        final NullPointerException missingWriteStats = assertThrows(NullPointerException.class,
-                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
-        assertEquals("writeToDiskTimeStats cannot be null", missingWriteStats.getMessage());
-        final NullPointerException missingReadStats = assertThrows(NullPointerException.class,
-                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, null, -1, null));
-        assertEquals("readFromDiskTimeStats cannot be null", missingReadStats.getMessage());
-        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, -1, null));
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, z, 1, Map.of()));
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, null, 1, Map.of()));
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, null));
+
+        final Map<Integer, Map<Integer, Integer>> nullNested = new java.util.HashMap<>();
+        nullNested.put(64, null);
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, nullNested));
     }
 
     @Test
-    public void testRecord_AllZerosOk() {
+    void recordPreservesNullPointerExceptionForNullSlotComponents() {
         final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
-        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of());
-        assertEquals(0, stats.capacity());
-        assertEquals(0, stats.segmentSize());
-        assertTrue(stats.occupiedSlots().isEmpty());
+        final Map<Integer, Map<Integer, Integer>> slots = new LinkedHashMap<>();
+        slots.put(null, Map.of());
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
+
+        final Map<Integer, Integer> perSegment = new LinkedHashMap<>();
+        slots.clear();
+        slots.put(64, perSegment);
+        perSegment.put(null, 0);
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
+
+        perSegment.clear();
+        perSegment.put(0, null);
+        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
     }
 
     @Test
-    public void testRecordValidatesAndDefensivelyCopiesOccupiedSlots() {
+    void recordValidatesAndDefensivelyCopiesOccupiedSlots() {
         final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
         final Map<Integer, Integer> perSegment = new LinkedHashMap<>();
         perSegment.put(2, 3);
@@ -147,48 +178,16 @@ public class OffHeapCacheStatsTest {
     }
 
     @Test
-    public void testRates_EdgeCase_CounterSumDoesNotOverflow() {
-        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
-        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, Long.MAX_VALUE, Long.MAX_VALUE, 0, Long.MAX_VALUE, 0, 0, 0, 0, 0, 0, z, z, 0,
-                Map.of());
-
-        assertEquals(0.5D, stats.hitRate());
-        assertEquals(0.5D, stats.missRate());
-    }
-
-    /**
-     * The documented (deliberate) NPE-for-null-components convention: reference components are
-     * rejected with NullPointerException via Objects.requireNonNull, unlike the IAE used for
-     * out-of-range numerics.
-     */
-    @Test
-    public void testRecord_EdgeCase_NullComponents_ThrowNPE() {
+    void recordValidatesComponentsInSignatureOrder() {
         final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
 
-        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, z, 1, Map.of()));
-        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, null, 1, Map.of()));
-        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, null));
-
-        final Map<Integer, Map<Integer, Integer>> nullNested = new java.util.HashMap<>();
-        nullNested.put(64, null);
-        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, nullNested));
-    }
-
-    @Test
-    public void testRecordPreservesNullPointerExceptionForNullSlotComponents() {
-        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
-        final Map<Integer, Map<Integer, Integer>> slots = new LinkedHashMap<>();
-        slots.put(null, Map.of());
-        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
-
-        final Map<Integer, Integer> perSegment = new LinkedHashMap<>();
-        slots.clear();
-        slots.put(64, perSegment);
-        perSegment.put(null, 0);
-        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
-
-        perSegment.clear();
-        perSegment.put(0, null);
-        assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, slots));
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
+        final NullPointerException missingWriteStats = assertThrows(NullPointerException.class,
+                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, -1, null));
+        assertEquals("writeToDiskTimeStats cannot be null", missingWriteStats.getMessage());
+        final NullPointerException missingReadStats = assertThrows(NullPointerException.class,
+                () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, null, -1, null));
+        assertEquals("readFromDiskTimeStats cannot be null", missingReadStats.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, -1, null));
     }
 }

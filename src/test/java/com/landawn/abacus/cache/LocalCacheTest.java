@@ -7,22 +7,182 @@ package com.landawn.abacus.cache;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import com.landawn.abacus.cache.LocalCache;
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolStats;
 import com.landawn.abacus.pool.PoolableAdapter;
 
-@Tag("2025")
-public class LocalCacheTest {
+class LocalCacheTest {
+
+    // Construction
+
+    @Test
+    void constructorInvalidCapacity() {
+        assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(-1, 0));
+    }
+
+    @Test
+    void constructorNegativeEvictDelay() {
+        assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(100, -1));
+    }
+
+    @Test
+    void constructorNullPool() {
+        assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(0L, 0L, null));
+    }
+
+    @Test
+    void constructorWithCustomPool() {
+        final com.landawn.abacus.pool.KeyedObjectPool<String, com.landawn.abacus.pool.PoolableAdapter<String>> pool = com.landawn.abacus.pool.PoolFactory
+                .createKeyedObjectPool(50, 0);
+        final LocalCache<String, String> cache = new LocalCache<>(60_000L, 30_000L, pool);
+        try {
+            assertTrue(cache.put("k", "v"));
+            assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Reads
+
+    /**
+     * Regression coverage for the asymmetric null-key handling defect.
+     *
+     * <p>Before the fix {@link LocalCache#put(Object, Object, long, long)} threw
+     * {@code IllegalArgumentException("Key cannot be null")} on a null key, but the read-side
+     * methods ({@link LocalCache#getOrNull(Object)},
+     * {@link LocalCache#remove(Object)}, and {@link LocalCache#containsKey(Object)})
+     * delegated straight to the pool, where a null key triggered a raw NPE from the underlying
+     * pool. Callers therefore got two different exception types depending on which method was
+     * called. The fix harmonizes the contract: all four reject null keys with
+     * {@code IllegalArgumentException} up front.
+     */
+    @Test
+    void getOrNullNullKeyThrowsIAE() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Writes
+
+    /**
+     * Pins the dependency's overflow-safe expiration arithmetic: createdTime + Long.MAX_VALUE must
+     * not wrap around and make a "never expires" entry look expired immediately.
+     */
+    @Test
+    void putMaxValueTimesDoNotOverflowIntoExpiry() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertTrue(cache.put("k", "v", Long.MAX_VALUE, Long.MAX_VALUE));
+            assertTrue(cache.containsKey("k"));
+            assertEquals("v", cache.getOrNull("k"));
+            assertEquals(0L, cache.stats().evictionCount());
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** A non-positive liveTime disables only the TTL: a positive maxIdleTime must still expire the entry. */
+    @Test
+    void putNonPositiveLiveTimeIdleTimeoutStillApplies() throws Exception {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertTrue(cache.put("k", "v", 0, 50));
+
+            com.landawn.abacus.TestSupport.awaitCondition("idle entry to expire", () -> !cache.containsKey("k"));
+
+            assertNull(cache.getOrNull("k"));
+            assertEquals(0, cache.size());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void putNullKey() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 1000, 1000));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** Null values are rejected up-front with IAE, as documented (settled validation policy). */
+    @Test
+    void putNullValue() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.put("k", null));
+            assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 1000, 1000));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * Pins the documented replacement semantics against the default pool: replacing an existing key
+     * in a full cache detaches the old mapping first, so the replacement is admitted without a
+     * capacity rejection and without evicting an unrelated entry.
+     */
+    @Test
+    void putReplaceExistingKeyAtFullCapacitySucceedsWithoutEvictingOthers() {
+        final LocalCache<String, String> cache = new LocalCache<>(2, 0);
+        try {
+            assertTrue(cache.put("a", "1"));
+            assertTrue(cache.put("b", "2"));
+
+            assertTrue(cache.put("a", "1b"));
+
+            assertEquals(2, cache.size());
+            assertEquals("1b", cache.getOrNull("a"));
+            assertEquals("2", cache.getOrNull("b"));
+            assertEquals(0L, cache.stats().evictionCount());
+            assertEquals(3L, cache.stats().putCount());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void putWithNegativeTimesDoesNotThrow() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            final boolean stored = cache.put("k", "v", -1, -1);
+
+            assertTrue(stored);
+            assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void putWithPositiveTimesStillWorks() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            final boolean stored = cache.put("user:123", "John", 3600000, 1800000);
+
+            assertTrue(stored);
+            assertEquals("John", cache.getOrNull("user:123"));
+        } finally {
+            cache.close();
+        }
+    }
 
     /**
      * Regression test for the LocalCache.put(key, value, liveTime, maxIdleTime) bug.
@@ -37,7 +197,7 @@ public class LocalCacheTest {
      * documented "permanent entry" use case threw instead of storing the entry.
      */
     @Test
-    public void testPutWithZeroLiveTimeAndIdleTimeDoesNotThrow() {
+    void putWithZeroLiveTimeAndIdleTimeDoesNotThrow() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
             // Documented "permanent entry" usage - must NOT throw and must store the value.
@@ -52,20 +212,7 @@ public class LocalCacheTest {
     }
 
     @Test
-    public void testPutWithNegativeTimesDoesNotThrow() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            final boolean stored = cache.put("k", "v", -1, -1);
-
-            assertTrue(stored);
-            assertEquals("v", cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testPutWithZeroLiveTimeButPositiveIdleTime() {
+    void putWithZeroLiveTimeButPositiveIdleTime() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
             // No TTL, but a 5s idle timeout - must not throw.
@@ -78,112 +225,62 @@ public class LocalCacheTest {
         }
     }
 
-    @Test
-    public void testPutWithPositiveTimesStillWorks() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            final boolean stored = cache.put("user:123", "John", 3600000, 1800000);
-
-            assertTrue(stored);
-            assertEquals("John", cache.getOrNull("user:123"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    /**
-     * Pins the dependency's overflow-safe expiration arithmetic: createdTime + Long.MAX_VALUE must
-     * not wrap around and make a "never expires" entry look expired immediately.
-     */
-    @Test
-    public void testPut_EdgeCase_MaxValueTimesDoNotOverflowIntoExpiry() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            assertTrue(cache.put("k", "v", Long.MAX_VALUE, Long.MAX_VALUE));
-            assertTrue(cache.containsKey("k"));
-            assertEquals("v", cache.getOrNull("k"));
-            assertEquals(0L, cache.stats().evictionCount());
-        } finally {
-            cache.close();
-        }
-    }
-
-    /** A non-positive liveTime disables only the TTL: a positive maxIdleTime must still expire the entry. */
-    @Test
-    public void testPut_NonPositiveLiveTime_IdleTimeoutStillApplies() throws Exception {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            assertTrue(cache.put("k", "v", 0, 50));
-
-            Thread.sleep(200);
-
-            assertNull(cache.getOrNull("k"));
-            assertEquals(0, cache.size());
-        } finally {
-            cache.close();
-        }
-    }
+    // Removals
 
     @Test
-    public void testDefaultPutAndRemove() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            assertTrue(cache.put("a", "1"));
-            assertEquals("1", cache.getOrNull("a"));
-
-            cache.remove("a");
-            assertNull(cache.getOrNull("a"));
-            assertEquals(0, cache.size());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testConstructor_EdgeCase_InvalidCapacity() {
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(0, 0));
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(-1, 0));
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testConstructor_EdgeCase_NegativeEvictDelay() {
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(100, -1));
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testConstructor_EdgeCase_NullPool() {
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new LocalCache<String, String>(0L, 0L, null));
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testPut_EdgeCase_NullKey() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 1000, 1000));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testContainsKey() {
+    void clearRemovesEntries() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
             cache.put("a", "1");
-            org.junit.jupiter.api.Assertions.assertTrue(cache.containsKey("a"));
-            org.junit.jupiter.api.Assertions.assertFalse(cache.containsKey("missing"));
+            cache.put("b", "2");
+            cache.clear();
+            assertEquals(0, cache.size());
         } finally {
             cache.close();
         }
     }
 
-    @org.junit.jupiter.api.Test
-    public void testContainsKey_returnsFalseForExpiredEntry() throws Exception {
+    @Test
+    void removeNullKeyThrowsIAE() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Membership And Views
+
+    @Test
+    void containsKeyNullKeyThrowsIAE() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void containsKeyReportsPresence() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            cache.put("a", "1");
+            assertTrue(cache.containsKey("a"));
+            assertFalse(cache.containsKey("missing"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void containsKeyReturnsFalseForExpiredEntry() throws Exception {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
             assertTrue(cache.put("a", "1", 5, 0));
 
-            Thread.sleep(25);
+            com.landawn.abacus.TestSupport.awaitCondition("TTL entry to expire", () -> !cache.containsKey("a"));
 
             assertFalse(cache.containsKey("a"));
             assertNull(cache.getOrNull("a"));
@@ -192,112 +289,23 @@ public class LocalCacheTest {
         }
     }
 
-    @org.junit.jupiter.api.Test
-    public void testKeySet_AndSize() {
+    @Test
+    void keySetAndSize() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
             cache.put("a", "1");
             cache.put("b", "2");
-            org.junit.jupiter.api.Assertions.assertEquals(2, cache.size());
+            assertEquals(2, cache.size());
             final java.util.Set<String> keys = cache.keySet();
-            org.junit.jupiter.api.Assertions.assertEquals(2, keys.size());
-            org.junit.jupiter.api.Assertions.assertTrue(keys.contains("a"));
-            org.junit.jupiter.api.Assertions.assertTrue(keys.contains("b"));
+            assertEquals(2, keys.size());
+            assertTrue(keys.contains("a"));
+            assertTrue(keys.contains("b"));
         } finally {
             cache.close();
         }
     }
 
-    @org.junit.jupiter.api.Test
-    public void testClear() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            cache.put("a", "1");
-            cache.put("b", "2");
-            cache.clear();
-            org.junit.jupiter.api.Assertions.assertEquals(0, cache.size());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testIsClosed() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        org.junit.jupiter.api.Assertions.assertFalse(cache.isClosed());
-        cache.close();
-        org.junit.jupiter.api.Assertions.assertTrue(cache.isClosed());
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testStats() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            cache.put("a", "1");
-            cache.getOrNull("a");
-            cache.getOrNull("missing");
-            final com.landawn.abacus.cache.CacheStats stats = cache.stats();
-            org.junit.jupiter.api.Assertions.assertNotNull(stats);
-            org.junit.jupiter.api.Assertions.assertEquals(100, stats.capacity());
-        } finally {
-            cache.close();
-        }
-    }
-
-    /**
-     * Regression coverage for the asymmetric null-key handling defect.
-     *
-     * <p>Before the fix {@link LocalCache#put(Object, Object, long, long)} threw
-     * {@code IllegalArgumentException("Key cannot be null")} on a null key, but the read-side
-     * methods ({@link LocalCache#getOrNull(Object)},
-     * {@link LocalCache#remove(Object)}, and {@link LocalCache#containsKey(Object)})
-     * delegated straight to the pool, where a null key triggered a raw NPE from the underlying
-     * pool. Callers therefore got two different exception types depending on which method was
-     * called. The fix harmonizes the contract: all four reject null keys with
-     * {@code IllegalArgumentException} up front.
-     */
-    @org.junit.jupiter.api.Test
-    public void testGetOrNull_EdgeCase_NullKeyThrowsIAE() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testRemove_EdgeCase_NullKeyThrowsIAE() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testContainsKey_EdgeCase_NullKeyThrowsIAE() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @org.junit.jupiter.api.Test
-    public void testConstructor_WithCustomPool() {
-        final com.landawn.abacus.pool.KeyedObjectPool<String, com.landawn.abacus.pool.PoolableAdapter<String>> pool = com.landawn.abacus.pool.PoolFactory
-                .createKeyedObjectPool(50, 0);
-        final LocalCache<String, String> cache = new LocalCache<>(60_000L, 30_000L, pool);
-        try {
-            assertTrue(cache.put("k", "v"));
-            assertEquals("v", cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
+    // Statistics
 
     /**
      * Regression test for the stats() crash on drifted memory accounting.
@@ -311,7 +319,7 @@ public class LocalCacheTest {
      */
     @Test
     @SuppressWarnings("unchecked")
-    public void testStats_NegativePoolMemoryAccounting_ClampedInsteadOfThrowing() {
+    void statsNegativePoolMemoryAccountingClampedInsteadOfThrowing() {
         final KeyedObjectPool<String, PoolableAdapter<String>> pool = mock(KeyedObjectPool.class);
         final PoolStats poolStats = mock(PoolStats.class);
         when(poolStats.capacity()).thenReturn(100);
@@ -336,13 +344,62 @@ public class LocalCacheTest {
         }
     }
 
-    /** Null values are rejected up-front with IAE, as documented (settled validation policy). */
     @Test
-    public void testPut_EdgeCase_NullValue() {
+    void statsReportsCounters() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
-            assertThrows(IllegalArgumentException.class, () -> cache.put("k", null));
-            assertThrows(IllegalArgumentException.class, () -> cache.put("k", null, 1000, 1000));
+            cache.put("a", "1");
+            cache.getOrNull("a");
+            cache.getOrNull("missing");
+            final com.landawn.abacus.cache.CacheStats stats = cache.stats();
+            assertNotNull(stats);
+            assertEquals(100, stats.capacity());
+            assertEquals(1, stats.size());
+            assertEquals(1, stats.putCount());
+            assertEquals(2, stats.getCount());
+            assertEquals(1, stats.hitCount());
+            assertEquals(1, stats.missCount());
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Lifecycle
+
+    @Test
+    void isClosedReflectsLifecycle() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        assertFalse(cache.isClosed());
+        cache.close();
+        assertTrue(cache.isClosed());
+    }
+
+    // Validation And Failures
+
+    /** The state check runs before argument validation: a closed cache reports ISE even for a null key/value. */
+    @Test
+    void keyOperationsAfterCloseNullArgsThrowIllegalStateExceptionFirst() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        cache.close();
+
+        assertThrows(IllegalStateException.class, () -> cache.getOrNull(null));
+        assertThrows(IllegalStateException.class, () -> cache.put(null, null, 1000, 1000));
+        assertThrows(IllegalStateException.class, () -> cache.remove(null));
+        assertThrows(IllegalStateException.class, () -> cache.containsKey(null));
+    }
+
+    // Other Behavior
+
+    @Test
+    void defaultPutAndRemove() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertTrue(cache.put("a", "1"));
+            assertEquals("1", cache.getOrNull("a"));
+
+            cache.remove("a");
+            assertNull(cache.getOrNull("a"));
+            assertEquals(0, cache.size());
         } finally {
             cache.close();
         }
@@ -354,7 +411,7 @@ public class LocalCacheTest {
      * pool, so pin both paths here against dependency changes.
      */
     @Test
-    public void testOperations_AfterClose_ThrowIllegalStateException() {
+    void operationsAfterCloseThrowIllegalStateException() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         cache.put("k", "v");
         cache.close();
@@ -367,41 +424,5 @@ public class LocalCacheTest {
         assertThrows(IllegalStateException.class, cache::size);
         assertThrows(IllegalStateException.class, cache::clear);
         assertThrows(IllegalStateException.class, cache::stats);
-    }
-
-    /**
-     * Pins the documented replacement semantics against the default pool: replacing an existing key
-     * in a full cache detaches the old mapping first, so the replacement is admitted without a
-     * capacity rejection and without evicting an unrelated entry.
-     */
-    @Test
-    public void testPut_ReplaceExistingKeyAtFullCapacity_SucceedsWithoutEvictingOthers() {
-        final LocalCache<String, String> cache = new LocalCache<>(2, 0);
-        try {
-            assertTrue(cache.put("a", "1"));
-            assertTrue(cache.put("b", "2"));
-
-            assertTrue(cache.put("a", "1b"));
-
-            assertEquals(2, cache.size());
-            assertEquals("1b", cache.getOrNull("a"));
-            assertEquals("2", cache.getOrNull("b"));
-            assertEquals(0L, cache.stats().evictionCount());
-            assertEquals(3L, cache.stats().putCount());
-        } finally {
-            cache.close();
-        }
-    }
-
-    /** The state check runs before argument validation: a closed cache reports ISE even for a null key/value. */
-    @Test
-    public void testKeyOperations_AfterClose_NullArgs_ThrowIllegalStateExceptionFirst() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        cache.close();
-
-        assertThrows(IllegalStateException.class, () -> cache.getOrNull(null));
-        assertThrows(IllegalStateException.class, () -> cache.put(null, null, 1000, 1000));
-        assertThrows(IllegalStateException.class, () -> cache.remove(null));
-        assertThrows(IllegalStateException.class, () -> cache.containsKey(null));
     }
 }

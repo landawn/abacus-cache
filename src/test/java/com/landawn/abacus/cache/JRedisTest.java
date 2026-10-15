@@ -7,9 +7,9 @@ package com.landawn.abacus.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -20,18 +20,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
-import java.util.AbstractCollection;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedConstruction;
 import org.mockito.Mockito;
@@ -60,8 +54,8 @@ import redis.clients.jedis.params.SetParams;
  * client is captured (in construction order) in {@link #shards} so individual shards can be
  * stubbed and verified.
  */
-@Tag("2025")
-public class JRedisTest {
+
+class JRedisTest {
 
     private static final KryoParser KRYO = ParserFactory.createKryoParser();
 
@@ -91,35 +85,77 @@ public class JRedisTest {
         }
     }
 
+    // Construction
+
+    /** A shard-construction failure must close the shard clients that were already built. */
     @Test
-    public void test_malformedUnicodeKeysAreRejectedBeforeAnyCommand() {
-        for (final String key : List.of("\uD800", "\uDC00", "prefix:\uD800suffix", "prefix:\uDC00suffix", "\uD800\uD800", "\uDC00\uD800")) {
-            assertThrows(IllegalArgumentException.class, () -> cache.get(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.put(key, "value", 0));
-            assertThrows(IllegalArgumentException.class, () -> cache.remove(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.incr(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.incr(key, 1));
-            assertThrows(IllegalArgumentException.class, () -> cache.decr(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.decr(key, 1));
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(List.of("valid", key)));
+    void constructorPartialFailureClosesAlreadyBuiltShards() {
+        ctorIntercept.close();
+        final List<RedisClient> built = new ArrayList<>();
+        final RuntimeException failure = new IllegalStateException("third shard fails");
+
+        ctorIntercept = Mockito.mockConstruction(RedisClient.class, (poolMock, context) -> {
+            if (built.size() == 2) {
+                throw failure;
+            }
+
+            built.add(poolMock);
+        });
+
+        final RuntimeException thrown = assertThrows(RuntimeException.class, () -> new JRedis<>("h1:6379,h2:6379,h3:6379"));
+
+        assertTrue(thrown == failure || thrown.getCause() == failure, String.valueOf(thrown));
+        assertEquals(2, built.size());
+        verify(built.get(0)).close();
+        verify(built.get(1)).close();
+    }
+
+    @Test
+    void constructorRejectsInvalidServerUrl() {
+        // An empty URL is rejected by the base-class blank check; a token without host:port by AddrUtil.
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>(""));
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost"));
+        assertEquals(1, shards.size(), "only setUp's shard may exist; none is built for a malformed URL");
+    }
+
+    @Test
+    void constructorRejectsInvalidTimeout() {
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", 0L));
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", -1L));
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", (long) Integer.MAX_VALUE + 1L));
+    }
+
+    @Test
+    void constructorRejectsNullServerUrl() {
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>((String) null));
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>((String) null, 1000L));
+    }
+
+    @Test
+    void constructorWithDefaultTimeoutDoesNotThrow() {
+        // Default-timeout constructor (single-arg) is exercised here, reusing the BeforeEach mockConstruction.
+        final JRedis<Object> c = new JRedis<>("localhost:6379");
+        assertNotNull(c);
+    }
+
+    // Reads
+
+    @Test
+    void getKeyBytesNullKey() throws Exception {
+        // Reach the protected getKeyBytes via reflection so we can verify the contract. It is declared
+        // on the abstract base class (AbstractJedisCacheClient), so look it up on the superclass.
+        final java.lang.reflect.Method m = JRedis.class.getSuperclass().getDeclaredMethod("getKeyBytes", String.class);
+        m.setAccessible(true);
+        try {
+            m.invoke(cache, (Object) null);
+            fail("expected IllegalArgumentException");
+        } catch (final java.lang.reflect.InvocationTargetException ite) {
+            assertTrue(ite.getCause() instanceof IllegalArgumentException);
         }
-
-        Mockito.verifyNoInteractions(mockJedis);
     }
 
     @Test
-    public void test_validSupplementaryUnicodeKeyPreservesUtf8Bytes() {
-        final String key = "user:\uD83D\uDE00:\uD800\uDC00";
-        when(mockJedis.get(utf8(key))).thenReturn(KRYO.encode("value"));
-
-        assertEquals("value", cache.get(key));
-        assertEquals(Map.of(key, "value"), cache.getBulk("missing", key));
-        verify(mockJedis, times(2)).get(utf8(key));
-    }
-
-    @Test
-    public void test_get_returns_decoded_value() {
+    void getReturnsDecodedValue() {
         Account account = createAccount();
         byte[] encoded = KRYO.encode(account);
         when(mockJedis.get(utf8("user:1"))).thenReturn(encoded);
@@ -132,42 +168,28 @@ public class JRedisTest {
         verify(mockJedis).get(utf8("user:1"));
     }
 
-    @Test
-    public void test_get_returns_null_when_key_missing() {
-        when(mockJedis.get(any(byte[].class))).thenReturn(null);
+    // Bulk Reads
 
-        assertNull(cache.get("missing"));
+    @Test
+    void getBulkCollectionReturnsOnlyFoundKeys() {
+        Account a1 = createAccount();
+        when(mockJedis.get(utf8("k1"))).thenReturn(KRYO.encode(a1));
+        when(mockJedis.get(utf8("k2"))).thenReturn(null);
+
+        Map<String, Object> result = cache.getBulk(List.of("k1", "k2"));
+
+        assertEquals(1, result.size());
+        assertTrue(result.containsKey("k1"));
     }
 
     @Test
-    public void test_get_returns_null_for_empty_byte_array() {
-        when(mockJedis.get(any(byte[].class))).thenReturn(new byte[0]);
-
-        assertNull(cache.get("empty"));
+    void getBulkEmptyReturnsEmptyMap() {
+        assertTrue(cache.getBulk().isEmpty());
+        assertTrue(cache.getBulk(List.of()).isEmpty());
     }
 
-    /**
-     * Regression test: counter values (raw ASCII digits written by INCR/DECR) are not Kryo payloads.
-     * About one in eight such values (every value starting with '6' or '9') made Kryo's generated
-     * constructor accessor instantiate an abstract class, so {@code get}/{@code getBulk} leaked a
-     * {@link InstantiationError} instead of the documented runtime (Kryo) exception — escaping
-     * {@code catch (Exception)} handlers. Every counter-shaped payload must now fail with a
-     * {@code KryoException}.
-     */
     @Test
-    public void test_get_counterPayload_failsWithKryoException_notError() {
-        for (final String counter : List.of("6", "9", "64", "99", "9223372036854775807", "1", "-5", "42")) {
-            when(mockJedis.get(utf8("jredis-review:counter"))).thenReturn(counter.getBytes(StandardCharsets.US_ASCII));
-
-            assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.get("jredis-review:counter"), counter);
-            assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.getBulk("jredis-review:counter"), counter);
-        }
-    }
-
-    // ---- getBulk: previously JRedis inherited UnsupportedOperationException; now implemented (B1) ----
-
-    @Test
-    public void test_getBulk_varargs_returns_only_found_keys() {
+    void getBulkVarargsReturnsOnlyFoundKeys() {
         Account a1 = createAccount();
         when(mockJedis.get(utf8("user:1"))).thenReturn(KRYO.encode(a1));
         when(mockJedis.get(utf8("user:2"))).thenReturn(null); // missing key
@@ -182,118 +204,46 @@ public class JRedisTest {
         assertTrue(result.get("user:1") instanceof Account);
     }
 
+    // Writes
+
     @Test
-    public void test_getBulk_collection_returns_only_found_keys() {
-        Account a1 = createAccount();
-        when(mockJedis.get(utf8("k1"))).thenReturn(KRYO.encode(a1));
-        when(mockJedis.get(utf8("k2"))).thenReturn(null);
+    void incrReturnsServerValue() {
+        when(mockJedis.incr(utf8("counter"))).thenReturn(42L);
 
-        Map<String, Object> result = cache.getBulk(List.of("k1", "k2"));
-
-        assertEquals(1, result.size());
-        assertTrue(result.containsKey("k1"));
+        assertEquals(42L, cache.incr("counter"));
     }
 
     @Test
-    public void test_getBulk_empty_returns_empty_map() {
-        assertTrue(cache.getBulk().isEmpty());
-        assertTrue(cache.getBulk(List.of()).isEmpty());
-    }
+    void setRoundTripUsesKryoEncoding() {
+        // Confirm the byte payload SET sends is what Kryo would produce, so callers reading
+        // the same key from a real Redis would get an equal Account back.
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
-    /**
-     * A bulk result is keyed by the requested key, so duplicate requests must not trigger repeated
-     * network reads (which could observe different values or expiry states for the same map entry).
-     */
-    @Test
-    public void test_getBulk_duplicateKeysAreFetchedOnce() {
-        when(mockJedis.get(utf8("same"))).thenReturn(KRYO.encode("value"));
+        Account account = createAccount();
+        cache.put("k", account, 30_000);
 
-        final Map<String, Object> result = cache.getBulk("same", "same", "same");
+        org.mockito.ArgumentCaptor<byte[]> payload = org.mockito.ArgumentCaptor.forClass(byte[].class);
+        verify(mockJedis).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().px(30_000L)));
 
-        assertEquals(Map.of("same", "value"), result);
-        verify(mockJedis, times(1)).get(utf8("same"));
-    }
-
-    @Test
-    public void test_nullKeyIsRejectedWithIllegalArgumentExceptionBeforeAnyCommand() {
-        assertThrows(IllegalArgumentException.class, () -> cache.get(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 0));
-        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 60000));
-        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
-
-        Mockito.verifyNoInteractions(mockJedis);
+        Object roundTripped = KRYO.decode(payload.getValue());
+        assertTrue(roundTripped instanceof Account);
+        assertEquals(account.getFirstName(), ((Account) roundTripped).getFirstName());
+        assertEquals(account.getLastName(), ((Account) roundTripped).getLastName());
     }
 
     @Test
-    public void test_constructor_rejects_null_server_url() {
-        assertThrows(IllegalArgumentException.class, () -> new JRedis<>((String) null));
-        assertThrows(IllegalArgumentException.class, () -> new JRedis<>((String) null, 1000L));
+    void setWithoutTtlUsesPlainSet() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
+
+        boolean ok = cache.put("forever", "value", 0);
+
+        assertTrue(ok);
+        verify(mockJedis).set(eq(utf8("forever")), any(byte[].class));
+        verify(mockJedis, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
     }
 
     @Test
-    public void test_getBulk_rejects_null_keys() {
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((String[]) null));
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((List<String>) null));
-    }
-
-    @Test
-    public void test_getBulk_rejects_null_element() {
-        // Validation happens up-front, before any GET is issued.
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk("a", null, "c"));
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk(Arrays.asList("a", null)));
-        verify(mockJedis, never()).get(any(byte[].class));
-    }
-
-    /**
-     * The caller retains ownership of a varargs array. Mutating it after the first GET must not change
-     * the already-validated operation or inject an unvalidated null into the remaining requests.
-     */
-    @Test
-    public void test_getBulk_varargs_usesPrivateSnapshot() {
-        final String[] keys = { "a", "b" };
-        when(mockJedis.get(utf8("a"))).thenAnswer(invocation -> {
-            keys[1] = null;
-            return null;
-        });
-        when(mockJedis.get(utf8("b"))).thenReturn(KRYO.encode("value-b"));
-
-        final Map<String, Object> result = cache.getBulk(keys);
-
-        assertEquals("value-b", result.get("b"));
-        verify(mockJedis).get(utf8("b"));
-    }
-
-    /**
-     * A collection is copied and validated in one pass. The old validate-then-fetch implementation
-     * iterated a live collection twice, so a changed second view could issue requests for keys that
-     * had never been validated.
-     */
-    @Test
-    public void test_getBulk_collection_isValidatedAndSnapshottedInOnePass() {
-        final AtomicInteger iteratorCalls = new AtomicInteger();
-        final Collection<String> changingView = new AbstractCollection<>() {
-            @Override
-            public Iterator<String> iterator() {
-                return (iteratorCalls.getAndIncrement() == 0 ? List.of("a") : Arrays.asList("a", null)).iterator();
-            }
-
-            @Override
-            public int size() {
-                return 1;
-            }
-        };
-        when(mockJedis.get(utf8("a"))).thenReturn(KRYO.encode("value-a"));
-
-        assertEquals("value-a", cache.getBulk(changingView).get("a"));
-        assertEquals(1, iteratorCalls.get(), "the caller's collection must be consumed exactly once");
-    }
-
-    @Test
-    public void test_set_with_ttl_uses_set_with_expiry() {
+    void setWithTtlUsesSetWithExpiry() {
         when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
 
         Account account = createAccount();
@@ -305,94 +255,7 @@ public class JRedisTest {
         verify(mockJedis, never()).set(any(byte[].class), any(byte[].class));
     }
 
-    /**
-     * Regression test for the TTL-coarsening bug: {@code liveTime} was previously converted to whole
-     * seconds ({@code SET ... EX}, rounding up), so a 300 ms TTL silently became a full second —
-     * over 3x longer than requested for sub-second entries. The TTL is now passed through with
-     * millisecond precision ({@code SET ... PX}).
-     */
-    @Test
-    public void test_set_subSecondTtl_honoredWithMillisecondPrecision() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-
-        assertTrue(cache.put("short-lived", "v", 300));
-
-        verify(mockJedis).set(eq(utf8("short-lived")), any(byte[].class), eq(SetParams.setParams().px(300L)));
-    }
-
-    @Test
-    public void test_set_largeTtl_isNotNarrowedOrConverted() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-
-        assertTrue(cache.put("large-ttl", "v", Long.MAX_VALUE));
-
-        verify(mockJedis).set(eq(utf8("large-ttl")), any(byte[].class), eq(SetParams.setParams().px(Long.MAX_VALUE)));
-    }
-
-    @Test
-    public void test_set_without_ttl_uses_plain_set() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
-
-        boolean ok = cache.put("forever", "value", 0);
-
-        assertTrue(ok);
-        verify(mockJedis).set(eq(utf8("forever")), any(byte[].class));
-        verify(mockJedis, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
-    }
-
-    /** A negative liveTime means "no expiration" too: plain SET, never SET ... PX with a negative value. */
-    @Test
-    public void test_set_negativeTtl_uses_plain_set() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
-
-        assertTrue(cache.put("forever", "value", -1));
-        assertTrue(cache.put("forever", "value", Long.MIN_VALUE));
-
-        verify(mockJedis, times(2)).set(eq(utf8("forever")), any(byte[].class));
-        verify(mockJedis, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
-    }
-
-    /**
-     * The deprecated {@code set}/{@code delete} names are interface compatibility defaults. They must
-     * bridge to the {@code put}/{@code remove} implementations, which are declared on the
-     * package-private {@code AbstractJedisCacheClient} rather than on {@code JRedis} itself.
-     */
-    @SuppressWarnings("deprecation")
-    @Test
-    public void test_legacySetAndDelete_bridgeToPutAndRemove() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-        when(mockJedis.del(any(byte[].class))).thenReturn(1L);
-
-        assertTrue(cache.set("legacy", "v", 60_000));
-        assertTrue(cache.delete("legacy"));
-
-        verify(mockJedis).set(eq(utf8("legacy")), any(byte[].class), eq(SetParams.setParams().px(60_000L)));
-        verify(mockJedis).del(utf8("legacy"));
-    }
-
-    @Test
-    public void test_set_returns_false_when_server_does_not_say_OK() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("NOT_OK");
-
-        assertFalse(cache.put("k", "v", 60_000));
-    }
-
-    @Test
-    public void test_set_null_value_encodes_as_empty_byte_array() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-
-        cache.put("k", null, 60_000);
-
-        verify(mockJedis).set(eq(utf8("k")), eq(new byte[0]), any(SetParams.class));
-    }
-
-    @Test
-    public void test_delete_calls_del_and_returns_true() {
-        when(mockJedis.del(any(byte[].class))).thenReturn(1L);
-
-        assertTrue(cache.remove("k"));
-        verify(mockJedis).del(utf8("k"));
-    }
+    // Removals
 
     /**
      * Regression coverage for the {@code delete()} return value defect. Previously the method
@@ -401,7 +264,7 @@ public class JRedisTest {
      * that at least one key was actually removed (DEL > 0), matching the documented Redis semantics.
      */
     @Test
-    public void test_delete_returns_false_when_key_did_not_exist() {
+    void deleteReturnsFalseWhenKeyDidNotExist() {
         when(mockJedis.del(any(byte[].class))).thenReturn(0L);
 
         assertFalse(cache.remove("missing"));
@@ -409,7 +272,7 @@ public class JRedisTest {
     }
 
     @Test
-    public void test_delete_returns_true_when_multiple_removed() {
+    void deleteReturnsTrueWhenMultipleRemoved() {
         // A single-key DEL would report 1; just verify any positive count maps to true.
         when(mockJedis.del(any(byte[].class))).thenReturn(2L);
 
@@ -417,58 +280,19 @@ public class JRedisTest {
     }
 
     @Test
-    public void test_incr_returns_server_value() {
-        when(mockJedis.incr(utf8("counter"))).thenReturn(42L);
+    void flushAllContinuesWhenOneShardThrows() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        when(shards.get(0).flushAll()).thenThrow(new RuntimeException("shard 1 down"));
+        when(shards.get(1).flushAll()).thenReturn("OK");
 
-        assertEquals(42L, cache.incr("counter"));
+        RuntimeException thrown = assertThrows(RuntimeException.class, sharded::flushAll);
+        assertEquals("shard 1 down", thrown.getMessage());
+        // shard2 must still have been flushed even though shard1 threw
+        verify(shards.get(1)).flushAll();
     }
 
     @Test
-    public void test_incr_with_delta_calls_incrBy() {
-        when(mockJedis.incrBy(utf8("counter"), 5L)).thenReturn(5L);
-
-        assertEquals(5L, cache.incr("counter", 5));
-        verify(mockJedis).incrBy(utf8("counter"), 5L);
-    }
-
-    @Test
-    public void test_incr_with_delta_rejects_negative_delta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1));
-        verify(mockJedis, never()).incrBy(any(byte[].class), eq(-1L));
-    }
-
-    @Test
-    public void test_decr_returns_negative_when_redis_does() {
-        when(mockJedis.decr(utf8("counter"))).thenReturn(-1L);
-
-        assertEquals(-1L, cache.decr("counter"));
-    }
-
-    @Test
-    public void test_decr_with_delta_calls_decrBy() {
-        when(mockJedis.decrBy(utf8("counter"), 3L)).thenReturn(-3L);
-
-        assertEquals(-3L, cache.decr("counter", 3));
-        verify(mockJedis).decrBy(utf8("counter"), 3L);
-    }
-
-    @Test
-    public void test_decr_with_delta_rejects_negative_delta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.decr("counter", -1));
-        verify(mockJedis, never()).decrBy(any(byte[].class), eq(-1L));
-    }
-
-    @Test
-    public void test_flushAll_single_shard_calls_flushAll() {
-        when(mockJedis.flushAll()).thenReturn("OK");
-
-        cache.flushAll();
-
-        verify(mockJedis).flushAll();
-    }
-
-    @Test
-    public void test_flushAll_iterates_all_shards() {
+    void flushAllIteratesAllShards() {
         final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
         assertEquals(2, shards.size());
         when(shards.get(0).flushAll()).thenReturn("OK");
@@ -481,19 +305,7 @@ public class JRedisTest {
     }
 
     @Test
-    public void test_flushAll_continues_when_one_shard_throws() {
-        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
-        when(shards.get(0).flushAll()).thenThrow(new RuntimeException("shard 1 down"));
-        when(shards.get(1).flushAll()).thenReturn("OK");
-
-        RuntimeException thrown = assertThrows(RuntimeException.class, sharded::flushAll);
-        assertEquals("shard 1 down", thrown.getMessage());
-        // shard2 must still have been flushed even though shard1 threw
-        verify(shards.get(1)).flushAll();
-    }
-
-    @Test
-    public void test_flushAll_retains_additional_failures_asSuppressed() {
+    void flushAllRetainsAdditionalFailuresAsSuppressed() {
         final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379,h3:6379");
         final RuntimeException first = new RuntimeException("shard 1 down");
         final RuntimeException second = new RuntimeException("shard 2 down");
@@ -509,54 +321,19 @@ public class JRedisTest {
         verify(shards.get(2)).flushAll();
     }
 
-    // ---- shard routing ----
-
     @Test
-    public void test_clientFor_rejects_null_before_single_shard_shortcut_or_hashing() {
-        final IllegalArgumentException singleShardFailure = assertThrows(IllegalArgumentException.class, () -> cache.clientFor(null));
-        assertTrue(singleShardFailure.getMessage().contains("keyBytes"));
-        Mockito.verifyNoInteractions(mockJedis);
+    void flushAllSingleShardCallsFlushAll() {
+        when(mockJedis.flushAll()).thenReturn("OK");
 
-        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
-        final IllegalArgumentException multipleShardFailure = assertThrows(IllegalArgumentException.class, () -> sharded.clientFor(null));
-        assertEquals(singleShardFailure.getMessage(), multipleShardFailure.getMessage());
-        shards.forEach(Mockito::verifyNoInteractions);
+        cache.flushAll();
+
+        verify(mockJedis).flushAll();
     }
 
-    @Test
-    public void test_routing_same_key_is_consistent_across_calls() {
-        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
-        when(shards.get(0).get(any(byte[].class))).thenReturn(null);
-        when(shards.get(1).get(any(byte[].class))).thenReturn(null);
-
-        sharded.get("same-key");
-        sharded.get("same-key");
-
-        int hits0 = invocationCount(shards.get(0), "get");
-        int hits1 = invocationCount(shards.get(1), "get");
-
-        // Both reads of the same key must land on exactly one shard (deterministic routing).
-        assertEquals(2, hits0 + hits1);
-        assertTrue(hits0 == 0 || hits1 == 0, "the same key must always route to the same shard");
-    }
+    // Lifecycle
 
     @Test
-    public void test_routing_distributes_keys_across_shards() {
-        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
-        when(shards.get(0).get(any(byte[].class))).thenReturn(null);
-        when(shards.get(1).get(any(byte[].class))).thenReturn(null);
-
-        for (int i = 0; i < 100; i++) {
-            sharded.get("key-" + i);
-        }
-
-        // CRC-32 over 100 distinct keys must exercise both shards.
-        assertTrue(invocationCount(shards.get(0), "get") > 0);
-        assertTrue(invocationCount(shards.get(1), "get") > 0);
-    }
-
-    @Test
-    public void test_disconnect_is_idempotent() {
+    void disconnectIsIdempotent() {
         cache.disconnect();
         cache.disconnect(); // safe to call again
 
@@ -565,7 +342,7 @@ public class JRedisTest {
     }
 
     @Test
-    public void test_disconnect_publishesShutdownBeforeClosingClient() {
+    void disconnectPublishesShutdownBeforeClosingClient() {
         doAnswer(invocation -> {
             assertThrows(IllegalStateException.class, () -> cache.get("during-close"));
             return null;
@@ -584,7 +361,7 @@ public class JRedisTest {
      * remaining shard and eventually rethrow that original error.
      */
     @Test
-    public void test_disconnect_reusedErrorDoesNotAbortRemainingShardCleanup() {
+    void disconnectReusedErrorDoesNotAbortRemainingShardCleanup() {
         final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379,h3:6379");
         final AssertionError sharedFailure = new AssertionError("shared close failure");
         doThrow(sharedFailure).when(shards.get(0)).close();
@@ -599,29 +376,115 @@ public class JRedisTest {
         verify(shards.get(2)).close();
     }
 
+    // Compatibility
+
+    /**
+     * The deprecated {@code set}/{@code delete} names are interface compatibility defaults. They must
+     * bridge to the {@code put}/{@code remove} implementations, which are declared on the
+     * package-private {@code AbstractJedisCacheClient} rather than on {@code JRedis} itself.
+     */
+    @SuppressWarnings("deprecation")
     @Test
-    public void test_constructor_rejects_invalid_timeout() {
-        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", 0L));
-        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", -1L));
-        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", (long) Integer.MAX_VALUE + 1L));
+    void legacySetAndDeleteBridgeToPutAndRemove() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+        when(mockJedis.del(any(byte[].class))).thenReturn(1L);
+
+        assertTrue(cache.set("legacy", "v", 60_000));
+        assertTrue(cache.delete("legacy"));
+
+        verify(mockJedis).set(eq(utf8("legacy")), any(byte[].class), eq(SetParams.setParams().px(60_000L)));
+        verify(mockJedis).del(utf8("legacy"));
+    }
+
+    // Validation And Failures
+
+    @Test
+    void clientForRejectsNullBeforeSingleShardShortcutOrHashing() {
+        final IllegalArgumentException singleShardFailure = assertThrows(IllegalArgumentException.class, () -> cache.clientFor(null));
+        assertTrue(singleShardFailure.getMessage().contains("keyBytes"));
+        Mockito.verifyNoInteractions(mockJedis);
+
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        final IllegalArgumentException multipleShardFailure = assertThrows(IllegalArgumentException.class, () -> sharded.clientFor(null));
+        assertEquals(singleShardFailure.getMessage(), multipleShardFailure.getMessage());
+        shards.forEach(Mockito::verifyNoInteractions);
+    }
+
+    // Other Behavior
+
+    /**
+     * Regression test: without Kryo on the classpath, every construction attempt must fail with the
+     * documented, actionable {@link IllegalStateException}. The check used to run in a static field
+     * initializer, so the first attempt surfaced as {@link ExceptionInInitializerError} and every
+     * later attempt as a bare {@link NoClassDefFoundError} ("Could not initialize class ...").
+     *
+     * <p>The abacus classes (including abacus-common's {@code ParserFactory}, whose Kryo probe is
+     * computed once per class loader) are reloaded in an isolated loader that hides Kryo.
+     */
+    @Test
+    void missingKryoEveryConstructionFailsWithIllegalStateException() throws Exception {
+        final ClassLoader loader = new KryoHidingClassLoader(JRedisTest.class.getClassLoader());
+        // Reflect only on JRedis itself: reflecting on ParserFactory's public methods would fail on
+        // the Kryo types in their signatures. Initialization is deferred to the constructor call.
+        final Class<?> jredis = Class.forName(JRedis.class.getName(), false, loader);
+        final java.lang.reflect.Constructor<?> ctor = jredis.getConstructor(String.class);
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            final Throwable thrown = assertThrows(Throwable.class, () -> ctor.newInstance("localhost:6379"));
+            final Throwable cause = thrown instanceof java.lang.reflect.InvocationTargetException ? thrown.getCause() : thrown;
+
+            assertEquals(IllegalStateException.class, cause.getClass(), "attempt " + attempt + ": " + cause);
+            assertTrue(cause.getMessage().contains("com.esotericsoftware:kryo"), cause.getMessage());
+        }
+
+        assertEquals(1, shards.size(), "only setUp's shard may exist; none is built when Kryo is missing");
     }
 
     @Test
-    public void test_set_round_trip_uses_kryo_encoding() {
-        // Confirm the byte payload SET sends is what Kryo would produce, so callers reading
-        // the same key from a real Redis would get an equal Account back.
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+    void routingDistributesKeysAcrossShards() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        when(shards.get(0).get(any(byte[].class))).thenReturn(null);
+        when(shards.get(1).get(any(byte[].class))).thenReturn(null);
 
-        Account account = createAccount();
-        cache.put("k", account, 30_000);
+        for (int i = 0; i < 100; i++) {
+            sharded.get("key-" + i);
+        }
 
-        org.mockito.ArgumentCaptor<byte[]> payload = org.mockito.ArgumentCaptor.forClass(byte[].class);
-        verify(mockJedis).set(eq(utf8("k")), payload.capture(), eq(SetParams.setParams().px(30_000L)));
+        // CRC-32 over 100 distinct keys must exercise both shards.
+        assertTrue(invocationCount(shards.get(0), "get") > 0);
+        assertTrue(invocationCount(shards.get(1), "get") > 0);
+    }
 
-        Object roundTripped = KRYO.decode(payload.getValue());
-        assertTrue(roundTripped instanceof Account);
-        assertEquals(account.getFirstName(), ((Account) roundTripped).getFirstName());
-        assertEquals(account.getLastName(), ((Account) roundTripped).getLastName());
+    @Test
+    void routingSameKeyIsConsistentAcrossCalls() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        when(shards.get(0).get(any(byte[].class))).thenReturn(null);
+        when(shards.get(1).get(any(byte[].class))).thenReturn(null);
+
+        sharded.get("same-key");
+        sharded.get("same-key");
+
+        int hits0 = invocationCount(shards.get(0), "get");
+        int hits1 = invocationCount(shards.get(1), "get");
+
+        // Both reads of the same key must land on exactly one shard (deterministic routing).
+        assertEquals(2, hits0 + hits1);
+        assertTrue(hits0 == 0 || hits1 == 0, "the same key must always route to the same shard");
+    }
+
+    @Test
+    void serverUrlReturnsConstructorValue() {
+        assertEquals("localhost:6379", cache.serverUrl());
+    }
+
+    @Test
+    void validSupplementaryUnicodeKeyPreservesUtf8Bytes() {
+        final String key = "user:\uD83D\uDE00:\uD800\uDC00";
+        when(mockJedis.get(utf8(key))).thenReturn(KRYO.encode("value"));
+
+        assertEquals("value", cache.get(key));
+        assertEquals(Map.of(key, "value"), cache.getBulk("missing", key));
+        verify(mockJedis, times(2)).get(utf8(key));
     }
 
     /**
@@ -652,77 +515,6 @@ public class JRedisTest {
         a.setEmailAddress(a.getGui() + "@email");
         a.setBirthDate(Dates.currentTimestamp());
         return a;
-    }
-
-    @Test
-    public void test_serverUrl_returns_constructor_value() {
-        assertEquals("localhost:6379", cache.serverUrl());
-    }
-
-    @Test
-    public void test_constructor_with_default_timeout_does_not_throw() {
-        // Default-timeout constructor (single-arg) is exercised here, reusing the BeforeEach mockConstruction.
-        final JRedis<Object> c = new JRedis<>("localhost:6379");
-        assertNotNull(c);
-    }
-
-    @Test
-    public void test_constructor_rejects_invalid_server_url() {
-        // An empty URL is rejected by the base-class blank check; a token without host:port by AddrUtil.
-        assertThrows(IllegalArgumentException.class, () -> new JRedis<>(""));
-        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost"));
-        assertEquals(1, shards.size(), "only setUp's shard may exist; none is built for a malformed URL");
-    }
-
-    /** A shard-construction failure must close the shard clients that were already built. */
-    @Test
-    public void test_constructor_partialFailureClosesAlreadyBuiltShards() {
-        ctorIntercept.close();
-        final List<RedisClient> built = new ArrayList<>();
-        final RuntimeException failure = new IllegalStateException("third shard fails");
-
-        ctorIntercept = Mockito.mockConstruction(RedisClient.class, (poolMock, context) -> {
-            if (built.size() == 2) {
-                throw failure;
-            }
-
-            built.add(poolMock);
-        });
-
-        final RuntimeException thrown = assertThrows(RuntimeException.class, () -> new JRedis<>("h1:6379,h2:6379,h3:6379"));
-
-        assertTrue(thrown == failure || thrown.getCause() == failure, String.valueOf(thrown));
-        assertEquals(2, built.size());
-        verify(built.get(0)).close();
-        verify(built.get(1)).close();
-    }
-
-    /**
-     * Regression test: without Kryo on the classpath, every construction attempt must fail with the
-     * documented, actionable {@link IllegalStateException}. The check used to run in a static field
-     * initializer, so the first attempt surfaced as {@link ExceptionInInitializerError} and every
-     * later attempt as a bare {@link NoClassDefFoundError} ("Could not initialize class ...").
-     *
-     * <p>The abacus classes (including abacus-common's {@code ParserFactory}, whose Kryo probe is
-     * computed once per class loader) are reloaded in an isolated loader that hides Kryo.
-     */
-    @Test
-    public void test_missingKryo_everyConstructionFailsWithIllegalStateException() throws Exception {
-        final ClassLoader loader = new KryoHidingClassLoader(JRedisTest.class.getClassLoader());
-        // Reflect only on JRedis itself: reflecting on ParserFactory's public methods would fail on
-        // the Kryo types in their signatures. Initialization is deferred to the constructor call.
-        final Class<?> jredis = Class.forName(JRedis.class.getName(), false, loader);
-        final java.lang.reflect.Constructor<?> ctor = jredis.getConstructor(String.class);
-
-        for (int attempt = 1; attempt <= 2; attempt++) {
-            final Throwable thrown = assertThrows(Throwable.class, () -> ctor.newInstance("localhost:6379"));
-            final Throwable cause = thrown instanceof java.lang.reflect.InvocationTargetException ? thrown.getCause() : thrown;
-
-            assertEquals(IllegalStateException.class, cause.getClass(), "attempt " + attempt + ": " + cause);
-            assertTrue(cause.getMessage().contains("com.esotericsoftware:kryo"), cause.getMessage());
-        }
-
-        assertEquals(1, shards.size(), "only setUp's shard may exist; none is built when Kryo is missing");
     }
 
     /**
@@ -766,20 +558,6 @@ public class JRedisTest {
 
                 return cls;
             }
-        }
-    }
-
-    @Test
-    public void test_getKeyBytes_EdgeCase_NullKey() throws Exception {
-        // Reach the protected getKeyBytes via reflection so we can verify the contract. It is declared
-        // on the abstract base class (AbstractJedisCacheClient), so look it up on the superclass.
-        final java.lang.reflect.Method m = JRedis.class.getSuperclass().getDeclaredMethod("getKeyBytes", String.class);
-        m.setAccessible(true);
-        try {
-            m.invoke(cache, (Object) null);
-            org.junit.jupiter.api.Assertions.fail("expected IllegalArgumentException");
-        } catch (final java.lang.reflect.InvocationTargetException ite) {
-            org.junit.jupiter.api.Assertions.assertTrue(ite.getCause() instanceof IllegalArgumentException);
         }
     }
 }

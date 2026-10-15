@@ -37,7 +37,24 @@
 		<maven.compiler.target>25</maven.compiler.target>
 		<maven.compiler.release>25</maven.compiler.release>
 		<junit.jupiter.version>6.1.3</junit.jupiter.version>
-		<junit.platform.version>6.1.3</junit.platform.version>
+		<junit.platform.version>${junit.jupiter.version}</junit.platform.version>
+		<argLine />
+		<test.heap>1g</test.heap>
+		<test.directMemory>256m</test.directMemory>
+		<test.jvm.args>
+			-Dfile.encoding=UTF-8
+			-Xmx${test.heap}
+			-XX:MaxDirectMemorySize=${test.directMemory}
+			--sun-misc-unsafe-memory-access=allow
+			--add-opens java.base/java.lang=ALL-UNNAMED
+			--add-opens java.base/java.lang.reflect=ALL-UNNAMED
+			--add-opens java.base/java.io=ALL-UNNAMED
+			--add-opens java.base/sun.nio.ch=ALL-UNNAMED
+			--add-opens java.base/java.nio=ALL-UNNAMED
+			--add-exports java.base/jdk.internal.ref=ALL-UNNAMED
+			--add-exports java.base/sun.nio.ch=ALL-UNNAMED
+			--add-exports jdk.unsupported/sun.misc=ALL-UNNAMED
+		</test.jvm.args>
 		<lombok.version>1.18.48</lombok.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -141,6 +158,12 @@
 			<version>${junit.jupiter.version}</version>
 			<scope>test</scope>
 		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-params</artifactId>
+			<version>${junit.jupiter.version}</version>
+			<scope>test</scope>
+		</dependency>
 		<!-- JUnit engines are discovered at runtime by Surefire. -->
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
@@ -148,15 +171,10 @@
 			<version>${junit.jupiter.version}</version>
 			<scope>test</scope>
 		</dependency>
+		<!-- API and engine for the optional IDE suite launcher. -->
 		<dependency>
 			<groupId>org.junit.platform</groupId>
-			<artifactId>junit-platform-suite-api</artifactId>
-			<version>${junit.platform.version}</version>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.junit.platform</groupId>
-			<artifactId>junit-platform-suite-engine</artifactId>
+			<artifactId>junit-platform-suite</artifactId>
 			<version>${junit.platform.version}</version>
 			<scope>test</scope>
 		</dependency>
@@ -232,31 +250,14 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>3.6.0</version>
 				<configuration>
+					<!-- Discover unit classes directly; the optional *TestSuite launcher must not run them a second time. -->
 					<includes>
-						<include>**/AbacusCacheTestSuite.java</include>
+						<include>**/*Test.java</include>
 					</includes>
 					<useModulePath>false</useModulePath>
-					<testFailureIgnore>true</testFailureIgnore> <!-- set to false
-					if you want failures to fail the build -->
-					<argLine>
-						-Dfile.encoding=UTF-8
-						<!-- Bound the fork's memory so the suite's footprint is deterministic: several test
-						     classes hold 4 GB native caches (Unsafe/FFM statics, Ehcache off-heap), and with
-						     the default unbounded-ish heap (1/4 of RAM) G1 can balloon during the load tests
-						     until the OS commit limit is exhausted, crashing the fork. Direct memory must
-						     exceed the Ehcache 4096 MB off-heap test, and is limited to -Xmx when unset. -->
-						-Xmx8g
-						-XX:MaxDirectMemorySize=5g
-						--sun-misc-unsafe-memory-access=allow
-						--add-opens java.base/java.lang=ALL-UNNAMED
-						--add-opens java.base/java.lang.reflect=ALL-UNNAMED
-						--add-opens java.base/java.io=ALL-UNNAMED
-						--add-opens java.base/sun.nio.ch=ALL-UNNAMED
-						--add-opens java.base/java.nio=ALL-UNNAMED
-						--add-exports java.base/jdk.internal.ref=ALL-UNNAMED
-						--add-exports java.base/sun.nio.ch=ALL-UNNAMED
-						--add-exports jdk.unsupported/sun.misc=ALL-UNNAMED
-					</argLine>
+					<testFailureIgnore>false</testFailureIgnore>
+					<failIfNoTests>true</failIfNoTests>
+					<argLine>@{argLine} ${test.jvm.args} "-Djava.io.tmpdir=${project.build.directory}"</argLine>
 				</configuration>
 			</plugin>
 
@@ -265,14 +266,14 @@
 				<artifactId>jacoco-maven-plugin</artifactId>
 				<version>0.8.15</version>
 				<executions>
-					<!-- Prepare agent in all modules via inheritance -->
+					<!-- Keep the coverage agent in the fork alongside the native-memory JVM options. -->
 					<execution>
 						<id>prepare-agent</id>
 						<goals>
 							<goal>prepare-agent</goal>
 						</goals>
 					</execution>
-					<!-- Generate a single aggregated report at the parent -->
+					<!-- Generate the coverage report during verify. -->
 					<execution>
 						<id>report</id>
 						<phase>verify</phase>
@@ -310,4 +311,46 @@
 			</plugin>
 		</plugins>
 	</build>
+	<profiles>
+		<profile>
+			<id>integration-tests</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-failsafe-plugin</artifactId>
+						<version>3.6.0</version>
+						<configuration>
+							<includes><include>**/*IT.java</include></includes>
+							<useModulePath>false</useModulePath>
+							<failIfNoTests>true</failIfNoTests>
+							<argLine>@{argLine} ${test.jvm.args} "-Djava.io.tmpdir=${project.build.directory}"</argLine>
+						</configuration>
+						<executions>
+							<execution>
+								<goals><goal>integration-test</goal><goal>verify</goal></goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+		<profile>
+			<id>performance</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<includes>
+								<include>**/*Test.java</include>
+								<include>**/*Performance.java</include>
+							</includes>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 </project>

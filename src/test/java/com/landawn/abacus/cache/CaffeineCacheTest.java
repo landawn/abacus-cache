@@ -29,30 +29,57 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.landawn.abacus.TestBase;
 import com.landawn.abacus.util.Suppliers;
 
-@Tag("2025")
-public class CaffeineCacheTest extends TestBase {
+class CaffeineCacheTest {
 
-    private CaffeineCache<String, String> newCache() {
-        // Use a Supplier to create the underlying Caffeine instance, exercising the Suppliers helper.
-        final Supplier<com.github.benmanes.caffeine.cache.Cache<String, String>> supplier = Suppliers
-                .of(() -> Caffeine.newBuilder().maximumSize(100).recordStats().build());
-        return new CaffeineCache<>(supplier.get());
-    }
+    // Construction
 
     @Test
-    public void testConstructor_EdgeCase_NullCache() {
+    void constructorNullCache() {
         assertThrows(IllegalArgumentException.class, () -> new CaffeineCache<String, String>(null));
     }
 
+    // Reads
+
     @Test
-    public void testPutAndGetOrNull() {
+    void getOrNullMissing() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            assertNull(cache.getOrNull("missing"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * Regression coverage for the asymmetric null-key handling defect.
+     *
+     * <p>Before the fix {@link CaffeineCache#put(Object, Object, long, long)} explicitly rejected
+     * null keys with {@code IllegalArgumentException}, but the read-side methods
+     * ({@code getOrNull}, {@code remove}, {@code containsKey}) delegated straight to Caffeine,
+     * which raises an unrelated {@code NullPointerException}. The fix harmonises the contract so
+     * every key-taking operation rejects nulls with the same {@code IllegalArgumentException}.
+     */
+    @Test
+    void getOrNullNullKey() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Writes
+
+    @Test
+    void putAndGetOrNull() {
         final CaffeineCache<String, String> cache = newCache();
 
         try {
@@ -64,7 +91,7 @@ public class CaffeineCacheTest extends TestBase {
     }
 
     @Test
-    public void testPut_EdgeCase_NullKey() {
+    void putNullKey() {
         final CaffeineCache<String, String> cache = newCache();
 
         try {
@@ -80,7 +107,7 @@ public class CaffeineCacheTest extends TestBase {
      * underlying Caffeine cache.
      */
     @Test
-    public void testPut_EdgeCase_NullValue() {
+    void putNullValue() {
         final CaffeineCache<String, String> cache = newCache();
 
         try {
@@ -90,55 +117,25 @@ public class CaffeineCacheTest extends TestBase {
         }
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * The post-close cleanup must be side-effect-free on the delegate: it probes with the
+     * documented no-side-effect {@code Policy.getIfPresentQuietly} and issues at most one
+     * conditional remove. The previous {@code computeIfPresent} cleanup was processed by Caffeine
+     * as an update even when it kept the mapping - refreshing the newer entry's expiration
+     * metadata and, with {@code recordStats()}, logging a synthetic loadSuccess (kept) or
+     * loadFailure (removed). Real-Caffeine load counters pin both cleanup branches at zero.
+     */
     @Test
-    public void testPut_RacingClose_RemovesOwnLateWrite() throws InterruptedException {
-        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
-        final ConcurrentMap<String, String> delegateMap = new ConcurrentHashMap<>();
-        final CountDownLatch putStarted = new CountDownLatch(1);
-        final CountDownLatch allowPutToFinish = new CountDownLatch(1);
-
-        org.mockito.Mockito.when(delegate.asMap()).thenReturn(delegateMap);
-        stubQuietProbe(delegate, delegateMap);
-        doAnswer(invocation -> {
-            putStarted.countDown();
-            assertTrue(allowPutToFinish.await(5, TimeUnit.SECONDS));
-            delegateMap.put("k", "v");
-            return null;
-        }).when(delegate).put("k", "v");
-
-        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
-        final AtomicReference<Throwable> putFailure = new AtomicReference<>();
-        final Thread putThread = new Thread(() -> {
-            try {
-                cache.put("k", "v", 0, 0);
-            } catch (final Throwable e) {
-                putFailure.set(e);
-            }
-        });
-
-        try {
-            putThread.start();
-            assertTrue(putStarted.await(5, TimeUnit.SECONDS));
-
-            cache.close();
-            allowPutToFinish.countDown();
-            putThread.join(5_000L);
-
-            assertFalse(putThread.isAlive());
-            assertInstanceOf(IllegalStateException.class, putFailure.get());
-            assertFalse(delegateMap.containsKey("k"));
-            verify(delegate).invalidateAll();
-        } finally {
-            allowPutToFinish.countDown();
-            putThread.join(5_000L);
-            cache.close();
-        }
+    void putRacingCloseCleanupRecordsNoLoadStatsOnRealCaffeine() throws Exception {
+        // Branch 1: cleanup finds its own write current and removes it -> no loadFailure.
+        runRealCaffeineCleanupScenario(false);
+        // Branch 2: cleanup finds a newer direct write and keeps it -> no loadSuccess.
+        runRealCaffeineCleanupScenario(true);
     }
 
     @SuppressWarnings("unchecked")
     @Test
-    public void testPut_RacingClose_DoesNotRemoveNewerDelegateValue() throws InterruptedException {
+    void putRacingCloseDoesNotRemoveNewerDelegateValue() throws InterruptedException {
         final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
         final ConcurrentMap<String, String> delegateMap = new ConcurrentHashMap<>();
         final CountDownLatch putStarted = new CountDownLatch(1);
@@ -187,6 +184,485 @@ public class CaffeineCacheTest extends TestBase {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    @Test
+    void putRacingCloseRemovesOwnLateWrite() throws InterruptedException {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final ConcurrentMap<String, String> delegateMap = new ConcurrentHashMap<>();
+        final CountDownLatch putStarted = new CountDownLatch(1);
+        final CountDownLatch allowPutToFinish = new CountDownLatch(1);
+
+        org.mockito.Mockito.when(delegate.asMap()).thenReturn(delegateMap);
+        stubQuietProbe(delegate, delegateMap);
+        doAnswer(invocation -> {
+            putStarted.countDown();
+            assertTrue(allowPutToFinish.await(5, TimeUnit.SECONDS));
+            delegateMap.put("k", "v");
+            return null;
+        }).when(delegate).put("k", "v");
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final AtomicReference<Throwable> putFailure = new AtomicReference<>();
+        final Thread putThread = new Thread(() -> {
+            try {
+                cache.put("k", "v", 0, 0);
+            } catch (final Throwable e) {
+                putFailure.set(e);
+            }
+        });
+
+        try {
+            putThread.start();
+            assertTrue(putStarted.await(5, TimeUnit.SECONDS));
+
+            cache.close();
+            allowPutToFinish.countDown();
+            putThread.join(5_000L);
+
+            assertFalse(putThread.isAlive());
+            assertInstanceOf(IllegalStateException.class, putFailure.get());
+            assertFalse(delegateMap.containsKey("k"));
+            verify(delegate).invalidateAll();
+        } finally {
+            allowPutToFinish.countDown();
+            putThread.join(5_000L);
+            cache.close();
+        }
+    }
+
+    // Removals
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void clearAdmittedBeforeCloseCanFinishAfterCloseReturns() throws InterruptedException {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final AtomicInteger invalidateAllCalls = new AtomicInteger();
+        final CountDownLatch clearStarted = new CountDownLatch(1);
+        final CountDownLatch allowClearToFinish = new CountDownLatch(1);
+        final CountDownLatch closeStarted = new CountDownLatch(1);
+        final CountDownLatch closeFinished = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            if (invalidateAllCalls.incrementAndGet() == 1) {
+                clearStarted.countDown();
+                assertTrue(allowClearToFinish.await(5, TimeUnit.SECONDS));
+            }
+
+            return null;
+        }).when(delegate).invalidateAll();
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final Thread clearThread = new Thread(cache::clear);
+        final Thread closeThread = new Thread(() -> {
+            closeStarted.countDown();
+            cache.close();
+            closeFinished.countDown();
+        });
+
+        try {
+            clearThread.start();
+            assertTrue(clearStarted.await(5, TimeUnit.SECONDS));
+            closeThread.start();
+
+            assertTrue(closeStarted.await(5, TimeUnit.SECONDS));
+            assertTrue(closeFinished.await(5, TimeUnit.SECONDS), "close must not hold a wrapper lock while an admitted clear is in the delegate");
+            assertTrue(clearThread.isAlive(), "the admitted clear remains paused after close returns");
+            assertTrue(cache.isClosed());
+            allowClearToFinish.countDown();
+
+            clearThread.join(5_000L);
+            closeThread.join(5_000L);
+            assertFalse(clearThread.isAlive());
+            assertFalse(closeThread.isAlive());
+            assertEquals(2, invalidateAllCalls.get(), "both the admitted clear and the one-time close invalidate the delegate");
+        } finally {
+            allowClearToFinish.countDown();
+            clearThread.join(5_000L);
+            closeThread.join(5_000L);
+            cache.close();
+        }
+    }
+
+    @Test
+    void clearRemovesEntries() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            cache.put("k", "v", 0, 0);
+            cache.clear();
+            assertNull(cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void removeAdmittedBeforeCloseCanFinishAfterCloseReturns() throws InterruptedException {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final AtomicInteger invalidateCalls = new AtomicInteger();
+        final AtomicInteger invalidateAllCalls = new AtomicInteger();
+        final CountDownLatch removeStarted = new CountDownLatch(1);
+        final CountDownLatch allowRemoveToFinish = new CountDownLatch(1);
+        final CountDownLatch closeFinished = new CountDownLatch(1);
+        final AtomicReference<Throwable> removeFailure = new AtomicReference<>();
+
+        doAnswer(invocation -> {
+            invalidateCalls.incrementAndGet();
+            removeStarted.countDown();
+            assertTrue(allowRemoveToFinish.await(5, TimeUnit.SECONDS));
+            return null;
+        }).when(delegate).invalidate("k");
+        doAnswer(invocation -> {
+            invalidateAllCalls.incrementAndGet();
+            return null;
+        }).when(delegate).invalidateAll();
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final Thread removeThread = new Thread(() -> {
+            try {
+                cache.remove("k");
+            } catch (final Throwable e) {
+                removeFailure.set(e);
+            }
+        });
+        final Thread closeThread = new Thread(() -> {
+            cache.close();
+            closeFinished.countDown();
+        });
+
+        try {
+            removeThread.start();
+            assertTrue(removeStarted.await(5, TimeUnit.SECONDS));
+            closeThread.start();
+
+            // The remove passed its open-state check before close, so close neither waits for it
+            // nor makes it fail; it completes against the delegate after close has returned.
+            assertTrue(closeFinished.await(5, TimeUnit.SECONDS), "close must not wait for an admitted remove in the delegate");
+            assertTrue(removeThread.isAlive(), "the admitted remove remains paused after close returns");
+            assertTrue(cache.isClosed());
+            assertEquals(1, invalidateAllCalls.get(), "close invalidates the delegate once without waiting for the remove");
+            allowRemoveToFinish.countDown();
+
+            removeThread.join(5_000L);
+            closeThread.join(5_000L);
+            assertFalse(removeThread.isAlive());
+            assertFalse(closeThread.isAlive());
+            assertNull(removeFailure.get(), "an admitted remove completes normally even though close returned first");
+            assertEquals(1, invalidateCalls.get());
+            assertThrows(IllegalStateException.class, () -> cache.remove("k"), "a remove started after close is rejected");
+            assertEquals(1, invalidateCalls.get(), "a rejected remove never reaches the delegate");
+        } finally {
+            allowRemoveToFinish.countDown();
+            removeThread.join(5_000L);
+            closeThread.join(5_000L);
+            cache.close();
+        }
+    }
+
+    @Test
+    void removeDeletesEntry() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            cache.put("k", "v", 0, 0);
+            cache.remove("k");
+            assertNull(cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void removeNullKey() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** Argument validation must not wait for a delegate callback holding the lifecycle lock. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void removeRejectsNullBeforeWaitingForDestructiveOperation() throws Exception {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final CountDownLatch clearing = new CountDownLatch(1);
+        final CountDownLatch finishClear = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            clearing.countDown();
+            assertTrue(finishClear.await(10, TimeUnit.SECONDS));
+            return null;
+        }).when(delegate).invalidateAll();
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            final Future<?> clear = executor.submit(cache::clear);
+            assertTrue(clearing.await(5, TimeUnit.SECONDS));
+            final Future<?> rejected = executor.submit(() -> assertThrows(IllegalArgumentException.class, () -> cache.remove(null)));
+            rejected.get(5, TimeUnit.SECONDS);
+            verify(delegate).invalidateAll();
+            org.mockito.Mockito.verifyNoMoreInteractions(delegate);
+            finishClear.countDown();
+            clear.get(5, TimeUnit.SECONDS);
+        } finally {
+            finishClear.countDown();
+            executor.shutdownNow();
+            cache.close();
+        }
+    }
+
+    // Membership And Views
+
+    @Test
+    void containsKeyNullKey() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void containsKeyReportsPresence() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            cache.put("k", "v", 0, 0);
+            assertTrue(cache.containsKey("k"));
+            assertFalse(cache.containsKey("missing"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void keySetUnsupported() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            assertThrows(UnsupportedOperationException.class, cache::keySet);
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void size() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            cache.put("a", "1", 0, 0);
+            cache.put("b", "2", 0, 0);
+            // Caffeine performs maintenance lazily; force pending writes to drain so size is reliable.
+            // We just check it's between 0 and the maximum.
+            final int size = cache.size();
+            assertTrue(size >= 0);
+            assertTrue(size <= 2);
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Statistics
+
+    /** Caffeine accepts {@code long} maximums, so even an entry-count bound can exceed the int capacity field. */
+    @Test
+    void statsCapacityClampedForLongSizeBound() {
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(Caffeine.newBuilder().maximumSize(3_000_000_000L).build());
+
+        try {
+            assertEquals(Integer.MAX_VALUE, cache.stats().capacity());
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * Content-level stats mapping (previously only non-nullness was asserted): capacity from the
+     * eviction policy's maximum, wrapper-tracked putCount, Caffeine-tracked hit/miss/request
+     * counts, and the -1 "not tracked" sentinels for maxMemory/dataSize.
+     */
+    @Test
+    void statsContentReflectsTraffic() {
+        final CaffeineCache<String, String> cache = newCache(); // maximumSize(100), recordStats()
+
+        try {
+            assertTrue(cache.put("a", "1"));
+            assertEquals("1", cache.getOrNull("a"));
+            assertNull(cache.getOrNull("missing"));
+
+            final CacheStats stats = cache.stats();
+            assertEquals(100, stats.capacity());
+            assertEquals(1, stats.size());
+            assertEquals(1L, stats.putCount());
+            assertEquals(2L, stats.getCount());
+            assertEquals(1L, stats.hitCount());
+            assertEquals(1L, stats.missCount());
+            assertEquals(-1L, stats.maxMemory(), "memory is not tracked: -1 sentinel");
+            assertEquals(-1L, stats.dataSize(), "data size is not tracked: -1 sentinel");
+
+            final com.github.benmanes.caffeine.cache.stats.CacheStats nativeStats = cache.caffeineStats();
+            assertEquals(1L, nativeStats.hitCount());
+            assertEquals(1L, nativeStats.missCount());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void statsReturnsNonNull() {
+        final CaffeineCache<String, String> cache = newCache();
+
+        try {
+            cache.put("k", "v", 0, 0);
+            cache.getOrNull("k");
+            cache.getOrNull("missing");
+            assertNotNull(cache.stats());
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Lifecycle
+
+    /** Once close publishes its state, failed calls must not wait for its delegate cleanup. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void closedRemoveAndClearDoNotWaitForCloseCleanup() throws Exception {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final CountDownLatch closing = new CountDownLatch(1);
+        final CountDownLatch finishClose = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            closing.countDown();
+            assertTrue(finishClose.await(10, TimeUnit.SECONDS));
+            return null;
+        }).when(delegate).invalidateAll();
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            final Future<?> close = executor.submit(cache::close);
+            assertTrue(closing.await(5, TimeUnit.SECONDS));
+            assertTrue(cache.isClosed());
+            final Future<?> rejected = executor.submit(() -> {
+                cache.close(); // A repeated close must not wait for the first invalidation either.
+                assertThrows(IllegalStateException.class, () -> cache.remove(null));
+                assertThrows(IllegalStateException.class, cache::clear);
+            });
+            rejected.get(5, TimeUnit.SECONDS);
+            verify(delegate).invalidateAll();
+            verify(delegate, never()).invalidate(org.mockito.ArgumentMatchers.any());
+            finishClose.countDown();
+            close.get(5, TimeUnit.SECONDS);
+        } finally {
+            finishClose.countDown();
+            executor.shutdownNow();
+            cache.close();
+        }
+    }
+
+    @Test
+    void closeIsIdempotent() {
+        final CaffeineCache<String, String> cache = newCache();
+        assertFalse(cache.isClosed());
+        cache.close();
+        cache.close();
+        assertTrue(cache.isClosed());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void closeRacingInFlightClearDoesNotWaitAndReentrantCloseIsNoOp() throws InterruptedException {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
+        final AtomicInteger invalidateAllCalls = new AtomicInteger();
+        final AtomicReference<CaffeineCache<String, String>> cacheRef = new AtomicReference<>();
+        final CountDownLatch outerClearEnteredDelegate = new CountDownLatch(1);
+        final CountDownLatch allowReentrantClose = new CountDownLatch(1);
+        final CountDownLatch reentrantCloseReturned = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            if (invalidateAllCalls.incrementAndGet() == 1) {
+                outerClearEnteredDelegate.countDown();
+                assertTrue(allowReentrantClose.await(5, TimeUnit.SECONDS));
+                cacheRef.get().close();
+                reentrantCloseReturned.countDown();
+            }
+
+            return null;
+        }).when(delegate).invalidateAll();
+
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        cacheRef.set(cache);
+        final Thread clearThread = new Thread(cache::clear);
+        final Thread competingCloseThread = new Thread(cache::close);
+        // Daemon threads let a locking regression fail instead of hanging the whole test fork.
+        clearThread.setDaemon(true);
+        competingCloseThread.setDaemon(true);
+
+        clearThread.start();
+        assertTrue(outerClearEnteredDelegate.await(5, TimeUnit.SECONDS));
+        // The competing close is the FIRST close: it wins the state transition while the clear is
+        // still inside the delegate. The close later issued from that delegate callback is the
+        // repeated one and must return without invalidating again.
+        competingCloseThread.start();
+
+        competingCloseThread.join(5_000L);
+        assertFalse(competingCloseThread.isAlive(), "close is a state transition, not a wait for an admitted clear");
+        assertTrue(cache.isClosed());
+
+        allowReentrantClose.countDown();
+        assertTrue(reentrantCloseReturned.await(5, TimeUnit.SECONDS), "delegate callback must be able to reenter close without lock inversion");
+
+        clearThread.join(5_000L);
+        competingCloseThread.join(5_000L);
+        assertFalse(clearThread.isAlive());
+        assertFalse(competingCloseThread.isAlive());
+        assertTrue(cache.isClosed());
+        assertEquals(2, invalidateAllCalls.get(), "only the outer clear and the first close invalidate; the reentrant close is a no-op");
+    }
+
+    // Other Behavior
+
+    @Test
+    void operationsAfterCloseThrow() {
+        final CaffeineCache<String, String> cache = newCache();
+        cache.close();
+        assertThrows(IllegalStateException.class, () -> cache.getOrNull("k"));
+        assertThrows(IllegalStateException.class, () -> cache.put("k", "v", 0, 0));
+        assertThrows(IllegalStateException.class, () -> cache.remove("k"));
+        assertThrows(IllegalStateException.class, () -> cache.containsKey("k"));
+        assertThrows(IllegalStateException.class, cache::size);
+        assertThrows(IllegalStateException.class, cache::clear);
+    }
+
+    @Test
+    void removalListenerCloseDoesNotDeadlockWithConcurrentClear() throws InterruptedException {
+        assertRemovalListenerDoesNotDeadlock(false, false, "close");
+    }
+
+    @Test
+    void removalListenerCloseDoesNotDeadlockWithConcurrentClose() throws InterruptedException {
+        assertRemovalListenerDoesNotDeadlock(true, false, "close");
+    }
+
+    @Test
+    void retainedDelegateRemovalListenerDoesNotDeadlockWithConcurrentClear() throws InterruptedException {
+        for (final String listenerOperation : new String[] { "close", "clear", "remove" }) {
+            assertRemovalListenerDoesNotDeadlock(false, true, listenerOperation);
+        }
+    }
+
+    private CaffeineCache<String, String> newCache() {
+        // Use a Supplier to create the underlying Caffeine instance, exercising the Suppliers helper.
+        final Supplier<com.github.benmanes.caffeine.cache.Cache<String, String>> supplier = Suppliers
+                .of(() -> Caffeine.newBuilder().maximumSize(100).recordStats().build());
+        return new CaffeineCache<>(supplier.get());
+    }
+
     /** The closed-state cleanup probes via {@code Policy.getIfPresentQuietly}; mocks must stub it. */
     @SuppressWarnings("unchecked")
     private static void stubQuietProbe(final com.github.benmanes.caffeine.cache.Cache<String, String> delegate,
@@ -194,22 +670,6 @@ public class CaffeineCacheTest extends TestBase {
         final com.github.benmanes.caffeine.cache.Policy<String, String> delegatePolicy = mock(com.github.benmanes.caffeine.cache.Policy.class);
         org.mockito.Mockito.when(delegate.policy()).thenReturn(delegatePolicy);
         org.mockito.Mockito.when(delegatePolicy.getIfPresentQuietly("k")).thenAnswer(invocation -> delegateMap.get("k"));
-    }
-
-    /**
-     * The post-close cleanup must be side-effect-free on the delegate: it probes with the
-     * documented no-side-effect {@code Policy.getIfPresentQuietly} and issues at most one
-     * conditional remove. The previous {@code computeIfPresent} cleanup was processed by Caffeine
-     * as an update even when it kept the mapping - refreshing the newer entry's expiration
-     * metadata and, with {@code recordStats()}, logging a synthetic loadSuccess (kept) or
-     * loadFailure (removed). Real-Caffeine load counters pin both cleanup branches at zero.
-     */
-    @Test
-    public void testPut_RacingClose_CleanupRecordsNoLoadStatsOnRealCaffeine() throws Exception {
-        // Branch 1: cleanup finds its own write current and removes it -> no loadFailure.
-        runRealCaffeineCleanupScenario(false);
-        // Branch 2: cleanup finds a newer direct write and keeps it -> no loadSuccess.
-        runRealCaffeineCleanupScenario(true);
     }
 
     private void runRealCaffeineCleanupScenario(final boolean directWriteReplacesLateWrite) throws Exception {
@@ -355,267 +815,6 @@ public class CaffeineCacheTest extends TestBase {
         }
     }
 
-    @Test
-    public void testGetOrNull_EdgeCase_Missing() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            assertNull(cache.getOrNull("missing"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testRemove() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            cache.put("k", "v", 0, 0);
-            cache.remove("k");
-            assertNull(cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testContainsKey() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            cache.put("k", "v", 0, 0);
-            assertTrue(cache.containsKey("k"));
-            assertFalse(cache.containsKey("missing"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testKeySet_Unsupported() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            assertThrows(UnsupportedOperationException.class, cache::keySet);
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testSize() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            cache.put("a", "1", 0, 0);
-            cache.put("b", "2", 0, 0);
-            // Caffeine performs maintenance lazily; force pending writes to drain so size is reliable.
-            // We just check it's between 0 and the maximum.
-            final int size = cache.size();
-            assertTrue(size >= 0);
-            assertTrue(size <= 2);
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testClear() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            cache.put("k", "v", 0, 0);
-            cache.clear();
-            assertNull(cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    @Test
-    public void testClear_AdmittedBeforeClose_CanFinishAfterCloseReturns() throws InterruptedException {
-        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
-        final AtomicInteger invalidateAllCalls = new AtomicInteger();
-        final CountDownLatch clearStarted = new CountDownLatch(1);
-        final CountDownLatch allowClearToFinish = new CountDownLatch(1);
-        final CountDownLatch closeStarted = new CountDownLatch(1);
-        final CountDownLatch closeFinished = new CountDownLatch(1);
-
-        doAnswer(invocation -> {
-            if (invalidateAllCalls.incrementAndGet() == 1) {
-                clearStarted.countDown();
-                assertTrue(allowClearToFinish.await(5, TimeUnit.SECONDS));
-            }
-
-            return null;
-        }).when(delegate).invalidateAll();
-
-        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
-        final Thread clearThread = new Thread(cache::clear);
-        final Thread closeThread = new Thread(() -> {
-            closeStarted.countDown();
-            cache.close();
-            closeFinished.countDown();
-        });
-
-        try {
-            clearThread.start();
-            assertTrue(clearStarted.await(5, TimeUnit.SECONDS));
-            closeThread.start();
-
-            assertTrue(closeStarted.await(5, TimeUnit.SECONDS));
-            assertTrue(closeFinished.await(5, TimeUnit.SECONDS), "close must not hold a wrapper lock while an admitted clear is in the delegate");
-            assertTrue(clearThread.isAlive(), "the admitted clear remains paused after close returns");
-            assertTrue(cache.isClosed());
-            allowClearToFinish.countDown();
-
-            clearThread.join(5_000L);
-            closeThread.join(5_000L);
-            assertFalse(clearThread.isAlive());
-            assertFalse(closeThread.isAlive());
-            assertEquals(2, invalidateAllCalls.get(), "both the admitted clear and the one-time close invalidate the delegate");
-        } finally {
-            allowClearToFinish.countDown();
-            clearThread.join(5_000L);
-            closeThread.join(5_000L);
-            cache.close();
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    @Test
-    public void testRemove_AdmittedBeforeClose_CanFinishAfterCloseReturns() throws InterruptedException {
-        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
-        final AtomicInteger invalidateCalls = new AtomicInteger();
-        final AtomicInteger invalidateAllCalls = new AtomicInteger();
-        final CountDownLatch removeStarted = new CountDownLatch(1);
-        final CountDownLatch allowRemoveToFinish = new CountDownLatch(1);
-        final CountDownLatch closeFinished = new CountDownLatch(1);
-        final AtomicReference<Throwable> removeFailure = new AtomicReference<>();
-
-        doAnswer(invocation -> {
-            invalidateCalls.incrementAndGet();
-            removeStarted.countDown();
-            assertTrue(allowRemoveToFinish.await(5, TimeUnit.SECONDS));
-            return null;
-        }).when(delegate).invalidate("k");
-        doAnswer(invocation -> {
-            invalidateAllCalls.incrementAndGet();
-            return null;
-        }).when(delegate).invalidateAll();
-
-        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
-        final Thread removeThread = new Thread(() -> {
-            try {
-                cache.remove("k");
-            } catch (final Throwable e) {
-                removeFailure.set(e);
-            }
-        });
-        final Thread closeThread = new Thread(() -> {
-            cache.close();
-            closeFinished.countDown();
-        });
-
-        try {
-            removeThread.start();
-            assertTrue(removeStarted.await(5, TimeUnit.SECONDS));
-            closeThread.start();
-
-            // The remove passed its open-state check before close, so close neither waits for it
-            // nor makes it fail; it completes against the delegate after close has returned.
-            assertTrue(closeFinished.await(5, TimeUnit.SECONDS), "close must not wait for an admitted remove in the delegate");
-            assertTrue(removeThread.isAlive(), "the admitted remove remains paused after close returns");
-            assertTrue(cache.isClosed());
-            assertEquals(1, invalidateAllCalls.get(), "close invalidates the delegate once without waiting for the remove");
-            allowRemoveToFinish.countDown();
-
-            removeThread.join(5_000L);
-            closeThread.join(5_000L);
-            assertFalse(removeThread.isAlive());
-            assertFalse(closeThread.isAlive());
-            assertNull(removeFailure.get(), "an admitted remove completes normally even though close returned first");
-            assertEquals(1, invalidateCalls.get());
-            assertThrows(IllegalStateException.class, () -> cache.remove("k"), "a remove started after close is rejected");
-            assertEquals(1, invalidateCalls.get(), "a rejected remove never reaches the delegate");
-        } finally {
-            allowRemoveToFinish.countDown();
-            removeThread.join(5_000L);
-            closeThread.join(5_000L);
-            cache.close();
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    @Test
-    public void testClose_RacingInFlightClear_DoesNotWait_AndReentrantCloseIsNoOp() throws InterruptedException {
-        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
-        final AtomicInteger invalidateAllCalls = new AtomicInteger();
-        final AtomicReference<CaffeineCache<String, String>> cacheRef = new AtomicReference<>();
-        final CountDownLatch outerClearEnteredDelegate = new CountDownLatch(1);
-        final CountDownLatch allowReentrantClose = new CountDownLatch(1);
-        final CountDownLatch reentrantCloseReturned = new CountDownLatch(1);
-
-        doAnswer(invocation -> {
-            if (invalidateAllCalls.incrementAndGet() == 1) {
-                outerClearEnteredDelegate.countDown();
-                assertTrue(allowReentrantClose.await(5, TimeUnit.SECONDS));
-                cacheRef.get().close();
-                reentrantCloseReturned.countDown();
-            }
-
-            return null;
-        }).when(delegate).invalidateAll();
-
-        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
-        cacheRef.set(cache);
-        final Thread clearThread = new Thread(cache::clear);
-        final Thread competingCloseThread = new Thread(cache::close);
-        // Daemon threads let a locking regression fail instead of hanging the whole test fork.
-        clearThread.setDaemon(true);
-        competingCloseThread.setDaemon(true);
-
-        clearThread.start();
-        assertTrue(outerClearEnteredDelegate.await(5, TimeUnit.SECONDS));
-        // The competing close is the FIRST close: it wins the state transition while the clear is
-        // still inside the delegate. The close later issued from that delegate callback is the
-        // repeated one and must return without invalidating again.
-        competingCloseThread.start();
-
-        competingCloseThread.join(5_000L);
-        assertFalse(competingCloseThread.isAlive(), "close is a state transition, not a wait for an admitted clear");
-        assertTrue(cache.isClosed());
-
-        allowReentrantClose.countDown();
-        assertTrue(reentrantCloseReturned.await(5, TimeUnit.SECONDS), "delegate callback must be able to reenter close without lock inversion");
-
-        clearThread.join(5_000L);
-        competingCloseThread.join(5_000L);
-        assertFalse(clearThread.isAlive());
-        assertFalse(competingCloseThread.isAlive());
-        assertTrue(cache.isClosed());
-        assertEquals(2, invalidateAllCalls.get(), "only the outer clear and the first close invalidate; the reentrant close is a no-op");
-    }
-
-    @Test
-    public void testRemovalListenerClose_DoesNotDeadlockWithConcurrentClose() throws InterruptedException {
-        assertRemovalListenerDoesNotDeadlock(true, false, "close");
-    }
-
-    @Test
-    public void testRemovalListenerClose_DoesNotDeadlockWithConcurrentClear() throws InterruptedException {
-        assertRemovalListenerDoesNotDeadlock(false, false, "close");
-    }
-
-    @Test
-    public void testRetainedDelegateRemovalListener_DoesNotDeadlockWithConcurrentClear() throws InterruptedException {
-        for (final String listenerOperation : new String[] { "close", "clear", "remove" }) {
-            assertRemovalListenerDoesNotDeadlock(false, true, listenerOperation);
-        }
-    }
-
     private void assertRemovalListenerDoesNotDeadlock(final boolean competingClose, final boolean directWrite, final String listenerOperation)
             throws InterruptedException {
         final CountDownLatch listenerEntered = new CountDownLatch(1);
@@ -710,192 +909,6 @@ public class CaffeineCacheTest extends TestBase {
             if (!writer.isAlive() && !competing.isAlive()) {
                 cache.close();
             }
-        }
-    }
-
-    @Test
-    public void testClose_IsIdempotent() {
-        final CaffeineCache<String, String> cache = newCache();
-        assertFalse(cache.isClosed());
-        cache.close();
-        cache.close();
-        assertTrue(cache.isClosed());
-    }
-
-    @Test
-    public void testOperations_AfterClose_Throw() {
-        final CaffeineCache<String, String> cache = newCache();
-        cache.close();
-        assertThrows(IllegalStateException.class, () -> cache.getOrNull("k"));
-        assertThrows(IllegalStateException.class, () -> cache.put("k", "v", 0, 0));
-        assertThrows(IllegalStateException.class, () -> cache.remove("k"));
-        assertThrows(IllegalStateException.class, () -> cache.containsKey("k"));
-        assertThrows(IllegalStateException.class, cache::size);
-        assertThrows(IllegalStateException.class, cache::clear);
-    }
-
-    @Test
-    public void testStats_ReturnsNonNull() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            cache.put("k", "v", 0, 0);
-            cache.getOrNull("k");
-            cache.getOrNull("missing");
-            assertNotNull(cache.stats());
-        } finally {
-            cache.close();
-        }
-    }
-
-    /**
-     * Regression coverage for the asymmetric null-key handling defect.
-     *
-     * <p>Before the fix {@link CaffeineCache#put(Object, Object, long, long)} explicitly rejected
-     * null keys with {@code IllegalArgumentException}, but the read-side methods
-     * ({@code getOrNull}, {@code remove}, {@code containsKey}) delegated straight to Caffeine,
-     * which raises an unrelated {@code NullPointerException}. The fix harmonises the contract so
-     * every key-taking operation rejects nulls with the same {@code IllegalArgumentException}.
-     */
-    @Test
-    public void testGetOrNull_EdgeCase_NullKey() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testRemove_EdgeCase_NullKey() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
-        } finally {
-            cache.close();
-        }
-    }
-
-    /** Argument validation must not wait for a delegate callback holding the lifecycle lock. */
-    @Test
-    @SuppressWarnings("unchecked")
-    public void testRemoveRejectsNullBeforeWaitingForDestructiveOperation() throws Exception {
-        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
-        final CountDownLatch clearing = new CountDownLatch(1);
-        final CountDownLatch finishClear = new CountDownLatch(1);
-        doAnswer(invocation -> {
-            clearing.countDown();
-            assertTrue(finishClear.await(10, TimeUnit.SECONDS));
-            return null;
-        }).when(delegate).invalidateAll();
-        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
-        final ExecutorService executor = Executors.newFixedThreadPool(2);
-        try {
-            final Future<?> clear = executor.submit(cache::clear);
-            assertTrue(clearing.await(5, TimeUnit.SECONDS));
-            final Future<?> rejected = executor.submit(() -> assertThrows(IllegalArgumentException.class, () -> cache.remove(null)));
-            rejected.get(5, TimeUnit.SECONDS);
-            verify(delegate).invalidateAll();
-            org.mockito.Mockito.verifyNoMoreInteractions(delegate);
-            finishClear.countDown();
-            clear.get(5, TimeUnit.SECONDS);
-        } finally {
-            finishClear.countDown();
-            executor.shutdownNow();
-            cache.close();
-        }
-    }
-
-    /** Once close publishes its state, failed calls must not wait for its delegate cleanup. */
-    @Test
-    @SuppressWarnings("unchecked")
-    public void testClosedRemoveAndClearDoNotWaitForCloseCleanup() throws Exception {
-        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = mock(com.github.benmanes.caffeine.cache.Cache.class);
-        final CountDownLatch closing = new CountDownLatch(1);
-        final CountDownLatch finishClose = new CountDownLatch(1);
-        doAnswer(invocation -> {
-            closing.countDown();
-            assertTrue(finishClose.await(10, TimeUnit.SECONDS));
-            return null;
-        }).when(delegate).invalidateAll();
-        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
-        final ExecutorService executor = Executors.newFixedThreadPool(2);
-        try {
-            final Future<?> close = executor.submit(cache::close);
-            assertTrue(closing.await(5, TimeUnit.SECONDS));
-            assertTrue(cache.isClosed());
-            final Future<?> rejected = executor.submit(() -> {
-                cache.close(); // A repeated close must not wait for the first invalidation either.
-                assertThrows(IllegalStateException.class, () -> cache.remove(null));
-                assertThrows(IllegalStateException.class, cache::clear);
-            });
-            rejected.get(5, TimeUnit.SECONDS);
-            verify(delegate).invalidateAll();
-            verify(delegate, never()).invalidate(org.mockito.ArgumentMatchers.any());
-            finishClose.countDown();
-            close.get(5, TimeUnit.SECONDS);
-        } finally {
-            finishClose.countDown();
-            executor.shutdownNow();
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testContainsKey_EdgeCase_NullKey() {
-        final CaffeineCache<String, String> cache = newCache();
-
-        try {
-            assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
-        } finally {
-            cache.close();
-        }
-    }
-
-    /**
-     * Content-level stats mapping (previously only non-nullness was asserted): capacity from the
-     * eviction policy's maximum, wrapper-tracked putCount, Caffeine-tracked hit/miss/request
-     * counts, and the -1 "not tracked" sentinels for maxMemory/dataSize.
-     */
-    @Test
-    public void testStats_ContentReflectsTraffic() {
-        final CaffeineCache<String, String> cache = newCache(); // maximumSize(100), recordStats()
-
-        try {
-            assertTrue(cache.put("a", "1"));
-            assertEquals("1", cache.getOrNull("a"));
-            assertNull(cache.getOrNull("missing"));
-
-            final CacheStats stats = cache.stats();
-            assertEquals(100, stats.capacity());
-            assertEquals(1, stats.size());
-            assertEquals(1L, stats.putCount());
-            assertEquals(2L, stats.getCount());
-            assertEquals(1L, stats.hitCount());
-            assertEquals(1L, stats.missCount());
-            assertEquals(-1L, stats.maxMemory(), "memory is not tracked: -1 sentinel");
-            assertEquals(-1L, stats.dataSize(), "data size is not tracked: -1 sentinel");
-
-            final com.github.benmanes.caffeine.cache.stats.CacheStats nativeStats = cache.caffeineStats();
-            assertEquals(1L, nativeStats.hitCount());
-            assertEquals(1L, nativeStats.missCount());
-        } finally {
-            cache.close();
-        }
-    }
-
-    /** Caffeine accepts {@code long} maximums, so even an entry-count bound can exceed the int capacity field. */
-    @Test
-    public void testStats_CapacityClampedForLongSizeBound() {
-        final CaffeineCache<String, String> cache = new CaffeineCache<>(Caffeine.newBuilder().maximumSize(3_000_000_000L).build());
-
-        try {
-            assertEquals(Integer.MAX_VALUE, cache.stats().capacity());
-        } finally {
-            cache.close();
         }
     }
 }

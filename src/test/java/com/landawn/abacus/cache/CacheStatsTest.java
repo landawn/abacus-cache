@@ -10,16 +10,37 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import com.landawn.abacus.TestBase;
+class CacheStatsTest {
 
-@Tag("2025")
-public class CacheStatsTest extends TestBase {
+    // Statistics
 
     @Test
-    public void testRecord_AccessorsReturnConstructorValues() {
+    void ratesCounterSumDoesNotOverflow() {
+        final CacheStats stats = new CacheStats(0, 0, 0L, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, 0L, 0L, 0L);
+
+        assertEquals(0.5D, stats.hitRate());
+        assertEquals(0.5D, stats.missRate());
+    }
+
+    @Test
+    void ratesOrdinaryAsymmetricCounts() {
+        final CacheStats stats = new CacheStats(10, 2, 4L, 4L, 3L, 1L, 0L, 0L, 0L);
+        assertEquals(0.75D, stats.hitRate());
+        assertEquals(0.25D, stats.missRate());
+    }
+
+    @Test
+    void ratesZeroRequestsReturnZero() {
+        // Documented zero-safe guard: no requests recorded -> both rates are 0.0, not NaN.
+        final CacheStats stats = new CacheStats(10, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
+        assertEquals(0.0D, stats.hitRate());
+        assertEquals(0.0D, stats.missRate());
+    }
+
+    @Test
+    void recordAccessorsReturnConstructorValues() {
         final CacheStats stats = new CacheStats(100, 42, 10L, 30L, 25L, 5L, 3L, 1024L, 512L);
         assertEquals(100, stats.capacity());
         assertEquals(42, stats.size());
@@ -33,33 +54,7 @@ public class CacheStatsTest extends TestBase {
     }
 
     @Test
-    public void testEquals_SameValues() {
-        final CacheStats a = new CacheStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 9L);
-        final CacheStats b = new CacheStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 9L);
-        assertEquals(a, b);
-        assertEquals(a.hashCode(), b.hashCode());
-    }
-
-    @Test
-    public void testEquals_DifferentValues() {
-        final CacheStats a = new CacheStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 9L);
-        final CacheStats b = new CacheStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 10L);
-        assertNotEquals(a, b);
-    }
-
-    @Test
-    public void testToString() {
-        // Record auto-generates toString; verify it includes the component values.
-        final CacheStats stats = new CacheStats(100, 42, 10L, 30L, 25L, 5L, 3L, 1024L, 512L);
-        final String s = stats.toString();
-        assertNotNull(s);
-        assertTrue(s.contains("100"));
-        assertTrue(s.contains("42"));
-        assertTrue(s.contains("1024"));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_AllZeros() {
+    void recordAllZeros() {
         final CacheStats zero = new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
         assertEquals(0, zero.capacity());
         assertEquals(0, zero.size());
@@ -67,61 +62,7 @@ public class CacheStatsTest extends TestBase {
     }
 
     @Test
-    public void testRates_EdgeCase_CounterSumDoesNotOverflow() {
-        final CacheStats stats = new CacheStats(0, 0, 0L, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, 0L, 0L, 0L);
-
-        assertEquals(0.5D, stats.hitRate());
-        assertEquals(0.5D, stats.missRate());
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativeCapacityRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(-1, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativeSizeRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, -1, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativePutCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, -1L, 0L, 0L, 0L, 0L, 0L, 0L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativeGetCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, -1L, 0L, 0L, 0L, 0L, 0L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativeHitCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, -1L, 0L, 0L, 0L, 0L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativeMissCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, -1L, 0L, 0L, 0L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativeEvictionCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, -1L, 0L, 0L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativeMaxMemoryBelowSentinelRejected() {
-        // -1 is the documented "not tracked" sentinel; anything more-negative is invalid.
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, -2L, 0L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_NegativeDataSizeBelowSentinelRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, 0L, -2L));
-    }
-
-    @Test
-    public void testRecord_EdgeCase_MaxMemoryAndDataSize_NotTrackedSentinelAccepted() {
+    void recordMaxMemoryAndDataSizeNotTrackedSentinelAccepted() {
         // -1 is reserved as the "not tracked" sentinel for maxMemory and dataSize, returned by
         // the underlying KeyedObjectPool when memory accounting is disabled.
         final CacheStats stats = new CacheStats(10, 5, 1L, 2L, 1L, 1L, 0L, -1L, -1L);
@@ -130,17 +71,76 @@ public class CacheStatsTest extends TestBase {
     }
 
     @Test
-    public void testRates_EdgeCase_ZeroRequests_ReturnZero() {
-        // Documented zero-safe guard: no requests recorded -> both rates are 0.0, not NaN.
-        final CacheStats stats = new CacheStats(10, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
-        assertEquals(0.0D, stats.hitRate());
-        assertEquals(0.0D, stats.missRate());
+    void recordNegativeCapacityRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(-1, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
     }
 
     @Test
-    public void testRates_OrdinaryAsymmetricCounts() {
-        final CacheStats stats = new CacheStats(10, 2, 4L, 4L, 3L, 1L, 0L, 0L, 0L);
-        assertEquals(0.75D, stats.hitRate());
-        assertEquals(0.25D, stats.missRate());
+    void recordNegativeDataSizeBelowSentinelRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, 0L, -2L));
+    }
+
+    @Test
+    void recordNegativeEvictionCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, -1L, 0L, 0L));
+    }
+
+    @Test
+    void recordNegativeGetCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, -1L, 0L, 0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    void recordNegativeHitCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, -1L, 0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    void recordNegativeMaxMemoryBelowSentinelRejected() {
+        // -1 is the documented "not tracked" sentinel; anything more-negative is invalid.
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, -2L, 0L));
+    }
+
+    @Test
+    void recordNegativeMissCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, -1L, 0L, 0L, 0L));
+    }
+
+    @Test
+    void recordNegativePutCountRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, -1L, 0L, 0L, 0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    void recordNegativeSizeRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, -1, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
+    }
+
+    // Other Behavior
+
+    @Test
+    void equalsDifferentValues() {
+        final CacheStats a = new CacheStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 9L);
+        final CacheStats b = new CacheStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 10L);
+        assertNotEquals(a, b);
+    }
+
+    @Test
+    void equalsSameValues() {
+        final CacheStats a = new CacheStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 9L);
+        final CacheStats b = new CacheStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 9L);
+        assertEquals(a, b);
+        assertEquals(a.hashCode(), b.hashCode());
+    }
+
+    @Test
+    void toStringIncludesRecordComponents() {
+        // Record auto-generates toString; verify it includes the component values.
+        final CacheStats stats = new CacheStats(100, 42, 10L, 30L, 25L, 5L, 3L, 1024L, 512L);
+        final String s = stats.toString();
+        assertNotNull(s);
+        assertTrue(s.contains("100"));
+        assertTrue(s.contains("42"));
+        assertTrue(s.contains("1024"));
     }
 }

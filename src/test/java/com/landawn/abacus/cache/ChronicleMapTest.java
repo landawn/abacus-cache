@@ -7,23 +7,22 @@ package com.landawn.abacus.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-
-import com.landawn.abacus.TestBase;
 
 /**
  * Covers the deprecated {@link ChronicleMap} compatibility shim. It delegates to
  * {@link LocalCache}, so we exercise each constructor and confirm round-trip semantics.
  */
 @SuppressWarnings("deprecation")
-@Tag("2025")
-public class ChronicleMapTest extends TestBase {
+class ChronicleMapTest {
+
+    // Construction
 
     @Test
-    public void testDefaultConstructor() {
+    void defaultConstructor() {
         final ChronicleMap<String, String> map = new ChronicleMap<>();
 
         try {
@@ -36,19 +35,7 @@ public class ChronicleMapTest extends TestBase {
     }
 
     @Test
-    public void testConstructor_WithCapacityAndEvictDelay() {
-        final ChronicleMap<String, Integer> map = new ChronicleMap<>(64, 0L);
-
-        try {
-            assertTrue(map.put("count", 42));
-            assertEquals(Integer.valueOf(42), map.getOrNull("count"));
-        } finally {
-            map.close();
-        }
-    }
-
-    @Test
-    public void testConstructor_FullySpecified() {
+    void constructorFullySpecified() {
         final ChronicleMap<String, String> map = new ChronicleMap<>(128, 0L, 60_000L, 30_000L);
 
         try {
@@ -60,17 +47,32 @@ public class ChronicleMapTest extends TestBase {
     }
 
     @Test
-    public void testConstructor_EdgeCase_InvalidCapacity() {
-        try {
-            new ChronicleMap<String, String>(0, 0L);
-            org.junit.jupiter.api.Assertions.fail("expected IllegalArgumentException");
-        } catch (final IllegalArgumentException expected) {
-            // ok
-        }
+    void constructorInvalidCapacity() {
+        assertThrows(IllegalArgumentException.class, () -> new ChronicleMap<String, String>(0, 0L));
+    }
+
+    /** A negative evictDelay is rejected (documented; unlike the off-heap caches, which treat it as "disabled"). */
+    @Test
+    void constructorNegativeEvictDelayRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new ChronicleMap<String, String>(1_024, -1L));
     }
 
     @Test
-    public void testRemove() {
+    void constructorWithCapacityAndEvictDelay() {
+        final ChronicleMap<String, Integer> map = new ChronicleMap<>(64, 0L);
+
+        try {
+            assertTrue(map.put("count", 42));
+            assertEquals(Integer.valueOf(42), map.getOrNull("count"));
+        } finally {
+            map.close();
+        }
+    }
+
+    // Removals
+
+    @Test
+    void removeDeletesEntry() {
         final ChronicleMap<String, String> map = new ChronicleMap<>();
 
         try {
@@ -79,17 +81,6 @@ public class ChronicleMapTest extends TestBase {
             assertNull(map.getOrNull("k"));
         } finally {
             map.close();
-        }
-    }
-
-    /** A negative evictDelay is rejected (documented; unlike the off-heap caches, which treat it as "disabled"). */
-    @Test
-    public void testConstructor_EdgeCase_NegativeEvictDelayRejected() {
-        try {
-            new ChronicleMap<String, String>(1_024, -1L);
-            org.junit.jupiter.api.Assertions.fail("expected IllegalArgumentException");
-        } catch (final IllegalArgumentException expected) {
-            // ok
         }
     }
 }

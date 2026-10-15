@@ -29,10 +29,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import com.landawn.abacus.TestBase;
 import com.landawn.abacus.util.ContinuableFuture;
 import com.landawn.abacus.util.Properties;
 import com.landawn.abacus.util.u.Optional;
@@ -41,140 +39,14 @@ import com.landawn.abacus.util.u.Optional;
  * Covers the {@link AbstractCache} async wrappers and property helpers via the concrete
  * {@link LocalCache} subclass.
  */
-@Tag("2025")
-public class AbstractCacheTest extends TestBase {
 
-    private LocalCache<String, String> newCache() {
-        return new LocalCache<>(100, 0);
-    }
+class AbstractCacheTest {
 
-    @Test
-    public void testCacheContract_DeclaresCloseWithoutBeingAutoCloseable() throws NoSuchMethodException {
-        assertFalse(AutoCloseable.class.isAssignableFrom(Cache.class));
-        assertFalse(java.io.Closeable.class.isAssignableFrom(Cache.class));
-        assertEquals(void.class, Cache.class.getDeclaredMethod("close").getReturnType());
-    }
-
-    @Test
-    public void testGet() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.put("k", "v");
-            final Optional<String> got = cache.get("k");
-            assertTrue(got.isPresent());
-            assertEquals("v", got.get());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testGet_EdgeCase_Missing() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            assertFalse(cache.get("missing").isPresent());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testPutTwoArg_UsesDefaults() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            // Defaults should be applied; verify the entry is stored.
-            assertTrue(cache.put("k", "v"));
-            assertEquals("v", cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    // Async operations
-    @Test
-    public void testAsyncGet() throws Exception {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.put("k", "v");
-            final ContinuableFuture<Optional<String>> f = cache.asyncGet("k");
-            final Optional<String> opt = f.get();
-            assertTrue(opt.isPresent());
-            assertEquals("v", opt.get());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testAsyncGetOrNull() throws Exception {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.put("k", "v");
-            assertEquals("v", cache.asyncGetOrNull("k").get());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testAsyncGetOrNull_EdgeCase_Missing() throws Exception {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            assertNull(cache.asyncGetOrNull("none").get());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testAsyncPut() throws Exception {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            assertTrue(cache.asyncPut("k", "v").get());
-            assertEquals("v", cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testAsyncPutWithTimes() throws Exception {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            assertTrue(cache.asyncPut("k", "v", 5000, 5000).get());
-            assertEquals("v", cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testAsyncRemove() throws Exception {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.put("k", "v");
-            assertNull(cache.asyncRemove("k").get());
-            assertNull(cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testAsyncContainsKey() throws Exception {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.put("k", "v");
-            assertTrue(cache.asyncContainsKey("k").get());
-            assertFalse(cache.asyncContainsKey("missing").get());
-        } finally {
-            cache.close();
-        }
-    }
+    // Properties
 
     // Properties bag
     @Test
-    public void testGetProperties() {
+    void getPropertiesReturnsMutableProperties() {
         final LocalCache<String, String> cache = newCache();
         try {
             final Properties<String, Object> props = cache.getProperties();
@@ -186,207 +58,77 @@ public class AbstractCacheTest extends TestBase {
         }
     }
 
-    @Test
-    public void testProperties_FunctionalArguments_EdgeCase_NullRejected() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            final Properties<String, Object> props = cache.getProperties();
-
-            assertThrows(IllegalArgumentException.class, () -> props.forEach(null));
-            assertThrows(IllegalArgumentException.class, () -> props.replaceAll(null));
-            assertThrows(IllegalArgumentException.class, () -> props.computeIfAbsent("key", null));
-            assertThrows(IllegalArgumentException.class, () -> props.computeIfPresent("key", null));
-            assertThrows(IllegalArgumentException.class, () -> props.compute("key", null));
-            assertThrows(IllegalArgumentException.class, () -> props.merge("key", "value", null));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testProperties_MergeValidatesValueBeforeFunctionWithoutChangingMapping() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            final Properties<String, Object> props = cache.getProperties();
-            props.put("key", "original");
-            final AtomicInteger calls = new AtomicInteger();
-
-            assertThrows(NullPointerException.class, () -> props.merge("key", null, null));
-            assertThrows(NullPointerException.class, () -> props.merge("key", null, (oldValue, newValue) -> {
-                calls.incrementAndGet();
-                return newValue;
-            }));
-            assertEquals(0, calls.get());
-            assertEquals("original", props.get("key"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testProperties_NullNamesValuesAndRemappingResultsRemainSupported() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            assertNull(cache.setProperty(null, null));
-            final Properties<String, Object> props = cache.getProperties();
-            assertTrue(props.containsKey(null));
-            assertNull(cache.getProperty(null));
-
-            assertEquals("initial", props.merge(null, "initial", (oldValue, newValue) -> {
-                throw new AssertionError("A null mapping must use the incoming value directly");
-            }));
-            assertEquals("initial", cache.getProperty(null));
-            assertNull(props.merge(null, "replacement", (oldValue, newValue) -> null));
-            assertFalse(props.containsKey(null));
-
-            cache.setProperty(null, "final");
-            assertEquals("final", cache.removeProperty(null));
-            assertNull(cache.removeProperty(null));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testAsyncValidationFailuresRemainInFuture() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            final ContinuableFuture<String> invalidKey = assertDoesNotThrow(() -> cache.asyncGetOrNull(null));
-            final ExecutionException invalidKeyFailure = assertThrows(ExecutionException.class, () -> invalidKey.get(5, TimeUnit.SECONDS));
-            assertTrue(invalidKeyFailure.getCause() instanceof IllegalArgumentException);
-
-            cache.close();
-            final ContinuableFuture<Boolean> closedCache = assertDoesNotThrow(() -> cache.asyncPut(null, null));
-            final ExecutionException closedFailure = assertThrows(ExecutionException.class, () -> closedCache.get(5, TimeUnit.SECONDS));
-            assertTrue(closedFailure.getCause() instanceof IllegalStateException);
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    public void testWriteSerializationErrorsPropagateDirectlyAndThroughAsyncFutures() {
-        final DistributedCacheClient<Object> client = mock(DistributedCacheClient.class);
-        final Cache<String, Object> cache = new DistributedCache<>(client);
-        final Object value = new Object();
-        final StackOverflowError failure = new StackOverflowError("cyclic serialized value");
-        // Inject the client's documented serialization error without exhausting the test thread's stack.
-        when(client.put("a2V5", value, Cache.DEFAULT_LIVE_TIME)).thenThrow(failure);
-
-        try {
-            assertSame(failure, assertThrows(StackOverflowError.class, () -> cache.put("key", value)));
-            assertSame(failure, assertThrows(StackOverflowError.class, () -> cache.put("key", value, Cache.DEFAULT_LIVE_TIME, Cache.DEFAULT_MAX_IDLE_TIME)));
-
-            final ContinuableFuture<Boolean> defaultWrite = assertDoesNotThrow(() -> cache.asyncPut("key", value));
-            final ContinuableFuture<Boolean> explicitWrite = assertDoesNotThrow(
-                    () -> cache.asyncPut("key", value, Cache.DEFAULT_LIVE_TIME, Cache.DEFAULT_MAX_IDLE_TIME));
-            assertSame(failure, assertThrows(ExecutionException.class, () -> defaultWrite.get(5, TimeUnit.SECONDS)).getCause());
-            assertSame(failure, assertThrows(ExecutionException.class, () -> explicitWrite.get(5, TimeUnit.SECONDS)).getCause());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testSetAndGetProperty() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            assertNull(cache.setProperty("name", "alpha"));
-            final String name = cache.getProperty("name");
-            assertEquals("alpha", name);
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testSetProperty_ReturnsPreviousValue() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.setProperty("name", "v1");
-            final String prev = cache.setProperty("name", "v2");
-            assertEquals("v1", prev);
-            assertEquals("v2", cache.getProperty("name"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testRemoveProperty() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.setProperty("foo", "bar");
-            final String removed = cache.removeProperty("foo");
-            assertEquals("bar", removed);
-            assertNull(cache.getProperty("foo"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testRemoveProperty_EdgeCase_Missing() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            assertNull(cache.removeProperty("never-set"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    public void testProperties_DontAffectCacheEntries() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.put("a", "1");
-            cache.setProperty("a", "this-is-a-property");
-            // Cache entries and properties live in separate spaces.
-            assertEquals("1", cache.getOrNull("a"));
-            assertEquals("this-is-a-property", cache.getProperty("a"));
-            assertDoesNotThrow(() -> cache.removeProperty("a"));
-            assertEquals("1", cache.getOrNull("a"));
-        } finally {
-            cache.close();
-        }
-    }
-
     /**
-     * Property mutators are lifecycle-guarded like the data operations: mutating the property bag
-     * of a closed cache is a lifecycle bug and fails fast with {@link IllegalStateException}.
-     * Property reads remain usable after close, like other configuration accessors.
+     * Regression for the synchronized-wrapper gap: {@link Properties} implements
+     * {@code computeIfAbsent} as separate {@code get}/{@code put} calls unless the cache's wrapper
+     * delegates it to the synchronized backing map. With separate calls every worker can run the
+     * mapping function for the same absent key; the atomic implementation runs it exactly once.
      */
     @Test
-    public void testPropertyMutators_EdgeCase_AfterClose_throwISE_whileReadsStayUsable() {
+    void propertiesComputeIfAbsentIsAtomic() throws Exception {
         final LocalCache<String, String> cache = newCache();
-        cache.setProperty("region", "us-east");
-        cache.close();
+        try {
+            final int threads = 16;
+            final ExecutorService pool = Executors.newFixedThreadPool(threads);
+            final CountDownLatch ready = new CountDownLatch(threads);
+            final CountDownLatch start = new CountDownLatch(1);
+            final CountDownLatch firstMappingStarted = new CountDownLatch(1);
+            final CountDownLatch releaseMapping = new CountDownLatch(1);
+            final AtomicInteger mappingCalls = new AtomicInteger();
+            final java.util.Queue<Thread> workers = new java.util.concurrent.ConcurrentLinkedQueue<>();
+            final List<Future<String>> futures = new ArrayList<>();
 
-        assertThrows(IllegalStateException.class, () -> cache.setProperty("region", "eu-west"));
-        assertThrows(IllegalStateException.class, () -> cache.removeProperty("region"));
+            try {
+                for (int i = 0; i < threads; i++) {
+                    futures.add(pool.submit(() -> {
+                        workers.add(Thread.currentThread());
+                        ready.countDown();
+                        assertTrue(start.await(10, TimeUnit.SECONDS));
 
-        // Reads are configuration accessors and stay usable; the failed mutations changed nothing.
-        assertEquals("us-east", cache.getProperty("region"));
-        assertEquals("us-east", cache.getProperties().get("region"));
+                        return cache.getProperties().computeIfAbsent("shared", key -> {
+                            mappingCalls.incrementAndGet();
+                            firstMappingStarted.countDown();
+
+                            try {
+                                assertTrue(releaseMapping.await(10, TimeUnit.SECONDS));
+                            } catch (final InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new IllegalStateException(e);
+                            }
+
+                            return "computed";
+                        }).toString();
+                    }));
+                }
+
+                assertTrue(ready.await(10, TimeUnit.SECONDS));
+                start.countDown();
+                assertTrue(firstMappingStarted.await(10, TimeUnit.SECONDS));
+
+                // Every other worker must be blocked on the same map mutex while the first mapper waits.
+                com.landawn.abacus.TestSupport.awaitCondition("competing computeIfAbsent calls to block",
+                        () -> mappingCalls.get() == 1 && workers.stream().filter(thread -> thread.getState() == Thread.State.BLOCKED).count() == threads - 1);
+                releaseMapping.countDown();
+
+                for (final Future<String> future : futures) {
+                    assertEquals("computed", future.get(10, TimeUnit.SECONDS));
+                }
+
+                assertEquals(1, mappingCalls.get(), "the mapping function must run once for one absent key");
+            } finally {
+                releaseMapping.countDown();
+                pool.shutdownNow();
+            }
+        } finally {
+            cache.close();
+        }
     }
 
-    // --- Fix: shared async executor must use daemon threads -------------------------------------
-    // Regression test: the shared executor previously created non-daemon core threads that never
-    // timed out, so a JVM that had used any async cache operation could not exit normally.
-
-    @Test
-    public void testAsyncOperations_RunOnDaemonThreads() throws Exception {
-        final Boolean daemon = AbstractCache.asyncExecutor.execute(() -> Thread.currentThread().isDaemon()).get();
-        assertTrue(daemon, "async cache tasks must run on daemon threads");
-    }
-
-    // --- Fix: property bag must be safe for concurrent mutation ---------------------------------
     // Regression test: the property bag was previously backed by an unsynchronized LinkedHashMap,
     // so concurrent setProperty calls could lose updates or corrupt the map.
 
     @Test
-    public void testProperties_ConcurrentMutation_IsThreadSafe() throws Exception {
+    void propertiesConcurrentMutationIsThreadSafe() throws Exception {
         final LocalCache<String, String> cache = newCache();
         try {
             final int threads = 8;
@@ -398,7 +140,7 @@ public class AbstractCacheTest extends TestBase {
                 for (int t = 0; t < threads; t++) {
                     final int id = t;
                     futures.add(pool.submit(() -> {
-                        start.await();
+                        assertTrue(start.await(10, TimeUnit.SECONDS));
                         for (int i = 0; i < perThread; i++) {
                             cache.setProperty("p-" + id + "-" + i, id * perThread + i);
                         }
@@ -426,72 +168,97 @@ public class AbstractCacheTest extends TestBase {
         }
     }
 
-    /**
-     * Regression for the synchronized-wrapper gap: {@link Properties} implements
-     * {@code computeIfAbsent} as separate {@code get}/{@code put} calls unless the cache's wrapper
-     * delegates it to the synchronized backing map. With separate calls every worker can run the
-     * mapping function for the same absent key; the atomic implementation runs it exactly once.
-     */
     @Test
-    public void testProperties_ComputeIfAbsent_IsAtomic() throws Exception {
+    void propertiesDontAffectCacheEntries() {
         final LocalCache<String, String> cache = newCache();
         try {
-            final int threads = 16;
-            final ExecutorService pool = Executors.newFixedThreadPool(threads);
-            final CountDownLatch ready = new CountDownLatch(threads);
-            final CountDownLatch start = new CountDownLatch(1);
-            final CountDownLatch firstMappingStarted = new CountDownLatch(1);
-            final CountDownLatch releaseMapping = new CountDownLatch(1);
-            final AtomicInteger mappingCalls = new AtomicInteger();
-            final List<Future<String>> futures = new ArrayList<>();
-
-            try {
-                for (int i = 0; i < threads; i++) {
-                    futures.add(pool.submit(() -> {
-                        ready.countDown();
-                        start.await();
-
-                        return cache.getProperties().computeIfAbsent("shared", key -> {
-                            mappingCalls.incrementAndGet();
-                            firstMappingStarted.countDown();
-
-                            try {
-                                releaseMapping.await();
-                            } catch (final InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                                throw new IllegalStateException(e);
-                            }
-
-                            return "computed";
-                        }).toString();
-                    }));
-                }
-
-                assertTrue(ready.await(10, TimeUnit.SECONDS));
-                start.countDown();
-                assertTrue(firstMappingStarted.await(10, TimeUnit.SECONDS));
-
-                // Give every already-started worker an opportunity to reach computeIfAbsent. In
-                // the fixed implementation they block on one map mutex and cannot enter the mapper.
-                Thread.sleep(100);
-                releaseMapping.countDown();
-
-                for (final Future<String> future : futures) {
-                    assertEquals("computed", future.get(10, TimeUnit.SECONDS));
-                }
-
-                assertEquals(1, mappingCalls.get(), "the mapping function must run once for one absent key");
-            } finally {
-                releaseMapping.countDown();
-                pool.shutdownNow();
-            }
+            cache.put("a", "1");
+            cache.setProperty("a", "this-is-a-property");
+            // Cache entries and properties live in separate spaces.
+            assertEquals("1", cache.getOrNull("a"));
+            assertEquals("this-is-a-property", cache.getProperty("a"));
+            assertDoesNotThrow(() -> cache.removeProperty("a"));
+            assertEquals("1", cache.getOrNull("a"));
         } finally {
             cache.close();
         }
     }
 
     @Test
-    public void testProperties_ToStringSerializesConcurrentMutation() throws Exception {
+    void propertiesFunctionalArgumentsNullRejected() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> props = cache.getProperties();
+
+            assertThrows(IllegalArgumentException.class, () -> props.forEach(null));
+            assertThrows(IllegalArgumentException.class, () -> props.replaceAll(null));
+            assertThrows(IllegalArgumentException.class, () -> props.computeIfAbsent("key", null));
+            assertThrows(IllegalArgumentException.class, () -> props.computeIfPresent("key", null));
+            assertThrows(IllegalArgumentException.class, () -> props.compute("key", null));
+            assertThrows(IllegalArgumentException.class, () -> props.merge("key", "value", null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertiesMergeValidatesValueBeforeFunctionWithoutChangingMapping() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> props = cache.getProperties();
+            props.put("key", "original");
+            final AtomicInteger calls = new AtomicInteger();
+
+            assertThrows(NullPointerException.class, () -> props.merge("key", null, null));
+            assertThrows(NullPointerException.class, () -> props.merge("key", null, (oldValue, newValue) -> {
+                calls.incrementAndGet();
+                return newValue;
+            }));
+            assertEquals(0, calls.get());
+            assertEquals("original", props.get("key"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertiesNullNamesValuesAndRemappingResultsRemainSupported() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertNull(cache.setProperty(null, null));
+            final Properties<String, Object> props = cache.getProperties();
+            assertTrue(props.containsKey(null));
+            assertNull(cache.getProperty(null));
+
+            assertEquals("initial", props.merge(null, "initial", (oldValue, newValue) -> {
+                throw new AssertionError("A null mapping must use the incoming value directly");
+            }));
+            assertEquals("initial", cache.getProperty(null));
+            assertNull(props.merge(null, "replacement", (oldValue, newValue) -> null));
+            assertFalse(props.containsKey(null));
+
+            cache.setProperty(null, "final");
+            assertEquals("final", cache.removeProperty(null));
+            assertNull(cache.removeProperty(null));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertiesToStringPreservesDirectSelfReference() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            properties.put("self", properties);
+            assertEquals("{self=(this Map)}", properties.toString());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertiesToStringSerializesConcurrentMutation() throws Exception {
         final LocalCache<String, String> cache = newCache();
         final CountDownLatch formattingStarted = new CountDownLatch(1);
         final CountDownLatch finishFormatting = new CountDownLatch(1);
@@ -557,23 +324,156 @@ public class AbstractCacheTest extends TestBase {
     }
 
     @Test
-    public void testProperties_ToStringPreservesDirectSelfReference() {
+    void removeProperty() {
         final LocalCache<String, String> cache = newCache();
         try {
-            final Properties<String, Object> properties = cache.getProperties();
-            properties.put("self", properties);
-            assertEquals("{self=(this Map)}", properties.toString());
+            cache.setProperty("foo", "bar");
+            final String removed = cache.removeProperty("foo");
+            assertEquals("bar", removed);
+            assertNull(cache.getProperty("foo"));
         } finally {
             cache.close();
         }
     }
 
-    // --- Default put(K, V) delegation contract --------------------------------------------------
+    @Test
+    void removePropertyMissing() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertNull(cache.removeProperty("never-set"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void setAndGetProperty() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertNull(cache.setProperty("name", "alpha"));
+            final String name = cache.getProperty("name");
+            assertEquals("alpha", name);
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void setPropertyReturnsPreviousValue() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            cache.setProperty("name", "v1");
+            final String prev = cache.setProperty("name", "v2");
+            assertEquals("v1", prev);
+            assertEquals("v2", cache.getProperty("name"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Reads
+
+    @Test
+    void asyncGetOrNullMissing() throws Exception {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertNull(cache.asyncGetOrNull("none").get());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void asyncGetOrNullReturnsPresentValue() throws Exception {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            cache.put("k", "v");
+            assertEquals("v", cache.asyncGetOrNull("k").get());
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Async operations
+    @Test
+    void asyncGetReturnsPresentValue() throws Exception {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            cache.put("k", "v");
+            final ContinuableFuture<Optional<String>> f = cache.asyncGet("k");
+            final Optional<String> opt = f.get();
+            assertTrue(opt.isPresent());
+            assertEquals("v", opt.get());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void getMissing() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertFalse(cache.get("missing").isPresent());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void getReturnsPresentValue() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            cache.put("k", "v");
+            final Optional<String> got = cache.get("k");
+            assertTrue(got.isPresent());
+            assertEquals("v", got.get());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void getWrapsGetOrNull() {
+        final RecordingCache<String, String> cache = new RecordingCache<>();
+        try {
+            cache.put("k", "v");
+            assertTrue(cache.get("k").isPresent());
+            assertEquals("v", cache.get("k").get());
+            assertFalse(cache.get("missing").isPresent());
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Writes
+
+    @Test
+    void asyncPutStoresValue() throws Exception {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertTrue(cache.asyncPut("k", "v").get());
+            assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void asyncPutWithTimes() throws Exception {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertTrue(cache.asyncPut("k", "v", 5000, 5000).get());
+            assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
     // Verifies that AbstractCache.put(k, v) forwards the configured defaults to
     // put(k, v, liveTime, maxIdleTime) in the correct argument positions (no swap).
 
     @Test
-    public void testPutTwoArg_DelegatesDefaultLiveAndIdleTimes_NoSwap() {
+    void putTwoArgDelegatesDefaultLiveAndIdleTimesNoSwap() {
         final long liveTime = 111_000L;
         final long idleTime = 222_000L;
         final RecordingCache<String, String> cache = new RecordingCache<>(liveTime, idleTime);
@@ -587,7 +487,19 @@ public class AbstractCacheTest extends TestBase {
     }
 
     @Test
-    public void testPutTwoArg_UsesInterfaceDefaultsWhenConstructedWithoutArgs() {
+    void putTwoArgUsesDefaults() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            // Defaults should be applied; verify the entry is stored.
+            assertTrue(cache.put("k", "v"));
+            assertEquals("v", cache.getOrNull("k"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void putTwoArgUsesInterfaceDefaultsWhenConstructedWithoutArgs() {
         final RecordingCache<String, String> cache = new RecordingCache<>();
         try {
             assertTrue(cache.put("k", "v"));
@@ -598,17 +510,116 @@ public class AbstractCacheTest extends TestBase {
         }
     }
 
+    // Removals
+
     @Test
-    public void testGet_WrapsGetOrNull() {
-        final RecordingCache<String, String> cache = new RecordingCache<>();
+    void asyncRemoveDeletesValue() throws Exception {
+        final LocalCache<String, String> cache = newCache();
         try {
             cache.put("k", "v");
-            assertTrue(cache.get("k").isPresent());
-            assertEquals("v", cache.get("k").get());
-            assertFalse(cache.get("missing").isPresent());
+            assertNull(cache.asyncRemove("k").get());
+            assertNull(cache.getOrNull("k"));
         } finally {
             cache.close();
         }
+    }
+
+    // Membership And Views
+
+    @Test
+    void asyncContainsKeyReportsPresence() throws Exception {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            cache.put("k", "v");
+            assertTrue(cache.asyncContainsKey("k").get());
+            assertFalse(cache.asyncContainsKey("missing").get());
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Validation And Failures
+
+    @Test
+    void asyncValidationFailuresRemainInFuture() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final ContinuableFuture<String> invalidKey = assertDoesNotThrow(() -> cache.asyncGetOrNull(null));
+            final ExecutionException invalidKeyFailure = assertThrows(ExecutionException.class, () -> invalidKey.get(5, TimeUnit.SECONDS));
+            assertTrue(invalidKeyFailure.getCause() instanceof IllegalArgumentException);
+
+            cache.close();
+            final ContinuableFuture<Boolean> closedCache = assertDoesNotThrow(() -> cache.asyncPut(null, null));
+            final ExecutionException closedFailure = assertThrows(ExecutionException.class, () -> closedCache.get(5, TimeUnit.SECONDS));
+            assertTrue(closedFailure.getCause() instanceof IllegalStateException);
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void writeSerializationErrorsPropagateDirectlyAndThroughAsyncFutures() {
+        final DistributedCacheClient<Object> client = mock(DistributedCacheClient.class);
+        final Cache<String, Object> cache = new DistributedCache<>(client);
+        final Object value = new Object();
+        final StackOverflowError failure = new StackOverflowError("cyclic serialized value");
+        // Inject the client's documented serialization error without exhausting the test thread's stack.
+        when(client.put("a2V5", value, Cache.DEFAULT_LIVE_TIME)).thenThrow(failure);
+
+        try {
+            assertSame(failure, assertThrows(StackOverflowError.class, () -> cache.put("key", value)));
+            assertSame(failure, assertThrows(StackOverflowError.class, () -> cache.put("key", value, Cache.DEFAULT_LIVE_TIME, Cache.DEFAULT_MAX_IDLE_TIME)));
+
+            final ContinuableFuture<Boolean> defaultWrite = assertDoesNotThrow(() -> cache.asyncPut("key", value));
+            final ContinuableFuture<Boolean> explicitWrite = assertDoesNotThrow(
+                    () -> cache.asyncPut("key", value, Cache.DEFAULT_LIVE_TIME, Cache.DEFAULT_MAX_IDLE_TIME));
+            assertSame(failure, assertThrows(ExecutionException.class, () -> defaultWrite.get(5, TimeUnit.SECONDS)).getCause());
+            assertSame(failure, assertThrows(ExecutionException.class, () -> explicitWrite.get(5, TimeUnit.SECONDS)).getCause());
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Other Behavior
+
+    // Regression test: the shared executor previously created non-daemon core threads that never
+    // timed out, so a JVM that had used any async cache operation could not exit normally.
+
+    @Test
+    void asyncOperationsRunOnDaemonThreads() throws Exception {
+        final Boolean daemon = AbstractCache.asyncExecutor.execute(() -> Thread.currentThread().isDaemon()).get();
+        assertTrue(daemon, "async cache tasks must run on daemon threads");
+    }
+
+    @Test
+    void cacheContractDeclaresCloseWithoutBeingAutoCloseable() throws NoSuchMethodException {
+        assertFalse(AutoCloseable.class.isAssignableFrom(Cache.class));
+        assertFalse(java.io.Closeable.class.isAssignableFrom(Cache.class));
+        assertEquals(void.class, Cache.class.getDeclaredMethod("close").getReturnType());
+    }
+
+    /**
+     * Property mutators are lifecycle-guarded like the data operations: mutating the property bag
+     * of a closed cache is a lifecycle bug and fails fast with {@link IllegalStateException}.
+     * Property reads remain usable after close, like other configuration accessors.
+     */
+    @Test
+    void propertyMutatorsAfterCloseThrowISEWhileReadsStayUsable() {
+        final LocalCache<String, String> cache = newCache();
+        cache.setProperty("region", "us-east");
+        cache.close();
+
+        assertThrows(IllegalStateException.class, () -> cache.setProperty("region", "eu-west"));
+        assertThrows(IllegalStateException.class, () -> cache.removeProperty("region"));
+
+        // Reads are configuration accessors and stay usable; the failed mutations changed nothing.
+        assertEquals("us-east", cache.getProperty("region"));
+        assertEquals("us-east", cache.getProperties().get("region"));
+    }
+
+    private LocalCache<String, String> newCache() {
+        return new LocalCache<>(100, 0);
     }
 
     /**
