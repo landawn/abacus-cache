@@ -44,6 +44,87 @@ class AbstractCacheTest {
 
     // Properties
 
+    @Test
+    void propertyConditionalUpdatesPreserveExistingValues() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            assertEquals("fallback", properties.getOrDefault("missing", "fallback"));
+            assertNull(properties.putIfAbsent("owner", "Ada"));
+            assertEquals("Ada", properties.putIfAbsent("owner", "Grace"));
+            assertEquals("Ada", properties.getOrDefault("owner", "fallback"));
+            assertNull(properties.replace("missing", "value"));
+            assertFalse(properties.replace("owner", "wrong", "value"));
+            assertTrue(properties.replace("owner", "Ada", "Grace"));
+            assertEquals("Grace", properties.replace("owner", "Linus"));
+            assertFalse(properties.remove("owner", "Grace"));
+            assertTrue(properties.remove("owner", "Linus"));
+            assertFalse(properties.containsKey("owner"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertyRemappingSupportsCreationReplacementAndRemoval() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            assertNull(properties.computeIfPresent("count", (key, value) -> {
+                throw new AssertionError("Missing values must not invoke the mapper");
+            }));
+            assertEquals(1, properties.compute("count", (key, value) -> value == null ? 1 : 0));
+            assertEquals(2, properties.computeIfPresent("count", (key, value) -> (Integer) value + 1));
+            assertEquals(5, properties.merge("count", 3, (oldValue, value) -> (Integer) oldValue + (Integer) value));
+            assertNull(properties.compute("count", (key, value) -> null));
+            assertFalse(properties.containsKey("count"));
+            properties.put("a", 1);
+            properties.put("b", 2);
+            properties.replaceAll((key, value) -> (Integer) value * 10);
+            final Map<String, Object> visited = new HashMap<>();
+            properties.forEach(visited::put);
+            assertEquals(Map.of("a", 10, "b", 20), visited);
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertyCallbacksRejectNullWithoutMutatingValues() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            properties.put("key", "value");
+            assertThrows(IllegalArgumentException.class, () -> properties.forEach(null));
+            assertThrows(IllegalArgumentException.class, () -> properties.replaceAll(null));
+            assertThrows(IllegalArgumentException.class, () -> properties.computeIfAbsent("key", null));
+            assertThrows(IllegalArgumentException.class, () -> properties.computeIfPresent("key", null));
+            assertThrows(IllegalArgumentException.class, () -> properties.compute("key", null));
+            assertThrows(IllegalArgumentException.class, () -> properties.merge("key", "other", null));
+            assertThrows(NullPointerException.class, () -> properties.merge("key", null, (a, b) -> a));
+            assertEquals("value", properties.get("key"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertyCopyIsAnIndependentSnapshot() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            properties.put("key", "before");
+            final Properties<String, Object> copy = properties.copy();
+            properties.put("key", "after");
+            copy.put("copyOnly", 1);
+            assertEquals("before", copy.get("key"));
+            assertEquals("after", properties.get("key"));
+            assertFalse(properties.containsKey("copyOnly"));
+        } finally {
+            cache.close();
+        }
+    }
+
     // Properties bag
     @Test
     void getPropertiesReturnsMutableProperties() {

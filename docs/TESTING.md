@@ -14,6 +14,8 @@ Surefire discovers unit tests by filename. No suite registration or base class i
 
 ## Unit tests and coverage
 
+See [the coverage results](COVERAGE.md) for the measured improvement, remaining gaps, and the optional assertions-disabled allocator check.
+
 ```shell
 mvn test
 mvn "-Dtest=LocalCacheTest" test
@@ -110,6 +112,7 @@ Use `-Dcache.performance.capacityMb=64` to set each cache allocation. These valu
 | --- | --- |
 | Common off-heap behavior and allocation boundaries | `OffHeapCacheContractTest`, parameterized over both backends |
 | Shared off-heap serialization, disk-store, promotion, expiry, and lifecycle regressions | Behavior groups in `AbstractOffHeapCacheTest` |
+| Optional-dependency startup and background-task submission failures | `OffHeapCacheInitializationTest`, with isolated static state |
 | Native backend details and allocator regressions | `OffHeapCacheTest`, `ForeignMemoryOffHeapCacheTest`, `OffHeapAllocatorTest` |
 | Shared Redis operations and bulk-memory regressions | `AbstractJedisCacheClientTest`; routing and construction stay in `JRedisTest` and `JRedisClusterTest` |
 | Memcached protocol versus future handling | `SpyMemcachedTest` and `SpyMemcachedFutureTest`; live server cases in `SpyMemcachedIT` |

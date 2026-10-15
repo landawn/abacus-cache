@@ -8,22 +8,36 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
+import javax.tools.ToolProvider;
+
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedConstruction;
+import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
 import com.landawn.abacus.pool.KeyedObjectPool;
 import com.landawn.abacus.pool.PoolFactory;
 import com.landawn.abacus.pool.PoolableAdapter;
 import com.landawn.abacus.util.Suppliers;
+import com.landawn.abacus.util.TypeAttrParser;
 
 import net.spy.memcached.MemcachedClient;
 
@@ -36,7 +50,35 @@ class CacheFactoryTest {
     private static boolean nonCacheProviderInitialized;
 
     @Nested
-    class LocalCaches {
+    class InProcessCaches {
+
+        @Test
+        void ehcacheFactoryUsesTheSuppliedDelegate() {
+            final org.ehcache.Cache<String, String> delegate = Mockito.mock(org.ehcache.Cache.class);
+            Mockito.when(delegate.get("key")).thenReturn("value");
+            final Ehcache<String, String> cache = CacheFactory.createEhcache(delegate);
+            try {
+                assertTrue(cache.put("key", "value"));
+                assertEquals("value", cache.getOrNull("key"));
+                Mockito.verify(delegate).put("key", "value");
+            } finally {
+                cache.close();
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = { false, true })
+        void offHeapFactoryOverloadsCreateUsableCaches(final boolean customLifetimes) {
+            final OffHeapCache<String, byte[]> cache = customLifetimes ? CacheFactory.createOffHeapCache(1, 0, 60_000, 30_000)
+                    : CacheFactory.createOffHeapCache(1, 0);
+            try {
+                assertTrue(cache.put("key", new byte[] { 1, 2, 3 }));
+                assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("key"));
+            } finally {
+                cache.close();
+            }
+            assertTrue(cache.isClosed());
+        }
 
         // Two-arg createLocalCache
         @Test
@@ -326,6 +368,56 @@ class CacheFactoryTest {
     @Nested
     class RedisClusterProviders {
 
+        @Test
+        void rejectsMalformedEarlierSeedBeforeAnExplicitPrefixAndTimeout() {
+            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> CacheFactory.createCache("RedisCluster(seed:7000,invalid,prefix:,1000)"));
+            assertTrue(failure.getMessage().contains("seed"));
+        }
+
+        @Test
+        void rejectsTimeoutContainingAPunctuationCharacter() {
+            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> CacheFactory.createCache("RedisCluster(seed:7000,prefix:,12/)"));
+            assertTrue(failure.getMessage().contains("Invalid timeout parameter"));
+        }
+
+        @ParameterizedTest
+        @CsvSource(delimiter = '|', value = { "host:7001 | true", "host.name-_1:65535 | true", "[::1]:7002 | true", "[a,b]:7002 | false", "[a[b]:7002 | false",
+                "[a]b]:7002 | false", "[]:7002 | false", "[a:7002 | false", "a]:7002 | false", "abc]:7002 | false", "[abc:7002 | false", "host:0 | false",
+                "host:65536 | false", "host:9a | false", "host:/ | false", "a::1 | false", "a!:1 | false", "'' | false", "+ | false", "- | false" })
+        void distinguishesAdditionalSeedNodesFromPrefixes(final String token, final boolean isSeed) throws Exception {
+            final AtomicReference<java.util.List<?>> arguments = new AtomicReference<>();
+            try (MockedConstruction<JRedisCluster> clients = Mockito.mockConstruction(JRedisCluster.class,
+                    (client, context) -> arguments.set(context.arguments()))) {
+                final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(seed:7000,\"" + token + "\")");
+                try {
+                    assertEquals(isSeed ? "seed:7000," + token : "seed:7000", arguments.get().get(0));
+                    assertEquals(DistributedCacheClient.DEFAULT_TIMEOUT, arguments.get().get(1));
+                    assertEquals((isSeed ? "" : token) + "a2V5", ((DistributedCache<String, Object>) cache).generateKey("key"));
+                } finally {
+                    cache.close();
+                }
+                Mockito.verify(clients.constructed().get(0)).disconnect();
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = { " ", "[a b]:7002" })
+        void rejectsWhitespacePrefixesAfterClassifyingMalformedEndpoints(final String token) {
+            try (MockedConstruction<JRedisCluster> clients = Mockito.mockConstruction(JRedisCluster.class)) {
+                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("RedisCluster(seed:7000,\"" + token + "\")"));
+                Mockito.verify(clients.constructed().get(0)).disconnect();
+            }
+        }
+
+        @Test
+        void rejectsExtraOptionsAfterTheKeyPrefix() {
+            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> CacheFactory.createCache("RedisCluster(seed:7000,prefix:,other:7002,last:7003)"));
+            assertTrue(failure.getMessage().contains("Unsupported parameters"));
+        }
+
         // Redis Cluster
         //
         // RedisClusterClient eagerly discovers the cluster topology while it is being built (inside the
@@ -562,6 +654,91 @@ class CacheFactoryTest {
 
     @Nested
     class CustomProviders {
+
+        @ParameterizedTest
+        @ValueSource(booleans = { false, true })
+        void wrapperConstructionFailureDisconnectsTheCreatedClient(final boolean cleanupFails) {
+            final IllegalStateException cleanupFailure = new IllegalStateException("disconnect failed");
+            try (MockedConstruction<SpyMemcached> clients = Mockito.mockConstruction(SpyMemcached.class, (client, context) -> {
+                if (cleanupFails) {
+                    Mockito.doThrow(cleanupFailure).when(client).disconnect();
+                }
+            })) {
+                final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                        () -> CacheFactory.createCache("Memcached(127.0.0.1:11211,bad prefix)"));
+                assertTrue(failure.getMessage().contains("keyPrefix"));
+                assertEquals(1, clients.constructed().size());
+                Mockito.verify(clients.constructed().get(0)).disconnect();
+                assertEquals(cleanupFails ? 1 : 0, failure.getSuppressed().length);
+                if (cleanupFails) {
+                    assertSame(cleanupFailure, failure.getSuppressed()[0]);
+                }
+            }
+        }
+
+        @Test
+        void parserFailuresAreReportedAsProviderConfigurationErrors() {
+            final IndexOutOfBoundsException parserFailure = new IndexOutOfBoundsException("parser failed");
+            try (MockedStatic<TypeAttrParser> parser = Mockito.mockStatic(TypeAttrParser.class)) {
+                parser.when(() -> TypeAttrParser.parse("broken")).thenThrow(parserFailure);
+                final IllegalArgumentException wrapped = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("broken"));
+                assertSame(parserFailure, wrapped.getCause());
+                assertTrue(wrapped.getMessage().contains("Failed to parse provider specification"));
+
+                parser.when(() -> TypeAttrParser.parse("no-result")).thenReturn(null);
+                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("no-result"));
+
+                final TypeAttrParser unnamed = Mockito.mock(TypeAttrParser.class);
+                Mockito.when(unnamed.getClassName()).thenReturn("");
+                parser.when(() -> TypeAttrParser.parse("unnamed")).thenReturn(unnamed);
+                assertTrue(assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("unnamed")).getMessage()
+                        .contains("class name cannot be empty"));
+            }
+        }
+
+        @Test
+        void contextClassLoaderCanSupplyAnApplicationProvider(@TempDir final Path directory) throws Exception {
+            final Path javaFile = directory.resolve("ContextOnlyCache.java");
+            Files.writeString(javaFile, """
+                    package isolated;
+                    public final class ContextOnlyCache extends com.landawn.abacus.cache.LocalCache<String, Object> {
+                        public ContextOnlyCache() { super(4, 0); }
+                    }
+                    """);
+            final String classPath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+            assertEquals(0, ToolProvider.getSystemJavaCompiler()
+                    .run(null, null, null, "-proc:none", "-classpath", classPath, "-d", directory.toString(), javaFile.toString()));
+            final ClassLoader previous = Thread.currentThread().getContextClassLoader();
+            try (URLClassLoader applicationLoader = new URLClassLoader(new URL[] { directory.toUri().toURL() }, CacheFactory.class.getClassLoader())) {
+                Thread.currentThread().setContextClassLoader(applicationLoader);
+                final Cache<String, Object> cache = CacheFactory.createCache("isolated.ContextOnlyCache()");
+                try {
+                    assertSame(applicationLoader, cache.getClass().getClassLoader());
+                    assertTrue(cache.put("key", "value"));
+                    assertEquals("value", cache.getOrNull("key"));
+                } finally {
+                    cache.close();
+                }
+            } finally {
+                Thread.currentThread().setContextClassLoader(previous);
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = { false, true })
+        void missingCustomClassRetainsTheContextLoaderFailure(final boolean hasContextLoader) {
+            final ClassLoader previous = Thread.currentThread().getContextClassLoader();
+            try {
+                Thread.currentThread().setContextClassLoader(hasContextLoader ? new ClassLoader(null) {
+                } : null);
+                final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                        () -> CacheFactory.createCache("missing.application.Cache()"));
+                assertTrue(failure.getCause() instanceof ClassNotFoundException);
+                assertEquals(hasContextLoader ? 1 : 0, failure.getCause().getSuppressed().length);
+            } finally {
+                Thread.currentThread().setContextClassLoader(previous);
+            }
+        }
 
         /**
          * Regression: an abstract custom provider with a matching constructor was reflectively invoked and

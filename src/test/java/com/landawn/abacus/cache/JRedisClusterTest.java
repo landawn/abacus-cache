@@ -22,15 +22,23 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.MockedConstruction;
+import org.mockito.Mockito;
 
+import com.landawn.abacus.LogCapture;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 
 import redis.clients.jedis.RedisClusterClient;
 import redis.clients.jedis.params.SetParams;
+import redis.clients.jedis.providers.ClusterConnectionProvider;
 
 /**
  * Mock-based unit tests for {@link JRedisCluster}.
@@ -60,6 +68,40 @@ class JRedisClusterTest {
     }
 
     // Construction
+
+    @Test
+    void defaultTimeoutConstructorCreatesAndClosesItsClusterClient() {
+        try (MockedConstruction<ClusterConnectionProvider> providers = Mockito.mockConstruction(ClusterConnectionProvider.class);
+             MockedConstruction<RedisClusterClient> clients = Mockito.mockConstruction(RedisClusterClient.class)) {
+            final JRedisCluster<Object> local = new JRedisCluster<>("127.0.0.1:7000");
+            try {
+                assertEquals("127.0.0.1:7000", local.serverUrl());
+                assertEquals(1, clients.constructed().size());
+            } finally {
+                local.disconnect();
+            }
+            Mockito.verify(clients.constructed().get(0)).close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "WARN", "OFF" })
+    @ResourceLock(LogCapture.RESOURCE)
+    void disconnectRemainsTerminalWhenTheClusterCloseFails(final String level) {
+        final RedisClusterClient delegate = Mockito.mock(RedisClusterClient.class);
+        Mockito.doThrow(new IllegalStateException("close failed")).when(delegate).close();
+        final JRedisCluster<String> cache = new JRedisCluster<>("127.0.0.1:7000", delegate);
+        try (LogCapture logs = new LogCapture(JRedisCluster.class, Level.valueOf(level))) {
+            cache.disconnect();
+            cache.disconnect();
+            Mockito.verify(delegate, Mockito.times(1)).close();
+            assertThrows(IllegalStateException.class, () -> cache.get("key"));
+            assertEquals("WARN".equals(level) ? 1 : 0, logs.messages().size());
+            if ("WARN".equals(level)) {
+                assertTrue(logs.messages().get(0).contains("Failed to close the Redis Cluster client"));
+            }
+        }
+    }
 
     @Test
     void constructorRejectsBlankServerUrl() {

@@ -71,6 +71,8 @@ class OffHeapCacheStatsTest {
         final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 0, Map.of());
         assertEquals(0, stats.capacity());
         assertEquals(0, stats.segmentSize());
+        assertEquals(0.0D, stats.hitRate());
+        assertEquals(0.0D, stats.missRate());
         assertTrue(stats.occupiedSlots().isEmpty());
     }
 

@@ -35,10 +35,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
+import com.landawn.abacus.util.AddrUtil;
 
 import redis.clients.jedis.UnifiedJedis;
 import redis.clients.jedis.params.SetParams;
@@ -78,6 +80,25 @@ class AbstractJedisCacheClientTest {
     }
 
     // Reads
+
+    @Test
+    void missingKryoIsReportedBeforeAnyClientIsCreated() {
+        try (MockedStatic<ParserFactory> parsers = Mockito.mockStatic(ParserFactory.class)) {
+            parsers.when(ParserFactory::isKryoParserAvailable).thenReturn(false);
+            final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> new JRedis<>("127.0.0.1:6379"));
+            assertTrue(failure.getMessage().contains("Kryo is required"));
+            Mockito.verifyNoInteractions(mockJedis);
+        }
+    }
+
+    @Test
+    void emptyResolvedAddressListIsRejected() {
+        try (MockedStatic<AddrUtil> addresses = Mockito.mockStatic(AddrUtil.class)) {
+            addresses.when(() -> AddrUtil.getAddressList("127.0.0.1:6379")).thenReturn(List.of());
+            assertTrue(assertThrows(IllegalArgumentException.class, () -> AbstractJedisCacheClient.resolveServerAddresses("127.0.0.1:6379")).getMessage()
+                    .contains("No valid server addresses"));
+        }
+    }
 
     /**
      * Regression test: counter values (raw ASCII digits written by INCR/DECR) are not Kryo payloads.

@@ -4,24 +4,44 @@
 
 package com.landawn.abacus.cache;
 
+import static com.landawn.abacus.cache.DistributedCacheBreakerAccess.breakerState;
 import static com.landawn.abacus.cache.DistributedCacheBreakerAccess.setBreakerState;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import com.landawn.abacus.LogCapture;
 
 class DistributedCacheTest {
 
     // Construction
+
+    @ParameterizedTest
+    @ValueSource(strings = { "has space", "\n", "\u007F", "\u0080" })
+    void constructorRejectsPrefixesUnsafeForBackendKeys(final String prefix) {
+        final DistributedCacheClient<String> client = newClient();
+        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<>(client, prefix));
+        verifyNoInteractions(client);
+    }
 
     @Test
     void constructorNegativeMaxFailed() {
@@ -40,6 +60,91 @@ class DistributedCacheTest {
     }
 
     // Reads
+
+    @Test
+    void backendValidationFailureDoesNotChangeBreakerState() throws Exception {
+        final DistributedCacheClient<String> client = newClient();
+        final IllegalArgumentException failure = new IllegalArgumentException("encoded key too long");
+        when(client.get("a2V5")).thenThrow(failure);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0);
+        try {
+            setBreakerState(cache, 1, System.nanoTime());
+            final Object before = breakerState(cache);
+            assertSame(failure, assertThrows(IllegalArgumentException.class, () -> cache.getOrNull("key")));
+            assertSame(before, breakerState(cache));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 0, 1 })
+    @ResourceLock(LogCapture.RESOURCE)
+    void immediateRetryLogsOnlyTheFirstCircuitOpening(final int threshold) {
+        final DistributedCacheClient<String> client = newClient();
+        when(client.get("a2V5")).thenThrow(new IllegalStateException("unavailable"));
+        try (LogCapture logs = new LogCapture(DistributedCache.class, Level.WARN)) {
+            final DistributedCache<String, String> cache = new DistributedCache<>(client, "", threshold, 0);
+            try {
+                assertNull(cache.getOrNull("key"));
+                assertNull(cache.getOrNull("key"));
+                verify(client, times(2)).get("a2V5");
+                assertEquals(1, logs.messages().size());
+                assertTrue(logs.messages().get(0).contains("after 1 consecutive read failure;"));
+            } finally {
+                cache.close();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "", "tenant:" })
+    void operationsUseTheSameEncodedKeyAndOnlyTheTtl(final String prefix) {
+        final DistributedCacheClient<String> client = newClient();
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, prefix);
+        final String encoded = prefix + "a2V5";
+        try {
+            when(client.put(encoded, "value", 1234)).thenReturn(true);
+            when(client.get(encoded)).thenReturn("value", "value", null);
+            assertTrue(cache.put("key", "value", 1234, 5678));
+            assertEquals("value", cache.getOrNull("key"));
+            assertTrue(cache.containsKey("key"));
+            assertFalse(cache.containsKey("key"));
+            cache.remove("key");
+            cache.clear();
+            verify(client).put(encoded, "value", 1234);
+            verify(client).remove(encoded);
+            verify(client).flushAll();
+        } finally {
+            cache.close();
+        }
+        verify(client).disconnect();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "DEBUG", "OFF" })
+    @ResourceLock(LogCapture.RESOURCE)
+    void backendFailuresKeepTheCacheClosableAndReportDiagnostics(final String level) {
+        final DistributedCacheClient<String> client = newClient();
+        try (LogCapture logs = new LogCapture(DistributedCache.class, Level.valueOf(level))) {
+            final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0);
+            when(client.get("a2V5")).thenThrow(new IllegalStateException("server unavailable"));
+            doThrow(new IllegalStateException("disconnect failed")).when(client).disconnect();
+            assertNull(cache.getOrNull("key"));
+            assertNull(cache.getOrNull("key"));
+            cache.close();
+            cache.close();
+            assertTrue(cache.isClosed());
+            verify(client, times(1)).disconnect();
+            if ("DEBUG".equals(level)) {
+                assertTrue(logs.messages().stream().anyMatch(message -> message.contains("2 consecutive read failures")));
+                assertTrue(logs.messages().stream().anyMatch(message -> message.contains("Failed to disconnect")));
+                assertTrue(logs.messages().stream().anyMatch(message -> message.contains("treated as cache miss")));
+            } else {
+                assertTrue(logs.messages().isEmpty());
+            }
+        }
+    }
 
     /**
      * The documented contract of {@link DistributedCache#getOrNull(Object)} rejects a null key with

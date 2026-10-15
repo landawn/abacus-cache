@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doAnswer;
@@ -25,15 +26,19 @@ import java.lang.reflect.Field;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedConstruction;
 import org.mockito.Mockito;
 
+import com.landawn.abacus.LogCapture;
 import com.landawn.abacus.cache.SpyMemcached;
 
 class MemcachedLockTest {
@@ -52,6 +57,74 @@ class MemcachedLockTest {
     }
 
     // Reads
+
+    @Test
+    @SuppressWarnings("removal")
+    void legacyAliasesPreserveAcquisitionAndReleaseResults() throws Exception {
+        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
+        try (MemcachedLock<String, Object> lock = lockWithDelegate(delegate)) {
+            when(delegate.add(eq("plain"), any(), eq(1000L))).thenReturn(true);
+            when(delegate.add("valued", "holder", 2000L)).thenReturn(false);
+            when(delegate.remove("plain")).thenReturn(true, false);
+            assertTrue(lock.lock("plain", 1000));
+            assertFalse(lock.lock("valued", "holder", 2000));
+            assertTrue(lock.unlock("plain"));
+            assertFalse(lock.tryUnlockQuietly("plain"));
+            final ArgumentCaptor<Object> marker = ArgumentCaptor.forClass(Object.class);
+            verify(delegate).add(eq("plain"), marker.capture(), eq(1000L));
+            assertEquals(0, ((byte[]) marker.getValue()).length);
+        }
+    }
+
+    @Test
+    void nonEmptyByteArrayLockValuesAreReturnedUnchanged() throws Exception {
+        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
+        final byte[] value = { 1, 2 };
+        when(delegate.get("key")).thenReturn(value);
+        try (MemcachedLock<String, Object> lock = lockWithDelegate(delegate)) {
+            assertSame(value, lock.get("key"));
+        }
+    }
+
+    @Test
+    void releasePreservesClientValidationExceptions() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final IllegalArgumentException failure = new IllegalArgumentException("invalid client key");
+        when(delegate.remove("key")).thenThrow(failure);
+        try (MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
+            assertSame(failure, assertThrows(IllegalArgumentException.class, () -> lock.tryUnlock("key")));
+            assertSame(failure, assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly("key")));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "DEBUG", "OFF" })
+    @ResourceLock(LogCapture.RESOURCE)
+    void diagnosticsDescribeAcquisitionContentionAndCommunicationFailure(final String level) throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        when(delegate.add("key", "holder", 1000)).thenReturn(true, false).thenThrow(new IllegalStateException("offline"));
+        when(delegate.remove("key")).thenReturn(true, false, true, false).thenThrow(new IllegalStateException("offline"));
+        try (LogCapture logs = new LogCapture(MemcachedLock.class, Level.valueOf(level));
+             MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
+            assertTrue(lock.tryLock("key", "holder", 1000));
+            assertFalse(lock.tryLock("key", "holder", 1000));
+            assertTrue(lock.tryUnlock("key"));
+            assertFalse(lock.tryUnlock("key"));
+            assertTrue(lock.unlockQuietly("key"));
+            assertFalse(lock.unlockQuietly("key"));
+            assertThrows(RuntimeException.class, () -> lock.tryLock("key", "holder", 1000));
+            assertThrows(RuntimeException.class, () -> lock.tryUnlock("key"));
+            assertFalse(lock.unlockQuietly("key"));
+            if ("DEBUG".equals(level)) {
+                for (final String expected : List.of("Acquired lock", "Lock already held", "Released lock", "No lock to release", "acquisition failed",
+                        "release failed")) {
+                    assertTrue(logs.messages().stream().anyMatch(message -> message.contains(expected)), expected);
+                }
+            } else {
+                assertTrue(logs.messages().isEmpty());
+            }
+        }
+    }
 
     @Test
     @SuppressWarnings("unchecked")

@@ -65,6 +65,39 @@ class DistributedCacheCircuitBreakerTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void successfulCasRetryPreservesAConcurrentRecovery() throws Exception {
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get(anyString())).thenReturn("value");
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0);
+        final Object recovered = breakerState(cache);
+        setBreakerState(cache, 1, System.nanoTime());
+        final AtomicReference<Object> state = new AtomicReference<>(breakerState(cache));
+        final AtomicReference<Object> controlled = mock(AtomicReference.class);
+        when(controlled.get()).thenAnswer(invocation -> state.get());
+        when(controlled.getAndUpdate(any())).thenAnswer(invocation -> {
+            final UnaryOperator<Object> update = invocation.getArgument(0);
+            update.apply(state.get());
+            // Another successful reader wins the CAS; this updater must retry against its healthy state.
+            state.set(recovered);
+            return state.getAndUpdate(update);
+        });
+        final Field field = DistributedCache.class.getDeclaredField("circuitBreaker");
+        field.setAccessible(true);
+        field.set(cache, controlled);
+
+        try {
+            assertEquals("value", cache.getOrNull("key"));
+            assertSame(recovered, state.get());
+            assertFalse(booleanField(state.get(), "hasFailure"));
+            assertEquals("value", cache.getOrNull("next"));
+            verify(controlled, times(1)).getAndUpdate(any());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void delayedFailureCannotMoveCircuitRetryTimestampBackwards() throws Exception {
         final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
         when(client.get(anyString())).thenThrow(new IllegalStateException("backend unavailable"));

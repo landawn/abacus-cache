@@ -4,6 +4,7 @@
 
 package com.landawn.abacus.cache;
 
+import static com.landawn.abacus.TestSupport.awaitCondition;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -13,11 +14,16 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isA;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
@@ -45,11 +51,18 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
@@ -62,6 +75,72 @@ class AbstractOffHeapCacheTest {
 
     @Nested
     class ConstructionAndNativeAccess {
+
+        @ParameterizedTest
+        @CsvSource({ "0,false,false", "10000,true,true", "10000,true,false" })
+        void failedShutdownHookRegistrationReleasesAllAcquiredResources(final long evictDelay, final boolean withStore, final boolean storeCloseFails)
+                throws Exception {
+            Class.forName(AbstractOffHeapCache.class.getName());
+            final Logger logger = mock(Logger.class);
+            final Runtime runtime = mock(Runtime.class);
+            final IllegalStateException registrationFailure = new IllegalStateException("JVM shutting down");
+            final IllegalStateException storeFailure = new IllegalStateException("store close failed");
+            doThrow(registrationFailure).when(runtime).addShutdownHook(any(Thread.class));
+            final OffHeapStore<String> store = withStore ? mock(OffHeapStore.class) : null;
+            if (storeCloseFails) {
+                doThrow(storeFailure).when(store).close();
+            }
+            final AtomicInteger allocations = new AtomicInteger();
+            final AtomicInteger releases = new AtomicInteger();
+            try (MockedStatic<Runtime> runtimes = Mockito.mockStatic(Runtime.class)) {
+                runtimes.when(Runtime::getRuntime).thenReturn(runtime);
+                final IllegalStateException failure = assertThrows(IllegalStateException.class,
+                        () -> new AbstractOffHeapCache<String, byte[]>(1, 1024, evictDelay, 60_000, 0, 0f, 0, null, null, store, false, null, null, logger) {
+                            @Override
+                            protected long allocate(final long bytes) {
+                                allocations.incrementAndGet();
+                                return 0;
+                            }
+
+                            @Override
+                            protected void deallocate() {
+                                releases.incrementAndGet();
+                            }
+
+                            @Override
+                            protected void copyToMemory(final long pointer, final byte[] bytes, final int offset, final int length) {
+                                // No entry is installed before shutdown-hook registration.
+                            }
+
+                            @Override
+                            protected void copyFromMemory(final long pointer, final byte[] bytes, final int offset, final int length) {
+                                // Construction failure cannot read an entry.
+                            }
+                        });
+                assertSame(registrationFailure, failure);
+                assertEquals(1, allocations.get());
+                assertEquals(1, releases.get());
+                assertEquals(storeCloseFails ? 1 : 0, failure.getSuppressed().length);
+                if (withStore) {
+                    if (storeCloseFails) {
+                        assertSame(storeFailure, failure.getSuppressed()[0]);
+                    }
+                    verify(store).close();
+                }
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = { 1023, 1048577 })
+        void rejectsBlockSizesOutsideTheAllocatorRange(final int maxBlockSize) {
+            assertThrows(IllegalArgumentException.class, () -> OffHeapCache.builder().capacityInMB(1).maxBlockSizeInBytes(maxBlockSize).build());
+        }
+
+        @ParameterizedTest
+        @ValueSource(floats = { -0.1f, 1.1f, Float.NaN })
+        void rejectsVacatingFactorsOutsideTheValidFraction(final float factor) {
+            assertThrows(IllegalArgumentException.class, () -> OffHeapCache.builder().capacityInMB(1).vacatingFactor(factor).build());
+        }
 
         @Test
         void nativeCopyHooksRejectNullArraysBeforeCopying() {
@@ -139,6 +218,26 @@ class AbstractOffHeapCacheTest {
 
     @Nested
     class Allocation {
+
+        @Test
+        void statisticsSaturateTheCombinedReadCountWithoutOverflow() throws Exception {
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+            try {
+                for (final String counterName : new String[] { "hitCount", "missCount" }) {
+                    final Field counter = AbstractOffHeapCache.class.getDeclaredField(counterName);
+                    counter.setAccessible(true);
+                    ((LongAdder) counter.get(cache)).add(Long.MAX_VALUE);
+                }
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(Long.MAX_VALUE, stats.getCount());
+                assertEquals(Long.MAX_VALUE, stats.hitCount());
+                assertEquals(Long.MAX_VALUE, stats.missCount());
+                assertEquals(0.5, stats.hitRate());
+                assertEquals(0.5, stats.missRate());
+            } finally {
+                cache.close();
+            }
+        }
 
         /**
          * The {@code stats()} occupied-slot reporting reads each segment's occupied-slot count under
@@ -597,29 +696,65 @@ class AbstractOffHeapCacheTest {
     @Nested
     class DiskStorage {
 
-        /** Invalid custom routing results are programming errors, not undocumented aliases. */
         @Test
-        void storeSelectorRejectsUnknownAndNullResults() {
-            final OffHeapCache<String, byte[]> unknownSelectorCache = OffHeapCache.<String, byte[]> builder()
+        void diskTimingIgnoresMemoryReadsAndRejectedStoreWrites() {
+            final OffHeapStore<String> store = mock(OffHeapStore.class);
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
                     .capacityInMB(1)
-                    .storeSelector((key, value, size) -> 3)
+                    .offHeapStore(store)
+                    .statsTimeOnDisk(true)
+                    .storeSelector((key, value, size) -> "memory".equals(key) ? 1 : 2)
                     .build();
             try {
-                assertThrows(IllegalArgumentException.class, () -> unknownSelectorCache.put("k", new byte[] { 1 }));
-                assertEquals(0, unknownSelectorCache.size());
+                assertTrue(cache.put("memory", new byte[] { 1 }));
+                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("memory"));
+                assertFalse(cache.put("disk", new byte[] { 2 }));
+                cache.remove("absent");
+                assertEquals(1, cache.size());
+                assertEquals(1L, cache.stats().putCount());
+                assertEquals(0L, cache.stats().putCountToDisk());
+                assertEquals(new OffHeapCacheStats.MinMaxAvg(0, 0, 0), cache.stats().readFromDiskTimeStats());
+                assertEquals(new OffHeapCacheStats.MinMaxAvg(0, 0, 0), cache.stats().writeToDiskTimeStats());
+                verify(store).put("disk", new byte[] { 2 });
             } finally {
-                unknownSelectorCache.close();
+                cache.close();
             }
+        }
 
-            final OffHeapCache<String, byte[]> nullSelectorCache = OffHeapCache.<String, byte[]> builder()
+        @Test
+        void corruptedStoreValueIsRejectedAndTheMappingCanRecover() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
                     .capacityInMB(1)
-                    .storeSelector((key, value, size) -> null)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((key, value, size) -> 2)
                     .build();
             try {
-                assertThrows(IllegalArgumentException.class, () -> nullSelectorCache.put("k", new byte[] { 1 }));
-                assertEquals(0, nullSelectorCache.size());
+                assertTrue(cache.put("key", new byte[] { 1, 2, 3 }));
+                backing.put("key", new byte[] { 9 });
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.getOrNull("key"));
+                assertTrue(failure.getMessage().contains("does not match expected size"));
+                backing.put("key", new byte[] { 1, 2, 3 });
+                assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("key"));
             } finally {
-                nullSelectorCache.close();
+                cache.close();
+            }
+        }
+
+        /** Invalid custom routing results are programming errors, not undocumented aliases. */
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(ints = { -1, 3 })
+        void storeSelectorRejectsUnknownAndNullResults(final Integer selected) {
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .storeSelector((key, value, size) -> selected)
+                    .build();
+            try {
+                assertThrows(IllegalArgumentException.class, () -> cache.put("key", new byte[] { 1 }));
+                assertEquals(0, cache.size());
+            } finally {
+                cache.close();
             }
         }
 
@@ -1290,6 +1425,47 @@ class AbstractOffHeapCacheTest {
     @Nested
     class Promotion {
 
+        @ParameterizedTest
+        @ValueSource(strings = { "full", "oversized", "expired" })
+        void rejectedPromotionStillReturnsTheValueReadFromDisk(final String reason) {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .defaultLiveTime(60_000)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((key, value, size) -> key.equals("disk") ? 2 : 1)
+                    .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> {
+                        if ("expired".equals(reason)) {
+                            try {
+                                setActivityTime(activity, "createdTime", 0);
+                            } catch (final Exception failure) {
+                                throw new AssertionError(failure);
+                            }
+                        }
+                        return true;
+                    })
+                    .build();
+            try {
+                if ("full".equals(reason)) {
+                    assertTrue(cache.put("memory", new byte[AbstractOffHeapCache.SEGMENT_SIZE]));
+                }
+                final byte[] value = new byte["oversized".equals(reason) ? AbstractOffHeapCache.SEGMENT_SIZE + 1 : 16];
+                value[0] = 42;
+                assertTrue(cache.put("disk", value));
+                assertArrayEquals(value, cache.getOrNull("disk"));
+                assertEquals(1, cache.stats().sizeOnDisk());
+                if ("expired".equals(reason)) {
+                    assertFalse(cache.containsKey("disk"));
+                    assertNull(cache.getOrNull("disk"));
+                    assertFalse(backing.containsKey("disk"));
+                } else {
+                    assertArrayEquals(value, backing.get("disk"));
+                }
+            } finally {
+                cache.close();
+            }
+        }
+
         @Test
         void mappedByteBufferDiskReadsAndPromotionReturnHeapBuffers(@TempDir final Path directory) throws Exception {
             assertMappedByteBufferRoundTrip(directory, true);
@@ -1599,6 +1775,31 @@ class AbstractOffHeapCacheTest {
 
     @Nested
     class ExpirationAndMaintenance {
+
+        @Test
+        void vacationPreservesDiskEntriesWhileRelievingMemoryPressure() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((key, value, size) -> "disk".equals(key) ? 2 : 1)
+                    .build();
+            try {
+                assertTrue(cache.put("disk", new byte[] { 1 }));
+                assertTrue(cache.put("memory", new byte[AbstractOffHeapCache.SEGMENT_SIZE]));
+                assertFalse(cache.put("crowded-out", new byte[8192]));
+                awaitCondition("memory entry evicted", () -> cache.size() == 1);
+
+                assertEquals(1, cache.stats().sizeOnDisk());
+                assertEquals(1, cache.stats().evictionCount());
+                assertEquals(0, cache.stats().occupiedMemory());
+                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("disk"));
+                assertArrayEquals(new byte[] { 1 }, backing.get("disk"));
+            } finally {
+                cache.close();
+            }
+        }
 
         /**
          * A failed in-memory put of a value that COULD fit an empty cache (genuine memory pressure,
@@ -1931,6 +2132,97 @@ class AbstractOffHeapCacheTest {
 
     @Nested
     class Lifecycle {
+
+        @Test
+        void closeContinuesReleasingEntriesAndTheStoreWhenDiagnosticsFail() throws Exception {
+            final Logger logger = mock(Logger.class);
+            final OffHeapStore<Object> store = mock(OffHeapStore.class);
+            when(store.put(any(), any(byte[].class))).thenReturn(true);
+            doThrow(new IllegalStateException("store unavailable")).when(store).remove(any());
+            final IllegalStateException logFailure = new IllegalStateException("logging backend failed");
+            doThrow(logFailure).when(logger).warn(anyString(), any(Throwable.class));
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger, store);
+            try {
+                assertTrue(cache.put("first", new byte[] { 1 }));
+                assertTrue(cache.put("second", new byte[] { 2 }));
+                assertSame(logFailure, assertThrows(IllegalStateException.class, cache::close));
+                assertTrue(cache.isClosed());
+                assertTrue(entriesOf(cache).isEmpty());
+                verify(store, times(2)).remove(any());
+                verify(store).close();
+                assertEquals(0, logFailure.getSuppressed().length);
+            } finally {
+                assertDoesNotThrow(cache::close);
+            }
+        }
+
+        @Test
+        void shutdownHookClosesTheCacheAndLateMaintenanceDoesNothing() throws Exception {
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
+            final Field hookField = AbstractOffHeapCache.class.getDeclaredField("shutdownHook");
+            hookField.setAccessible(true);
+            final Thread hook = (Thread) hookField.get(cache);
+            try {
+                assertTrue(cache.put("key", new byte[] { 1 }));
+                hook.run();
+                assertTrue(cache.isClosed());
+                verify(logger).info("Closing off-heap cache on JVM shutdown");
+                final Method maintenance = AbstractOffHeapCache.class.getDeclaredMethod("runMaintenance");
+                maintenance.setAccessible(true);
+                assertDoesNotThrow(() -> maintenance.invoke(cache));
+                assertTrue(entriesOf(cache).isEmpty());
+            } finally {
+                cache.close();
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = { false, true })
+        void closeToleratesAnAlreadyShuttingDownJvm(final boolean debug) throws Exception {
+            final Logger logger = mock(Logger.class);
+            when(logger.isDebugEnabled()).thenReturn(debug);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
+            final Field hookField = AbstractOffHeapCache.class.getDeclaredField("shutdownHook");
+            hookField.setAccessible(true);
+            final Thread hook = (Thread) hookField.get(cache);
+            final Runtime actualRuntime = Runtime.getRuntime();
+            final Runtime shuttingDown = mock(Runtime.class);
+            doThrow(new IllegalStateException("JVM shutting down")).when(shuttingDown).removeShutdownHook(hook);
+            try (MockedStatic<Runtime> runtimes = Mockito.mockStatic(Runtime.class)) {
+                runtimes.when(Runtime::getRuntime).thenReturn(shuttingDown);
+                assertDoesNotThrow(cache::close);
+                assertTrue(cache.isClosed());
+                assertNull(hookField.get(cache));
+                verify(logger, times(debug ? 1 : 0)).debug(anyString(), any(Throwable.class));
+            } finally {
+                actualRuntime.removeShutdownHook(hook);
+                cache.close();
+            }
+        }
+
+        @Test
+        void closeContinuesCleanupAfterANativeReleaseRuntimeFailure() throws Exception {
+            final IllegalStateException failure = new IllegalStateException("native release failed after freeing memory");
+            final OffHeapStore<String> store = mock(OffHeapStore.class);
+            final OffHeapCache<String, byte[]> cache = new OffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000, 0,
+                    AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, null, null, store, false, null, null) {
+                @Override
+                protected void deallocate() {
+                    super.deallocate();
+                    throw failure;
+                }
+            };
+            try {
+                assertTrue(cache.put("key", new byte[] { 1 }));
+                assertSame(failure, assertThrows(IllegalStateException.class, cache::close));
+                assertTrue(cache.isClosed());
+                assertTrue(entriesOf(cache).isEmpty());
+                verify(store).close();
+            } finally {
+                assertDoesNotThrow(cache::close);
+            }
+        }
 
         /**
          * Regression coverage for the cancelled-eviction-task GC leak in
@@ -2869,7 +3161,12 @@ class AbstractOffHeapCacheTest {
         private final byte[] memory = new byte[SEGMENT_SIZE];
 
         HeapOffHeapCache(final Logger logger) {
-            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, null, null, null, false, null, null, logger);
+            this(logger, null);
+        }
+
+        HeapOffHeapCache(final Logger logger, final OffHeapStore<Object> store) {
+            super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, null, null, store, false, null,
+                    store == null ? null : (key, value, size) -> 2, logger);
         }
 
         @Override

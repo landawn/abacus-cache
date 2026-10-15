@@ -5,6 +5,7 @@
 package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -67,6 +68,31 @@ class AbstractDistributedCacheClientTest {
     }
 
     // Compatibility
+
+    @Test
+    void compatibilityGuardsTrackOverlappingPairsIndependently() {
+        try {
+            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
+            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
+            assertFalse(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
+            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
+            assertFalse(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
+        } finally {
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
+        }
+        assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
+        DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
+    }
+
+    @Test
+    void compatibilityOverrideLookupRejectsUnknownAndMissingMethods() {
+        assertFalse(DistributedCacheClientCompatibilitySupport.isOverridden(DistributedCacheClient.class, "unknown"));
+        assertFalse(DistributedCacheClientCompatibilitySupport.isOverridden(Object.class, "put"));
+    }
 
     /**
      * The delegation-cycle guard is keyed on (thread, client, name-pair) only — it cannot tell a

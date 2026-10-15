@@ -25,7 +25,13 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import com.landawn.abacus.LogCapture;
 
 import net.spy.memcached.DefaultConnectionFactory;
 import net.spy.memcached.MemcachedClient;
@@ -37,6 +43,26 @@ import net.spy.memcached.NodeLocator;
 class SpyMemcachedFutureTest {
 
     // Bulk Reads
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    @ResourceLock(LogCapture.RESOURCE)
+    void timeoutAndInterruptionProduceDiagnosticsAndCancelTheRequest(final boolean interrupted) throws Exception {
+        final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));
+        final Future<String> operation = mock(Future.class);
+        final Exception failure = interrupted ? new InterruptedException("cancelled by caller") : new TimeoutException("server silent");
+        when(operation.get(25, TimeUnit.MILLISECONDS)).thenThrow(failure);
+        try (LogCapture logs = new LogCapture(SpyMemcached.class, Level.WARN)) {
+            final RuntimeException thrown = assertThrows(RuntimeException.class, () -> cache.resultOf(operation));
+            assertSame(failure, thrown.getCause());
+            assertEquals(interrupted, Thread.currentThread().isInterrupted());
+            verify(operation).cancel(true);
+            assertTrue(logs.messages().stream().anyMatch(message -> message.contains(interrupted ? "interrupted" : "Timed out")));
+        } finally {
+            Thread.interrupted();
+            cache.disconnect();
+        }
+    }
 
     @Test
     @SuppressWarnings("unchecked")

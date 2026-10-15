@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.NotSerializableException;
+import java.io.OutputStream;
 import java.io.Serializable;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -29,6 +30,8 @@ import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.KryoException;
@@ -36,7 +39,9 @@ import com.esotericsoftware.kryo.Serializer;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
 import com.esotericsoftware.kryo.serializers.JavaSerializer;
+import com.landawn.abacus.exception.UncheckedIOException;
 import com.landawn.abacus.parser.KryoParser;
+import com.landawn.abacus.parser.KryoSerConfig;
 import com.landawn.abacus.parser.ParserFactory;
 
 import net.spy.memcached.CachedData;
@@ -45,6 +50,16 @@ class KryoTranscoderTest {
 
     @Nested
     class Construction {
+
+        @Test
+        void missingKryoIsAnActionableConfigurationFailure() {
+            try (MockedStatic<ParserFactory> parsers = Mockito.mockStatic(ParserFactory.class)) {
+                parsers.when(ParserFactory::isKryoParserAvailable).thenReturn(false);
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, KryoTranscoder::new);
+                assertTrue(failure.getMessage().contains("Kryo is required"));
+                assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(0));
+            }
+        }
 
         /** The caller-supplied-parser constructors: round-trip through a custom parser, and null rejection. */
         @Test
@@ -172,6 +187,15 @@ class KryoTranscoderTest {
 
     @Nested
     class Decoding {
+
+        @Test
+        void missingPayloadIsTreatedAsAnEmptyEntryWithoutDecoding() {
+            final KryoParser parser = Mockito.mock(KryoParser.class);
+            final CachedData data = Mockito.mock(CachedData.class);
+            Mockito.when(data.getData()).thenReturn(null);
+            assertNull(new KryoTranscoder<>(parser).decode(data));
+            Mockito.verifyNoInteractions(parser);
+        }
 
         @Test
         void asyncDecodeAlwaysFalse() {
@@ -384,6 +408,32 @@ class KryoTranscoderTest {
 
     @Nested
     class FailureHandling {
+
+        @Test
+        void singleByteSerializerWritesRespectTheExactSizeLimit() throws Exception {
+            final KryoParser parser = Mockito.mock(KryoParser.class);
+            Mockito.doAnswer(invocation -> {
+                final OutputStream output = invocation.getArgument(2);
+                output.write(1);
+                output.write(2);
+                output.write(3);
+                return null;
+            }).when(parser).serialize(Mockito.any(), Mockito.any(KryoSerConfig.class), Mockito.any(OutputStream.class));
+            assertArrayEquals(new byte[] { 1, 2, 3 }, new KryoTranscoder<>(3, parser).encode("value").getData());
+            assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(2, parser).encode("value"));
+        }
+
+        @Test
+        void nullValueIoFailureRetainsItsCauseAndDescriptiveType() throws Exception {
+            final KryoParser parser = Mockito.mock(KryoParser.class);
+            final IOException failure = new IOException("serializer I/O failed");
+            Mockito.doThrow(new UncheckedIOException(failure))
+                    .when(parser)
+                    .serialize(Mockito.isNull(), Mockito.any(KryoSerConfig.class), Mockito.any(OutputStream.class));
+            final KryoException error = assertThrows(KryoException.class, () -> new KryoTranscoder<>(parser).encode(null));
+            assertSame(failure, error.getCause());
+            assertTrue(error.getMessage().contains("type null"));
+        }
 
         /** Object-array cycles use Kryo's array serializer, which does not wrap the stack overflow. */
         @Test

@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.landawn.abacus.util.Suppliers;
@@ -37,6 +38,21 @@ import com.landawn.abacus.util.Suppliers;
 class CaffeineCacheTest {
 
     // Construction
+
+    @Test
+    void sizeAndStatisticsSaturateAtThePublicIntegerLimit() {
+        final com.github.benmanes.caffeine.cache.Cache<String, String> delegate = Mockito
+                .spy(Caffeine.newBuilder().maximumSize(Long.MAX_VALUE).<String, String> build());
+        Mockito.doReturn(Long.MAX_VALUE).when(delegate).estimatedSize();
+        final CaffeineCache<String, String> cache = new CaffeineCache<>(delegate);
+        try {
+            assertEquals(Integer.MAX_VALUE, cache.size());
+            assertEquals(Integer.MAX_VALUE, cache.stats().size());
+            assertEquals(Integer.MAX_VALUE, cache.stats().capacity());
+        } finally {
+            cache.close();
+        }
+    }
 
     @Test
     void constructorNullCache() {

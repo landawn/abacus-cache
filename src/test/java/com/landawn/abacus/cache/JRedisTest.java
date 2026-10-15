@@ -4,9 +4,11 @@
 
 package com.landawn.abacus.cache;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -24,12 +26,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedConstruction;
+import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
+import com.landawn.abacus.LogCapture;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.Dates;
@@ -86,6 +94,28 @@ class JRedisTest {
     }
 
     // Construction
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void constructorRetainsFailureWhileClosingEveryBuiltShard(final boolean reusedFailure) {
+        final RuntimeException failure = new IllegalStateException("third shard failed");
+        final Throwable cleanupFailure = reusedFailure ? failure : new AssertionError("second shard close failed");
+        final RedisClient first = Mockito.mock(RedisClient.class);
+        final RedisClient second = Mockito.mock(RedisClient.class);
+        final RedisClient.Builder builder = Mockito.mock(RedisClient.Builder.class, Mockito.RETURNS_SELF);
+        when(builder.build()).thenReturn(first, second).thenThrow(failure);
+        doThrow(cleanupFailure).when(second).close();
+
+        try (MockedStatic<RedisClient> factory = Mockito.mockStatic(RedisClient.class)) {
+            factory.when(RedisClient::builder).thenReturn(builder);
+            final RuntimeException thrown = assertThrows(RuntimeException.class, () -> new JRedis<>("h1:6379,h2:6379,h3:6379"));
+
+            assertSame(failure, thrown);
+            assertArrayEquals(reusedFailure ? new Throwable[0] : new Throwable[] { cleanupFailure }, thrown.getSuppressed());
+            verify(first).close();
+            verify(second).close();
+        }
+    }
 
     /** A shard-construction failure must close the shard clients that were already built. */
     @Test
@@ -331,6 +361,46 @@ class JRedisTest {
     }
 
     // Lifecycle
+
+    @ParameterizedTest
+    @ValueSource(strings = { "WARN", "OFF" })
+    @ResourceLock(LogCapture.RESOURCE)
+    void shardFailuresPreserveDiagnosticsAndContinueCleanup(final String level) {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379,h3:6379,h4:6379");
+        final RuntimeException sharedFlushFailure = new IllegalStateException("unavailable");
+        when(shards.get(0).flushAll()).thenThrow(sharedFlushFailure);
+        when(shards.get(1).flushAll()).thenThrow(sharedFlushFailure);
+        final AssertionError firstCloseFailure = new AssertionError("second shard close");
+        final AssertionError secondCloseFailure = new AssertionError("third shard close");
+        doThrow(new IllegalStateException("first shard close")).when(shards.get(0)).close();
+        doThrow(firstCloseFailure).when(shards.get(1)).close();
+        doThrow(secondCloseFailure).when(shards.get(2)).close();
+
+        try (LogCapture logs = new LogCapture(JRedis.class, Level.valueOf(level))) {
+            assertSame(sharedFlushFailure, assertThrows(RuntimeException.class, sharded::flushAll));
+            assertEquals(0, sharedFlushFailure.getSuppressed().length);
+            for (final RedisClient shard : shards) {
+                verify(shard).flushAll();
+            }
+
+            assertSame(firstCloseFailure, assertThrows(AssertionError.class, sharded::disconnect));
+            assertArrayEquals(new Throwable[] { secondCloseFailure }, firstCloseFailure.getSuppressed());
+            sharded.disconnect();
+            for (final RedisClient shard : shards) {
+                verify(shard, times(1)).close();
+            }
+            assertThrows(IllegalStateException.class, () -> sharded.get("after-close"));
+
+            if ("WARN".equals(level)) {
+                assertEquals(3, logs.messages().size());
+                assertTrue(logs.messages().get(0).contains("shard index 0"));
+                assertTrue(logs.messages().get(1).contains("shard index 1"));
+                assertTrue(logs.messages().get(2).contains("Failed to close Redis client for shard index 0"));
+            } else {
+                assertTrue(logs.messages().isEmpty());
+            }
+        }
+    }
 
     @Test
     void disconnectIsIdempotent() {

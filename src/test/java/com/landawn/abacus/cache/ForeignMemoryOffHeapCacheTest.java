@@ -5,17 +5,84 @@
 package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.foreign.Arena;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 class ForeignMemoryOffHeapCacheTest {
 
     // Construction
+
+    @Test
+    void builderUsesTheConfiguredSerializationCallbacks() {
+        final AtomicInteger writes = new AtomicInteger();
+        final AtomicInteger reads = new AtomicInteger();
+        final ForeignMemoryOffHeapCache<String, String> cache = ForeignMemoryOffHeapCache.<String, String> builder()
+                .capacityInMB(1)
+                .serializer((value, output) -> {
+                    writes.incrementAndGet();
+                    final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+                    output.write(bytes, 0, bytes.length);
+                })
+                .deserializer((bytes, type) -> {
+                    reads.incrementAndGet();
+                    return new String(bytes, StandardCharsets.UTF_8);
+                })
+                .build();
+        try {
+            assertTrue(cache.put("key", "custom payload"));
+            assertEquals("custom payload", cache.getOrNull("key"));
+            assertEquals(1, writes.get());
+            assertEquals(1, reads.get());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void allocationFailureRetainsItsIdentityWhenArenaCleanupAlsoFails(final boolean reusedFailure) {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+        final IllegalStateException allocationFailure = new IllegalStateException("allocation failed");
+        final IllegalStateException cleanupFailure = reusedFailure ? allocationFailure : new IllegalStateException("arena close failed");
+        try (Arena actual = Arena.ofShared()) {
+            final Arena failing = Mockito.spy(actual);
+            Mockito.doThrow(allocationFailure).when(failing).allocate(64L);
+            Mockito.doThrow(cleanupFailure).when(failing).close();
+            try (MockedStatic<Arena> arenas = Mockito.mockStatic(Arena.class)) {
+                arenas.when(Arena::ofShared).thenReturn(failing);
+                assertSame(allocationFailure, assertThrows(IllegalStateException.class, () -> cache.allocate(64)));
+            }
+            assertEquals(reusedFailure ? 0 : 1, allocationFailure.getSuppressed().length);
+            if (!reusedFailure) {
+                assertSame(cleanupFailure, allocationFailure.getSuppressed()[0]);
+            }
+            assertTrue(cache.put("key", new byte[] { 1, 2 }));
+            assertArrayEquals(new byte[] { 1, 2 }, cache.getOrNull("key"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void deallocationBeforeArenaInitializationIsHarmless() {
+        final ForeignMemoryOffHeapCache<?, ?> uninitialized = Mockito.mock(ForeignMemoryOffHeapCache.class, Mockito.CALLS_REAL_METHODS);
+        assertDoesNotThrow(uninitialized::deallocate);
+    }
 
     @Test
     void builderFunctionalArgumentsNullRejected() {
