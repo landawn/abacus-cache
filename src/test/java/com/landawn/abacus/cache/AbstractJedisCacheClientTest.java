@@ -21,6 +21,7 @@ import static org.mockito.Mockito.withSettings;
 
 import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.util.AbstractCollection;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -31,10 +32,17 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
@@ -45,6 +53,7 @@ import com.landawn.abacus.util.AddrUtil;
 import redis.clients.jedis.UnifiedJedis;
 import redis.clients.jedis.params.SetParams;
 
+/** Shared Redis wire-format, validation, and bulk contracts inherited by both client implementations. */
 class AbstractJedisCacheClientTest {
 
     private static final KryoParser KRYO = ParserFactory.createKryoParser();
@@ -54,7 +63,7 @@ class AbstractJedisCacheClientTest {
 
     @BeforeEach
     void setUpClient() {
-        mockJedis = org.mockito.Mockito.mock(UnifiedJedis.class);
+        mockJedis = Mockito.mock(UnifiedJedis.class);
         cache = new AbstractJedisCacheClient<>("unit.test:6379") {
             @Override
             protected UnifiedJedis clientFor(final byte[] keyBytes) {
@@ -79,7 +88,16 @@ class AbstractJedisCacheClientTest {
         cache.disconnect();
     }
 
-    // Reads
+    // Construction
+
+    @Test
+    void emptyResolvedAddressListIsRejected() {
+        try (MockedStatic<AddrUtil> addresses = Mockito.mockStatic(AddrUtil.class)) {
+            addresses.when(() -> AddrUtil.getAddressList("127.0.0.1:6379")).thenReturn(List.of());
+            assertTrue(assertThrows(IllegalArgumentException.class, () -> AbstractJedisCacheClient.resolveServerAddresses("127.0.0.1:6379")).getMessage()
+                    .contains("No valid server addresses"));
+        }
+    }
 
     @Test
     void missingKryoIsReportedBeforeAnyClientIsCreated() {
@@ -91,14 +109,7 @@ class AbstractJedisCacheClientTest {
         }
     }
 
-    @Test
-    void emptyResolvedAddressListIsRejected() {
-        try (MockedStatic<AddrUtil> addresses = Mockito.mockStatic(AddrUtil.class)) {
-            addresses.when(() -> AddrUtil.getAddressList("127.0.0.1:6379")).thenReturn(List.of());
-            assertTrue(assertThrows(IllegalArgumentException.class, () -> AbstractJedisCacheClient.resolveServerAddresses("127.0.0.1:6379")).getMessage()
-                    .contains("No valid server addresses"));
-        }
-    }
+    // Reads
 
     /**
      * Regression test: counter values (raw ASCII digits written by INCR/DECR) are not Kryo payloads.
@@ -108,251 +119,36 @@ class AbstractJedisCacheClientTest {
      * {@code catch (Exception)} handlers. Every counter-shaped payload must now fail with a
      * {@code KryoException}.
      */
-    @Test
-    void getCounterPayloadFailsWithKryoExceptionNotError() {
-        for (final String counter : List.of("6", "9", "64", "99", "9223372036854775807", "1", "-5", "42")) {
-            when(mockJedis.get(utf8("jredis-review:counter"))).thenReturn(counter.getBytes(StandardCharsets.US_ASCII));
+    @ParameterizedTest
+    @ValueSource(strings = { "6", "9", "64", "99", "9223372036854775807", "1", "-5", "42" })
+    void getCounterPayloadFailsWithKryoExceptionNotError(final String counter) {
 
-            assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.get("jredis-review:counter"), counter);
-            assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.getBulk("jredis-review:counter"), counter);
-        }
+        when(mockJedis.get(utf8("jredis-review:counter"))).thenReturn(counter.getBytes(StandardCharsets.US_ASCII));
+
+        assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.get("jredis-review:counter"), counter);
+        assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.getBulk("jredis-review:counter"), counter);
+
     }
 
-    @Test
-    void getReturnsNullForEmptyByteArray() {
-        when(mockJedis.get(any(byte[].class))).thenReturn(new byte[0]);
+    @ParameterizedTest
+    @MethodSource("encodedValues")
+    void getDecodesStringsAndObjects(final Object expected) {
+        when(mockJedis.get(utf8("key"))).thenReturn(KRYO.encode(expected));
 
-        assertNull(cache.get("empty"));
+        assertEquals(expected, cache.get("key"));
+        verify(mockJedis).get(utf8("key"));
     }
 
-    @Test
-    void getReturnsNullWhenKeyMissing() {
-        when(mockJedis.get(any(byte[].class))).thenReturn(null);
+    @ParameterizedTest
+    @NullAndEmptySource
+    void getTreatsMissingAndEmptyPayloadsAsAbsent(final byte[] payload) {
+        when(mockJedis.get(utf8("key"))).thenReturn(payload);
 
-        assertNull(cache.get("missing"));
+        assertNull(cache.get("key"));
+        verify(mockJedis).get(utf8("key"));
     }
 
-    // Bulk Reads
-
-    /**
-     * A collection is copied and validated in one pass. The old validate-then-fetch implementation
-     * iterated a live collection twice, so a changed second view could issue requests for keys that
-     * had never been validated.
-     */
-    @Test
-    void getBulkCollectionIsValidatedAndSnapshottedInOnePass() {
-        final AtomicInteger iteratorCalls = new AtomicInteger();
-        final Collection<String> changingView = new AbstractCollection<>() {
-            @Override
-            public Iterator<String> iterator() {
-                return (iteratorCalls.getAndIncrement() == 0 ? List.of("a") : Arrays.asList("a", null)).iterator();
-            }
-
-            @Override
-            public int size() {
-                return 1;
-            }
-        };
-        when(mockJedis.get(utf8("a"))).thenReturn(KRYO.encode("value-a"));
-
-        assertEquals("value-a", cache.getBulk(changingView).get("a"));
-        assertEquals(1, iteratorCalls.get(), "the caller's collection must be consumed exactly once");
-    }
-
-    /**
-     * A bulk result is keyed by the requested key, so duplicate requests must not trigger repeated
-     * network reads (which could observe different values or expiry states for the same map entry).
-     */
-    @Test
-    void getBulkDuplicateKeysAreFetchedOnce() {
-        when(mockJedis.get(utf8("same"))).thenReturn(KRYO.encode("value"));
-
-        final Map<String, Object> result = cache.getBulk("same", "same", "same");
-
-        assertEquals(Map.of("same", "value"), result);
-        verify(mockJedis, times(1)).get(utf8("same"));
-    }
-
-    @Test
-    void getBulkRejectsNullElement() {
-        // Validation happens up-front, before any GET is issued.
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk("a", null, "c"));
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk(Arrays.asList("a", null)));
-        verify(mockJedis, never()).get(any(byte[].class));
-    }
-
-    @Test
-    void getBulkRejectsNullKeys() {
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((String[]) null));
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((List<String>) null));
-    }
-
-    /**
-     * The caller retains ownership of a varargs array. Mutating it after the first GET must not change
-     * the already-validated operation or inject an unvalidated null into the remaining requests.
-     */
-    @Test
-    void getBulkVarargsUsesPrivateSnapshot() {
-        final String[] keys = { "a", "b" };
-        when(mockJedis.get(utf8("a"))).thenAnswer(invocation -> {
-            keys[1] = null;
-            return null;
-        });
-        when(mockJedis.get(utf8("b"))).thenReturn(KRYO.encode("value-b"));
-
-        final Map<String, Object> result = cache.getBulk(keys);
-
-        assertEquals("value-b", result.get("b"));
-        verify(mockJedis).get(utf8("b"));
-    }
-
-    // Writes
-
-    @Test
-    void decrReturnsNegativeWhenRedisDoes() {
-        when(mockJedis.decr(utf8("counter"))).thenReturn(-1L);
-
-        assertEquals(-1L, cache.decr("counter"));
-    }
-
-    @Test
-    void decrWithDeltaCallsDecrBy() {
-        when(mockJedis.decrBy(utf8("counter"), 3L)).thenReturn(-3L);
-
-        assertEquals(-3L, cache.decr("counter", 3));
-        verify(mockJedis).decrBy(utf8("counter"), 3L);
-    }
-
-    @Test
-    void decrWithDeltaRejectsNegativeDelta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.decr("counter", -1));
-        verify(mockJedis, never()).decrBy(any(byte[].class), eq(-1L));
-    }
-
-    @Test
-    void incrWithDeltaCallsIncrBy() {
-        when(mockJedis.incrBy(utf8("counter"), 5L)).thenReturn(5L);
-
-        assertEquals(5L, cache.incr("counter", 5));
-        verify(mockJedis).incrBy(utf8("counter"), 5L);
-    }
-
-    @Test
-    void incrWithDeltaRejectsNegativeDelta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1));
-        verify(mockJedis, never()).incrBy(any(byte[].class), eq(-1L));
-    }
-
-    @Test
-    void setLargeTtlIsNotNarrowedOrConverted() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-
-        assertTrue(cache.put("large-ttl", "v", Long.MAX_VALUE));
-
-        verify(mockJedis).set(eq(utf8("large-ttl")), any(byte[].class), eq(SetParams.setParams().px(Long.MAX_VALUE)));
-    }
-
-    /** A negative liveTime means "no expiration" too: plain SET, never SET ... PX with a negative value. */
-    @Test
-    void setNegativeTtlUsesPlainSet() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
-
-        assertTrue(cache.put("forever", "value", -1));
-        assertTrue(cache.put("forever", "value", Long.MIN_VALUE));
-
-        verify(mockJedis, times(2)).set(eq(utf8("forever")), any(byte[].class));
-        verify(mockJedis, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
-    }
-
-    @Test
-    void setNullValueEncodesAsEmptyByteArray() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-
-        cache.put("k", null, 60_000);
-
-        verify(mockJedis).set(eq(utf8("k")), eq(new byte[0]), any(SetParams.class));
-    }
-
-    @Test
-    void setReturnsFalseWhenServerDoesNotSayOK() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("NOT_OK");
-
-        assertFalse(cache.put("k", "v", 60_000));
-    }
-
-    /**
-     * Regression test for the TTL-coarsening bug: {@code liveTime} was previously converted to whole
-     * seconds ({@code SET ... EX}, rounding up), so a 300 ms TTL silently became a full second —
-     * over 3x longer than requested for sub-second entries. The TTL is now passed through with
-     * millisecond precision ({@code SET ... PX}).
-     */
-    @Test
-    void setSubSecondTtlHonoredWithMillisecondPrecision() {
-        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
-
-        assertTrue(cache.put("short-lived", "v", 300));
-
-        verify(mockJedis).set(eq(utf8("short-lived")), any(byte[].class), eq(SetParams.setParams().px(300L)));
-    }
-
-    // Removals
-
-    @Test
-    void deleteCallsDelAndReturnsTrue() {
-        when(mockJedis.del(any(byte[].class))).thenReturn(1L);
-
-        assertTrue(cache.remove("k"));
-        verify(mockJedis).del(utf8("k"));
-    }
-
-    // Validation And Failures
-
-    @Test
-    void invalidKeyAfterManyDuplicatesIsRejectedBeforeAnyBackendRead() {
-        final RecordingClient cache = new RecordingClient();
-        final List<String> keys = new ArrayList<>(Collections.nCopies(1_000, "valid"));
-        keys.add("\uD800");
-        try {
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(keys));
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(keys.toArray(String[]::new)));
-            assertTrue(cache.reads.isEmpty(), "no GET may be issued before every key is validated: " + cache.reads);
-        } finally {
-            cache.disconnect();
-        }
-    }
-
-    @Test
-    void malformedUnicodeKeysAreRejectedBeforeAnyCommand() {
-        for (final String key : List.of("\uD800", "\uDC00", "prefix:\uD800suffix", "prefix:\uDC00suffix", "\uD800\uD800", "\uDC00\uD800")) {
-            assertThrows(IllegalArgumentException.class, () -> cache.get(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.put(key, "value", 0));
-            assertThrows(IllegalArgumentException.class, () -> cache.remove(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.incr(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.incr(key, 1));
-            assertThrows(IllegalArgumentException.class, () -> cache.decr(key));
-            assertThrows(IllegalArgumentException.class, () -> cache.decr(key, 1));
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(List.of("valid", key)));
-        }
-
-        Mockito.verifyNoInteractions(mockJedis);
-    }
-
-    @Test
-    void nullKeyIsRejectedWithIllegalArgumentExceptionBeforeAnyCommand() {
-        assertThrows(IllegalArgumentException.class, () -> cache.get(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 0));
-        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 60000));
-        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
-
-        Mockito.verifyNoInteractions(mockJedis);
-    }
-
-    // Other Behavior
+    // Bulk reads
 
     @Test
     void collectionMutationDuringFirstGetCannotChangeLaterKeys() {
@@ -402,6 +198,264 @@ class AbstractJedisCacheClientTest {
         } finally {
             cache.disconnect();
         }
+    }
+
+    /**
+     * A collection is copied and validated in one pass. The old validate-then-fetch implementation
+     * iterated a live collection twice, so a changed second view could issue requests for keys that
+     * had never been validated.
+     */
+    @Test
+    void getBulkCollectionIsValidatedAndSnapshottedInOnePass() {
+        final AtomicInteger iteratorCalls = new AtomicInteger();
+        final Collection<String> changingView = new AbstractCollection<>() {
+            @Override
+            public Iterator<String> iterator() {
+                return (iteratorCalls.getAndIncrement() == 0 ? List.of("a") : Arrays.asList("a", null)).iterator();
+            }
+
+            @Override
+            public int size() {
+                return 1;
+            }
+        };
+        when(mockJedis.get(utf8("a"))).thenReturn(KRYO.encode("value-a"));
+
+        assertEquals("value-a", cache.getBulk(changingView).get("a"));
+        assertEquals(1, iteratorCalls.get(), "the caller's collection must be consumed exactly once");
+    }
+
+    /**
+     * A bulk result is keyed by the requested key, so duplicate requests must not trigger repeated
+     * network reads (which could observe different values or expiry states for the same map entry).
+     */
+    @Test
+    void getBulkDuplicateKeysAreFetchedOnce() {
+        when(mockJedis.get(utf8("same"))).thenReturn(KRYO.encode("value"));
+
+        final Map<String, Object> result = cache.getBulk("same", "same", "same");
+
+        assertEquals(Map.of("same", "value"), result);
+        verify(mockJedis, times(1)).get(utf8("same"));
+    }
+
+    @ParameterizedTest(name = "collection overload: {0}")
+    @ValueSource(booleans = { false, true })
+    void getBulkEmptyRequestsDoNotContactTheBackend(final boolean collection) {
+        assertTrue((collection ? cache.getBulk(List.of()) : cache.getBulk()).isEmpty());
+        Mockito.verifyNoInteractions(mockJedis);
+    }
+
+    @Test
+    void getBulkRejectsNullElement() {
+        // Validation happens up-front, before any GET is issued.
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk("a", null, "c"));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk(Arrays.asList("a", null)));
+        verify(mockJedis, never()).get(any(byte[].class));
+    }
+
+    @Test
+    void getBulkRejectsNullKeys() {
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((String[]) null));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((List<String>) null));
+    }
+
+    @ParameterizedTest(name = "collection overload: {0}")
+    @ValueSource(booleans = { false, true })
+    void getBulkReturnsOnlyFoundKeys(final boolean collection) {
+        final String[] keys = { "present", "missing", "empty" };
+        when(mockJedis.get(utf8("present"))).thenReturn(KRYO.encode("value"));
+        when(mockJedis.get(utf8("empty"))).thenReturn(new byte[0]);
+
+        assertEquals(Map.of("present", "value"), collection ? cache.getBulk(List.of(keys)) : cache.getBulk(keys));
+        for (final String key : keys) {
+            verify(mockJedis).get(utf8(key));
+        }
+    }
+
+    /**
+     * The caller retains ownership of a varargs array. Mutating it after the first GET must not change
+     * the already-validated operation or inject an unvalidated null into the remaining requests.
+     */
+    @Test
+    void getBulkVarargsUsesPrivateSnapshot() {
+        final String[] keys = { "a", "b" };
+        when(mockJedis.get(utf8("a"))).thenAnswer(invocation -> {
+            keys[1] = null;
+            return null;
+        });
+        when(mockJedis.get(utf8("b"))).thenReturn(KRYO.encode("value-b"));
+
+        final Map<String, Object> result = cache.getBulk(keys);
+
+        assertEquals("value-b", result.get("b"));
+        verify(mockJedis).get(utf8("b"));
+    }
+
+    @ParameterizedTest(name = "collection overload: {0}")
+    @ValueSource(booleans = { false, true })
+    void validSupplementaryUnicodeKeysPreserveUtf8Bytes(final boolean collection) {
+        final String key = "user:\uD83D\uDE00:\uD800\uDC00";
+        when(mockJedis.get(utf8(key))).thenReturn(KRYO.encode("value"));
+
+        assertEquals("value", cache.get(key));
+        assertEquals(Map.of(key, "value"), collection ? cache.getBulk(List.of("missing", key)) : cache.getBulk("missing", key));
+        verify(mockJedis, times(2)).get(utf8(key));
+    }
+
+    // Writes
+
+    @ParameterizedTest
+    @MethodSource("encodedValues")
+    void putEncodesStringsAndObjects(final Object expected) {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+
+        assertTrue(cache.put("key", expected, 30_000));
+
+        final ArgumentCaptor<byte[]> payload = ArgumentCaptor.forClass(byte[].class);
+        verify(mockJedis).set(eq(utf8("key")), payload.capture(), eq(SetParams.setParams().px(30_000L)));
+        assertEquals(expected, KRYO.decode(payload.getValue()));
+    }
+
+    @Test
+    void putNullValueEncodesAsEmptyByteArray() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+
+        cache.put("k", null, 60_000);
+
+        verify(mockJedis).set(eq(utf8("k")), eq(new byte[0]), any(SetParams.class));
+    }
+
+    /** Preserve millisecond precision, including sub-second and long-valued TTLs. */
+    @ParameterizedTest
+    @ValueSource(longs = { 300, 30_000, 60_000, Long.MAX_VALUE })
+    void putPassesTheExactTtlInMilliseconds(final long liveTime) {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("OK");
+
+        assertTrue(cache.put("key", "value", liveTime));
+        verify(mockJedis).set(eq(utf8("key")), any(byte[].class), eq(SetParams.setParams().px(liveTime)));
+        verify(mockJedis, never()).set(any(byte[].class), any(byte[].class));
+    }
+
+    @Test
+    void putReturnsFalseWhenServerDoesNotSayOK() {
+        when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenReturn("NOT_OK");
+
+        assertFalse(cache.put("k", "v", 60_000));
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = { 0, -1, Long.MIN_VALUE })
+    void putWithoutExpirationUsesPlainSet(final long liveTime) {
+        when(mockJedis.set(any(byte[].class), any(byte[].class))).thenReturn("OK");
+
+        assertTrue(cache.put("key", "value", liveTime));
+        verify(mockJedis).set(eq(utf8("key")), any(byte[].class));
+        verify(mockJedis, never()).set(any(byte[].class), any(byte[].class), any(SetParams.class));
+    }
+
+    // Counters
+
+    @Test
+    void decrReturnsNegativeWhenRedisDoes() {
+        when(mockJedis.decr(utf8("counter"))).thenReturn(-1L);
+
+        assertEquals(-1L, cache.decr("counter"));
+    }
+
+    @Test
+    void decrWithDeltaCallsDecrBy() {
+        when(mockJedis.decrBy(utf8("counter"), 3L)).thenReturn(-3L);
+
+        assertEquals(-3L, cache.decr("counter", 3));
+        verify(mockJedis).decrBy(utf8("counter"), 3L);
+    }
+
+    @Test
+    void decrWithDeltaRejectsNegativeDelta() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("counter", -1));
+        verify(mockJedis, never()).decrBy(any(byte[].class), eq(-1L));
+    }
+
+    @Test
+    void incrReturnsTheServerValue() {
+        when(mockJedis.incr(utf8("counter"))).thenReturn(12L);
+
+        assertEquals(12L, cache.incr("counter"));
+        verify(mockJedis).incr(utf8("counter"));
+    }
+
+    @Test
+    void incrWithDeltaCallsIncrBy() {
+        when(mockJedis.incrBy(utf8("counter"), 5L)).thenReturn(5L);
+
+        assertEquals(5L, cache.incr("counter", 5));
+        verify(mockJedis).incrBy(utf8("counter"), 5L);
+    }
+
+    @Test
+    void incrWithDeltaRejectsNegativeDelta() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1));
+        verify(mockJedis, never()).incrBy(any(byte[].class), eq(-1L));
+    }
+
+    // Removals
+
+    @ParameterizedTest
+    @CsvSource({ "0,false", "1,true", "2,true" })
+    void removeReportsWhetherRedisDeletedAnyKeys(final long deleted, final boolean expected) {
+        when(mockJedis.del(utf8("key"))).thenReturn(deleted);
+
+        assertEquals(expected, cache.remove("key"));
+        verify(mockJedis).del(utf8("key"));
+    }
+
+    // Key validation
+
+    @Test
+    void invalidKeyAfterManyDuplicatesIsRejectedBeforeAnyBackendRead() {
+        final RecordingClient cache = new RecordingClient();
+        final List<String> keys = new ArrayList<>(Collections.nCopies(1_000, "valid"));
+        keys.add("\uD800");
+        try {
+            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(keys));
+            assertThrows(IllegalArgumentException.class, () -> cache.getBulk(keys.toArray(String[]::new)));
+            assertTrue(cache.reads.isEmpty(), "no GET may be issued before every key is validated: " + cache.reads);
+        } finally {
+            cache.disconnect();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "\uD800", "\uDC00", "prefix:\uD800suffix", "prefix:\uDC00suffix", "\uD800\uD800", "\uDC00\uD800" })
+    void malformedUnicodeKeysAreRejectedBeforeAnyCommand(final String key) {
+
+        assertThrows(IllegalArgumentException.class, () -> cache.get(key));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(key, "value", 0));
+        assertThrows(IllegalArgumentException.class, () -> cache.remove(key));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(key));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(key, 1));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(key));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(key, 1));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk(List.of("valid", key)));
+
+        Mockito.verifyNoInteractions(mockJedis);
+    }
+
+    @Test
+    void nullKeyIsRejectedWithIllegalArgumentExceptionBeforeAnyCommand() {
+        assertThrows(IllegalArgumentException.class, () -> cache.getKeyBytes(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.get(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 0));
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "value", 60000));
+        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
+
+        Mockito.verifyNoInteractions(mockJedis);
     }
 
     private static void assertDuplicateAllocationBound(final RecordingClient cache, final Collection<String> collection, final String[] array) {
@@ -478,6 +532,18 @@ class AbstractJedisCacheClientTest {
         protected void closeClients() {
             backend.close();
         }
+    }
+
+    private static Stream<Object> encodedValues() {
+        return Stream.of("hello",
+                Account.builder()
+                        .id(7)
+                        .gui("unit-test")
+                        .firstName("Ada")
+                        .lastName("Lovelace")
+                        .emailAddress("ada@example.test")
+                        .birthDate(Timestamp.valueOf("1815-12-10 00:00:00"))
+                        .build());
     }
 
     private static byte[] utf8(String s) {

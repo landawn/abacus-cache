@@ -21,9 +21,11 @@ import java.io.OutputStream;
 import java.io.Serializable;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -51,16 +53,6 @@ class KryoTranscoderTest {
 
     @Nested
     class Construction {
-
-        @Test
-        void missingKryoIsAnActionableConfigurationFailure() {
-            try (MockedStatic<ParserFactory> parsers = Mockito.mockStatic(ParserFactory.class)) {
-                parsers.when(ParserFactory::isKryoParserAvailable).thenReturn(false);
-                final IllegalStateException failure = assertThrows(IllegalStateException.class, KryoTranscoder::new);
-                assertTrue(failure.getMessage().contains("Kryo is required"));
-                assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(0));
-            }
-        }
 
         /** The caller-supplied-parser constructors: round-trip through a custom parser, and null rejection. */
         @Test
@@ -97,7 +89,15 @@ class KryoTranscoderTest {
             assertEquals(2048, tx.getMaxSize());
         }
 
-        // Validation And Failures
+        @Test
+        void missingKryoIsAnActionableConfigurationFailure() {
+            try (MockedStatic<ParserFactory> parsers = Mockito.mockStatic(ParserFactory.class)) {
+                parsers.when(ParserFactory::isKryoParserAvailable).thenReturn(false);
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, KryoTranscoder::new);
+                assertTrue(failure.getMessage().contains("Kryo is required"));
+                assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(0));
+            }
+        }
 
         @Test
         void missingKryoStillProducesActionableErrorsOnRepeatedConstruction() throws Exception {
@@ -116,6 +116,7 @@ class KryoTranscoderTest {
                 assertEquals(IllegalArgumentException.class, invalidSize.getCause().getClass());
             }
         }
+
     }
 
     @Nested
@@ -172,31 +173,23 @@ class KryoTranscoderTest {
         @Test
         void encodeRoundTripComplexObject() {
             final KryoTranscoder<Object> tx = new KryoTranscoder<>();
-            final java.util.HashMap<String, Integer> map = new java.util.HashMap<>();
+            final HashMap<String, Integer> map = new HashMap<>();
             map.put("a", 1);
             map.put("b", 2);
             final CachedData cd = tx.encode(map);
             assertNotNull(cd);
             final Object decoded = tx.decode(cd);
-            assertTrue(decoded instanceof java.util.Map);
+            assertTrue(decoded instanceof Map);
             @SuppressWarnings("unchecked")
-            final java.util.Map<String, Integer> roundTrip = (java.util.Map<String, Integer>) decoded;
+            final Map<String, Integer> roundTrip = (Map<String, Integer>) decoded;
             assertEquals(Integer.valueOf(1), roundTrip.get("a"));
             assertEquals(Integer.valueOf(2), roundTrip.get("b"));
         }
+
     }
 
     @Nested
     class Decoding {
-
-        @Test
-        void missingPayloadIsTreatedAsAnEmptyEntryWithoutDecoding() {
-            final KryoParser parser = Mockito.mock(KryoParser.class);
-            final CachedData data = Mockito.mock(CachedData.class);
-            Mockito.when(data.getData()).thenReturn(null);
-            assertNull(new KryoTranscoder<>(parser).decode(data));
-            Mockito.verifyNoInteractions(parser);
-        }
 
         @Test
         void asyncDecodeAlwaysFalse() {
@@ -220,11 +213,11 @@ class KryoTranscoderTest {
 
             for (int i = 0; i < 10_000; i++) {
                 final String counter = Integer.toString(i);
-                final CachedData cd = new CachedData(0, counter.getBytes(java.nio.charset.StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
+                final CachedData cd = new CachedData(0, counter.getBytes(StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
                 assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> tx.decode(cd), counter);
             }
 
-            final CachedData maxCounter = new CachedData(0, "18446744073709551615".getBytes(java.nio.charset.StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
+            final CachedData maxCounter = new CachedData(0, "18446744073709551615".getBytes(StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
             assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> tx.decode(maxCounter));
         }
 
@@ -239,7 +232,7 @@ class KryoTranscoderTest {
             final KryoTranscoder<Object> tx = new KryoTranscoder<>();
 
             for (final String counter : new String[] { "6", "9", "64", "99", "1", "42" }) {
-                final CachedData cd = new CachedData(0, counter.getBytes(java.nio.charset.StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
+                final CachedData cd = new CachedData(0, counter.getBytes(StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
                 assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> tx.decode(cd), counter);
             }
         }
@@ -249,10 +242,44 @@ class KryoTranscoderTest {
             final KryoTranscoder<String> tx = new KryoTranscoder<>();
             assertNull(tx.decode(null));
         }
+
+        @Test
+        void missingPayloadIsTreatedAsAnEmptyEntryWithoutDecoding() {
+            final KryoParser parser = Mockito.mock(KryoParser.class);
+            final CachedData data = Mockito.mock(CachedData.class);
+            Mockito.when(data.getData()).thenReturn(null);
+            assertNull(new KryoTranscoder<>(parser).decode(data));
+            Mockito.verifyNoInteractions(parser);
+        }
+
     }
 
     @Nested
     class SizeLimits {
+
+        @Test
+        void customSerializerBytesAndExactSizeBoundaryArePreserved() {
+            final KryoParser parser = ParserFactory.createKryoParser();
+            parser.register(ChunkedPayload.class, new Serializer<ChunkedPayload>() {
+                @Override
+                public void write(final Kryo kryo, final Output output, final ChunkedPayload object) {
+                    output.writeBytes(new byte[16_500]);
+                }
+
+                @Override
+                public ChunkedPayload read(final Kryo kryo, final Input input, final Class<? extends ChunkedPayload> type) {
+                    input.readBytes(16_500);
+                    return new ChunkedPayload();
+                }
+            }, 50_001);
+            final ChunkedPayload value = new ChunkedPayload();
+            final byte[] originalFormat = parser.encode(value);
+            final KryoTranscoder<ChunkedPayload> exactFit = new KryoTranscoder<>(originalFormat.length, parser);
+
+            assertArrayEquals(originalFormat, exactFit.encode(value).getData());
+            assertArrayEquals(originalFormat, parser.encode(exactFit.decode(exactFit.encode(value))));
+            assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(originalFormat.length - 1, parser).encode(value));
+        }
 
         /**
          * Boundary regression for the {@code encoded.length > maxSize} size check.
@@ -290,22 +317,6 @@ class KryoTranscoderTest {
             final String big = "this string is definitely larger than 8 bytes after kryo encoding";
             assertThrows(IllegalArgumentException.class, () -> tx.encode(big));
         }
-
-        // Membership And Views
-
-        @Test
-        void sizeRejectionReportsTheSizeReachedAndTheLimit() {
-            final KryoTranscoder<Object> transcoder = new KryoTranscoder<>(64, chunkedParser(new AtomicInteger()));
-
-            // The holder's field serializer wraps the rejection in a KryoException before encode unwraps it.
-            final IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> transcoder.encode(new PayloadHolder()));
-            final Matcher matcher = Pattern.compile("Encoded data size \\(at least (\\d+) bytes\\) exceeds maxSize \\(64 bytes\\)").matcher(e.getMessage());
-            assertTrue(matcher.matches(), e.getMessage());
-            assertTrue(Long.parseLong(matcher.group(1)) > 64, e.getMessage());
-            assertEquals(0, e.getSuppressed().length, "a wrapped rejection must not be suppressed into itself");
-        }
-
-        // Validation And Failures
 
         @Test
         void failureAfterASwallowedRejectionIsKeptAsSuppressed() {
@@ -345,6 +356,18 @@ class KryoTranscoderTest {
         }
 
         @Test
+        void oversizedPayloadStopsSerializationBeforeTheWholeValueIsWritten() {
+            final AtomicInteger chunksWritten = new AtomicInteger();
+            final KryoParser parser = chunkedParser(chunksWritten);
+            final KryoTranscoder<Object> transcoder = new KryoTranscoder<>(64, parser);
+
+            assertThrows(IllegalArgumentException.class, () -> transcoder.encode(new ChunkedPayload()));
+            assertTrue(chunksWritten.get() < ChunkedPayload.CHUNKS,
+                    "The size limit must abort serialization instead of first allocating the complete oversized payload");
+            assertEquals("usable after a rejected entry", transcoder.decode(transcoder.encode("usable after a rejected entry")));
+        }
+
+        @Test
         void serializerCannotTurnARejectedWriteIntoASuccessfulTruncatedEntry() {
             final KryoParser parser = ParserFactory.createKryoParser();
             parser.register(ChunkedPayload.class, new Serializer<ChunkedPayload>() {
@@ -368,60 +391,31 @@ class KryoTranscoderTest {
             assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(64, parser).encode(new ChunkedPayload()));
         }
 
-        // Other Behavior
-
         @Test
-        void customSerializerBytesAndExactSizeBoundaryArePreserved() {
-            final KryoParser parser = ParserFactory.createKryoParser();
-            parser.register(ChunkedPayload.class, new Serializer<ChunkedPayload>() {
-                @Override
-                public void write(final Kryo kryo, final Output output, final ChunkedPayload object) {
-                    output.writeBytes(new byte[16_500]);
-                }
+        void sizeRejectionReportsTheSizeReachedAndTheLimit() {
+            final KryoTranscoder<Object> transcoder = new KryoTranscoder<>(64, chunkedParser(new AtomicInteger()));
 
-                @Override
-                public ChunkedPayload read(final Kryo kryo, final Input input, final Class<? extends ChunkedPayload> type) {
-                    input.readBytes(16_500);
-                    return new ChunkedPayload();
-                }
-            }, 50_001);
-            final ChunkedPayload value = new ChunkedPayload();
-            final byte[] originalFormat = parser.encode(value);
-            final KryoTranscoder<ChunkedPayload> exactFit = new KryoTranscoder<>(originalFormat.length, parser);
-
-            assertArrayEquals(originalFormat, exactFit.encode(value).getData());
-            assertArrayEquals(originalFormat, parser.encode(exactFit.decode(exactFit.encode(value))));
-            assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(originalFormat.length - 1, parser).encode(value));
+            // The holder's field serializer wraps the rejection in a KryoException before encode unwraps it.
+            final IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> transcoder.encode(new PayloadHolder()));
+            final Matcher matcher = Pattern.compile("Encoded data size \\(at least (\\d+) bytes\\) exceeds maxSize \\(64 bytes\\)").matcher(e.getMessage());
+            assertTrue(matcher.matches(), e.getMessage());
+            assertTrue(Long.parseLong(matcher.group(1)) > 64, e.getMessage());
+            assertEquals(0, e.getSuppressed().length, "a wrapped rejection must not be suppressed into itself");
         }
 
-        @Test
-        void oversizedPayloadStopsSerializationBeforeTheWholeValueIsWritten() {
-            final AtomicInteger chunksWritten = new AtomicInteger();
-            final KryoParser parser = chunkedParser(chunksWritten);
-            final KryoTranscoder<Object> transcoder = new KryoTranscoder<>(64, parser);
-
-            assertThrows(IllegalArgumentException.class, () -> transcoder.encode(new ChunkedPayload()));
-            assertTrue(chunksWritten.get() < ChunkedPayload.CHUNKS,
-                    "The size limit must abort serialization instead of first allocating the complete oversized payload");
-            assertEquals("usable after a rejected entry", transcoder.decode(transcoder.encode("usable after a rejected entry")));
-        }
     }
 
     @Nested
     class FailureHandling {
 
+        /** Object-array cycles use Kryo's array serializer, which does not wrap the stack overflow. */
         @Test
-        void singleByteSerializerWritesRespectTheExactSizeLimit() throws Exception {
-            final KryoParser parser = Mockito.mock(KryoParser.class);
-            Mockito.doAnswer(invocation -> {
-                final OutputStream output = invocation.getArgument(2);
-                output.write(1);
-                output.write(2);
-                output.write(3);
-                return null;
-            }).when(parser).serialize(ArgumentMatchers.any(), ArgumentMatchers.any(KryoSerConfig.class), ArgumentMatchers.any(OutputStream.class));
-            assertArrayEquals(new byte[] { 1, 2, 3 }, new KryoTranscoder<>(3, parser).encode("value").getData());
-            assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(2, parser).encode("value"));
+        void encodeSelfReferentialObjectArrayPropagatesStackOverflowError() {
+            final KryoTranscoder<Object> tx = new KryoTranscoder<>(com.landawn.abacus.parser.ParserFactory.createKryoParser());
+            final Object[] cycle = new Object[1];
+            cycle[0] = cycle;
+
+            assertThrows(StackOverflowError.class, () -> tx.encode(cycle));
         }
 
         @Test
@@ -436,18 +430,6 @@ class KryoTranscoderTest {
             assertTrue(error.getMessage().contains("type null"));
         }
 
-        /** Object-array cycles use Kryo's array serializer, which does not wrap the stack overflow. */
-        @Test
-        void encodeSelfReferentialObjectArrayPropagatesStackOverflowError() {
-            final KryoTranscoder<Object> tx = new KryoTranscoder<>(com.landawn.abacus.parser.ParserFactory.createKryoParser());
-            final Object[] cycle = new Object[1];
-            cycle[0] = cycle;
-
-            assertThrows(StackOverflowError.class, () -> tx.encode(cycle));
-        }
-
-        // Validation And Failures
-
         @Test
         void serializerIoFailureIsStillReportedAsKryoException() {
             final KryoParser parser = ParserFactory.createKryoParser();
@@ -456,6 +438,20 @@ class KryoTranscoderTest {
             final KryoException e = assertThrows(KryoException.class, () -> new KryoTranscoder<>(parser).encode(new JavaSerializedHolder()));
             assertInstanceOf(NotSerializableException.class, e.getCause());
             assertTrue(e.getMessage().contains(JavaSerializedHolder.class.getName()), e.getMessage());
+        }
+
+        @Test
+        void singleByteSerializerWritesRespectTheExactSizeLimit() throws Exception {
+            final KryoParser parser = Mockito.mock(KryoParser.class);
+            Mockito.doAnswer(invocation -> {
+                final OutputStream output = invocation.getArgument(2);
+                output.write(1);
+                output.write(2);
+                output.write(3);
+                return null;
+            }).when(parser).serialize(ArgumentMatchers.any(), ArgumentMatchers.any(KryoSerConfig.class), ArgumentMatchers.any(OutputStream.class));
+            assertArrayEquals(new byte[] { 1, 2, 3 }, new KryoTranscoder<>(3, parser).encode("value").getData());
+            assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(2, parser).encode("value"));
         }
 
         @Test
@@ -476,6 +472,7 @@ class KryoTranscoderTest {
 
             assertSame(failure, assertThrows(IllegalStateException.class, () -> new KryoTranscoder<>(parser).encode(new ChunkedPayload())));
         }
+
     }
 
     private static KryoParser chunkedParser(final AtomicInteger chunksWritten) {

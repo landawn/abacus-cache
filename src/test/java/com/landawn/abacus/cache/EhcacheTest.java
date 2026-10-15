@@ -19,6 +19,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -34,6 +35,8 @@ import org.ehcache.config.builders.WriteBehindConfigurationBuilder;
 import org.ehcache.spi.loaderwriter.CacheLoaderWriter;
 import org.ehcache.spi.loaderwriter.CacheLoadingException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EhcacheTest {
 
@@ -44,7 +47,119 @@ class EhcacheTest {
         assertThrows(IllegalArgumentException.class, () -> new Ehcache<String, String>(null));
     }
 
-    // Reads
+    // Reads and loading
+
+    @Test
+    void getOrNull() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            wrapper.put("k", "v", 0, 0);
+            assertEquals("v", wrapper.getOrNull("k"));
+            assertNull(wrapper.getOrNull("missing"));
+        } finally {
+            cm.close();
+        }
+    }
+
+    /**
+     * Regression coverage for the asymmetric null-key handling defect.
+     *
+     * <p>Before the fix {@link Ehcache#put(Object, Object, long, long)} and
+     * {@code putIfAbsent} rejected null keys with {@code IllegalArgumentException}, but the
+     * read-side methods ({@link Ehcache#getOrNull(Object)}, {@link Ehcache#remove(Object)},
+     * {@link Ehcache#containsKey(Object)}) delegated straight to Ehcache 3, which raises an
+     * unrelated {@code NullPointerException}. The fix harmonises the contract so every key-taking
+     * operation rejects nulls with the same {@code IllegalArgumentException}.
+     */
+    @Test
+    void getOrNullNullKey() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            assertThrows(IllegalArgumentException.class, () -> wrapper.getOrNull(null));
+        } finally {
+            cm.close();
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void loaderFailuresPropagateThroughDirectAndOptionalReads() throws Exception {
+        final CacheLoaderWriter<String, String> loader = mock(CacheLoaderWriter.class);
+        final Exception failure = new Exception("loader unavailable");
+        when(loader.load("direct")).thenThrow(failure);
+        when(loader.load("optional")).thenThrow(failure);
+
+        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
+            final org.ehcache.Cache<String, String> underlying = manager.createCache("failedReadThrough",
+                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10)).withLoaderWriter(loader));
+            final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
+            try {
+                assertSame(failure, assertThrows(CacheLoadingException.class, () -> wrapper.getOrNull("direct")).getCause());
+                assertSame(failure, assertThrows(CacheLoadingException.class, () -> wrapper.get("optional")).getCause());
+                assertFalse(underlying.containsKey("direct"));
+                assertFalse(underlying.containsKey("optional"));
+            } finally {
+                wrapper.close();
+            }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void missingEntriesAreLoadedByDirectAndOptionalReads() throws Exception {
+        final CacheLoaderWriter<String, String> loader = mock(CacheLoaderWriter.class);
+        when(loader.load("direct")).thenReturn("loaded-direct");
+        when(loader.load("optional")).thenReturn("loaded-optional");
+
+        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
+            final org.ehcache.Cache<String, String> underlying = manager.createCache("readThrough",
+                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10)).withLoaderWriter(loader));
+            final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
+            try {
+                assertFalse(underlying.containsKey("direct"));
+                assertFalse(underlying.containsKey("optional"));
+
+                assertEquals("loaded-direct", wrapper.getOrNull("direct"));
+                assertEquals("loaded-optional", wrapper.get("optional").orElse(null));
+                assertTrue(underlying.containsKey("direct"));
+                assertTrue(underlying.containsKey("optional"));
+                verify(loader).load("direct");
+                verify(loader).load("optional");
+            } finally {
+                wrapper.close();
+            }
+        }
+    }
+
+    // Bulk reads and write-through
+
+    @Test
+    void bulkOpsBatchedWriteBehindWriterReceivesMultiKeyBatches() throws Exception {
+        // One stripe and a batch size equal to each call's key count: each batch is submitted as soon as it
+        // fills (the one-minute max delay never elapses), so every call's keys arrive in a single callback.
+        final RecordingWriter writer = new RecordingWriter(2);
+
+        assertEquals(Arrays.asList("deleteAll [x, y, z]", "writeAll [a, b, c]"), runBulkWritesThroughWriter(writer,
+                heapConfig().withService(WriteBehindConfigurationBuilder.newBatchedWriteBehindConfiguration(1, TimeUnit.MINUTES, 3).concurrencyLevel(1))));
+    }
+
+    @Test
+    void bulkOpsUnbatchedWriteBehindWriterReceivesIndividualWritesAndDeletes() throws Exception {
+        final RecordingWriter writer = new RecordingWriter(6);
+
+        assertEquals(Arrays.asList("delete x", "delete y", "delete z", "write a", "write b", "write c"),
+                runBulkWritesThroughWriter(writer, heapConfig().withService(WriteBehindConfigurationBuilder.newUnBatchedWriteBehindConfiguration())));
+    }
+
+    @Test
+    void bulkOpsWriteThroughWriterReceivesOneBulkCallPerKey() throws Exception {
+        final RecordingWriter writer = new RecordingWriter(6);
+
+        assertEquals(Arrays.asList("deleteAll [x]", "deleteAll [y]", "deleteAll [z]", "writeAll [a]", "writeAll [b]", "writeAll [c]"),
+                runBulkWritesThroughWriter(writer, heapConfig()));
+    }
 
     @Test
     void getAll() {
@@ -122,7 +237,7 @@ class EhcacheTest {
      * everywhere else. The fix validates elements up front.
      */
     @Test
-    void getAllNullElementThrowsIAE() {
+    void getAllNullElementThrowsIllegalArgumentException() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
         try {
             final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
@@ -186,68 +301,6 @@ class EhcacheTest {
         }
     }
 
-    @Test
-    void getOrNull() {
-        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
-        try {
-            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
-            wrapper.put("k", "v", 0, 0);
-            assertEquals("v", wrapper.getOrNull("k"));
-            assertNull(wrapper.getOrNull("missing"));
-        } finally {
-            cm.close();
-        }
-    }
-
-    /**
-     * Regression coverage for the asymmetric null-key handling defect.
-     *
-     * <p>Before the fix {@link Ehcache#put(Object, Object, long, long)} and
-     * {@code putIfAbsent} rejected null keys with {@code IllegalArgumentException}, but the
-     * read-side methods ({@link Ehcache#getOrNull(Object)}, {@link Ehcache#remove(Object)},
-     * {@link Ehcache#containsKey(Object)}) delegated straight to Ehcache 3, which raises an
-     * unrelated {@code NullPointerException}. The fix harmonises the contract so every key-taking
-     * operation rejects nulls with the same {@code IllegalArgumentException}.
-     */
-    @Test
-    void getOrNullNullKey() {
-        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
-        try {
-            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
-            assertThrows(IllegalArgumentException.class, () -> wrapper.getOrNull(null));
-        } finally {
-            cm.close();
-        }
-    }
-
-    // Bulk Reads
-
-    @Test
-    void bulkOpsBatchedWriteBehindWriterReceivesMultiKeyBatches() throws Exception {
-        // One stripe and a batch size equal to each call's key count: each batch is submitted as soon as it
-        // fills (the one-minute max delay never elapses), so every call's keys arrive in a single callback.
-        final RecordingWriter writer = new RecordingWriter(2);
-
-        assertEquals(Arrays.asList("deleteAll [x, y, z]", "writeAll [a, b, c]"), runBulkWritesThroughWriter(writer,
-                heapConfig().withService(WriteBehindConfigurationBuilder.newBatchedWriteBehindConfiguration(1, TimeUnit.MINUTES, 3).concurrencyLevel(1))));
-    }
-
-    @Test
-    void bulkOpsUnbatchedWriteBehindWriterReceivesIndividualWritesAndDeletes() throws Exception {
-        final RecordingWriter writer = new RecordingWriter(6);
-
-        assertEquals(Arrays.asList("delete x", "delete y", "delete z", "write a", "write b", "write c"),
-                runBulkWritesThroughWriter(writer, heapConfig().withService(WriteBehindConfigurationBuilder.newUnBatchedWriteBehindConfiguration())));
-    }
-
-    @Test
-    void bulkOpsWriteThroughWriterReceivesOneBulkCallPerKey() throws Exception {
-        final RecordingWriter writer = new RecordingWriter(6);
-
-        assertEquals(Arrays.asList("deleteAll [x]", "deleteAll [y]", "deleteAll [z]", "writeAll [a]", "writeAll [b]", "writeAll [c]"),
-                runBulkWritesThroughWriter(writer, heapConfig()));
-    }
-
     // Writes
 
     @Test
@@ -277,55 +330,21 @@ class EhcacheTest {
         }
     }
 
-    /**
-     * Regression test for the garbled putAll validation messages.
-     *
-     * <p>{@code N.checkElementNotNull} treats a message longer than 9 characters that contains a
-     * space as the complete error message. The former arguments {@code "entries' keys"} /
-     * {@code "entries' values"} therefore surfaced verbatim as the whole exception message, which
-     * neither says that a {@code null} was found nor which part of the map was at fault.
-     */
-    @Test
-    void putAllNullKeyOrValueMessageIsDescriptive() {
-        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+    @ParameterizedTest(name = "null key: {0}")
+    @ValueSource(booleans = { false, true })
+    void putAllRejectsInvalidEntriesBeforeWritingAnything(final boolean nullKey) {
+        final CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true);
         try {
-            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(manager));
+            final Map<String, String> entries = new LinkedHashMap<>();
+            entries.put("valid", "value");
+            entries.put(nullKey ? null : "invalid", nullKey ? "value" : null);
 
-            final Map<String, String> nullKeyEntries = new HashMap<>();
-            nullKeyEntries.put(null, "2");
-            final IllegalArgumentException keyError = assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(nullKeyEntries));
-            assertEquals("null key is found in entries", keyError.getMessage());
-
-            final Map<String, String> nullValueEntries = new HashMap<>();
-            nullValueEntries.put("bad", null);
-            final IllegalArgumentException valueError = assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(nullValueEntries));
-            assertEquals("null value is found in entries", valueError.getMessage());
+            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(entries));
+            assertEquals(nullKey ? "null key is found in entries" : "null value is found in entries", failure.getMessage());
+            assertNull(wrapper.getOrNull("valid"), "validation must finish before the first write");
         } finally {
-            cm.close();
-        }
-    }
-
-    @Test
-    void putAllNullKeyOrValueThrowsIAE() {
-        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
-        try {
-            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
-
-            final Map<String, String> nullKeyEntries = new HashMap<>();
-            nullKeyEntries.put("ok", "1");
-            nullKeyEntries.put(null, "2");
-
-            assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(nullKeyEntries));
-            assertNull(wrapper.getOrNull("ok"));
-
-            final Map<String, String> nullValueEntries = new HashMap<>();
-            nullValueEntries.put("ok", "1");
-            nullValueEntries.put("bad", null);
-
-            assertThrows(IllegalArgumentException.class, () -> wrapper.putAll(nullValueEntries));
-            assertNull(wrapper.getOrNull("ok"));
-        } finally {
-            cm.close();
+            manager.close();
         }
     }
 
@@ -440,7 +459,7 @@ class EhcacheTest {
     }
 
     @Test
-    void removeAllNullElementThrowsIAE() {
+    void removeAllNullElementThrowsIllegalArgumentException() {
         final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
         try {
             final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
@@ -491,7 +510,7 @@ class EhcacheTest {
         }
     }
 
-    // Membership And Views
+    // Membership and views
 
     @Test
     void containsKeyNullKey() {
@@ -542,40 +561,6 @@ class EhcacheTest {
     // Lifecycle
 
     /**
-     * Regression test for the Ehcache.close() bug.
-     *
-     * <p>The Javadoc of {@link Ehcache#close()} explicitly states: "This method only marks the
-     * wrapper as closed; it does not close or dispose the underlying Ehcache instance. The
-     * underlying cache manager is responsible for managing the lifecycle of Ehcache instances."
-     *
-     * <p>Before the fix, close() called {@code cacheImpl.clear()}, destroying all entries of the
-     * underlying (externally-owned, possibly shared) Ehcache instance. This test verifies the
-     * underlying cache data survives closing the wrapper.
-     */
-    @Test
-    void closeDoesNotClearUnderlyingCache() {
-        final CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder().build(true);
-        try {
-            final org.ehcache.Cache<String, String> underlying = newUnderlyingCache(cacheManager);
-
-            final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
-            wrapper.put("k1", "v1", 0, 0);
-            wrapper.put("k2", "v2", 0, 0);
-
-            assertEquals("v1", underlying.get("k1"));
-
-            wrapper.close();
-            assertTrue(wrapper.isClosed());
-
-            // The underlying cache (owned by the CacheManager, not the wrapper) must retain its data.
-            assertEquals("v1", underlying.get("k1"));
-            assertEquals("v2", underlying.get("k2"));
-        } finally {
-            cacheManager.close();
-        }
-    }
-
-    /**
      * Sanity check: a second close() is idempotent and still does not clear the underlying cache.
      */
     @Test
@@ -585,69 +570,17 @@ class EhcacheTest {
             final org.ehcache.Cache<String, String> underlying = newUnderlyingCache(cacheManager);
 
             final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
-            wrapper.put("a", "1", 0, 0);
+            assertTrue(wrapper.put("a", "1", 0, 0));
+            assertTrue(wrapper.put("b", "2", 0, 0));
 
             wrapper.close();
             wrapper.close(); // idempotent, no exception
 
             assertTrue(wrapper.isClosed());
             assertEquals("1", underlying.get("a"));
+            assertEquals("2", underlying.get("b"));
         } finally {
             cacheManager.close();
-        }
-    }
-
-    // Validation And Failures
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void loaderFailuresPropagateThroughDirectAndOptionalReads() throws Exception {
-        final CacheLoaderWriter<String, String> loader = mock(CacheLoaderWriter.class);
-        final Exception failure = new Exception("loader unavailable");
-        when(loader.load("direct")).thenThrow(failure);
-        when(loader.load("optional")).thenThrow(failure);
-
-        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
-            final org.ehcache.Cache<String, String> underlying = manager.createCache("failedReadThrough",
-                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10)).withLoaderWriter(loader));
-            final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
-            try {
-                assertSame(failure, assertThrows(CacheLoadingException.class, () -> wrapper.getOrNull("direct")).getCause());
-                assertSame(failure, assertThrows(CacheLoadingException.class, () -> wrapper.get("optional")).getCause());
-                assertFalse(underlying.containsKey("direct"));
-                assertFalse(underlying.containsKey("optional"));
-            } finally {
-                wrapper.close();
-            }
-        }
-    }
-
-    // Other Behavior
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void missingEntriesAreLoadedByDirectAndOptionalReads() throws Exception {
-        final CacheLoaderWriter<String, String> loader = mock(CacheLoaderWriter.class);
-        when(loader.load("direct")).thenReturn("loaded-direct");
-        when(loader.load("optional")).thenReturn("loaded-optional");
-
-        try (CacheManager manager = CacheManagerBuilder.newCacheManagerBuilder().build(true)) {
-            final org.ehcache.Cache<String, String> underlying = manager.createCache("readThrough",
-                    CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10)).withLoaderWriter(loader));
-            final Ehcache<String, String> wrapper = new Ehcache<>(underlying);
-            try {
-                assertFalse(underlying.containsKey("direct"));
-                assertFalse(underlying.containsKey("optional"));
-
-                assertEquals("loaded-direct", wrapper.getOrNull("direct"));
-                assertEquals("loaded-optional", wrapper.get("optional").orElse(null));
-                assertTrue(underlying.containsKey("direct"));
-                assertTrue(underlying.containsKey("optional"));
-                verify(loader).load("direct");
-                verify(loader).load("optional");
-            } finally {
-                wrapper.close();
-            }
         }
     }
 

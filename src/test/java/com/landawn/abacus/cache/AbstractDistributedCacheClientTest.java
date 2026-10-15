@@ -21,6 +21,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.Mockito;
 
 class AbstractDistributedCacheClientTest {
 
@@ -30,24 +33,19 @@ class AbstractDistributedCacheClientTest {
 
     // Construction
 
-    @Test
-    void constructorBlankServerUrl() {
-        // A whitespace-only URL is semantically empty and must be rejected just like "" or null.
-        assertThrows(IllegalArgumentException.class, () -> new TestClient<String>("   "));
-        assertThrows(IllegalArgumentException.class, () -> new TestClient<String>("\t\n"));
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = { " ", "\t", "\n" })
+    void constructorRejectsMissingServerUrls(final String serverUrl) {
+        assertThrows(IllegalArgumentException.class, () -> new TestClient<String>(serverUrl));
     }
 
     @Test
-    void constructorEmptyServerUrl() {
-        assertThrows(IllegalArgumentException.class, () -> new TestClient<String>(""));
+    void serverUrl() {
+        assertEquals(SERVER_URL, client.serverUrl());
     }
 
-    @Test
-    void constructorNullServerUrl() {
-        assertThrows(IllegalArgumentException.class, () -> new TestClient<String>(null));
-    }
-
-    // Bulk Reads
+    // Bulk reads
 
     @Test
     void getBulkCollectionUnsupported() {
@@ -68,31 +66,6 @@ class AbstractDistributedCacheClientTest {
     }
 
     // Compatibility
-
-    @Test
-    void compatibilityGuardsTrackOverlappingPairsIndependently() {
-        try {
-            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
-            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
-            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
-            assertFalse(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
-            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
-            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
-            assertFalse(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
-        } finally {
-            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
-            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
-            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
-        }
-        assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
-        DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
-    }
-
-    @Test
-    void compatibilityOverrideLookupRejectsUnknownAndMissingMethods() {
-        assertFalse(DistributedCacheClientCompatibilitySupport.isOverridden(DistributedCacheClient.class, "unknown"));
-        assertFalse(DistributedCacheClientCompatibilitySupport.isOverridden(Object.class, "put"));
-    }
 
     /**
      * The delegation-cycle guard is keyed on (thread, client, name-pair) only — it cannot tell a
@@ -212,6 +185,31 @@ class AbstractDistributedCacheClientTest {
     }
 
     @Test
+    void compatibilityGuardsTrackOverlappingPairsIndependently() {
+        try {
+            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
+            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
+            assertFalse(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
+            assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
+            assertFalse(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR));
+        } finally {
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
+            DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.REMOVE_PAIR);
+        }
+        assertTrue(DistributedCacheClientCompatibilitySupport.tryEnter(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR));
+        DistributedCacheClientCompatibilitySupport.exit(client, DistributedCacheClientCompatibilitySupport.WRITE_PAIR);
+    }
+
+    @Test
+    void compatibilityOverrideLookupRejectsUnknownAndMissingMethods() {
+        assertFalse(DistributedCacheClientCompatibilitySupport.isOverridden(DistributedCacheClient.class, "unknown"));
+        assertFalse(DistributedCacheClientCompatibilitySupport.isOverridden(Object.class, "put"));
+    }
+
+    @Test
     void currentWriteNamesDelegateToLegacyImplementation() {
         final LegacyNamingClient<String> legacy = new LegacyNamingClient<>();
         assertTrue(legacy.put("k", "v", 0));
@@ -243,12 +241,7 @@ class AbstractDistributedCacheClientTest {
         assertEquals(removeFailure.getMessage(), deleteFailure.getMessage());
     }
 
-    // Other Behavior
-
-    @Test
-    void serverUrl() {
-        assertEquals(SERVER_URL, client.serverUrl());
-    }
+    // Expiration
 
     @Test
     void toSecondsOverflow() {
@@ -269,7 +262,7 @@ class AbstractDistributedCacheClientTest {
         TestClient(final String url) {
             // super(url) validates the URL and throws on null/empty/blank BEFORE any connection is opened.
             super(url);
-            delegate = org.mockito.Mockito.mock(DistributedCacheClient.class);
+            delegate = Mockito.mock(DistributedCacheClient.class);
         }
 
         @Override

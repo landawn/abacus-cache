@@ -17,13 +17,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,13 +29,100 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import com.landawn.abacus.LogCapture;
 
 /** Service-free regression coverage for {@link DistributedCache}'s circuit-breaker state. */
 
 class DistributedCacheCircuitBreakerTest {
 
-    // Construction
+    // State and transitions
+
+    /**
+     * Regression guard for the torn-state race: the failure count and its timestamp must be
+     * published through one atomic holder, not through independently writable atomics.
+     */
+    @Test
+    void circuitBreakerCountAndTimestampUseOneAtomicState() throws Exception {
+        final DistributedCache<String, String> cache = new DistributedCache<>(mock(DistributedCacheClient.class));
+        try {
+            final Field stateField = DistributedCache.class.getDeclaredField("circuitBreaker");
+            stateField.setAccessible(true);
+
+            assertTrue(AtomicReference.class.isAssignableFrom(stateField.getType()));
+
+            final Object state = ((AtomicReference<?>) stateField.get(cache)).get();
+            final Field failedCountField = state.getClass().getDeclaredField("failedCount");
+            final Field lastFailedTimeField = state.getClass().getDeclaredField("lastFailedTime");
+            final Field hasFailureField = state.getClass().getDeclaredField("hasFailure");
+            failedCountField.setAccessible(true);
+            lastFailedTimeField.setAccessible(true);
+            hasFailureField.setAccessible(true);
+            assertEquals(0, failedCountField.getInt(state));
+            assertEquals(0L, lastFailedTimeField.getLong(state));
+            assertFalse(hasFailureField.getBoolean(state));
+            assertThrows(NoSuchFieldException.class, () -> DistributedCache.class.getDeclaredField("failedCounter"));
+            assertThrows(NoSuchFieldException.class, () -> DistributedCache.class.getDeclaredField("lastFailedTime"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void failurePublishesMarkerAndSuccessResetsWholeState() throws Exception {
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get(anyString())).thenThrow(new IllegalStateException("backend unavailable"))
+                .thenThrow(new IllegalStateException("backend unavailable"))
+                .thenReturn("value");
+
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0);
+
+        try {
+            assertNull(cache.getOrNull("key"));
+            assertNull(cache.getOrNull("key"));
+
+            final Object failedState = breakerState(cache);
+            assertEquals(2, intField(failedState, "failedCount"));
+            assertTrue(booleanField(failedState, "hasFailure"));
+
+            // A zero retry delay lets the next read probe the backend immediately.
+            assertEquals("value", cache.getOrNull("key"));
+
+            final Object recoveredState = breakerState(cache);
+            assertEquals(0, intField(recoveredState, "failedCount"));
+            assertEquals(0L, longField(recoveredState, "lastFailedTime"));
+            assertFalse(booleanField(recoveredState, "hasFailure"));
+            verify(client, times(3)).get(anyString());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 0, 1 })
+    @ResourceLock(LogCapture.RESOURCE)
+    void immediateRetryLogsOnlyTheFirstCircuitOpening(final int threshold) {
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get("a2V5")).thenThrow(new IllegalStateException("unavailable"));
+        try (LogCapture logs = new LogCapture(DistributedCache.class, Level.WARN)) {
+            final DistributedCache<String, String> cache = new DistributedCache<>(client, "", threshold, 0);
+            try {
+                assertNull(cache.getOrNull("key"));
+                assertNull(cache.getOrNull("key"));
+                verify(client, times(2)).get("a2V5");
+                assertEquals(1, logs.messages().size());
+                assertTrue(logs.messages().get(0).contains("after 1 consecutive read failure;"));
+            } finally {
+                cache.close();
+            }
+        }
+    }
 
     /** With a threshold of 1, the newer failure that survives a success still opens the circuit. */
     @Test
@@ -61,40 +144,24 @@ class DistributedCacheCircuitBreakerTest {
         }
     }
 
-    // Validation And Failures
-
     @Test
-    @SuppressWarnings("unchecked")
-    void successfulCasRetryPreservesAConcurrentRecovery() throws Exception {
+    void zeroThresholdOpensAfterFirstRecordedFailure() {
+        @SuppressWarnings("unchecked")
         final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
-        when(client.get(anyString())).thenReturn("value");
-        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0);
-        final Object recovered = breakerState(cache);
-        setBreakerState(cache, 1, System.nanoTime());
-        final AtomicReference<Object> state = new AtomicReference<>(breakerState(cache));
-        final AtomicReference<Object> controlled = mock(AtomicReference.class);
-        when(controlled.get()).thenAnswer(invocation -> state.get());
-        when(controlled.getAndUpdate(any())).thenAnswer(invocation -> {
-            final UnaryOperator<Object> update = invocation.getArgument(0);
-            update.apply(state.get());
-            // Another successful reader wins the CAS; this updater must retry against its healthy state.
-            state.set(recovered);
-            return state.getAndUpdate(update);
-        });
-        final Field field = DistributedCache.class.getDeclaredField("circuitBreaker");
-        field.setAccessible(true);
-        field.set(cache, controlled);
+        when(client.get(anyString())).thenThrow(new IllegalStateException("backend unavailable"));
+
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 0, 60_000L);
 
         try {
-            assertEquals("value", cache.getOrNull("key"));
-            assertSame(recovered, state.get());
-            assertFalse(booleanField(state.get(), "hasFailure"));
-            assertEquals("value", cache.getOrNull("next"));
-            verify(controlled, times(1)).getAndUpdate(any());
+            assertNull(cache.getOrNull("key")); // records the first failure
+            assertNull(cache.getOrNull("key")); // short-circuited; no second backend call
+            verify(client, times(1)).get(anyString());
         } finally {
             cache.close();
         }
     }
+
+    // Concurrent recovery
 
     @Test
     @SuppressWarnings("unchecked")
@@ -143,134 +210,6 @@ class DistributedCacheCircuitBreakerTest {
         } finally {
             publishOlderFailure.countDown();
             executor.shutdownNow();
-            cache.close();
-        }
-    }
-
-    @Test
-    void failurePublishesMarkerAndSuccessResetsWholeState() throws Exception {
-        @SuppressWarnings("unchecked")
-        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
-        when(client.get(anyString())).thenThrow(new IllegalStateException("backend unavailable"))
-                .thenThrow(new IllegalStateException("backend unavailable"))
-                .thenReturn("value");
-
-        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0);
-
-        try {
-            assertNull(cache.getOrNull("key"));
-            assertNull(cache.getOrNull("key"));
-
-            final Object failedState = breakerState(cache);
-            assertEquals(2, intField(failedState, "failedCount"));
-            assertTrue(booleanField(failedState, "hasFailure"));
-
-            // A zero retry delay lets the next read probe the backend immediately.
-            assertEquals("value", cache.getOrNull("key"));
-
-            final Object recoveredState = breakerState(cache);
-            assertEquals(0, intField(recoveredState, "failedCount"));
-            assertEquals(0L, longField(recoveredState, "lastFailedTime"));
-            assertFalse(booleanField(recoveredState, "hasFailure"));
-            verify(client, times(3)).get(anyString());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void malformedUnicodeKeysAreRejectedWhileCircuitIsOpen() throws Exception {
-        @SuppressWarnings("unchecked")
-        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
-        when(client.get(anyString())).thenThrow(new IllegalStateException("backend unavailable"));
-        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 1, 60_000L);
-
-        try {
-            assertNull(cache.getOrNull("valid"));
-            final Object failedState = breakerState(cache);
-
-            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull("\uD800"));
-            assertThrows(IllegalArgumentException.class, () -> cache.containsKey("\uDC00"));
-            assertSame(failedState, breakerState(cache));
-            verify(client, times(1)).get(anyString());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void malformedUnicodeKeysCannotAddressAnotherEntryOrChangeBreakerState() throws Exception {
-        @SuppressWarnings("unchecked")
-        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
-        final DistributedCache<Object, String> cache = new DistributedCache<>(client, "prefix:", 1, 60_000L);
-
-        try {
-            final Object initialState = breakerState(cache);
-            for (final String malformed : List.of("\uD800", "\uDC00", "key:\uD800suffix", "key:\uDC00suffix")) {
-                for (final Object key : List.of(malformed, new StringBuilder(malformed))) {
-                    assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(key));
-                    assertThrows(IllegalArgumentException.class, () -> cache.put(key, "value", 0, 0));
-                    assertThrows(IllegalArgumentException.class, () -> cache.remove(key));
-                    assertThrows(IllegalArgumentException.class, () -> cache.containsKey(key));
-                }
-            }
-
-            assertSame(initialState, breakerState(cache));
-            verifyNoInteractions(client);
-
-            // Valid supplementary characters keep the established UTF-8/Base64 wire encoding.
-            final String valid = "user:\uD83D\uDE00:\uD800\uDC00";
-            final String encoded = "prefix:" + Base64.getEncoder().encodeToString(valid.getBytes(StandardCharsets.UTF_8));
-            assertEquals(encoded, cache.generateKey(valid));
-            assertEquals(encoded, cache.generateKey(new StringBuilder(valid)));
-            assertEquals("prefix:Pz8=", cache.generateKey("??"));
-            assertEquals("prefix:-", cache.generateKey(""));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void nullArgumentsAreRejectedWithIaeWithoutTouchingClientOrBreaker() throws Exception {
-        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<String, String>(null));
-        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<String, String>(null, "p:"));
-        assertThrows(IllegalArgumentException.class, () -> new DistributedCache<String, String>(null, "p:", 1, 1_000L));
-
-        @SuppressWarnings("unchecked")
-        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
-        final DistributedCache<String, String> cache = new DistributedCache<>(client, "p:", 1, 60_000L);
-
-        try {
-            final Object initialState = breakerState(cache);
-
-            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
-            assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
-            assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 1_000L, 0L));
-            assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
-            assertThrows(IllegalArgumentException.class, () -> cache.generateKey(null));
-
-            assertSame(initialState, breakerState(cache));
-            verifyNoInteractions(client);
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void nullKeyPrefixMeansNoPrefixAndNullValueIsForwardedToClient() {
-        @SuppressWarnings("unchecked")
-        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
-        final DistributedCache<String, String> cache = new DistributedCache<>(client, null);
-
-        try {
-            final String encoded = Base64.getEncoder().encodeToString("k".getBytes(StandardCharsets.UTF_8));
-            assertEquals(encoded, cache.generateKey("k"));
-
-            // The null policy for values belongs to the pluggable client; the wrapper forwards null as-is.
-            when(client.put(encoded, null, 1_000L)).thenReturn(true);
-            assertTrue(cache.put("k", null, 1_000L, 0L));
-            verify(client).put(encoded, null, 1_000L);
-        } finally {
             cache.close();
         }
     }
@@ -345,6 +284,39 @@ class DistributedCacheCircuitBreakerTest {
         }
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void successfulCasRetryPreservesAConcurrentRecovery() throws Exception {
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get(anyString())).thenReturn("value");
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0);
+        final Object recovered = breakerState(cache);
+        setBreakerState(cache, 1, System.nanoTime());
+        final AtomicReference<Object> state = new AtomicReference<>(breakerState(cache));
+        final AtomicReference<Object> controlled = mock(AtomicReference.class);
+        when(controlled.get()).thenAnswer(invocation -> state.get());
+        when(controlled.getAndUpdate(any())).thenAnswer(invocation -> {
+            final UnaryOperator<Object> update = invocation.getArgument(0);
+            update.apply(state.get());
+            // Another successful reader wins the CAS; this updater must retry against its healthy state.
+            state.set(recovered);
+            return state.getAndUpdate(update);
+        });
+        final Field field = DistributedCache.class.getDeclaredField("circuitBreaker");
+        field.setAccessible(true);
+        field.set(cache, controlled);
+
+        try {
+            assertEquals("value", cache.getOrNull("key"));
+            assertSame(recovered, state.get());
+            assertFalse(booleanField(state.get(), "hasFailure"));
+            assertEquals("value", cache.getOrNull("next"));
+            verify(controlled, times(1)).getAndUpdate(any());
+        } finally {
+            cache.close();
+        }
+    }
+
     /**
      * A failure recorded after the successful response survives the success, but only as a run of one:
      * the failures counted before the success belong to a run that the success interrupted, and keeping
@@ -380,20 +352,42 @@ class DistributedCacheCircuitBreakerTest {
         }
     }
 
+    // Validation
+
     @Test
-    void zeroThresholdOpensAfterFirstRecordedFailure() {
+    void backendValidationFailureDoesNotChangeBreakerState() throws Exception {
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        final IllegalArgumentException failure = new IllegalArgumentException("encoded key too long");
+        when(client.get("a2V5")).thenThrow(failure);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 2, 0);
+        try {
+            setBreakerState(cache, 1, System.nanoTime());
+            final Object before = breakerState(cache);
+            assertSame(failure, assertThrows(IllegalArgumentException.class, () -> cache.getOrNull("key")));
+            assertSame(before, breakerState(cache));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void malformedUnicodeKeysAreRejectedWhileCircuitIsOpen() throws Exception {
         @SuppressWarnings("unchecked")
         final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
         when(client.get(anyString())).thenThrow(new IllegalStateException("backend unavailable"));
-
-        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 0, 60_000L);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 1, 60_000L);
 
         try {
-            assertNull(cache.getOrNull("key")); // records the first failure
-            assertNull(cache.getOrNull("key")); // short-circuited; no second backend call
+            assertNull(cache.getOrNull("valid"));
+            final Object failedState = breakerState(cache);
+
+            assertThrows(IllegalArgumentException.class, () -> cache.getOrNull("\uD800"));
+            assertThrows(IllegalArgumentException.class, () -> cache.containsKey("\uDC00"));
+            assertSame(failedState, breakerState(cache));
             verify(client, times(1)).get(anyString());
         } finally {
             cache.close();
         }
     }
+
 }

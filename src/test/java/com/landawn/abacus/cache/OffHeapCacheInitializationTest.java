@@ -78,40 +78,6 @@ class OffHeapCacheInitializationTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void rejectedVacationCanBeRetriedAfterTheExecutorRecovers() throws Exception {
-        final List<Throwables.Runnable<? extends Exception>> tasks = new ArrayList<>();
-        try (MockedConstruction<AsyncExecutor> executors = mockConstruction(AsyncExecutor.class);
-             IsolatedOffHeapClasses classes = new IsolatedOffHeapClasses(true)) {
-            final Cache<String, Object> cache = classes.newCache();
-            try {
-                final AsyncExecutor executor = executors.constructed().get(0);
-                final RejectedExecutionException rejected = new RejectedExecutionException("executor overloaded");
-                doThrow(rejected).when(executor).execute(any(Throwables.Runnable.class));
-                assertTrue(cache.put("occupant", new byte[1024 * 1024]));
-
-                assertSame(rejected, assertThrows(RejectedExecutionException.class, () -> cache.put("crowded-out", new byte[8192])));
-                assertFalse(classes.vacating(cache).get());
-                assertEquals(1, cache.size());
-
-                doAnswer(invocation -> {
-                    tasks.add(invocation.getArgument(0));
-                    return null;
-                }).when(executor).execute(any(Throwables.Runnable.class));
-                assertFalse(cache.put("retry", new byte[8192]));
-                assertEquals(1, tasks.size());
-                tasks.get(0).run();
-                assertFalse(classes.vacating(cache).get());
-                assertEquals(0, cache.size());
-                assertTrue(cache.put("after-recovery", new byte[] { 1 }));
-                assertArrayEquals(new byte[] { 1 }, (byte[]) cache.getOrNull("after-recovery"));
-            } finally {
-                cache.close();
-            }
-        }
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
     void pendingVacationIsSingleFlightAndSafeAfterClose() throws Exception {
         final List<Throwables.Runnable<? extends Exception>> tasks = new ArrayList<>();
         try (MockedConstruction<AsyncExecutor> executors = mockConstruction(AsyncExecutor.class, (executor, context) -> doAnswer(invocation -> {
@@ -155,6 +121,40 @@ class OffHeapCacheInitializationTest {
                 assertTrue(tasks.isEmpty());
                 assertFalse(classes.vacating(cache).get());
                 assertEquals(1, cache.size());
+            } finally {
+                cache.close();
+            }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void rejectedVacationCanBeRetriedAfterTheExecutorRecovers() throws Exception {
+        final List<Throwables.Runnable<? extends Exception>> tasks = new ArrayList<>();
+        try (MockedConstruction<AsyncExecutor> executors = mockConstruction(AsyncExecutor.class);
+             IsolatedOffHeapClasses classes = new IsolatedOffHeapClasses(true)) {
+            final Cache<String, Object> cache = classes.newCache();
+            try {
+                final AsyncExecutor executor = executors.constructed().get(0);
+                final RejectedExecutionException rejected = new RejectedExecutionException("executor overloaded");
+                doThrow(rejected).when(executor).execute(any(Throwables.Runnable.class));
+                assertTrue(cache.put("occupant", new byte[1024 * 1024]));
+
+                assertSame(rejected, assertThrows(RejectedExecutionException.class, () -> cache.put("crowded-out", new byte[8192])));
+                assertFalse(classes.vacating(cache).get());
+                assertEquals(1, cache.size());
+
+                doAnswer(invocation -> {
+                    tasks.add(invocation.getArgument(0));
+                    return null;
+                }).when(executor).execute(any(Throwables.Runnable.class));
+                assertFalse(cache.put("retry", new byte[8192]));
+                assertEquals(1, tasks.size());
+                tasks.get(0).run();
+                assertFalse(classes.vacating(cache).get());
+                assertEquals(0, cache.size());
+                assertTrue(cache.put("after-recovery", new byte[] { 1 }));
+                assertArrayEquals(new byte[] { 1 }, (byte[]) cache.getOrNull("after-recovery"));
             } finally {
                 cache.close();
             }

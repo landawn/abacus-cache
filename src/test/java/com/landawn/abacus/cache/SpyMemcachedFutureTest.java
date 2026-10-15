@@ -42,27 +42,49 @@ import net.spy.memcached.NodeLocator;
 
 class SpyMemcachedFutureTest {
 
-    // Bulk Reads
+    // Future contracts
 
-    @ParameterizedTest
-    @ValueSource(booleans = { false, true })
-    @ResourceLock(LogCapture.RESOURCE)
-    void timeoutAndInterruptionProduceDiagnosticsAndCancelTheRequest(final boolean interrupted) throws Exception {
-        final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));
-        final Future<String> operation = mock(Future.class);
-        final Exception failure = interrupted ? new InterruptedException("cancelled by caller") : new TimeoutException("server silent");
-        when(operation.get(25, TimeUnit.MILLISECONDS)).thenThrow(failure);
-        try (LogCapture logs = new LogCapture(SpyMemcached.class, Level.WARN)) {
-            final RuntimeException thrown = assertThrows(RuntimeException.class, () -> cache.resultOf(operation));
-            assertSame(failure, thrown.getCause());
-            assertEquals(interrupted, Thread.currentThread().isInterrupted());
-            verify(operation).cancel(true);
-            assertTrue(logs.messages().stream().anyMatch(message -> message.contains(interrupted ? "interrupted" : "Timed out")));
-        } finally {
-            Thread.interrupted();
-            cache.disconnect();
-        }
+    @Test
+    @SuppressWarnings("unchecked")
+    void noArgumentGetIsBoundedWhileExplicitTimeoutPassesThrough() throws Exception {
+        final Class<?> adapterType = Class.forName(SpyMemcached.class.getName() + "$DefaultTimeoutFuture");
+        final Constructor<?> constructor = adapterType.getDeclaredConstructor(Future.class, long.class);
+        constructor.setAccessible(true);
+
+        final Future<String> timeoutDelegate = mock(Future.class);
+        when(timeoutDelegate.get(25L, TimeUnit.MILLISECONDS)).thenThrow(new TimeoutException("test timeout"));
+        final Future<String> bounded = (Future<String>) constructor.newInstance(timeoutDelegate, 25L);
+
+        final ExecutionException error = assertThrows(ExecutionException.class, bounded::get);
+        assertTrue(error.getCause() instanceof TimeoutException);
+        verify(timeoutDelegate).get(25L, TimeUnit.MILLISECONDS);
+        verify(timeoutDelegate).cancel(true);
+
+        final Future<String> timedDelegate = mock(Future.class);
+        when(timedDelegate.get(7L, TimeUnit.SECONDS)).thenReturn("value");
+        final Future<String> explicitlyTimed = (Future<String>) constructor.newInstance(timedDelegate, 25L);
+        assertEquals("value", explicitlyTimed.get(7L, TimeUnit.SECONDS));
+        verify(timedDelegate).get(7L, TimeUnit.SECONDS);
     }
+
+    @Test
+    void resultOfRejectsNullFutureWithIllegalArgumentException() throws Exception {
+        final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));
+        assertThrows(IllegalArgumentException.class, () -> cache.resultOf(null));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void timedFutureGetPreservesNullTimeUnitContract() throws Exception {
+        final Class<?> adapterType = Class.forName(SpyMemcached.class.getName() + "$DefaultTimeoutFuture");
+        final Constructor<?> constructor = adapterType.getDeclaredConstructor(Future.class, long.class);
+        constructor.setAccessible(true);
+        final Future<String> future = (Future<String>) constructor.newInstance(new CompletableFuture<>(), 25L);
+
+        assertThrows(NullPointerException.class, () -> future.get(1, null));
+    }
+
+    // Failures and cancellation
 
     @Test
     @SuppressWarnings("unchecked")
@@ -83,8 +105,6 @@ class SpyMemcachedFutureTest {
         assertEquals(1, timeout.getSuppressed().length);
         assertSame(cancellationFailure, timeout.getSuppressed()[0]);
     }
-
-    // Validation And Failures
 
     @Test
     @SuppressWarnings("unchecked")
@@ -118,12 +138,6 @@ class SpyMemcachedFutureTest {
         final AssertionError failure = new AssertionError("asynchronous worker error");
         when(delegate.get(25L, TimeUnit.MILLISECONDS)).thenThrow(new ExecutionException(failure));
         assertSame(failure, assertThrows(RuntimeException.class, () -> cache.resultOf(delegate)).getCause());
-    }
-
-    @Test
-    void resultOfRejectsNullFutureWithIae() throws Exception {
-        final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));
-        assertThrows(IllegalArgumentException.class, () -> cache.resultOf(null));
     }
 
     @Test
@@ -163,18 +177,27 @@ class SpyMemcachedFutureTest {
         assertSame(cancellationFailure, timeout.getSuppressed()[0]);
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    void timedFutureGetPreservesNullTimeUnitContract() throws Exception {
-        final Class<?> adapterType = Class.forName(SpyMemcached.class.getName() + "$DefaultTimeoutFuture");
-        final Constructor<?> constructor = adapterType.getDeclaredConstructor(Future.class, long.class);
-        constructor.setAccessible(true);
-        final Future<String> future = (Future<String>) constructor.newInstance(new CompletableFuture<>(), 25L);
-
-        assertThrows(NullPointerException.class, () -> future.get(1, null));
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    @ResourceLock(LogCapture.RESOURCE)
+    void timeoutAndInterruptionProduceDiagnosticsAndCancelTheRequest(final boolean interrupted) throws Exception {
+        final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));
+        final Future<String> operation = mock(Future.class);
+        final Exception failure = interrupted ? new InterruptedException("cancelled by caller") : new TimeoutException("server silent");
+        when(operation.get(25, TimeUnit.MILLISECONDS)).thenThrow(failure);
+        try (LogCapture logs = new LogCapture(SpyMemcached.class, Level.WARN)) {
+            final RuntimeException thrown = assertThrows(RuntimeException.class, () -> cache.resultOf(operation));
+            assertSame(failure, thrown.getCause());
+            assertEquals(interrupted, Thread.currentThread().isInterrupted());
+            verify(operation).cancel(true);
+            assertTrue(logs.messages().stream().anyMatch(message -> message.contains(interrupted ? "interrupted" : "Timed out")));
+        } finally {
+            Thread.interrupted();
+            cache.disconnect();
+        }
     }
 
-    // Other Behavior
+    // Shutdown
 
     /** The delegate starts its timed response wait only after synchronous queue admission finishes. */
     @Test
@@ -231,26 +254,4 @@ class SpyMemcachedFutureTest {
         assertFalse(worker.isAlive(), "The shutdown probe must leave no worker running");
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    void noArgumentGetIsBoundedWhileExplicitTimeoutPassesThrough() throws Exception {
-        final Class<?> adapterType = Class.forName(SpyMemcached.class.getName() + "$DefaultTimeoutFuture");
-        final Constructor<?> constructor = adapterType.getDeclaredConstructor(Future.class, long.class);
-        constructor.setAccessible(true);
-
-        final Future<String> timeoutDelegate = mock(Future.class);
-        when(timeoutDelegate.get(25L, TimeUnit.MILLISECONDS)).thenThrow(new TimeoutException("test timeout"));
-        final Future<String> bounded = (Future<String>) constructor.newInstance(timeoutDelegate, 25L);
-
-        final ExecutionException error = assertThrows(ExecutionException.class, bounded::get);
-        assertTrue(error.getCause() instanceof TimeoutException);
-        verify(timeoutDelegate).get(25L, TimeUnit.MILLISECONDS);
-        verify(timeoutDelegate).cancel(true);
-
-        final Future<String> timedDelegate = mock(Future.class);
-        when(timedDelegate.get(7L, TimeUnit.SECONDS)).thenReturn("value");
-        final Future<String> explicitlyTimed = (Future<String>) constructor.newInstance(timedDelegate, 25L);
-        assertEquals("value", explicitlyTimed.get(7L, TimeUnit.SECONDS));
-        verify(timedDelegate).get(7L, TimeUnit.SECONDS);
-    }
 }

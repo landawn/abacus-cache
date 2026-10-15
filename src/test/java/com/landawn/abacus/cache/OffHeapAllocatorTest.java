@@ -39,35 +39,7 @@ class OffHeapAllocatorTest {
 
     private static final int SEGMENT_SIZE = AbstractOffHeapCache.SEGMENT_SIZE;
 
-    // Membership And Views
-
-    @Test
-    void sizeClassQueuesAreCreatedOnlyWhenUsed() throws Exception {
-        final AbstractOffHeapCache<String, byte[]> cache = newCache(false, 2, SEGMENT_SIZE, null);
-        try {
-            final Deque<AbstractOffHeapCache.Segment>[] queues = segmentQueues(cache);
-            assertEquals(SEGMENT_SIZE / AbstractOffHeapCache.MIN_BLOCK_SIZE, queues.length);
-            assertEquals(0, Arrays.stream(queues).filter(Objects::nonNull).count());
-
-            assertTrue(cache.put("small", new byte[1]));
-            assertTrue(cache.put("large", new byte[SEGMENT_SIZE]));
-            // The single-slot class is full right away, so it still needs no queue.
-            assertEquals(1, Arrays.stream(queues).filter(Objects::nonNull).count());
-            assertNotNull(queues[0]);
-
-            cache.remove("large"); // freeing the full single-slot segment queues it
-            assertNotNull(queues[queues.length - 1]);
-            cache.remove("small");
-            cache.clear();
-            assertTrue(cache.stats().occupiedSlots().isEmpty());
-            assertTrue(cache.put("large", new byte[SEGMENT_SIZE]));
-            assertTrue(cache.put("large-2", new byte[SEGMENT_SIZE]));
-        } finally {
-            cache.close();
-        }
-    }
-
-    // Expiration And Capacity
+    // Allocation and reuse
 
     @Test
     void allocationRollbackReclaimsSegmentsFilledByEarlierChunks() {
@@ -160,6 +132,56 @@ class OffHeapAllocatorTest {
         }
     }
 
+    @Test
+    void singleSlotSegmentsCanBeReassignedAfterRemoval() {
+        for (final boolean foreignMemory : new boolean[] { false, true }) {
+            final AbstractOffHeapCache<String, byte[]> cache = newCache(foreignMemory, 1, SEGMENT_SIZE, null);
+            try {
+                final byte[] large = new byte[SEGMENT_SIZE];
+                large[large.length - 1] = 43;
+                assertTrue(cache.put("large", large));
+                cache.remove("large");
+                assertTrue(cache.put("small", new byte[] { 11 }));
+                assertEquals(Map.of(64, Map.of(0, 1)), cache.stats().occupiedSlots());
+                cache.remove("small");
+                assertTrue(cache.put("large-again", large));
+                assertArrayEquals(large, cache.getOrNull("large-again"));
+                assertEquals(Map.of(SEGMENT_SIZE, Map.of(0, 1)), cache.stats().occupiedSlots());
+                assertEquals(0, cache.stats().evictionCount());
+            } finally {
+                cache.close();
+            }
+        }
+    }
+
+    @Test
+    void sizeClassQueuesAreCreatedOnlyWhenUsed() throws Exception {
+        final AbstractOffHeapCache<String, byte[]> cache = newCache(false, 2, SEGMENT_SIZE, null);
+        try {
+            final Deque<AbstractOffHeapCache.Segment>[] queues = segmentQueues(cache);
+            assertEquals(SEGMENT_SIZE / AbstractOffHeapCache.MIN_BLOCK_SIZE, queues.length);
+            assertEquals(0, Arrays.stream(queues).filter(Objects::nonNull).count());
+
+            assertTrue(cache.put("small", new byte[1]));
+            assertTrue(cache.put("large", new byte[SEGMENT_SIZE]));
+            // The single-slot class is full right away, so it still needs no queue.
+            assertEquals(1, Arrays.stream(queues).filter(Objects::nonNull).count());
+            assertNotNull(queues[0]);
+
+            cache.remove("large"); // freeing the full single-slot segment queues it
+            assertNotNull(queues[queues.length - 1]);
+            cache.remove("small");
+            cache.clear();
+            assertTrue(cache.stats().occupiedSlots().isEmpty());
+            assertTrue(cache.put("large", new byte[SEGMENT_SIZE]));
+            assertTrue(cache.put("large-2", new byte[SEGMENT_SIZE]));
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Release validation
+
     /**
      * A stale or duplicate slot handle must not corrupt the allocator, including after its segment
      * was reclaimed (slot size 0). With assertions enabled (the test suite) the release fails
@@ -236,30 +258,6 @@ class OffHeapAllocatorTest {
                 assertEquals(0, cache.stats().occupiedMemory());
                 assertEquals(0, cache.stats().evictionCount());
                 assertTrue(cache.stats().occupiedSlots().isEmpty());
-            } finally {
-                cache.close();
-            }
-        }
-    }
-
-    // Other Behavior
-
-    @Test
-    void singleSlotSegmentsCanBeReassignedAfterRemoval() {
-        for (final boolean foreignMemory : new boolean[] { false, true }) {
-            final AbstractOffHeapCache<String, byte[]> cache = newCache(foreignMemory, 1, SEGMENT_SIZE, null);
-            try {
-                final byte[] large = new byte[SEGMENT_SIZE];
-                large[large.length - 1] = 43;
-                assertTrue(cache.put("large", large));
-                cache.remove("large");
-                assertTrue(cache.put("small", new byte[] { 11 }));
-                assertEquals(Map.of(64, Map.of(0, 1)), cache.stats().occupiedSlots());
-                cache.remove("small");
-                assertTrue(cache.put("large-again", large));
-                assertArrayEquals(large, cache.getOrNull("large-again"));
-                assertEquals(Map.of(SEGMENT_SIZE, Map.of(0, 1)), cache.stats().occupiedSlots());
-                assertEquals(0, cache.stats().evictionCount());
             } finally {
                 cache.close();
             }

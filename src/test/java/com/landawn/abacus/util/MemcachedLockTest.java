@@ -56,75 +56,23 @@ class MemcachedLockTest {
         construction.close();
     }
 
+    // Construction
+
+    @Test
+    void clientReturnsUnderlyingSpyMemcached() {
+        final MemcachedLock<String, String> local = new MemcachedLock<>(SERVER_URL);
+        assertSame(construction.constructed().get(0), local.client());
+        local.close();
+    }
+
+    @Test
+    void nullOrBlankServerUrlIsRejectedWithIllegalArgumentException() {
+        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>(null));
+        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>(""));
+        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>("   "));
+    }
+
     // Reads
-
-    @Test
-    @SuppressWarnings("removal")
-    void legacyAliasesPreserveAcquisitionAndReleaseResults() throws Exception {
-        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
-        try (MemcachedLock<String, Object> lock = lockWithDelegate(delegate)) {
-            when(delegate.add(eq("plain"), any(), eq(1000L))).thenReturn(true);
-            when(delegate.add("valued", "holder", 2000L)).thenReturn(false);
-            when(delegate.remove("plain")).thenReturn(true, false);
-            assertTrue(lock.lock("plain", 1000));
-            assertFalse(lock.lock("valued", "holder", 2000));
-            assertTrue(lock.unlock("plain"));
-            assertFalse(lock.tryUnlockQuietly("plain"));
-            final ArgumentCaptor<Object> marker = ArgumentCaptor.forClass(Object.class);
-            verify(delegate).add(eq("plain"), marker.capture(), eq(1000L));
-            assertEquals(0, ((byte[]) marker.getValue()).length);
-        }
-    }
-
-    @Test
-    void nonEmptyByteArrayLockValuesAreReturnedUnchanged() throws Exception {
-        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
-        final byte[] value = { 1, 2 };
-        when(delegate.get("key")).thenReturn(value);
-        try (MemcachedLock<String, Object> lock = lockWithDelegate(delegate)) {
-            assertSame(value, lock.get("key"));
-        }
-    }
-
-    @Test
-    void releasePreservesClientValidationExceptions() throws Exception {
-        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
-        final IllegalArgumentException failure = new IllegalArgumentException("invalid client key");
-        when(delegate.remove("key")).thenThrow(failure);
-        try (MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
-            assertSame(failure, assertThrows(IllegalArgumentException.class, () -> lock.tryUnlock("key")));
-            assertSame(failure, assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly("key")));
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = { "DEBUG", "OFF" })
-    @ResourceLock(LogCapture.RESOURCE)
-    void diagnosticsDescribeAcquisitionContentionAndCommunicationFailure(final String level) throws Exception {
-        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
-        when(delegate.add("key", "holder", 1000)).thenReturn(true, false).thenThrow(new IllegalStateException("offline"));
-        when(delegate.remove("key")).thenReturn(true, false, true, false).thenThrow(new IllegalStateException("offline"));
-        try (LogCapture logs = new LogCapture(MemcachedLock.class, Level.valueOf(level));
-             MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
-            assertTrue(lock.tryLock("key", "holder", 1000));
-            assertFalse(lock.tryLock("key", "holder", 1000));
-            assertTrue(lock.tryUnlock("key"));
-            assertFalse(lock.tryUnlock("key"));
-            assertTrue(lock.unlockQuietly("key"));
-            assertFalse(lock.unlockQuietly("key"));
-            assertThrows(RuntimeException.class, () -> lock.tryLock("key", "holder", 1000));
-            assertThrows(RuntimeException.class, () -> lock.tryUnlock("key"));
-            assertFalse(lock.unlockQuietly("key"));
-            if ("DEBUG".equals(level)) {
-                for (final String expected : List.of("Acquired lock", "Lock already held", "Released lock", "No lock to release", "acquisition failed",
-                        "release failed")) {
-                    assertTrue(logs.messages().stream().anyMatch(message -> message.contains(expected)), expected);
-                }
-            } else {
-                assertTrue(logs.messages().isEmpty());
-            }
-        }
-    }
 
     @Test
     @SuppressWarnings("unchecked")
@@ -146,20 +94,60 @@ class MemcachedLockTest {
         assertNull(lock.get("absent"));
     }
 
-    // Writes
-
     @Test
-    @SuppressWarnings("unchecked")
-    void lockRejectsKeysExactlyLikeTheClient() throws Exception {
-        final MemcachedLock<String, String> lock = lockWithDelegate(mock(SpyMemcached.class));
-
-        for (final String key : List.of("a\uD800x", "\uDC00", "", "has space", "a".repeat(251))) {
-            final String clientMessage = assertThrows(IllegalArgumentException.class, () -> SpyMemcached.checkKey(key)).getMessage();
-            assertEquals(clientMessage, assertThrows(IllegalArgumentException.class, () -> lock.tryLock(key, "holder", 1_000L)).getMessage());
+    void nonEmptyByteArrayLockValuesAreReturnedUnchanged() throws Exception {
+        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
+        final byte[] value = { 1, 2 };
+        when(delegate.get("key")).thenReturn(value);
+        try (MemcachedLock<String, Object> lock = lockWithDelegate(delegate)) {
+            assertSame(value, lock.get("key"));
         }
     }
 
-    // Removals
+    // Acquisition
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void nonPositiveLiveTimeIsRejectedBeforeAnyNetworkOperation() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
+
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", 0L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", -1L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", "holder", 0L));
+        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", "holder", Long.MIN_VALUE));
+        verifyNoInteractions(delegate);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void nullValueIsStoredAsTheValueLessMarker() throws Exception {
+        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
+        final MemcachedLock<String, Object> lock = mock(MemcachedLock.class, CALLS_REAL_METHODS);
+        final Field clientField = MemcachedLock.class.getDeclaredField("mc");
+        clientField.setAccessible(true);
+        clientField.set(lock, delegate);
+
+        final ArgumentCaptor<Object> stored = ArgumentCaptor.forClass(Object.class);
+        when(delegate.add(eq("target"), stored.capture(), eq(1_000L))).thenReturn(true);
+
+        assertTrue(lock.tryLock("target", null, 1_000L));
+        assertTrue(stored.getValue() instanceof byte[]);
+        assertEquals(0, ((byte[]) stored.getValue()).length);
+    }
+
+    // Release
+
+    @Test
+    void releasePreservesClientValidationExceptions() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final IllegalArgumentException failure = new IllegalArgumentException("invalid client key");
+        when(delegate.remove("key")).thenThrow(failure);
+        try (MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
+            assertSame(failure, assertThrows(IllegalArgumentException.class, () -> lock.tryUnlock("key")));
+            assertSame(failure, assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly("key")));
+        }
+    }
 
     /**
      * A genuine communication failure — here, the underlying client has been shut down, which makes
@@ -208,33 +196,82 @@ class MemcachedLockTest {
         }
     }
 
-    // Validation And Failures
+    @Test
+    void ordinaryOperationsCheckClosedStateBeforeArguments() {
+        final MemcachedLock<String, String> lock = new MemcachedLock<>(SERVER_URL);
+        lock.close();
 
-    /** Client failures: IAE propagates unchanged, others are wrapped (tryLock/tryUnlock) or swallowed (unlockQuietly). */
+        assertThrows(IllegalStateException.class, () -> lock.tryLock(null, 1_000L));
+        assertThrows(IllegalStateException.class, () -> lock.isLocked(null));
+        assertThrows(IllegalStateException.class, () -> lock.get(null));
+        assertThrows(IllegalStateException.class, () -> lock.tryUnlock(null));
+        assertFalse(lock.unlockQuietly("valid-key"));
+        assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly(null));
+    }
+
     @Test
     @SuppressWarnings("unchecked")
-    void clientFailuresArePropagatedWrappedOrSwallowedAsDocumented() throws Exception {
+    void quietReleaseStillValidatesMalformedKeysAfterClose() throws Exception {
         final SpyMemcached<String> delegate = mock(SpyMemcached.class);
         final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
+        lock.close();
 
-        final IllegalArgumentException tooLarge = new IllegalArgumentException("Cannot cache data larger than 8 bytes");
-        when(delegate.add("rejected", "holder", 1_000L)).thenThrow(tooLarge);
-        assertSame(tooLarge, assertThrows(IllegalArgumentException.class, () -> lock.tryLock("rejected", "holder", 1_000L)));
+        assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly("\uD800\uDC00\uDC00"));
+        assertFalse(lock.unlockQuietly("\uD800\uDC00"));
+        verify(delegate).disconnect();
+    }
 
-        final RuntimeException timeout = new RuntimeException("timed out");
-        when(delegate.add("slow", "holder", 1_000L)).thenThrow(timeout);
-        final RuntimeException wrappedLock = assertThrows(RuntimeException.class, () -> lock.tryLock("slow", "holder", 1_000L));
-        assertSame(timeout, wrappedLock.getCause());
+    // Compatibility
 
-        final IllegalStateException queueFull = new IllegalStateException("queue full");
-        when(delegate.remove("slow")).thenThrow(queueFull);
-        final RuntimeException wrappedUnlock = assertThrows(RuntimeException.class, () -> lock.tryUnlock("slow"));
-        assertSame(queueFull, wrappedUnlock.getCause());
-        assertFalse(lock.unlockQuietly("slow"));
+    @Test
+    @SuppressWarnings("removal")
+    void legacyAliasesPreserveAcquisitionAndReleaseResults() throws Exception {
+        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
+        try (MemcachedLock<String, Object> lock = lockWithDelegate(delegate)) {
+            when(delegate.add(eq("plain"), any(), eq(1000L))).thenReturn(true);
+            when(delegate.add("valued", "holder", 2000L)).thenReturn(false);
+            when(delegate.remove("plain")).thenReturn(true, false);
+            assertTrue(lock.lock("plain", 1000));
+            assertFalse(lock.lock("valued", "holder", 2000));
+            assertTrue(lock.unlock("plain"));
+            assertFalse(lock.tryUnlockQuietly("plain"));
+            final ArgumentCaptor<Object> marker = ArgumentCaptor.forClass(Object.class);
+            verify(delegate).add(eq("plain"), marker.capture(), eq(1000L));
+            assertEquals(0, ((byte[]) marker.getValue()).length);
+        }
+    }
 
-        when(delegate.remove("held")).thenReturn(true);
-        assertTrue(lock.tryUnlock("held"));
-        assertTrue(lock.unlockQuietly("held"));
+    // Key validation
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void acceptsSupplementaryCodePointBoundariesAndTheExactUtf8KeyLimit() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
+        final String firstSupplementary = new String(Character.toChars(Character.MIN_SUPPLEMENTARY_CODE_POINT));
+        final String lastSupplementary = new String(Character.toChars(Character.MAX_CODE_POINT));
+        final List<String> keys = List.of(firstSupplementary, lastSupplementary, firstSupplementary + lastSupplementary, "a".repeat(246) + lastSupplementary,
+                "prefix" + firstSupplementary + "suffix");
+
+        for (final String key : keys) {
+            when(delegate.add(key, "holder", 1_000L)).thenReturn(true);
+            when(delegate.remove(key)).thenReturn(true);
+            assertTrue(lock.tryLock(key, "holder", 1_000L));
+            assertTrue(lock.tryUnlock(key));
+            verify(delegate).add(key, "holder", 1_000L);
+            verify(delegate).remove(key);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void lockRejectsKeysExactlyLikeTheClient() throws Exception {
+        final MemcachedLock<String, String> lock = lockWithDelegate(mock(SpyMemcached.class));
+
+        for (final String key : List.of("a\uD800x", "\uDC00", "", "has space", "a".repeat(251))) {
+            final String clientMessage = assertThrows(IllegalArgumentException.class, () -> SpyMemcached.checkKey(key)).getMessage();
+            assertEquals(clientMessage, assertThrows(IllegalArgumentException.class, () -> lock.tryLock(key, "holder", 1_000L)).getMessage());
+        }
     }
 
     @Test
@@ -271,19 +308,6 @@ class MemcachedLockTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void nonPositiveLiveTimeIsRejectedBeforeAnyNetworkOperation() throws Exception {
-        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
-        final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
-
-        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", 0L));
-        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", -1L));
-        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", "holder", 0L));
-        assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", "holder", Long.MIN_VALUE));
-        verifyNoInteractions(delegate);
-    }
-
-    @Test
     void nullKeyFromOverrideIsRejectedBeforeAnyNetworkOperation() {
         try (NullKeyLock lock = new NullKeyLock()) {
             assertThrows(IllegalArgumentException.class, () -> lock.tryLock("target", 1_000L));
@@ -310,15 +334,8 @@ class MemcachedLockTest {
     }
 
     @Test
-    void nullOrBlankServerUrlIsRejectedWithIae() {
-        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>(null));
-        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>(""));
-        assertThrows(IllegalArgumentException.class, () -> new MemcachedLock<String, String>("   "));
-    }
-
-    @Test
     @SuppressWarnings({ "unchecked", "removal" })
-    void nullTargetIsRejectedWithIaeBeforeAnyNetworkOperation() throws Exception {
+    void nullTargetIsRejectedWithIllegalArgumentExceptionBeforeAnyNetworkOperation() throws Exception {
         final SpyMemcached<String> delegate = mock(SpyMemcached.class);
         final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
 
@@ -333,35 +350,6 @@ class MemcachedLockTest {
         assertThrows(IllegalArgumentException.class, () -> lock.unlock(null));
         assertThrows(IllegalArgumentException.class, () -> lock.tryUnlockQuietly(null));
         verifyNoInteractions(delegate);
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void nullValueIsStoredAsTheValueLessMarker() throws Exception {
-        final SpyMemcached<Object> delegate = mock(SpyMemcached.class);
-        final MemcachedLock<String, Object> lock = mock(MemcachedLock.class, CALLS_REAL_METHODS);
-        final Field clientField = MemcachedLock.class.getDeclaredField("mc");
-        clientField.setAccessible(true);
-        clientField.set(lock, delegate);
-
-        final ArgumentCaptor<Object> stored = ArgumentCaptor.forClass(Object.class);
-        when(delegate.add(eq("target"), stored.capture(), eq(1_000L))).thenReturn(true);
-
-        assertTrue(lock.tryLock("target", null, 1_000L));
-        assertTrue(stored.getValue() instanceof byte[]);
-        assertEquals(0, ((byte[]) stored.getValue()).length);
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void quietReleaseStillValidatesMalformedKeysAfterClose() throws Exception {
-        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
-        final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
-        lock.close();
-
-        assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly("\uD800\uDC00\uDC00"));
-        assertFalse(lock.unlockQuietly("\uD800\uDC00"));
-        verify(delegate).disconnect();
     }
 
     /**
@@ -380,46 +368,62 @@ class MemcachedLockTest {
         }
     }
 
-    // Other Behavior
+    // Diagnostics and failures
 
+    /** Client failures: IAE propagates unchanged, others are wrapped (tryLock/tryUnlock) or swallowed (unlockQuietly). */
     @Test
     @SuppressWarnings("unchecked")
-    void acceptsSupplementaryCodePointBoundariesAndTheExactUtf8KeyLimit() throws Exception {
+    void clientFailuresArePropagatedWrappedOrSwallowedAsDocumented() throws Exception {
         final SpyMemcached<String> delegate = mock(SpyMemcached.class);
         final MemcachedLock<String, String> lock = lockWithDelegate(delegate);
-        final String firstSupplementary = new String(Character.toChars(Character.MIN_SUPPLEMENTARY_CODE_POINT));
-        final String lastSupplementary = new String(Character.toChars(Character.MAX_CODE_POINT));
-        final List<String> keys = List.of(firstSupplementary, lastSupplementary, firstSupplementary + lastSupplementary, "a".repeat(246) + lastSupplementary,
-                "prefix" + firstSupplementary + "suffix");
 
-        for (final String key : keys) {
-            when(delegate.add(key, "holder", 1_000L)).thenReturn(true);
-            when(delegate.remove(key)).thenReturn(true);
-            assertTrue(lock.tryLock(key, "holder", 1_000L));
-            assertTrue(lock.tryUnlock(key));
-            verify(delegate).add(key, "holder", 1_000L);
-            verify(delegate).remove(key);
+        final IllegalArgumentException tooLarge = new IllegalArgumentException("Cannot cache data larger than 8 bytes");
+        when(delegate.add("rejected", "holder", 1_000L)).thenThrow(tooLarge);
+        assertSame(tooLarge, assertThrows(IllegalArgumentException.class, () -> lock.tryLock("rejected", "holder", 1_000L)));
+
+        final RuntimeException timeout = new RuntimeException("timed out");
+        when(delegate.add("slow", "holder", 1_000L)).thenThrow(timeout);
+        final RuntimeException wrappedLock = assertThrows(RuntimeException.class, () -> lock.tryLock("slow", "holder", 1_000L));
+        assertSame(timeout, wrappedLock.getCause());
+
+        final IllegalStateException queueFull = new IllegalStateException("queue full");
+        when(delegate.remove("slow")).thenThrow(queueFull);
+        final RuntimeException wrappedUnlock = assertThrows(RuntimeException.class, () -> lock.tryUnlock("slow"));
+        assertSame(queueFull, wrappedUnlock.getCause());
+        assertFalse(lock.unlockQuietly("slow"));
+
+        when(delegate.remove("held")).thenReturn(true);
+        assertTrue(lock.tryUnlock("held"));
+        assertTrue(lock.unlockQuietly("held"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "DEBUG", "OFF" })
+    @ResourceLock(LogCapture.RESOURCE)
+    void diagnosticsDescribeAcquisitionContentionAndCommunicationFailure(final String level) throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        when(delegate.add("key", "holder", 1000)).thenReturn(true, false).thenThrow(new IllegalStateException("offline"));
+        when(delegate.remove("key")).thenReturn(true, false, true, false).thenThrow(new IllegalStateException("offline"));
+        try (LogCapture logs = new LogCapture(MemcachedLock.class, Level.valueOf(level));
+             MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
+            assertTrue(lock.tryLock("key", "holder", 1000));
+            assertFalse(lock.tryLock("key", "holder", 1000));
+            assertTrue(lock.tryUnlock("key"));
+            assertFalse(lock.tryUnlock("key"));
+            assertTrue(lock.unlockQuietly("key"));
+            assertFalse(lock.unlockQuietly("key"));
+            assertThrows(RuntimeException.class, () -> lock.tryLock("key", "holder", 1000));
+            assertThrows(RuntimeException.class, () -> lock.tryUnlock("key"));
+            assertFalse(lock.unlockQuietly("key"));
+            if ("DEBUG".equals(level)) {
+                for (final String expected : List.of("Acquired lock", "Lock already held", "Released lock", "No lock to release", "acquisition failed",
+                        "release failed")) {
+                    assertTrue(logs.messages().stream().anyMatch(message -> message.contains(expected)), expected);
+                }
+            } else {
+                assertTrue(logs.messages().isEmpty());
+            }
         }
-    }
-
-    @Test
-    void clientReturnsUnderlyingSpyMemcached() {
-        final MemcachedLock<String, String> local = new MemcachedLock<>(SERVER_URL);
-        assertSame(construction.constructed().get(0), local.client());
-        local.close();
-    }
-
-    @Test
-    void ordinaryOperationsCheckClosedStateBeforeArguments() {
-        final MemcachedLock<String, String> lock = new MemcachedLock<>(SERVER_URL);
-        lock.close();
-
-        assertThrows(IllegalStateException.class, () -> lock.tryLock(null, 1_000L));
-        assertThrows(IllegalStateException.class, () -> lock.isLocked(null));
-        assertThrows(IllegalStateException.class, () -> lock.get(null));
-        assertThrows(IllegalStateException.class, () -> lock.tryUnlock(null));
-        assertFalse(lock.unlockQuietly("valid-key"));
-        assertThrows(IllegalArgumentException.class, () -> lock.unlockQuietly(null));
     }
 
     @SuppressWarnings("unchecked")

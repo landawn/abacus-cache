@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.foreign.Arena;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,16 @@ import org.mockito.Mockito;
 class ForeignMemoryOffHeapCacheTest {
 
     // Construction
+
+    @Test
+    void builderFunctionalArgumentsNullRejected() {
+        final ForeignMemoryOffHeapCache.Builder<String, Account> builder = ForeignMemoryOffHeapCache.builder();
+
+        assertThrows(IllegalArgumentException.class, () -> builder.serializer(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.deserializer(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.testerForLoadingItemFromDiskToMemory(null));
+        assertThrows(IllegalArgumentException.class, () -> builder.storeSelector(null));
+    }
 
     @Test
     void builderUsesTheConfiguredSerializationCallbacks() {
@@ -51,47 +62,6 @@ class ForeignMemoryOffHeapCacheTest {
         } finally {
             cache.close();
         }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = { false, true })
-    void allocationFailureRetainsItsIdentityWhenArenaCleanupAlsoFails(final boolean reusedFailure) {
-        final ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
-        final IllegalStateException allocationFailure = new IllegalStateException("allocation failed");
-        final IllegalStateException cleanupFailure = reusedFailure ? allocationFailure : new IllegalStateException("arena close failed");
-        try (Arena actual = Arena.ofShared()) {
-            final Arena failing = Mockito.spy(actual);
-            Mockito.doThrow(allocationFailure).when(failing).allocate(64L);
-            Mockito.doThrow(cleanupFailure).when(failing).close();
-            try (MockedStatic<Arena> arenas = Mockito.mockStatic(Arena.class)) {
-                arenas.when(Arena::ofShared).thenReturn(failing);
-                assertSame(allocationFailure, assertThrows(IllegalStateException.class, () -> cache.allocate(64)));
-            }
-            assertEquals(reusedFailure ? 0 : 1, allocationFailure.getSuppressed().length);
-            if (!reusedFailure) {
-                assertSame(cleanupFailure, allocationFailure.getSuppressed()[0]);
-            }
-            assertTrue(cache.put("key", new byte[] { 1, 2 }));
-            assertArrayEquals(new byte[] { 1, 2 }, cache.getOrNull("key"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void deallocationBeforeArenaInitializationIsHarmless() {
-        final ForeignMemoryOffHeapCache<?, ?> uninitialized = Mockito.mock(ForeignMemoryOffHeapCache.class, Mockito.CALLS_REAL_METHODS);
-        assertDoesNotThrow(uninitialized::deallocate);
-    }
-
-    @Test
-    void builderFunctionalArgumentsNullRejected() {
-        final ForeignMemoryOffHeapCache.Builder<String, Account> builder = ForeignMemoryOffHeapCache.builder();
-
-        assertThrows(IllegalArgumentException.class, () -> builder.serializer(null));
-        assertThrows(IllegalArgumentException.class, () -> builder.deserializer(null));
-        assertThrows(IllegalArgumentException.class, () -> builder.testerForLoadingItemFromDiskToMemory(null));
-        assertThrows(IllegalArgumentException.class, () -> builder.storeSelector(null));
     }
 
     /** {@code ForeignMemoryOffHeapCache(capacityInMB, evictDelay)} delegates to the default-TTL constructor. */
@@ -138,7 +108,43 @@ class ForeignMemoryOffHeapCacheTest {
         }
     }
 
-    // Validation And Failures
+    /**
+     * Documented full-constructor contract: unlike {@code Builder.build()}, the constructor performs no
+     * {@code 0}-to-default substitution for {@code maxBlockSize}, so {@code 0} is rejected. The
+     * invalid argument is detected before the arena is created, so the supplied store stays open
+     * and owned by the caller.
+     */
+    @Test
+    void fullConstructorZeroMaxBlockSizeRejectedWithoutClosingStore() {
+        final AtomicBoolean storeClosed = new AtomicBoolean();
+        final OffHeapStore<String> store = new OffHeapStore<>() {
+            @Override
+            public byte[] get(final String key) {
+                return null;
+            }
+
+            @Override
+            public boolean put(final String key, final byte[] value) {
+                return false;
+            }
+
+            @Override
+            public boolean remove(final String key) {
+                return false;
+            }
+
+            @Override
+            public void close() {
+                storeClosed.set(true);
+            }
+        };
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new ForeignMemoryOffHeapCache<String, byte[]>(1, 0, 0, 0, 0, 0f, null, null, store, false, null, null));
+        assertFalse(storeClosed.get());
+    }
+
+    // Allocation and cleanup
 
     /**
      * Exercises the failure branch of {@code allocate()} directly: {@code Arena.allocate} rejects
@@ -188,39 +194,35 @@ class ForeignMemoryOffHeapCacheTest {
         });
     }
 
-    /**
-     * Documented full-constructor contract: unlike {@code Builder.build()}, the constructor performs no
-     * {@code 0}-to-default substitution for {@code maxBlockSize}, so {@code 0} is rejected. The
-     * invalid argument is detected before the arena is created, so the supplied store stays open
-     * and owned by the caller.
-     */
-    @Test
-    void fullConstructorZeroMaxBlockSizeRejectedWithoutClosingStore() {
-        final java.util.concurrent.atomic.AtomicBoolean storeClosed = new java.util.concurrent.atomic.AtomicBoolean();
-        final OffHeapStore<String> store = new OffHeapStore<>() {
-            @Override
-            public byte[] get(final String key) {
-                return null;
+    @ParameterizedTest
+    @ValueSource(booleans = { false, true })
+    void allocationFailureRetainsItsIdentityWhenArenaCleanupAlsoFails(final boolean reusedFailure) {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+        final IllegalStateException allocationFailure = new IllegalStateException("allocation failed");
+        final IllegalStateException cleanupFailure = reusedFailure ? allocationFailure : new IllegalStateException("arena close failed");
+        try (Arena actual = Arena.ofShared()) {
+            final Arena failing = Mockito.spy(actual);
+            Mockito.doThrow(allocationFailure).when(failing).allocate(64L);
+            Mockito.doThrow(cleanupFailure).when(failing).close();
+            try (MockedStatic<Arena> arenas = Mockito.mockStatic(Arena.class)) {
+                arenas.when(Arena::ofShared).thenReturn(failing);
+                assertSame(allocationFailure, assertThrows(IllegalStateException.class, () -> cache.allocate(64)));
             }
-
-            @Override
-            public boolean put(final String key, final byte[] value) {
-                return false;
+            assertEquals(reusedFailure ? 0 : 1, allocationFailure.getSuppressed().length);
+            if (!reusedFailure) {
+                assertSame(cleanupFailure, allocationFailure.getSuppressed()[0]);
             }
-
-            @Override
-            public boolean remove(final String key) {
-                return false;
-            }
-
-            @Override
-            public void close() {
-                storeClosed.set(true);
-            }
-        };
-
-        assertThrows(IllegalArgumentException.class,
-                () -> new ForeignMemoryOffHeapCache<String, byte[]>(1, 0, 0, 0, 0, 0f, null, null, store, false, null, null));
-        assertFalse(storeClosed.get());
+            assertTrue(cache.put("key", new byte[] { 1, 2 }));
+            assertArrayEquals(new byte[] { 1, 2 }, cache.getOrNull("key"));
+        } finally {
+            cache.close();
+        }
     }
+
+    @Test
+    void deallocationBeforeArenaInitializationIsHarmless() {
+        final ForeignMemoryOffHeapCache<?, ?> uninitialized = Mockito.mock(ForeignMemoryOffHeapCache.class, Mockito.CALLS_REAL_METHODS);
+        assertDoesNotThrow(uninitialized::deallocate);
+    }
+
 }

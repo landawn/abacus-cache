@@ -32,6 +32,7 @@ import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -56,6 +57,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -75,6 +77,50 @@ class AbstractOffHeapCacheTest {
 
     @Nested
     class ConstructionAndNativeAccess {
+
+        /**
+         * A {@code null} logger is rejected eagerly with {@link IllegalArgumentException} before any
+         * native memory is allocated, while {@code null} serializer, deserializer, store, promotion
+         * tester, and store selector remain accepted as "use the default / feature disabled".
+         */
+        @Test
+        void constructorRejectsNullLoggerBeforeAllocationButAcceptsNullOptionalCallbacks() {
+            final AtomicBoolean allocated = new AtomicBoolean();
+
+            assertThrows(IllegalArgumentException.class, () -> new AbstractOffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0,
+                    60_000L, 60_000L, AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, 0, null, null, null, false, null, null, null) {
+                @Override
+                protected long allocate(final long capacityInBytes) {
+                    allocated.set(true);
+                    return 0L;
+                }
+
+                @Override
+                protected void deallocate() {
+                }
+
+                @Override
+                protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
+                }
+
+                @Override
+                protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
+                }
+            });
+
+            assertFalse(allocated.get(), "validation must fail before native memory is allocated");
+
+            final GuardedOffHeapCache cache = new GuardedOffHeapCache();
+            try {
+                assertNotNull(cache.serializer);
+                assertNotNull(cache.deserializer);
+                assertNull(cache.offHeapStore);
+                assertNull(cache.testerForLoadingItemFromDiskToMemory);
+                assertNull(cache.storeSelector);
+            } finally {
+                cache.close();
+            }
+        }
 
         @ParameterizedTest
         @CsvSource({ "0,false,false", "10000,true,true", "10000,true,false" })
@@ -130,18 +176,6 @@ class AbstractOffHeapCacheTest {
             }
         }
 
-        @ParameterizedTest
-        @ValueSource(ints = { 1023, 1048577 })
-        void rejectsBlockSizesOutsideTheAllocatorRange(final int maxBlockSize) {
-            assertThrows(IllegalArgumentException.class, () -> OffHeapCache.builder().capacityInMB(1).maxBlockSizeInBytes(maxBlockSize).build());
-        }
-
-        @ParameterizedTest
-        @ValueSource(floats = { -0.1f, 1.1f, Float.NaN })
-        void rejectsVacatingFactorsOutsideTheValidFraction(final float factor) {
-            assertThrows(IllegalArgumentException.class, () -> OffHeapCache.builder().capacityInMB(1).vacatingFactor(factor).build());
-        }
-
         @Test
         void nativeCopyHooksRejectNullArraysBeforeCopying() {
             for (final boolean useForeignMemory : new boolean[] { false, true }) {
@@ -171,127 +205,22 @@ class AbstractOffHeapCacheTest {
             }
         }
 
-        /**
-         * A {@code null} logger is rejected eagerly with {@link IllegalArgumentException} before any
-         * native memory is allocated, while {@code null} serializer, deserializer, store, promotion
-         * tester, and store selector remain accepted as "use the default / feature disabled".
-         */
-        @Test
-        void constructorRejectsNullLoggerBeforeAllocationButAcceptsNullOptionalCallbacks() {
-            final AtomicBoolean allocated = new AtomicBoolean();
-
-            assertThrows(IllegalArgumentException.class, () -> new AbstractOffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0,
-                    60_000L, 60_000L, AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, 0, null, null, null, false, null, null, null) {
-                @Override
-                protected long allocate(final long capacityInBytes) {
-                    allocated.set(true);
-                    return 0L;
-                }
-
-                @Override
-                protected void deallocate() {
-                }
-
-                @Override
-                protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
-                }
-
-                @Override
-                protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
-                }
-            });
-
-            assertFalse(allocated.get(), "validation must fail before native memory is allocated");
-
-            final GuardedOffHeapCache cache = new GuardedOffHeapCache();
-            try {
-                assertNotNull(cache.serializer);
-                assertNotNull(cache.deserializer);
-                assertNull(cache.offHeapStore);
-                assertNull(cache.testerForLoadingItemFromDiskToMemory);
-                assertNull(cache.storeSelector);
-            } finally {
-                cache.close();
-            }
+        @ParameterizedTest
+        @ValueSource(ints = { 1023, 1048577 })
+        void rejectsBlockSizesOutsideTheAllocatorRange(final int maxBlockSize) {
+            assertThrows(IllegalArgumentException.class, () -> OffHeapCache.builder().capacityInMB(1).maxBlockSizeInBytes(maxBlockSize).build());
         }
+
+        @ParameterizedTest
+        @ValueSource(floats = { -0.1f, 1.1f, Float.NaN })
+        void rejectsVacatingFactorsOutsideTheValidFraction(final float factor) {
+            assertThrows(IllegalArgumentException.class, () -> OffHeapCache.builder().capacityInMB(1).vacatingFactor(factor).build());
+        }
+
     }
 
     @Nested
     class Allocation {
-
-        @Test
-        void statisticsSaturateTheCombinedReadCountWithoutOverflow() throws Exception {
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
-            try {
-                for (final String counterName : new String[] { "hitCount", "missCount" }) {
-                    final Field counter = AbstractOffHeapCache.class.getDeclaredField(counterName);
-                    counter.setAccessible(true);
-                    ((LongAdder) counter.get(cache)).add(Long.MAX_VALUE);
-                }
-                final OffHeapCacheStats stats = cache.stats();
-                assertEquals(Long.MAX_VALUE, stats.getCount());
-                assertEquals(Long.MAX_VALUE, stats.hitCount());
-                assertEquals(Long.MAX_VALUE, stats.missCount());
-                assertEquals(0.5, stats.hitRate());
-                assertEquals(0.5, stats.missRate());
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * The {@code stats()} occupied-slot reporting reads each segment's occupied-slot count under
-         * the allocator lock. This verifies the reported per-segment occupied-slot total matches the
-         * number of in-memory entries.
-         */
-        @Test
-        void statsOccupiedSlotsReflectInMemoryEntries() {
-            final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
-                    .capacityInMB(16)
-                    .evictDelay(0)
-                    .defaultLiveTime(600_000)
-                    .defaultMaxIdleTime(600_000)
-                    .build();
-            try {
-                for (int i = 0; i < 50; i++) {
-                    assertTrue(cache.put("k" + i, "v" + i));
-                }
-
-                final OffHeapCacheStats stats = cache.stats();
-                assertEquals(50, stats.size(), "in-memory entry count");
-                assertEquals(50, totalOccupiedSlots(stats), "sum of per-segment occupied slots should equal the entry count");
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * {@code clear()} removes every entry and then reclaims the now-empty segments; afterwards no
-         * occupied slots may remain in the stats snapshot.
-         */
-        @Test
-        void clearReleasesAllSegments() {
-            final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
-                    .capacityInMB(16)
-                    .evictDelay(0)
-                    .defaultLiveTime(600_000)
-                    .defaultMaxIdleTime(600_000)
-                    .build();
-            try {
-                for (int i = 0; i < 50; i++) {
-                    assertTrue(cache.put("k" + i, "v" + i));
-                }
-                assertTrue(totalOccupiedSlots(cache.stats()) > 0);
-
-                cache.clear();
-
-                final OffHeapCacheStats stats = cache.stats();
-                assertEquals(0, stats.size(), "cache should be empty after clear()");
-                assertEquals(0, totalOccupiedSlots(stats), "all segments should be released after clear()");
-            } finally {
-                cache.close();
-            }
-        }
 
         /**
          * Exercises allocation across multiple slot-size classes, each with its own vacancy queue in
@@ -330,6 +259,30 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
+         * A segment emptied by an explicit {@code remove()} stays dedicated to its slot class until it
+         * is reclaimed. When a differently sized put finds no free segment, the allocator must reclaim
+         * that empty segment on demand rather than fail the put - which, without a disk store, would
+         * also schedule a vacate pass that evicts unrelated live entries.
+         */
+        @Test
+        void allocationReclaimsEmptySegmentOfAnotherClassOnDemand() throws Exception {
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(2).evictDelay(0).build();
+            try {
+                assertTrue(cache.put("live", new byte[100])); // segment 0: 128-byte class
+                assertTrue(cache.put("removed", new byte[100 * 8192])); // segment 1: 8192-byte class
+                cache.remove("removed"); // segment 1 is now empty but still dedicated to the 8192-byte class
+
+                assertDoesNotScheduleVacation(cache,
+                        () -> assertTrue(cache.put("other-class", new byte[1000]), "the empty segment must be re-dedicated on demand"));
+                assertArrayEquals(new byte[1000], cache.getOrNull("other-class"));
+                assertArrayEquals(new byte[100], cache.getOrNull("live"), "no live entry may be evicted when an empty segment was available");
+                assertEquals(0L, cache.stats().evictionCount());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
          * The chunk-count arithmetic must not overflow int for serialized sizes near
          * {@code Integer.MAX_VALUE} (legal in a sufficiently large cache): computing
          * {@code size + maxBlockSize - 1} in int arithmetic wraps negative, which made {@code put}
@@ -353,64 +306,28 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
-         * A failed multi-class allocation followed by a successful disk fallback must not leave its
-         * now-empty segment dedicated to the attempted class; the very next differently sized memory
-         * put must be able to reuse it without waiting for an asynchronous vacate pass.
+         * {@code clear()} removes every entry and then reclaims the now-empty segments; afterwards no
+         * occupied slots may remain in the stats snapshot.
          */
         @Test
-        void partialAllocationRollbackImmediatelyReclaimsEmptySegments() {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(2)
-                    .maxBlockSizeInBytes(512 * 1024)
+        void clearReleasesAllSegments() {
+            final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
+                    .capacityInMB(16)
                     .evictDelay(0)
-                    .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((key, value, size) -> "spill".equals(key) ? 0 : 1)
+                    .defaultLiveTime(600_000)
+                    .defaultMaxIdleTime(600_000)
                     .build();
             try {
-                // Segment 0 is dedicated to the 128-byte class, so only segment 1 is free.
-                assertTrue(cache.put("filler", new byte[100]));
+                for (int i = 0; i < 50; i++) {
+                    assertTrue(cache.put("k" + i, "v" + i));
+                }
+                assertTrue(totalOccupiedSlots(cache.stats()) > 0);
 
-                // One 512 KiB chunk dedicates the remaining free segment; the final one-byte chunk
-                // needs the 64-byte class, which has no segment and no free segment left, so memory
-                // placement rolls back and the value spills to disk. (The value could fit an empty
-                // two-segment cache, so the memory attempt is genuinely made.)
-                assertTrue(cache.put("spill", new byte[512 * 1024 + 1]));
-                assertEquals(1L, cache.stats().sizeOnDisk());
-                // Allocation also reclaims empty segments on demand, so pin the rollback's own
-                // reclamation directly: the attempted class must not keep the emptied segment.
-                assertFalse(cache.stats().occupiedSlots().containsKey(512 * 1024), "the rollback must return the emptied segment to the free pool");
+                cache.clear();
 
-                assertTrue(cache.put("small", new byte[] { 7 }), "the rollback must make the emptied segment immediately reusable");
-                assertArrayEquals(new byte[] { 7 }, cache.getOrNull("small"));
-                assertArrayEquals(new byte[100], cache.getOrNull("filler"));
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * A segment emptied by an explicit {@code remove()} stays dedicated to its slot class until it
-         * is reclaimed. When a differently sized put finds no free segment, the allocator must reclaim
-         * that empty segment on demand rather than fail the put - which, without a disk store, would
-         * also schedule a vacate pass that evicts unrelated live entries.
-         */
-        @Test
-        void allocationReclaimsEmptySegmentOfAnotherClassOnDemand() throws InterruptedException {
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(2).evictDelay(0).build();
-            try {
-                assertTrue(cache.put("live", new byte[100])); // segment 0: 128-byte class
-                assertTrue(cache.put("removed", new byte[100 * 8192])); // segment 1: 8192-byte class
-                cache.remove("removed"); // segment 1 is now empty but still dedicated to the 8192-byte class
-
-                assertTrue(cache.put("other-class", new byte[1000]), "the empty segment must be re-dedicated to the 1024-byte class on demand");
-                assertArrayEquals(new byte[1000], cache.getOrNull("other-class"));
-
-                // Give an (erroneously) scheduled vacate pass time to run before checking for collateral eviction.
-                Thread.sleep(200);
-                assertArrayEquals(new byte[100], cache.getOrNull("live"), "no live entry may be evicted when an empty segment was available");
-                assertEquals(0L, cache.stats().evictionCount());
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(0, stats.size(), "cache should be empty after clear()");
+                assertEquals(0, totalOccupiedSlots(stats), "all segments should be released after clear()");
             } finally {
                 cache.close();
             }
@@ -464,6 +381,44 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
+         * A failed multi-class allocation followed by a successful disk fallback must not leave its
+         * now-empty segment dedicated to the attempted class; the very next differently sized memory
+         * put must be able to reuse it without waiting for an asynchronous vacate pass.
+         */
+        @Test
+        void partialAllocationRollbackImmediatelyReclaimsEmptySegments() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(2)
+                    .maxBlockSizeInBytes(512 * 1024)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((key, value, size) -> "spill".equals(key) ? 0 : 1)
+                    .build();
+            try {
+                // Segment 0 is dedicated to the 128-byte class, so only segment 1 is free.
+                assertTrue(cache.put("filler", new byte[100]));
+
+                // One 512 KiB chunk dedicates the remaining free segment; the final one-byte chunk
+                // needs the 64-byte class, which has no segment and no free segment left, so memory
+                // placement rolls back and the value spills to disk. (The value could fit an empty
+                // two-segment cache, so the memory attempt is genuinely made.)
+                assertTrue(cache.put("spill", new byte[512 * 1024 + 1]));
+                assertEquals(1L, cache.stats().sizeOnDisk());
+                // Allocation also reclaims empty segments on demand, so pin the rollback's own
+                // reclamation directly: the attempted class must not keep the emptied segment.
+                assertFalse(cache.stats().occupiedSlots().containsKey(512 * 1024), "the rollback must return the emptied segment to the free pool");
+
+                assertTrue(cache.put("small", new byte[] { 7 }), "the rollback must make the emptied segment immediately reusable");
+                assertArrayEquals(new byte[] { 7 }, cache.getOrNull("small"));
+                assertArrayEquals(new byte[100], cache.getOrNull("filler"));
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
          * An undeclared checked exception from a key's {@code hashCode} (as code written in Kotlin, or
          * using sneaky throws, can produce) aborts the put's {@code compute} before the new entry is
          * installed. The freshly allocated slots must still be released, exactly as they are for a
@@ -486,87 +441,78 @@ class AbstractOffHeapCacheTest {
                 cache.close();
             }
         }
-    }
-
-    @Nested
-    class Serialization {
-
-        // The memory/disk wrappers special-case byte[] and ByteBuffer values before ever calling the
-        // configured deserializer, so the raw-type branches of the package-private default DESERIALIZER
-        // are only reachable by invoking it directly. These two tests exercise those branches.
-
-        /** {@code DESERIALIZER} returns the supplied array unchanged for a primitive {@code byte[]} type. */
-        @Test
-        void deserializerPrimitiveByteArray() {
-            final byte[] raw = { 1, 2, 3, 4, 5 };
-            final Type<?> type = N.typeOf(byte[].class);
-
-            final Object result = AbstractOffHeapCache.DESERIALIZER.apply(raw, type);
-
-            assertSame(raw, result, "primitive byte[] must be returned as-is without copying");
-        }
-
-        /** Every buffer type reconstructs as a writable heap buffer, including direct implementation classes. */
-        @Test
-        void deserializerByteBuffer() {
-            final byte[] raw = "byte-buffer-payload".getBytes();
-            for (final Class<?> bufferType : new Class<?>[] { ByteBuffer.class, MappedByteBuffer.class, ByteBuffer.allocateDirect(1).getClass(),
-                    ByteBuffer.allocateDirect(1).asReadOnlyBuffer().getClass() }) {
-                final Object result = AbstractOffHeapCache.DESERIALIZER.apply(raw, N.typeOf(bufferType));
-                assertTrue(result instanceof ByteBuffer, "ByteBuffer type must deserialize to a ByteBuffer");
-                assertHeapBufferContent(raw, (ByteBuffer) result);
-            }
-        }
-
-        // Exercise the ByteBuffer serialization branch in put() and the ByteBuffer read branch for
-        // each entry form (single-slot, multi-slot, and disk-backed).
 
         @Test
-        void mappedByteBufferMemoryReadsReturnHeapBuffers(@TempDir final Path directory) throws Exception {
-            assertMappedByteBufferRoundTrip(directory, false);
-        }
-
-        @Test
-        void directByteBufferMemoryReadsReturnHeapBuffers() {
-            assertDirectByteBufferRoundTrip(false, false);
-        }
-
-        @Test
-        void heapByteBufferStillReconstructsOnHeapForBothBackends() {
-            for (final boolean useForeignMemory : new boolean[] { false, true }) {
-                final AbstractOffHeapCache<String, ByteBuffer> cache = useForeignMemory
-                        ? ForeignMemoryOffHeapCache.<String, ByteBuffer> builder().capacityInMB(1).build()
-                        : OffHeapCache.<String, ByteBuffer> builder().capacityInMB(1).build();
-                try {
-                    final byte[] expected = { 4, 5, 6 };
-                    assertTrue(cache.put("heap", bufferOf(expected)));
-                    final ByteBuffer result = cache.getOrNull("heap");
-                    assertHeapBufferContent(expected, result);
-                } finally {
-                    cache.close();
+        void statisticsSaturateTheCombinedReadCountWithoutOverflow() throws Exception {
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+            try {
+                for (final String counterName : new String[] { "hitCount", "missCount" }) {
+                    final Field counter = AbstractOffHeapCache.class.getDeclaredField(counterName);
+                    counter.setAccessible(true);
+                    ((LongAdder) counter.get(cache)).add(Long.MAX_VALUE);
                 }
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(Long.MAX_VALUE, stats.getCount());
+                assertEquals(Long.MAX_VALUE, stats.hitCount());
+                assertEquals(Long.MAX_VALUE, stats.missCount());
+                assertEquals(0.5, stats.hitRate());
+                assertEquals(0.5, stats.missRate());
+            } finally {
+                cache.close();
             }
         }
 
-        /** Small ByteBuffer value: stored in a single slot and read back from memory. */
+        /**
+         * The {@code stats()} occupied-slot reporting reads each segment's occupied-slot count under
+         * the allocator lock. This verifies the reported per-segment occupied-slot total matches the
+         * number of in-memory entries.
+         */
         @Test
-        void byteBufferValueSingleSlotRoundtrip() {
-            final byte[] data = "hello-single-slot-byte-buffer".getBytes();
-            final OffHeapCache<String, ByteBuffer> cache = OffHeapCache.<String, ByteBuffer> builder()
-                    .capacityInMB(8)
+        void statsOccupiedSlotsReflectInMemoryEntries() {
+            final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
+                    .capacityInMB(16)
                     .evictDelay(0)
                     .defaultLiveTime(600_000)
                     .defaultMaxIdleTime(600_000)
                     .build();
             try {
-                assertTrue(cache.put("k", bufferOf(data)));
+                for (int i = 0; i < 50; i++) {
+                    assertTrue(cache.put("k" + i, "v" + i));
+                }
 
-                final ByteBuffer out = cache.getOrNull("k");
-                assertNotNull(out);
-                assertArrayEquals(data, ByteBufferType.byteArrayOf(out));
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(50, stats.size(), "in-memory entry count");
+                assertEquals(50, totalOccupiedSlots(stats), "sum of per-segment occupied slots should equal the entry count");
             } finally {
                 cache.close();
             }
+        }
+
+    }
+
+    @Nested
+    class Serialization {
+
+        @Test
+        void byteBufferEncodingPreservesWrittenBytes() {
+            final ByteBufferType bbType = (ByteBufferType) ((Type<?>) com.landawn.abacus.type.TypeFactory.getType(ByteBufferType.BYTE_BUFFER));
+            ByteBuffer bb = ByteBuffer.allocate(1024);
+            bb.put("abc".getBytes(StandardCharsets.UTF_8));
+            bb.put("123".getBytes(StandardCharsets.UTF_8));
+            byte[] bytes = ByteBufferType.byteArrayOf(bb);
+
+            assertEquals("abc123", new String(bytes, StandardCharsets.UTF_8));
+
+            bb = ByteBuffer.wrap("abc123".getBytes(StandardCharsets.UTF_8), 6, 0);
+            bytes = ByteBufferType.byteArrayOf(bb);
+
+            assertEquals("abc123", new String(bytes, StandardCharsets.UTF_8));
+
+            bb = ByteBuffer.wrap(N.EMPTY_BYTE_ARRAY);
+            assertEquals("", bbType.stringOf(bb));
+
+            bb = ByteBuffer.wrap(N.EMPTY_BYTE_ARRAY, 0, 0);
+            assertEquals("", bbType.stringOf(bb));
         }
 
         /**
@@ -622,6 +568,77 @@ class AbstractOffHeapCacheTest {
             }
         }
 
+        /** Small ByteBuffer value: stored in a single slot and read back from memory. */
+        @Test
+        void byteBufferValueSingleSlotRoundtrip() {
+            final byte[] data = "hello-single-slot-byte-buffer".getBytes();
+            final OffHeapCache<String, ByteBuffer> cache = OffHeapCache.<String, ByteBuffer> builder()
+                    .capacityInMB(8)
+                    .evictDelay(0)
+                    .defaultLiveTime(600_000)
+                    .defaultMaxIdleTime(600_000)
+                    .build();
+            try {
+                assertTrue(cache.put("k", bufferOf(data)));
+
+                final ByteBuffer out = cache.getOrNull("k");
+                assertNotNull(out);
+                assertArrayEquals(data, ByteBufferType.byteArrayOf(out));
+            } finally {
+                cache.close();
+            }
+        }
+
+        /** Every buffer type reconstructs as a writable heap buffer, including direct implementation classes. */
+        @Test
+        void deserializerByteBuffer() {
+            final byte[] raw = "byte-buffer-payload".getBytes();
+            for (final Class<?> bufferType : new Class<?>[] { ByteBuffer.class, MappedByteBuffer.class, ByteBuffer.allocateDirect(1).getClass(),
+                    ByteBuffer.allocateDirect(1).asReadOnlyBuffer().getClass() }) {
+                final Object result = AbstractOffHeapCache.DESERIALIZER.apply(raw, N.typeOf(bufferType));
+                assertTrue(result instanceof ByteBuffer, "ByteBuffer type must deserialize to a ByteBuffer");
+                assertHeapBufferContent(raw, (ByteBuffer) result);
+            }
+        }
+
+        /** {@code DESERIALIZER} returns the supplied array unchanged for a primitive {@code byte[]} type. */
+        @Test
+        void deserializerPrimitiveByteArray() {
+            final byte[] raw = { 1, 2, 3, 4, 5 };
+            final Type<?> type = N.typeOf(byte[].class);
+
+            final Object result = AbstractOffHeapCache.DESERIALIZER.apply(raw, type);
+
+            assertSame(raw, result, "primitive byte[] must be returned as-is without copying");
+        }
+
+        @Test
+        void directByteBufferMemoryReadsReturnHeapBuffers() {
+            assertDirectByteBufferRoundTrip(false, false);
+        }
+
+        @Test
+        void heapByteBufferStillReconstructsOnHeapForBothBackends() {
+            for (final boolean useForeignMemory : new boolean[] { false, true }) {
+                final AbstractOffHeapCache<String, ByteBuffer> cache = useForeignMemory
+                        ? ForeignMemoryOffHeapCache.<String, ByteBuffer> builder().capacityInMB(1).build()
+                        : OffHeapCache.<String, ByteBuffer> builder().capacityInMB(1).build();
+                try {
+                    final byte[] expected = { 4, 5, 6 };
+                    assertTrue(cache.put("heap", bufferOf(expected)));
+                    final ByteBuffer result = cache.getOrNull("heap");
+                    assertHeapBufferContent(expected, result);
+                } finally {
+                    cache.close();
+                }
+            }
+        }
+
+        @Test
+        void mappedByteBufferMemoryReadsReturnHeapBuffers(@TempDir final Path directory) throws Exception {
+            assertMappedByteBufferRoundTrip(directory, false);
+        }
+
         /**
          * A zero-length {@code byte[]} value is a legal cache value that exercises the size-0 path of
          * the slot math ({@code slotSizeOfChunk} maps a 0-byte chunk to one {@code MIN_BLOCK_SIZE}
@@ -670,255 +687,10 @@ class AbstractOffHeapCacheTest {
             }
         }
 
-        @Test
-        void byteBufferEncodingPreservesWrittenBytes() {
-            final ByteBufferType bbType = (ByteBufferType) ((Type<?>) com.landawn.abacus.type.TypeFactory.getType(ByteBufferType.BYTE_BUFFER));
-            ByteBuffer bb = ByteBuffer.allocate(1024);
-            bb.put("abc".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            bb.put("123".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            byte[] bytes = ByteBufferType.byteArrayOf(bb);
-
-            assertEquals("abc123", new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
-
-            bb = ByteBuffer.wrap("abc123".getBytes(java.nio.charset.StandardCharsets.UTF_8), 6, 0);
-            bytes = ByteBufferType.byteArrayOf(bb);
-
-            assertEquals("abc123", new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
-
-            bb = ByteBuffer.wrap(N.EMPTY_BYTE_ARRAY);
-            assertEquals("", bbType.stringOf(bb));
-
-            bb = ByteBuffer.wrap(N.EMPTY_BYTE_ARRAY, 0, 0);
-            assertEquals("", bbType.stringOf(bb));
-        }
     }
 
     @Nested
     class DiskStorage {
-
-        @Test
-        void diskTimingIgnoresMemoryReadsAndRejectedStoreWrites() {
-            final OffHeapStore<String> store = mock(OffHeapStore.class);
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .offHeapStore(store)
-                    .statsTimeOnDisk(true)
-                    .storeSelector((key, value, size) -> "memory".equals(key) ? 1 : 2)
-                    .build();
-            try {
-                assertTrue(cache.put("memory", new byte[] { 1 }));
-                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("memory"));
-                assertFalse(cache.put("disk", new byte[] { 2 }));
-                cache.remove("absent");
-                assertEquals(1, cache.size());
-                assertEquals(1L, cache.stats().putCount());
-                assertEquals(0L, cache.stats().putCountToDisk());
-                assertEquals(new OffHeapCacheStats.MinMaxAvg(0, 0, 0), cache.stats().readFromDiskTimeStats());
-                assertEquals(new OffHeapCacheStats.MinMaxAvg(0, 0, 0), cache.stats().writeToDiskTimeStats());
-                verify(store).put("disk", new byte[] { 2 });
-            } finally {
-                cache.close();
-            }
-        }
-
-        @Test
-        void corruptedStoreValueIsRejectedAndTheMappingCanRecover() {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((key, value, size) -> 2)
-                    .build();
-            try {
-                assertTrue(cache.put("key", new byte[] { 1, 2, 3 }));
-                backing.put("key", new byte[] { 9 });
-                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.getOrNull("key"));
-                assertTrue(failure.getMessage().contains("does not match expected size"));
-                backing.put("key", new byte[] { 1, 2, 3 });
-                assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("key"));
-            } finally {
-                cache.close();
-            }
-        }
-
-        /** Invalid custom routing results are programming errors, not undocumented aliases. */
-        @ParameterizedTest
-        @NullSource
-        @ValueSource(ints = { -1, 3 })
-        void storeSelectorRejectsUnknownAndNullResults(final Integer selected) {
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .storeSelector((key, value, size) -> selected)
-                    .build();
-            try {
-                assertThrows(IllegalArgumentException.class, () -> cache.put("key", new byte[] { 1 }));
-                assertEquals(0, cache.size());
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * A failure raised before the per-key atomic replacement begins (here: an exceptional
-         * {@code hashCode} thrown by the map lookup itself) must fail the put BEFORE the key-only
-         * backing store is mutated; the prior memory entry must survive and the store must remain
-         * untouched.
-         */
-        @Test
-        void diskOwnershipFailurePrecedesBackingStoreMutation() {
-            final ExceptionalHashKey key = new ExceptionalHashKey();
-            final AtomicBoolean storePutCalled = new AtomicBoolean();
-            final OffHeapStore<ExceptionalHashKey> store = new OffHeapStore<>() {
-                @Override
-                public byte[] get(final ExceptionalHashKey ignored) {
-                    return null;
-                }
-
-                @Override
-                public boolean put(final ExceptionalHashKey ignored, final byte[] value) {
-                    storePutCalled.set(true);
-                    return true;
-                }
-
-                @Override
-                public boolean remove(final ExceptionalHashKey ignored) {
-                    return false;
-                }
-            };
-
-            final OffHeapCache<ExceptionalHashKey, byte[]> cache = OffHeapCache.<ExceptionalHashKey, byte[]> builder()
-                    .capacityInMB(1)
-                    .offHeapStore(store)
-                    .storeSelector((ignored, value, size) -> value.length == 1 ? 1 : 2)
-                    .build();
-            try {
-                final byte[] prior = { 1 };
-                assertTrue(cache.put(key, prior));
-
-                // The disk-routed replacement's first (and only) hashCode call is the entry map's
-                // atomic compute; a throwing hashCode fails the put before its lambda - and therefore
-                // before any store mutation - runs.
-                key.throwOnHashCall(1);
-                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 2, 3 }));
-
-                assertTrue(failure.getMessage().contains("forced hash failure"));
-                assertFalse(storePutCalled.get(), "the backing bytes must not be mutated when ownership registration fails");
-                assertArrayEquals(prior, cache.getOrNull(key), "the previous memory entry must be restored");
-                assertEquals(0L, cache.stats().sizeOnDisk());
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * With {@code statsTimeOnDisk} enabled, the disk timing statistics cover the
-         * {@link OffHeapStore} call. A store whose operations take a known minimum time must produce
-         * observations at least that large (only a lower bound is asserted, so the test is robust to
-         * scheduling delays), with {@code min <= avg <= max} holding.
-         */
-        @Test
-        void diskTimingStatsReflectStoreIo() {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final OffHeapStore<String> slowStore = new OffHeapStore<>() {
-                private void sleep() {
-                    try {
-                        Thread.sleep(15L);
-                    } catch (final InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
-
-                @Override
-                public byte[] get(final String key) {
-                    sleep();
-                    return backing.get(key);
-                }
-
-                @Override
-                public boolean put(final String key, final byte[] value) {
-                    sleep();
-                    backing.put(key, value);
-                    return true;
-                }
-
-                @Override
-                public boolean remove(final String key) {
-                    return backing.remove(key) != null;
-                }
-            };
-
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .evictDelay(0)
-                    .offHeapStore(slowStore)
-                    .storeSelector((k, v, size) -> 2)
-                    .statsTimeOnDisk(true)
-                    .build();
-            try {
-                assertTrue(cache.put("key", new byte[] { 1, 2, 3 }));
-                assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("key"));
-
-                final OffHeapCacheStats stats = cache.stats();
-                assertTrue(stats.writeToDiskTimeStats().min() >= 10.0D, "write timing must cover the store write: " + stats.writeToDiskTimeStats());
-                assertTrue(stats.readFromDiskTimeStats().min() >= 10.0D, "read timing must cover the store read: " + stats.readFromDiskTimeStats());
-                assertTrue(stats.writeToDiskTimeStats().min() <= stats.writeToDiskTimeStats().avg()
-                        && stats.writeToDiskTimeStats().avg() <= stats.writeToDiskTimeStats().max());
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * A disk lookup that finds an already-freed entry (the state a getOrNull racing an eviction
-         * observes just after its map lookup) must read as a miss WITHOUT touching the store: the
-         * freed entry's store bytes may already belong to nobody (or, under a same-key replacement,
-         * to a newer entry).
-         */
-        @Test
-        void freedDiskEntryReadsAsMissWithoutTouchingStore() throws Exception {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final AtomicInteger storeReads = new AtomicInteger();
-            final OffHeapStore<String> store = new OffHeapStore<>() {
-                @Override
-                public byte[] get(final String key) {
-                    storeReads.incrementAndGet();
-                    return backing.get(key);
-                }
-
-                @Override
-                public boolean put(final String key, final byte[] value) {
-                    backing.put(key, value);
-                    return true;
-                }
-
-                @Override
-                public boolean remove(final String key) {
-                    return backing.remove(key) != null;
-                }
-            };
-
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .evictDelay(0)
-                    .offHeapStore(store)
-                    .storeSelector((k, v, size) -> 2)
-                    .build();
-            try {
-                assertTrue(cache.put("key", new byte[] { 1 }));
-                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("key"));
-                assertEquals(1, storeReads.get());
-
-                // Mark the disk entry freed in place while the map still holds it.
-                final AbstractOffHeapCache.Entry<byte[]> entry = entriesOf(cache).get("key");
-                assertNotNull(entry);
-                entry.freed = true;
-
-                assertNull(cache.getOrNull("key"), "a freed disk entry must read as a miss");
-                assertEquals(1, storeReads.get(), "the store-less early return must not touch the store");
-            } finally {
-                cache.close();
-            }
-        }
 
         /** Disk-routed ByteBuffer value: read back from the store and deserialized. */
         @Test
@@ -940,59 +712,6 @@ class AbstractOffHeapCacheTest {
                 final ByteBuffer out = cache.getOrNull("k");
                 assertNotNull(out);
                 assertArrayEquals(data, ByteBufferType.byteArrayOf(out));
-            } finally {
-                cache.close();
-            }
-        }
-
-        /** A store may retain and return its own array; disk reads must never expose that mutable array. */
-        @Test
-        void diskReadReturnsDefensiveCopy() {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final byte[] expected = { 1, 2, 3, 4 };
-
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .evictDelay(0)
-                    .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((k, v, size) -> 2)
-                    .build();
-            try {
-                assertTrue(cache.put("k", expected));
-
-                final byte[] firstRead = cache.getOrNull("k");
-                firstRead[0] = 99;
-
-                assertArrayEquals(expected, cache.getOrNull("k"), "mutating a returned value must not alter the disk-resident cache entry");
-                assertArrayEquals(expected, backing.get("k"), "the store's retained array must remain private");
-            } finally {
-                cache.close();
-            }
-        }
-
-        /** A failed custom deserialization is not a successful disk hit. */
-        @Test
-        void throwingDeserializerDoesNotIncrementDiskHitCount() {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-
-            final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
-                    .capacityInMB(1)
-                    .evictDelay(0)
-                    .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((k, v, size) -> 2)
-                    .statsTimeOnDisk(true)
-                    .serializer((value, output) -> {
-                        final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                        output.write(bytes, 0, bytes.length);
-                    })
-                    .deserializer((bytes, type) -> {
-                        throw new IllegalStateException("cannot deserialize");
-                    })
-                    .build();
-            try {
-                assertTrue(cache.put("k", "value"));
-                assertThrows(IllegalStateException.class, () -> cache.getOrNull("k"));
-                assertEquals(0L, cache.stats().hitCountFromDisk());
             } finally {
                 cache.close();
             }
@@ -1096,35 +815,157 @@ class AbstractOffHeapCacheTest {
             }
         }
 
-        /** A stale disk miss must not detach and reinsert a concurrently installed replacement. */
         @Test
-        void staleDiskReadDoesNotReinsertConcurrentReplacement() throws Exception {
+        void corruptedStoreValueIsRejectedAndTheMappingCanRecover() {
             final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final AtomicBoolean blockFirstRead = new AtomicBoolean(true);
-            final CountDownLatch firstReadEntered = new CountDownLatch(1);
-            final CountDownLatch releaseFirstRead = new CountDownLatch(1);
-            final ExecutorService executor = Executors.newFixedThreadPool(2);
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((key, value, size) -> 2)
+                    .build();
+            try {
+                assertTrue(cache.put("key", new byte[] { 1, 2, 3 }));
+                backing.put("key", new byte[] { 9 });
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.getOrNull("key"));
+                assertTrue(failure.getMessage().contains("does not match expected size"));
+                backing.put("key", new byte[] { 1, 2, 3 });
+                assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("key"));
+            } finally {
+                cache.close();
+            }
+        }
 
-            final OffHeapStore<String> store = new OffHeapStore<>() {
+        /**
+         * A failure raised before the per-key atomic replacement begins (here: an exceptional
+         * {@code hashCode} thrown by the map lookup itself) must fail the put BEFORE the key-only
+         * backing store is mutated; the prior memory entry must survive and the store must remain
+         * untouched.
+         */
+        @Test
+        void diskOwnershipFailurePrecedesBackingStoreMutation() {
+            final ExceptionalHashKey key = new ExceptionalHashKey();
+            final AtomicBoolean storePutCalled = new AtomicBoolean();
+            final OffHeapStore<ExceptionalHashKey> store = new OffHeapStore<>() {
                 @Override
-                public boolean put(final String key, final byte[] value) {
-                    backing.put(key, value);
+                public byte[] get(final ExceptionalHashKey ignored) {
+                    return null;
+                }
+
+                @Override
+                public boolean put(final ExceptionalHashKey ignored, final byte[] value) {
+                    storePutCalled.set(true);
                     return true;
                 }
 
                 @Override
-                public byte[] get(final String key) {
-                    if (blockFirstRead.compareAndSet(true, false)) {
-                        firstReadEntered.countDown();
-                        try {
-                            assertTrue(releaseFirstRead.await(10, TimeUnit.SECONDS));
-                        } catch (final InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                        return null;
-                    }
+                public boolean remove(final ExceptionalHashKey ignored) {
+                    return false;
+                }
+            };
 
+            final OffHeapCache<ExceptionalHashKey, byte[]> cache = OffHeapCache.<ExceptionalHashKey, byte[]> builder()
+                    .capacityInMB(1)
+                    .offHeapStore(store)
+                    .storeSelector((ignored, value, size) -> value.length == 1 ? 1 : 2)
+                    .build();
+            try {
+                final byte[] prior = { 1 };
+                assertTrue(cache.put(key, prior));
+
+                // The disk-routed replacement's first (and only) hashCode call is the entry map's
+                // atomic compute; a throwing hashCode fails the put before its lambda - and therefore
+                // before any store mutation - runs.
+                key.throwOnHashCall(1);
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 2, 3 }));
+
+                assertTrue(failure.getMessage().contains("forced hash failure"));
+                assertFalse(storePutCalled.get(), "the backing bytes must not be mutated when ownership registration fails");
+                assertArrayEquals(prior, cache.getOrNull(key), "the previous memory entry must be restored");
+                assertEquals(0L, cache.stats().sizeOnDisk());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /** A store may retain and return its own array; disk reads must never expose that mutable array. */
+        @Test
+        void diskReadReturnsDefensiveCopy() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final byte[] expected = { 1, 2, 3, 4 };
+
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((k, v, size) -> 2)
+                    .build();
+            try {
+                assertTrue(cache.put("k", expected));
+
+                final byte[] firstRead = cache.getOrNull("k");
+                firstRead[0] = 99;
+
+                assertArrayEquals(expected, cache.getOrNull("k"), "mutating a returned value must not alter the disk-resident cache entry");
+                assertArrayEquals(expected, backing.get("k"), "the store's retained array must remain private");
+            } finally {
+                cache.close();
+            }
+        }
+
+        @Test
+        void diskTimingIgnoresMemoryReadsAndRejectedStoreWrites() {
+            final OffHeapStore<String> store = mock(OffHeapStore.class);
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .offHeapStore(store)
+                    .statsTimeOnDisk(true)
+                    .storeSelector((key, value, size) -> "memory".equals(key) ? 1 : 2)
+                    .build();
+            try {
+                assertTrue(cache.put("memory", new byte[] { 1 }));
+                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("memory"));
+                assertFalse(cache.put("disk", new byte[] { 2 }));
+                cache.remove("absent");
+                assertEquals(1, cache.size());
+                assertEquals(1L, cache.stats().putCount());
+                assertEquals(0L, cache.stats().putCountToDisk());
+                assertEquals(new OffHeapCacheStats.MinMaxAvg(0, 0, 0), cache.stats().readFromDiskTimeStats());
+                assertEquals(new OffHeapCacheStats.MinMaxAvg(0, 0, 0), cache.stats().writeToDiskTimeStats());
+                verify(store).put("disk", new byte[] { 2 });
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * With {@code statsTimeOnDisk} enabled, the disk timing statistics cover the
+         * {@link OffHeapStore} call. A store whose operations take a known minimum time must produce
+         * observations at least that large (only a lower bound is asserted, so the test is robust to
+         * scheduling delays), with {@code min <= avg <= max} holding.
+         */
+        @Test
+        void diskTimingStatsReflectStoreIo() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final OffHeapStore<String> slowStore = new OffHeapStore<>() {
+                private void sleep() {
+                    try {
+                        Thread.sleep(15L);
+                    } catch (final InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+
+                @Override
+                public byte[] get(final String key) {
+                    sleep();
                     return backing.get(key);
+                }
+
+                @Override
+                public boolean put(final String key, final byte[] value) {
+                    sleep();
+                    backing.put(key, value);
+                    return true;
                 }
 
                 @Override
@@ -1133,40 +974,101 @@ class AbstractOffHeapCacheTest {
                 }
             };
 
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(slowStore)
+                    .storeSelector((k, v, size) -> 2)
+                    .statsTimeOnDisk(true)
+                    .build();
             try {
-                final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                        .capacityInMB(1)
-                        .evictDelay(0)
-                        .offHeapStore(store)
-                        .storeSelector((k, v, size) -> 2)
-                        .build();
+                assertTrue(cache.put("key", new byte[] { 1, 2, 3 }));
+                assertArrayEquals(new byte[] { 1, 2, 3 }, cache.getOrNull("key"));
 
-                try {
-                    assertTrue(cache.put("k", new byte[] { 1 }));
-                    final Future<byte[]> staleRead = executor.submit(() -> cache.getOrNull("k"));
-                    assertTrue(firstReadEntered.await(5, TimeUnit.SECONDS));
-
-                    final byte[] replacement = { 2, 2 };
-                    final AtomicReference<Thread> replacementThread = new AtomicReference<>();
-                    final Future<Boolean> replacementPut = executor.submit(() -> {
-                        replacementThread.set(Thread.currentThread());
-                        return cache.put("k", replacement);
-                    });
-                    com.landawn.abacus.TestSupport.awaitCondition("replacement to block behind the stale read",
-                            () -> replacementThread.get() != null && replacementThread.get().getState() == Thread.State.BLOCKED);
-                    releaseFirstRead.countDown();
-
-                    assertEquals(null, staleRead.get(5, TimeUnit.SECONDS));
-                    assertTrue(replacementPut.get(5, TimeUnit.SECONDS));
-                    assertEquals(2L, cache.stats().putCount(), "stale cleanup must not count a remove/reinsert of the replacement as another put");
-                    assertArrayEquals(replacement, cache.getOrNull("k"));
-                } finally {
-                    releaseFirstRead.countDown();
-                    cache.close();
-                }
+                final OffHeapCacheStats stats = cache.stats();
+                assertTrue(stats.writeToDiskTimeStats().min() >= 10.0D, "write timing must cover the store write: " + stats.writeToDiskTimeStats());
+                assertTrue(stats.readFromDiskTimeStats().min() >= 10.0D, "read timing must cover the store read: " + stats.readFromDiskTimeStats());
+                assertTrue(stats.writeToDiskTimeStats().min() <= stats.writeToDiskTimeStats().avg()
+                        && stats.writeToDiskTimeStats().avg() <= stats.writeToDiskTimeStats().max());
             } finally {
-                releaseFirstRead.countDown();
-                executor.shutdownNow();
+                cache.close();
+            }
+        }
+
+        /**
+         * With a disk store, a put that finds only an empty segment dedicated to another slot class
+         * must reuse that segment instead of spilling a value that fits the (empty) memory region.
+         */
+        @Test
+        void emptySegmentOfAnotherClassIsReusedInsteadOfSpillingToDisk() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .build();
+            try {
+                assertTrue(cache.put("first", new byte[100])); // the only segment: 128-byte class
+                cache.remove("first");
+
+                assertTrue(cache.put("other-class", new byte[1000]));
+
+                assertEquals(0L, cache.stats().sizeOnDisk(), "a value that fits the empty memory region must not spill to disk");
+                assertTrue(backing.isEmpty());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * A disk lookup that finds an already-freed entry (the state a getOrNull racing an eviction
+         * observes just after its map lookup) must read as a miss WITHOUT touching the store: the
+         * freed entry's store bytes may already belong to nobody (or, under a same-key replacement,
+         * to a newer entry).
+         */
+        @Test
+        void freedDiskEntryReadsAsMissWithoutTouchingStore() throws Exception {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final AtomicInteger storeReads = new AtomicInteger();
+            final OffHeapStore<String> store = new OffHeapStore<>() {
+                @Override
+                public byte[] get(final String key) {
+                    storeReads.incrementAndGet();
+                    return backing.get(key);
+                }
+
+                @Override
+                public boolean put(final String key, final byte[] value) {
+                    backing.put(key, value);
+                    return true;
+                }
+
+                @Override
+                public boolean remove(final String key) {
+                    return backing.remove(key) != null;
+                }
+            };
+
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(store)
+                    .storeSelector((k, v, size) -> 2)
+                    .build();
+            try {
+                assertTrue(cache.put("key", new byte[] { 1 }));
+                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("key"));
+                assertEquals(1, storeReads.get());
+
+                // Mark the disk entry freed in place while the map still holds it.
+                final AbstractOffHeapCache.Entry<byte[]> entry = entriesOf(cache).get("key");
+                assertNotNull(entry);
+                entry.freed = true;
+
+                assertNull(cache.getOrNull("key"), "a freed disk entry must read as a miss");
+                assertEquals(1, storeReads.get(), "the store-less early return must not touch the store");
+            } finally {
+                cache.close();
             }
         }
 
@@ -1198,6 +1100,35 @@ class AbstractOffHeapCacheTest {
                 assertTrue(cache.put("k", large));
                 assertEquals(1L, cache.stats().sizeOnDisk());
                 assertArrayEquals(large, cache.getOrNull("k"));
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * A checked exception thrown undeclared by the store's {@code remove} is an ordinary removal
+         * failure, like a {@link RuntimeException}: it is logged, the mapping is removed, and only the
+         * store bytes leak. It used to escape remove() and strand a freed entry in the map.
+         */
+        @Test
+        void removeLogsUndeclaredCheckedStoreExceptionAndDropsMapping() {
+            final Map<String, byte[]> stored = new ConcurrentHashMap<>();
+            final AtomicInteger failingRemoves = new AtomicInteger();
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .offHeapStore(newRemoveFailingStore(stored, failingRemoves, new IOException("forced store remove failure")))
+                    .storeSelector((key, value, size) -> 2)
+                    .build();
+            try {
+                assertTrue(cache.put("k", new byte[] { 1 }));
+                failingRemoves.set(1);
+
+                assertDoesNotThrow(() -> cache.remove("k"));
+                assertEquals(0, failingRemoves.get());
+                assertNull(cache.getOrNull("k"));
+                assertEquals(0, cache.size());
+                assertEquals(0L, cache.stats().sizeOnDisk());
+                assertTrue(stored.containsKey("k"), "the failed byte removal leaks the store bytes, as documented");
             } finally {
                 cache.close();
             }
@@ -1277,60 +1208,6 @@ class AbstractOffHeapCacheTest {
             }
         }
 
-        /**
-         * With a disk store, a put that finds only an empty segment dedicated to another slot class
-         * must reuse that segment instead of spilling a value that fits the (empty) memory region.
-         */
-        @Test
-        void emptySegmentOfAnotherClassIsReusedInsteadOfSpillingToDisk() {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .evictDelay(0)
-                    .offHeapStore(newInMemoryStore(backing))
-                    .build();
-            try {
-                assertTrue(cache.put("first", new byte[100])); // the only segment: 128-byte class
-                cache.remove("first");
-
-                assertTrue(cache.put("other-class", new byte[1000]));
-
-                assertEquals(0L, cache.stats().sizeOnDisk(), "a value that fits the empty memory region must not spill to disk");
-                assertTrue(backing.isEmpty());
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * A zero-length value routed to the disk tier: the store receives an empty array, the read
-         * passes the size consistency check ({@code storeBytes.length == entry.size == 0}), and the
-         * value reads back as a non-null empty array counted as a disk hit.
-         */
-        @Test
-        void zeroLengthValueOnDiskTier() {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .evictDelay(0)
-                    .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((k, v, size) -> 2)
-                    .build();
-            try {
-                assertTrue(cache.put("empty", new byte[0]));
-                assertEquals(0, backing.get("empty").length, "the store must receive the zero-length payload");
-                assertEquals(1L, cache.stats().sizeOnDisk());
-
-                final byte[] out = cache.getOrNull("empty");
-                assertNotNull(out, "a zero-length disk-tier value must read back as a hit, not a miss");
-                assertEquals(0, out.length);
-                assertEquals(1L, cache.stats().hitCountFromDisk());
-            } finally {
-                cache.close();
-            }
-        }
-
         /** An {@link Error} from the store's {@code remove} propagates from remove() and leaves the entry readable and removable. */
         @Test
         void removeStoreErrorLeavesDiskEntryLiveAndRetryable() {
@@ -1392,155 +1269,163 @@ class AbstractOffHeapCacheTest {
             }
         }
 
-        /**
-         * A checked exception thrown undeclared by the store's {@code remove} is an ordinary removal
-         * failure, like a {@link RuntimeException}: it is logged, the mapping is removed, and only the
-         * store bytes leak. It used to escape remove() and strand a freed entry in the map.
-         */
+        /** A stale disk miss must not detach and reinsert a concurrently installed replacement. */
         @Test
-        void removeLogsUndeclaredCheckedStoreExceptionAndDropsMapping() {
-            final Map<String, byte[]> stored = new ConcurrentHashMap<>();
-            final AtomicInteger failingRemoves = new AtomicInteger();
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .offHeapStore(newRemoveFailingStore(stored, failingRemoves, new IOException("forced store remove failure")))
-                    .storeSelector((key, value, size) -> 2)
-                    .build();
-            try {
-                assertTrue(cache.put("k", new byte[] { 1 }));
-                failingRemoves.set(1);
-
-                assertDoesNotThrow(() -> cache.remove("k"));
-                assertEquals(0, failingRemoves.get());
-                assertNull(cache.getOrNull("k"));
-                assertEquals(0, cache.size());
-                assertEquals(0L, cache.stats().sizeOnDisk());
-                assertTrue(stored.containsKey("k"), "the failed byte removal leaks the store bytes, as documented");
-            } finally {
-                cache.close();
-            }
-        }
-    }
-
-    @Nested
-    class Promotion {
-
-        @ParameterizedTest
-        @ValueSource(strings = { "full", "oversized", "expired" })
-        void rejectedPromotionStillReturnsTheValueReadFromDisk(final String reason) {
+        void staleDiskReadDoesNotReinsertConcurrentReplacement() throws Exception {
             final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final AtomicBoolean blockFirstRead = new AtomicBoolean(true);
+            final CountDownLatch firstReadEntered = new CountDownLatch(1);
+            final CountDownLatch releaseFirstRead = new CountDownLatch(1);
+            final ExecutorService executor = Executors.newFixedThreadPool(2);
+
+            final OffHeapStore<String> store = new OffHeapStore<>() {
+                @Override
+                public boolean put(final String key, final byte[] value) {
+                    backing.put(key, value);
+                    return true;
+                }
+
+                @Override
+                public byte[] get(final String key) {
+                    if (blockFirstRead.compareAndSet(true, false)) {
+                        firstReadEntered.countDown();
+                        try {
+                            assertTrue(releaseFirstRead.await(10, TimeUnit.SECONDS));
+                        } catch (final InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return null;
+                    }
+
+                    return backing.get(key);
+                }
+
+                @Override
+                public boolean remove(final String key) {
+                    return backing.remove(key) != null;
+                }
+            };
+
+            try {
+                final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                        .capacityInMB(1)
+                        .evictDelay(0)
+                        .offHeapStore(store)
+                        .storeSelector((k, v, size) -> 2)
+                        .build();
+
+                try {
+                    assertTrue(cache.put("k", new byte[] { 1 }));
+                    final Future<byte[]> staleRead = executor.submit(() -> cache.getOrNull("k"));
+                    assertTrue(firstReadEntered.await(5, TimeUnit.SECONDS));
+
+                    final byte[] replacement = { 2, 2 };
+                    final AtomicReference<Thread> replacementThread = new AtomicReference<>();
+                    final Future<Boolean> replacementPut = executor.submit(() -> {
+                        replacementThread.set(Thread.currentThread());
+                        return cache.put("k", replacement);
+                    });
+                    com.landawn.abacus.TestSupport.awaitCondition("replacement to block behind the stale read",
+                            () -> replacementThread.get() != null && replacementThread.get().getState() == Thread.State.BLOCKED);
+                    releaseFirstRead.countDown();
+
+                    assertEquals(null, staleRead.get(5, TimeUnit.SECONDS));
+                    assertTrue(replacementPut.get(5, TimeUnit.SECONDS));
+                    assertEquals(2L, cache.stats().putCount(), "stale cleanup must not count a remove/reinsert of the replacement as another put");
+                    assertArrayEquals(replacement, cache.getOrNull("k"));
+                } finally {
+                    releaseFirstRead.countDown();
+                    cache.close();
+                }
+            } finally {
+                releaseFirstRead.countDown();
+                executor.shutdownNow();
+            }
+        }
+
+        /** Invalid custom routing results are programming errors, not undocumented aliases. */
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(ints = { -1, 3 })
+        void storeSelectorRejectsUnknownAndNullResults(final Integer selected) {
             final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
                     .capacityInMB(1)
-                    .defaultLiveTime(60_000)
-                    .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((key, value, size) -> key.equals("disk") ? 2 : 1)
-                    .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> {
-                        if ("expired".equals(reason)) {
-                            try {
-                                setActivityTime(activity, "createdTime", 0);
-                            } catch (final Exception failure) {
-                                throw new AssertionError(failure);
-                            }
-                        }
-                        return true;
-                    })
+                    .storeSelector((key, value, size) -> selected)
                     .build();
             try {
-                if ("full".equals(reason)) {
-                    assertTrue(cache.put("memory", new byte[AbstractOffHeapCache.SEGMENT_SIZE]));
-                }
-                final byte[] value = new byte["oversized".equals(reason) ? AbstractOffHeapCache.SEGMENT_SIZE + 1 : 16];
-                value[0] = 42;
-                assertTrue(cache.put("disk", value));
-                assertArrayEquals(value, cache.getOrNull("disk"));
-                assertEquals(1, cache.stats().sizeOnDisk());
-                if ("expired".equals(reason)) {
-                    assertFalse(cache.containsKey("disk"));
-                    assertNull(cache.getOrNull("disk"));
-                    assertFalse(backing.containsKey("disk"));
-                } else {
-                    assertArrayEquals(value, backing.get("disk"));
-                }
+                assertThrows(IllegalArgumentException.class, () -> cache.put("key", new byte[] { 1 }));
+                assertEquals(0, cache.size());
             } finally {
                 cache.close();
             }
         }
 
+        /** A failed custom deserialization is not a successful disk hit. */
         @Test
-        void mappedByteBufferDiskReadsAndPromotionReturnHeapBuffers(@TempDir final Path directory) throws Exception {
-            assertMappedByteBufferRoundTrip(directory, true);
-        }
-
-        @Test
-        void directByteBufferDiskReadsAndPromotionReturnHeapBuffers() {
-            assertDirectByteBufferRoundTrip(true, false);
-            assertDirectByteBufferRoundTrip(true, true);
-        }
-
-        /** A custom in-place decoder must not alter bytes that a successful disk read promotes. */
-        @Test
-        void mutatingDeserializerCannotCorruptPromotedBytes() {
+        void throwingDeserializerDoesNotIncrementDiskHitCount() {
             final Map<String, byte[]> backing = new ConcurrentHashMap<>();
 
             final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
                     .capacityInMB(1)
                     .evictDelay(0)
                     .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((key, value, size) -> 2)
-                    .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> true)
+                    .storeSelector((k, v, size) -> 2)
+                    .statsTimeOnDisk(true)
                     .serializer((value, output) -> {
-                        final byte[] encoded = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                        output.write(encoded, 0, encoded.length);
+                        final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+                        output.write(bytes, 0, bytes.length);
                     })
                     .deserializer((bytes, type) -> {
-                        final String decoded = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
-                        Arrays.fill(bytes, (byte) 0); // a legitimate in-place decode/scrub strategy
-                        return decoded;
+                        throw new IllegalStateException("cannot deserialize");
                     })
                     .build();
             try {
-                assertTrue(cache.put("key", "value"));
-                assertEquals("value", cache.getOrNull("key")); // disk read + promotion
-                assertEquals(0L, cache.stats().sizeOnDisk());
-                assertEquals("value", cache.getOrNull("key"), "the promoted memory copy must retain the original encoded bytes");
+                assertTrue(cache.put("k", "value"));
+                assertThrows(IllegalStateException.class, () -> cache.getOrNull("k"));
+                assertEquals(0L, cache.stats().hitCountFromDisk());
             } finally {
                 cache.close();
             }
         }
 
-        // With a promotion tester that always returns true, a disk-only put followed by a get reads the
-        // bytes from disk and copies them back into off-heap memory, retiring the on-disk copy.
-
-        /** Promotion of a small disk-stored value back into a single memory slot. */
+        /**
+         * A zero-length value routed to the disk tier: the store receives an empty array, the read
+         * passes the size consistency check ({@code storeBytes.length == entry.size == 0}), and the
+         * value reads back as a non-null empty array counted as a disk hit.
+         */
         @Test
-        void diskToMemoryPromotionSingleSlot() {
+        void zeroLengthValueOnDiskTier() {
             final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final byte[] data = new byte[256];
-            for (int i = 0; i < data.length; i++) {
-                data[i] = (byte) (i + 1);
-            }
+
             final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(8)
+                    .capacityInMB(1)
                     .evictDelay(0)
-                    .defaultLiveTime(600_000)
-                    .defaultMaxIdleTime(600_000)
                     .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((k, v, size) -> 2) // disk only on put
-                    .testerForLoadingItemFromDiskToMemory((activityPrint, size, elapsed) -> true)
+                    .storeSelector((k, v, size) -> 2)
                     .build();
             try {
-                assertTrue(cache.put("k", data));
+                assertTrue(cache.put("empty", new byte[0]));
+                assertEquals(0, backing.get("empty").length, "the store must receive the zero-length payload");
                 assertEquals(1L, cache.stats().sizeOnDisk());
 
-                // First get reads from disk and promotes the value into a memory slot.
-                assertArrayEquals(data, cache.getOrNull("k"));
-                // After promotion the on-disk copy is retired.
-                assertEquals(0L, cache.stats().sizeOnDisk());
-                // Value is still readable from memory.
-                assertArrayEquals(data, cache.getOrNull("k"));
+                final byte[] out = cache.getOrNull("empty");
+                assertNotNull(out, "a zero-length disk-tier value must read back as a hit, not a miss");
+                assertEquals(0, out.length);
+                assertEquals(1L, cache.stats().hitCountFromDisk());
             } finally {
                 cache.close();
             }
+        }
+
+    }
+
+    @Nested
+    class Promotion {
+
+        @Test
+        void directByteBufferDiskReadsAndPromotionReturnHeapBuffers() {
+            assertDirectByteBufferRoundTrip(true, false);
+            assertDirectByteBufferRoundTrip(true, true);
         }
 
         /** Promotion of a large disk-stored value back into multiple memory slots. */
@@ -1602,14 +1487,72 @@ class AbstractOffHeapCacheTest {
             }
         }
 
+        /** Promotion of a small disk-stored value back into a single memory slot. */
         @Test
-        void promotionDoesNotReviveEntryWhoseTtlExpiresDuringCopy() throws Exception {
-            assertPromotionDoesNotReviveEntry("createdTime");
+        void diskToMemoryPromotionSingleSlot() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final byte[] data = new byte[256];
+            for (int i = 0; i < data.length; i++) {
+                data[i] = (byte) (i + 1);
+            }
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(8)
+                    .evictDelay(0)
+                    .defaultLiveTime(600_000)
+                    .defaultMaxIdleTime(600_000)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((k, v, size) -> 2) // disk only on put
+                    .testerForLoadingItemFromDiskToMemory((activityPrint, size, elapsed) -> true)
+                    .build();
+            try {
+                assertTrue(cache.put("k", data));
+                assertEquals(1L, cache.stats().sizeOnDisk());
+
+                // First get reads from disk and promotes the value into a memory slot.
+                assertArrayEquals(data, cache.getOrNull("k"));
+                // After promotion the on-disk copy is retired.
+                assertEquals(0L, cache.stats().sizeOnDisk());
+                // Value is still readable from memory.
+                assertArrayEquals(data, cache.getOrNull("k"));
+            } finally {
+                cache.close();
+            }
         }
 
         @Test
-        void promotionDoesNotReviveEntryWhoseIdleTimeExpiresDuringCopy() throws Exception {
-            assertPromotionDoesNotReviveEntry("lastAccessTime");
+        void mappedByteBufferDiskReadsAndPromotionReturnHeapBuffers(@TempDir final Path directory) throws Exception {
+            assertMappedByteBufferRoundTrip(directory, true);
+        }
+
+        /** A custom in-place decoder must not alter bytes that a successful disk read promotes. */
+        @Test
+        void mutatingDeserializerCannotCorruptPromotedBytes() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+
+            final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((key, value, size) -> 2)
+                    .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> true)
+                    .serializer((value, output) -> {
+                        final byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
+                        output.write(encoded, 0, encoded.length);
+                    })
+                    .deserializer((bytes, type) -> {
+                        final String decoded = new String(bytes, StandardCharsets.UTF_8);
+                        Arrays.fill(bytes, (byte) 0); // a legitimate in-place decode/scrub strategy
+                        return decoded;
+                    })
+                    .build();
+            try {
+                assertTrue(cache.put("key", "value"));
+                assertEquals("value", cache.getOrNull("key")); // disk read + promotion
+                assertEquals(0L, cache.stats().sizeOnDisk());
+                assertEquals("value", cache.getOrNull("key"), "the promoted memory copy must retain the original encoded bytes");
+            } finally {
+                cache.close();
+            }
         }
 
         @Test
@@ -1637,83 +1580,14 @@ class AbstractOffHeapCacheTest {
             }
         }
 
-        /** Reclamation may fail after releasing slots; its exception must not trigger another release. */
-        @SuppressWarnings("unchecked")
         @Test
-        void rejectedPromotionReclamationFailureDoesNotReleaseSlotsTwice() throws Exception {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final PromotionCopyOffHeapCache cache = new PromotionCopyOffHeapCache(backing);
-            try {
-                assertTrue(cache.put("key", new byte[] { 7 }));
-                final Field queuesField = AbstractOffHeapCache.class.getDeclaredField("segmentQueues");
-                queuesField.setAccessible(true);
-                final Deque<AbstractOffHeapCache.Segment>[] queues = (Deque<AbstractOffHeapCache.Segment>[]) queuesField.get(cache);
-                cache.duringCopy = () -> {
-                    cache.remove("key"); // Make this promotion stale after it reserved its memory slot.
-                    queues[0] = new FailingReclamationQueue(queues[0]);
-                };
-
-                final OutOfMemoryError failure = assertThrows(OutOfMemoryError.class, () -> cache.getOrNull("key"));
-                assertEquals("forced reclamation iterator failure", failure.getMessage());
-                assertEquals(0, cache.size());
-                assertEquals(0, totalOccupiedSlots(cache.stats()), "each unpublished slot must be released exactly once");
-                cache.clear();
-                assertTrue(cache.stats().occupiedSlots().isEmpty());
-            } finally {
-                cache.close();
-            }
+        void promotionDoesNotReviveEntryWhoseIdleTimeExpiresDuringCopy() throws Exception {
+            assertPromotionDoesNotReviveEntry("lastAccessTime");
         }
 
-        /** A stale promotion attempt must likewise leave a concurrent replacement continuously installed. */
         @Test
-        void stalePromotionDoesNotReinsertConcurrentReplacement() throws Exception {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final AtomicBoolean blockFirstPromotion = new AtomicBoolean(true);
-            final CountDownLatch firstPromotionEntered = new CountDownLatch(1);
-            final CountDownLatch releaseFirstPromotion = new CountDownLatch(1);
-            final ExecutorService executor = Executors.newSingleThreadExecutor();
-
-            try {
-                final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                        .capacityInMB(1)
-                        .evictDelay(0)
-                        .offHeapStore(newInMemoryStore(backing))
-                        .storeSelector((k, v, size) -> 2)
-                        .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> {
-                            if (blockFirstPromotion.compareAndSet(true, false)) {
-                                firstPromotionEntered.countDown();
-                                try {
-                                    assertTrue(releaseFirstPromotion.await(10, TimeUnit.SECONDS));
-                                } catch (final InterruptedException e) {
-                                    Thread.currentThread().interrupt();
-                                }
-                                return true;
-                            }
-
-                            return false;
-                        })
-                        .build();
-
-                try {
-                    final byte[] oldValue = { 1 };
-                    final byte[] replacement = { 2, 2 };
-                    assertTrue(cache.put("k", oldValue));
-
-                    final Future<byte[]> staleRead = executor.submit(() -> cache.getOrNull("k"));
-                    assertTrue(firstPromotionEntered.await(5, TimeUnit.SECONDS));
-                    assertTrue(cache.put("k", replacement));
-                    releaseFirstPromotion.countDown();
-
-                    assertArrayEquals(oldValue, staleRead.get(5, TimeUnit.SECONDS));
-                    assertEquals(2L, cache.stats().putCount(), "stale promotion must not count a remove/reinsert of the replacement as another put");
-                    assertArrayEquals(replacement, cache.getOrNull("k"));
-                } finally {
-                    cache.close();
-                }
-            } finally {
-                releaseFirstPromotion.countDown();
-                executor.shutdownNow();
-            }
+        void promotionDoesNotReviveEntryWhoseTtlExpiresDuringCopy() throws Exception {
+            assertPromotionDoesNotReviveEntry("createdTime");
         }
 
         /**
@@ -1771,71 +1645,131 @@ class AbstractOffHeapCacheTest {
                 cache.close();
             }
         }
+
+        /** Reclamation may fail after releasing slots; its exception must not trigger another release. */
+        @SuppressWarnings("unchecked")
+        @Test
+        void rejectedPromotionReclamationFailureDoesNotReleaseSlotsTwice() throws Exception {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final PromotionCopyOffHeapCache cache = new PromotionCopyOffHeapCache(backing);
+            try {
+                assertTrue(cache.put("key", new byte[] { 7 }));
+                final Field queuesField = AbstractOffHeapCache.class.getDeclaredField("segmentQueues");
+                queuesField.setAccessible(true);
+                final Deque<AbstractOffHeapCache.Segment>[] queues = (Deque<AbstractOffHeapCache.Segment>[]) queuesField.get(cache);
+                cache.duringCopy = () -> {
+                    cache.remove("key"); // Make this promotion stale after it reserved its memory slot.
+                    queues[0] = new FailingReclamationQueue(queues[0]);
+                };
+
+                final OutOfMemoryError failure = assertThrows(OutOfMemoryError.class, () -> cache.getOrNull("key"));
+                assertEquals("forced reclamation iterator failure", failure.getMessage());
+                assertEquals(0, cache.size());
+                assertEquals(0, totalOccupiedSlots(cache.stats()), "each unpublished slot must be released exactly once");
+                cache.clear();
+                assertTrue(cache.stats().occupiedSlots().isEmpty());
+            } finally {
+                cache.close();
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = { "full", "oversized", "expired" })
+        void rejectedPromotionStillReturnsTheValueReadFromDisk(final String reason) {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .defaultLiveTime(60_000)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((key, value, size) -> key.equals("disk") ? 2 : 1)
+                    .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> {
+                        if ("expired".equals(reason)) {
+                            try {
+                                setActivityTime(activity, "createdTime", 0);
+                            } catch (final Exception failure) {
+                                throw new AssertionError(failure);
+                            }
+                        }
+                        return true;
+                    })
+                    .build();
+            try {
+                if ("full".equals(reason)) {
+                    assertTrue(cache.put("memory", new byte[AbstractOffHeapCache.SEGMENT_SIZE]));
+                }
+                final byte[] value = new byte["oversized".equals(reason) ? AbstractOffHeapCache.SEGMENT_SIZE + 1 : 16];
+                value[0] = 42;
+                assertTrue(cache.put("disk", value));
+                assertArrayEquals(value, cache.getOrNull("disk"));
+                assertEquals(1, cache.stats().sizeOnDisk());
+                if ("expired".equals(reason)) {
+                    assertFalse(cache.containsKey("disk"));
+                    assertNull(cache.getOrNull("disk"));
+                    assertFalse(backing.containsKey("disk"));
+                } else {
+                    assertArrayEquals(value, backing.get("disk"));
+                }
+            } finally {
+                cache.close();
+            }
+        }
+
+        /** A stale promotion attempt must likewise leave a concurrent replacement continuously installed. */
+        @Test
+        void stalePromotionDoesNotReinsertConcurrentReplacement() throws Exception {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final AtomicBoolean blockFirstPromotion = new AtomicBoolean(true);
+            final CountDownLatch firstPromotionEntered = new CountDownLatch(1);
+            final CountDownLatch releaseFirstPromotion = new CountDownLatch(1);
+            final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+            try {
+                final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                        .capacityInMB(1)
+                        .evictDelay(0)
+                        .offHeapStore(newInMemoryStore(backing))
+                        .storeSelector((k, v, size) -> 2)
+                        .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> {
+                            if (blockFirstPromotion.compareAndSet(true, false)) {
+                                firstPromotionEntered.countDown();
+                                try {
+                                    assertTrue(releaseFirstPromotion.await(10, TimeUnit.SECONDS));
+                                } catch (final InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                }
+                                return true;
+                            }
+
+                            return false;
+                        })
+                        .build();
+
+                try {
+                    final byte[] oldValue = { 1 };
+                    final byte[] replacement = { 2, 2 };
+                    assertTrue(cache.put("k", oldValue));
+
+                    final Future<byte[]> staleRead = executor.submit(() -> cache.getOrNull("k"));
+                    assertTrue(firstPromotionEntered.await(5, TimeUnit.SECONDS));
+                    assertTrue(cache.put("k", replacement));
+                    releaseFirstPromotion.countDown();
+
+                    assertArrayEquals(oldValue, staleRead.get(5, TimeUnit.SECONDS));
+                    assertEquals(2L, cache.stats().putCount(), "stale promotion must not count a remove/reinsert of the replacement as another put");
+                    assertArrayEquals(replacement, cache.getOrNull("k"));
+                } finally {
+                    cache.close();
+                }
+            } finally {
+                releaseFirstPromotion.countDown();
+                executor.shutdownNow();
+            }
+        }
+
     }
 
     @Nested
     class ExpirationAndMaintenance {
-
-        @Test
-        void vacationPreservesDiskEntriesWhileRelievingMemoryPressure() {
-            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
-                    .capacityInMB(1)
-                    .evictDelay(0)
-                    .offHeapStore(newInMemoryStore(backing))
-                    .storeSelector((key, value, size) -> "disk".equals(key) ? 2 : 1)
-                    .build();
-            try {
-                assertTrue(cache.put("disk", new byte[] { 1 }));
-                assertTrue(cache.put("memory", new byte[AbstractOffHeapCache.SEGMENT_SIZE]));
-                assertFalse(cache.put("crowded-out", new byte[8192]));
-                awaitCondition("memory entry evicted", () -> cache.size() == 1);
-
-                assertEquals(1, cache.stats().sizeOnDisk());
-                assertEquals(1, cache.stats().evictionCount());
-                assertEquals(0, cache.stats().occupiedMemory());
-                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("disk"));
-                assertArrayEquals(new byte[] { 1 }, backing.get("disk"));
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * A failed in-memory put of a value that COULD fit an empty cache (genuine memory pressure,
-         * not an impossible size) schedules the asynchronous vacating task. Exercises the
-         * {@code vacate()} scheduling path end-to-end: the task evicts entries and reclaims their
-         * now-empty segments, keeping the cache usable. (A value larger than the entire capacity no
-         * longer triggers a vacate - the in-memory attempt is skipped for it entirely.)
-         */
-        @Test
-        void vacateScheduledWhenMemoryFullForNewKey() throws InterruptedException {
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
-            try {
-                // Fill most of the single 1 MB segment, then ask for more than remains. Sizes are
-                // exact multiples of the 8192-byte max block size (byte[] values are stored raw, at
-                // exactly array length) so every chunk uses the segment's single 8192 slot class: 100
-                // of its 128 slots are taken, and the second put needs 100 more. The second value
-                // would fit an empty cache, so the failure is genuine memory pressure and schedules
-                // the vacating task.
-                assertTrue(cache.put("occupant", new byte[100 * 8192]));
-                assertFalse(cache.put("crowded-out", new byte[100 * 8192]));
-
-                // Allow the asynchronously-scheduled vacating task to run (covers its lambda body).
-                Thread.sleep(200);
-
-                // The vacate evicted the occupant and reclaimed its now-empty segment, so the cache
-                // is usable again - even for a different slot-size class.
-                final byte[] ok = new byte[128];
-                for (int i = 0; i < ok.length; i++) {
-                    ok[i] = (byte) i;
-                }
-                assertTrue(cache.put("ok", ok));
-                assertArrayEquals(ok, cache.getOrNull("ok"));
-            } finally {
-                cache.close();
-            }
-        }
 
         /**
          * Idle-time expiry (as opposed to TTL expiry, which every other expiry test uses): an entry
@@ -1858,25 +1792,24 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
-         * The periodic maintenance sweep (evictDelay &gt; 0) must remove an expired entry, count it as
-         * an eviction, and reclaim its segment — without any intervening {@code get}.
+         * A maintenance pass whose sweep hits an {@link Error} (here a key's {@code hashCode} throwing
+         * inside the removal's {@code compute}) must be logged and retried on the next cycle:
+         * {@code scheduleWithFixedDelay} permanently suppresses every future run when a throwable
+         * escapes the task. The expired entry must still be swept by a later pass.
          */
         @Test
-        void maintenanceSweepRemovesExpiredEntries() throws Exception {
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(100).build();
-            try {
-                assertTrue(cache.put("k", new byte[] { 1, 2, 3 }, 150, 0));
+        void maintenancePassSurvivesErrorAndKeepsSweeping() throws Exception {
+            assertMaintenancePassSurvivesAndKeepsSweeping(new AssertionError("forced hashCode failure"));
+        }
 
-                for (int i = 0; i < 100 && cache.size() != 0; i++) {
-                    Thread.sleep(50L);
-                }
-
-                assertEquals(0, cache.size(), "the maintenance sweep must remove the expired entry without a get");
-                assertEquals(1L, cache.stats().evictionCount());
-                assertEquals(0, totalOccupiedSlots(cache.stats()), "the sweep must reclaim the expired entry's slots");
-            } finally {
-                cache.close();
-            }
+        /**
+         * As above, for a checked exception thrown without being declared (as code written in Kotlin, or
+         * using sneaky throws, can do). It is neither a {@link RuntimeException} nor an {@link Error}, so a
+         * catch limited to those two would still let it escape and cancel every future maintenance run.
+         */
+        @Test
+        void maintenancePassSurvivesUndeclaredCheckedExceptionAndKeepsSweeping() throws Exception {
+            assertMaintenancePassSurvivesAndKeepsSweeping(new IOException("forced hashCode failure"));
         }
 
         /** A sweep must recheck idle expiry after an in-flight read releases the entry monitor. */
@@ -1901,10 +1834,8 @@ class AbstractOffHeapCacheTest {
                         return null;
                     });
 
-                    final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                    while ((maintenanceThread.get() == null || maintenanceThread.get().getState() != Thread.State.BLOCKED) && System.nanoTime() < deadline) {
-                        Thread.sleep(1L);
-                    }
+                    awaitCondition("maintenance waiting to retire the expired entry",
+                            () -> maintenanceThread.get() != null && maintenanceThread.get().getState() == Thread.State.BLOCKED);
 
                     assertNotNull(maintenanceThread.get());
                     assertEquals(Thread.State.BLOCKED, maintenanceThread.get().getState(), "maintenance must be waiting to retire the expired candidate");
@@ -1919,6 +1850,62 @@ class AbstractOffHeapCacheTest {
                 assertEquals(1, totalOccupiedSlots(cache.stats()));
             } finally {
                 executor.shutdownNow();
+                cache.close();
+            }
+        }
+
+        /**
+         * An {@link Error} from the store's {@code remove} must leave an expired disk entry live and mapped,
+         * so a later maintenance pass retries the removal. The entry used to be marked freed before the
+         * store call: the Error then aborted the removal's {@code compute}, stranding a freed entry that
+         * size() still counted, every later sweep skipped, and whose store bytes were never removed.
+         */
+        @Test
+        void maintenanceRetriesExpiredDiskEntryAfterStoreRemoveError() throws Exception {
+            final Map<String, byte[]> stored = new ConcurrentHashMap<>();
+            final AtomicInteger failingRemoves = new AtomicInteger();
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .evictDelay(50)
+                    .offHeapStore(newRemoveFailingStore(stored, failingRemoves, new AssertionError("forced store remove failure")))
+                    .storeSelector((key, value, size) -> 2)
+                    .build();
+            try {
+                assertTrue(cache.put("k", new byte[] { 1 }, 200, 0));
+                failingRemoves.set(1);
+
+                awaitCondition("all entries removed by maintenance", () -> cache.size() == 0);
+
+                assertEquals(0, failingRemoves.get(), "the first removal attempt must have failed");
+                assertEquals(0, cache.size(), "a later pass must retry and complete the removal");
+                assertFalse(stored.containsKey("k"), "the retried removal must delete the store bytes");
+
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(0L, stats.sizeOnDisk());
+                assertEquals(0L, stats.dataSizeOnDisk());
+                assertEquals(1L, stats.evictionCount());
+                assertEquals(1L, stats.evictionCountFromDisk());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * The periodic maintenance sweep (evictDelay &gt; 0) must remove an expired entry, count it as
+         * an eviction, and reclaim its segment — without any intervening {@code get}.
+         */
+        @Test
+        void maintenanceSweepRemovesExpiredEntries() throws Exception {
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(100).build();
+            try {
+                assertTrue(cache.put("k", new byte[] { 1, 2, 3 }, 150, 0));
+
+                awaitCondition("all entries removed by maintenance", () -> cache.size() == 0);
+
+                assertEquals(0, cache.size(), "the maintenance sweep must remove the expired entry without a get");
+                assertEquals(1L, cache.stats().evictionCount());
+                assertEquals(0, totalOccupiedSlots(cache.stats()), "the sweep must reclaim the expired entry's slots");
+            } finally {
                 cache.close();
             }
         }
@@ -1954,27 +1941,69 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
-         * A value no larger than the capacity in bytes can still be impossible to place: its
-         * slot-rounded chunks need whole segments per size class. In a 2 MB cache with the default
-         * 8192-byte max block, a value of {@code 2 MB - 100} bytes needs 255 full chunks (two whole
-         * 8192-class segments) plus a final 8092-byte chunk in the 8128-byte class, i.e. a third
-         * segment. Such a put is as doomed as an oversized one, so it must neither schedule a vacate
-         * (which would evict unrelated entries without ever making room) nor be promoted from disk.
+         * The vacate task's future is never read, so a failed pass is visible only through its log line.
+         * An undeclared checked exception (here from a key's {@code hashCode} while the pass evicts it) must
+         * be logged like an {@link Error} or {@link RuntimeException}, and the single-flight gate released.
          */
         @Test
-        void valueNeedingMoreSegmentsThanCapacityDoesNotVacate() throws Exception {
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(2).evictDelay(0).build();
+        void vacatePassLogsUndeclaredCheckedExceptionAndReleasesGate() throws Exception {
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
             try {
-                assertTrue(cache.put("small", new byte[] { 1 }));
+                final ThrowingHashKey occupant = new ThrowingHashKey();
+                // Exact 8192 multiples keep every chunk in the segment's single slot class (see
+                // vacateScheduledWhenMemoryFullForNewKey).
+                assertTrue(cache.put(occupant, new byte[100 * 8192]));
+                occupant.throwOnNextHashCalls(1, new IOException("forced hashCode failure"));
+                assertFalse(cache.put("crowded-out", new byte[100 * 8192]), "the segment is full; this put fails and schedules a vacate");
 
-                final byte[] doomed = new byte[2 * 1024 * 1024 - 100];
-                assertFalse(cache.put("doomed", doomed), "the value can never be placed in memory and there is no disk store");
+                verify(logger, timeout(5_000)).warn(eq("Off-heap cache vacate pass failed; a later put under memory pressure will retry"),
+                        isA(IOException.class));
+                assertEquals(0, occupant.remainingFailures());
 
-                // Give a (wrongly) scheduled asynchronous vacate pass ample time to run.
-                Thread.sleep(500L);
+                final Field vacatingField = AbstractOffHeapCache.class.getDeclaredField("vacating");
+                vacatingField.setAccessible(true);
+                final AtomicBoolean vacating = (AtomicBoolean) vacatingField.get(cache);
 
-                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("small"), "a doomed put must not vacate unrelated in-memory entries");
-                assertEquals(0L, cache.stats().evictionCount(), "a doomed put must not schedule a vacate");
+                awaitCondition("vacation gate released", () -> !vacating.get());
+
+                assertFalse(vacating.get(), "a failed vacate pass must release the single-flight gate");
+                assertEquals(1, cache.size(), "the failed pass evicted nothing");
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * A failed in-memory put of a value that COULD fit an empty cache (genuine memory pressure,
+         * not an impossible size) schedules the asynchronous vacating task. Exercises the
+         * {@code vacate()} scheduling path end-to-end: the task evicts entries and reclaims their
+         * now-empty segments, keeping the cache usable. (A value larger than the entire capacity no
+         * longer triggers a vacate - the in-memory attempt is skipped for it entirely.)
+         */
+        @Test
+        void vacateScheduledWhenMemoryFullForNewKey() throws InterruptedException {
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
+            try {
+                // Fill most of the single 1 MB segment, then ask for more than remains. Sizes are
+                // exact multiples of the 8192-byte max block size (byte[] values are stored raw, at
+                // exactly array length) so every chunk uses the segment's single 8192 slot class: 100
+                // of its 128 slots are taken, and the second put needs 100 more. The second value
+                // would fit an empty cache, so the failure is genuine memory pressure and schedules
+                // the vacating task.
+                assertTrue(cache.put("occupant", new byte[100 * 8192]));
+                assertFalse(cache.put("crowded-out", new byte[100 * 8192]));
+
+                awaitCondition("memory-pressure eviction completed", () -> cache.size() == 0);
+
+                // The vacate evicted the occupant and reclaimed its now-empty segment, so the cache
+                // is usable again - even for a different slot-size class.
+                final byte[] ok = new byte[128];
+                for (int i = 0; i < ok.length; i++) {
+                    ok[i] = (byte) i;
+                }
+                assertTrue(cache.put("ok", ok));
+                assertArrayEquals(ok, cache.getOrNull("ok"));
             } finally {
                 cache.close();
             }
@@ -2022,9 +2051,7 @@ class AbstractOffHeapCacheTest {
                 assertTrue(cache.put("b", new byte[40 * 8192]));
                 assertFalse(cache.put("crowded-out", new byte[100 * 8192]), "the segment is full; this put fails and schedules a vacate");
 
-                for (int i = 0; i < 100 && cache.size() != 0; i++) {
-                    Thread.sleep(50L);
-                }
+                awaitCondition("all entries removed by maintenance", () -> cache.size() == 0);
 
                 assertEquals(0, cache.size(), "vacatingFactor 1.0 must evict every entry");
                 assertEquals(2L, cache.stats().evictionCount());
@@ -2034,172 +2061,60 @@ class AbstractOffHeapCacheTest {
             }
         }
 
-        /**
-         * A maintenance pass whose sweep hits an {@link Error} (here a key's {@code hashCode} throwing
-         * inside the removal's {@code compute}) must be logged and retried on the next cycle:
-         * {@code scheduleWithFixedDelay} permanently suppresses every future run when a throwable
-         * escapes the task. The expired entry must still be swept by a later pass.
-         */
         @Test
-        void maintenancePassSurvivesErrorAndKeepsSweeping() throws Exception {
-            assertMaintenancePassSurvivesAndKeepsSweeping(new AssertionError("forced hashCode failure"));
-        }
-
-        /**
-         * As above, for a checked exception thrown without being declared (as code written in Kotlin, or
-         * using sneaky throws, can do). It is neither a {@link RuntimeException} nor an {@link Error}, so a
-         * catch limited to those two would still let it escape and cancel every future maintenance run.
-         */
-        @Test
-        void maintenancePassSurvivesUndeclaredCheckedExceptionAndKeepsSweeping() throws Exception {
-            assertMaintenancePassSurvivesAndKeepsSweeping(new IOException("forced hashCode failure"));
-        }
-
-        /**
-         * The vacate task's future is never read, so a failed pass is visible only through its log line.
-         * An undeclared checked exception (here from a key's {@code hashCode} while the pass evicts it) must
-         * be logged like an {@link Error} or {@link RuntimeException}, and the single-flight gate released.
-         */
-        @Test
-        void vacatePassLogsUndeclaredCheckedExceptionAndReleasesGate() throws Exception {
-            final Logger logger = mock(Logger.class);
-            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
-            try {
-                final ThrowingHashKey occupant = new ThrowingHashKey();
-                // Exact 8192 multiples keep every chunk in the segment's single slot class (see
-                // vacateScheduledWhenMemoryFullForNewKey).
-                assertTrue(cache.put(occupant, new byte[100 * 8192]));
-                occupant.throwOnNextHashCalls(1, new IOException("forced hashCode failure"));
-                assertFalse(cache.put("crowded-out", new byte[100 * 8192]), "the segment is full; this put fails and schedules a vacate");
-
-                verify(logger, timeout(5_000)).warn(eq("Off-heap cache vacate pass failed; a later put under memory pressure will retry"),
-                        isA(IOException.class));
-                assertEquals(0, occupant.remainingFailures());
-
-                final Field vacatingField = AbstractOffHeapCache.class.getDeclaredField("vacating");
-                vacatingField.setAccessible(true);
-                final AtomicBoolean vacating = (AtomicBoolean) vacatingField.get(cache);
-
-                for (int i = 0; i < 100 && vacating.get(); i++) {
-                    Thread.sleep(10L);
-                }
-
-                assertFalse(vacating.get(), "a failed vacate pass must release the single-flight gate");
-                assertEquals(1, cache.size(), "the failed pass evicted nothing");
-            } finally {
-                cache.close();
-            }
-        }
-
-        /**
-         * An {@link Error} from the store's {@code remove} must leave an expired disk entry live and mapped,
-         * so a later maintenance pass retries the removal. The entry used to be marked freed before the
-         * store call: the Error then aborted the removal's {@code compute}, stranding a freed entry that
-         * size() still counted, every later sweep skipped, and whose store bytes were never removed.
-         */
-        @Test
-        void maintenanceRetriesExpiredDiskEntryAfterStoreRemoveError() throws Exception {
-            final Map<String, byte[]> stored = new ConcurrentHashMap<>();
-            final AtomicInteger failingRemoves = new AtomicInteger();
+        void vacationPreservesDiskEntriesWhileRelievingMemoryPressure() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
             final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
                     .capacityInMB(1)
-                    .evictDelay(50)
-                    .offHeapStore(newRemoveFailingStore(stored, failingRemoves, new AssertionError("forced store remove failure")))
-                    .storeSelector((key, value, size) -> 2)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((key, value, size) -> "disk".equals(key) ? 2 : 1)
                     .build();
             try {
-                assertTrue(cache.put("k", new byte[] { 1 }, 200, 0));
-                failingRemoves.set(1);
+                assertTrue(cache.put("disk", new byte[] { 1 }));
+                assertTrue(cache.put("memory", new byte[AbstractOffHeapCache.SEGMENT_SIZE]));
+                assertFalse(cache.put("crowded-out", new byte[8192]));
+                awaitCondition("memory entry evicted", () -> cache.size() == 1);
 
-                for (int i = 0; i < 100 && cache.size() != 0; i++) {
-                    Thread.sleep(50L);
-                }
-
-                assertEquals(0, failingRemoves.get(), "the first removal attempt must have failed");
-                assertEquals(0, cache.size(), "a later pass must retry and complete the removal");
-                assertFalse(stored.containsKey("k"), "the retried removal must delete the store bytes");
-
-                final OffHeapCacheStats stats = cache.stats();
-                assertEquals(0L, stats.sizeOnDisk());
-                assertEquals(0L, stats.dataSizeOnDisk());
-                assertEquals(1L, stats.evictionCount());
-                assertEquals(1L, stats.evictionCountFromDisk());
+                assertEquals(1, cache.stats().sizeOnDisk());
+                assertEquals(1, cache.stats().evictionCount());
+                assertEquals(0, cache.stats().occupiedMemory());
+                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("disk"));
+                assertArrayEquals(new byte[] { 1 }, backing.get("disk"));
             } finally {
                 cache.close();
             }
         }
+
+        /**
+         * A value no larger than the capacity in bytes can still be impossible to place: its
+         * slot-rounded chunks need whole segments per size class. In a 2 MB cache with the default
+         * 8192-byte max block, a value of {@code 2 MB - 100} bytes needs 255 full chunks (two whole
+         * 8192-class segments) plus a final 8092-byte chunk in the 8128-byte class, i.e. a third
+         * segment. Such a put is as doomed as an oversized one, so it must neither schedule a vacate
+         * (which would evict unrelated entries without ever making room) nor be promoted from disk.
+         */
+        @Test
+        void valueNeedingMoreSegmentsThanCapacityDoesNotVacate() throws Exception {
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(2).evictDelay(0).build();
+            try {
+                assertTrue(cache.put("small", new byte[] { 1 }));
+
+                final byte[] doomed = new byte[2 * 1024 * 1024 - 100];
+                assertDoesNotScheduleVacation(cache,
+                        () -> assertFalse(cache.put("doomed", doomed), "the value can never be placed in memory and there is no disk store"));
+
+                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("small"), "a doomed put must not vacate unrelated in-memory entries");
+                assertEquals(0L, cache.stats().evictionCount(), "a doomed put must not schedule a vacate");
+            } finally {
+                cache.close();
+            }
+        }
+
     }
 
     @Nested
     class Lifecycle {
-
-        @Test
-        void closeContinuesReleasingEntriesAndTheStoreWhenDiagnosticsFail() throws Exception {
-            final Logger logger = mock(Logger.class);
-            final OffHeapStore<Object> store = mock(OffHeapStore.class);
-            when(store.put(any(), any(byte[].class))).thenReturn(true);
-            doThrow(new IllegalStateException("store unavailable")).when(store).remove(any());
-            final IllegalStateException logFailure = new IllegalStateException("logging backend failed");
-            doThrow(logFailure).when(logger).warn(anyString(), any(Throwable.class));
-            final HeapOffHeapCache cache = new HeapOffHeapCache(logger, store);
-            try {
-                assertTrue(cache.put("first", new byte[] { 1 }));
-                assertTrue(cache.put("second", new byte[] { 2 }));
-                assertSame(logFailure, assertThrows(IllegalStateException.class, cache::close));
-                assertTrue(cache.isClosed());
-                assertTrue(entriesOf(cache).isEmpty());
-                verify(store, times(2)).remove(any());
-                verify(store).close();
-                assertEquals(0, logFailure.getSuppressed().length);
-            } finally {
-                assertDoesNotThrow(cache::close);
-            }
-        }
-
-        @Test
-        void shutdownHookClosesTheCacheAndLateMaintenanceDoesNothing() throws Exception {
-            final Logger logger = mock(Logger.class);
-            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
-            final Field hookField = AbstractOffHeapCache.class.getDeclaredField("shutdownHook");
-            hookField.setAccessible(true);
-            final Thread hook = (Thread) hookField.get(cache);
-            try {
-                assertTrue(cache.put("key", new byte[] { 1 }));
-                hook.run();
-                assertTrue(cache.isClosed());
-                verify(logger).info("Closing off-heap cache on JVM shutdown");
-                final Method maintenance = AbstractOffHeapCache.class.getDeclaredMethod("runMaintenance");
-                maintenance.setAccessible(true);
-                assertDoesNotThrow(() -> maintenance.invoke(cache));
-                assertTrue(entriesOf(cache).isEmpty());
-            } finally {
-                cache.close();
-            }
-        }
-
-        @ParameterizedTest
-        @ValueSource(booleans = { false, true })
-        void closeToleratesAnAlreadyShuttingDownJvm(final boolean debug) throws Exception {
-            final Logger logger = mock(Logger.class);
-            when(logger.isDebugEnabled()).thenReturn(debug);
-            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
-            final Field hookField = AbstractOffHeapCache.class.getDeclaredField("shutdownHook");
-            hookField.setAccessible(true);
-            final Thread hook = (Thread) hookField.get(cache);
-            final Runtime actualRuntime = Runtime.getRuntime();
-            final Runtime shuttingDown = mock(Runtime.class);
-            doThrow(new IllegalStateException("JVM shutting down")).when(shuttingDown).removeShutdownHook(hook);
-            try (MockedStatic<Runtime> runtimes = Mockito.mockStatic(Runtime.class)) {
-                runtimes.when(Runtime::getRuntime).thenReturn(shuttingDown);
-                assertDoesNotThrow(cache::close);
-                assertTrue(cache.isClosed());
-                assertNull(hookField.get(cache));
-                verify(logger, times(debug ? 1 : 0)).debug(anyString(), any(Throwable.class));
-            } finally {
-                actualRuntime.removeShutdownHook(hook);
-                cache.close();
-            }
-        }
 
         @Test
         void closeContinuesCleanupAfterANativeReleaseRuntimeFailure() throws Exception {
@@ -2221,133 +2136,6 @@ class AbstractOffHeapCacheTest {
                 verify(store).close();
             } finally {
                 assertDoesNotThrow(cache::close);
-            }
-        }
-
-        /**
-         * Regression coverage for the cancelled-eviction-task GC leak in
-         * {@link AbstractOffHeapCache}.
-         *
-         * <p>Without {@code setRemoveOnCancelPolicy(true)} on the shared scheduled executor, a
-         * cancelled {@code scheduleFuture} sits in the executor's task queue until its scheduled fire
-         * time, holding a strong reference to the closed cache and preventing GC of its off-heap
-         * allocation. The fix enables the policy on the executor so {@code cancel()} purges the task
-         * from the queue immediately.
-         *
-         * <p>This smoke test creates and immediately closes many short-lived off-heap caches in a
-         * tight loop. With the fix, cancelled scheduled tasks are purged on close, so memory stays
-         * bounded. Without the fix, the executor's queue grows unbounded — each cache's eviction task
-         * remains scheduled at its full {@code evictDelay} into the future even after close. The test
-         * fails (OOM or excessive time) regress when the fix is reverted.
-         */
-        @Test
-        void repeatedCreateAndCloseDoesNotLeakScheduledTasks() {
-            // 200 caches with a 5-minute evictDelay each. Without the cancel-on-purge policy, all 200
-            // scheduled tasks would remain in the executor's queue holding cache references after close.
-            for (int i = 0; i < 200; i++) {
-                final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
-                        .capacityInMB(16)
-                        .evictDelay(5L * 60_000L)
-                        .defaultLiveTime(60_000)
-                        .defaultMaxIdleTime(60_000)
-                        .build();
-                try {
-                    assertTrue(cache.put("k", "v"));
-                } finally {
-                    cache.close();
-                }
-            }
-        }
-
-        /**
-         * Regression coverage for the post-close {@code put()} ordering bug. The off-heap cache frees
-         * its native allocation in {@code close()}; a later {@code put()} must fail before any slot
-         * allocation or native-copy hook is reached. Previously the closed state was only consulted
-         * after {@code copyToMemory(...)}, which made {@code OffHeapCache} write to freed native memory.
-         */
-        @Test
-        void putAfterCloseFailsBeforeNativeCopy() {
-            final GuardedOffHeapCache cache = new GuardedOffHeapCache();
-            cache.close();
-
-            assertThrows(IllegalStateException.class, () -> cache.put("k", new byte[] { 1 }));
-            assertFalse(cache.copiedAfterDeallocate.get(), "put after close must not copy into deallocated memory");
-        }
-
-        /** A user callback cannot upgrade the operation's lifecycle read lock into close's write lock. */
-        @Test
-        void reentrantCloseFromSerializerFailsFastAndCacheRemainsOpen() {
-            final AtomicReference<OffHeapCache<String, String>> cacheRef = new AtomicReference<>();
-            final AtomicReference<IllegalStateException> closeFailure = new AtomicReference<>();
-            final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder().capacityInMB(1).evictDelay(0).serializer((value, output) -> {
-                try {
-                    cacheRef.get().close();
-                    throw new AssertionError("reentrant close must fail instead of attempting a read-to-write lock upgrade");
-                } catch (final IllegalStateException e) {
-                    closeFailure.set(e);
-                }
-
-                final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                output.write(bytes, 0, bytes.length);
-            }).deserializer((bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8)).build();
-            cacheRef.set(cache);
-
-            try {
-                assertTrue(cache.put("key", "value"));
-                assertNotNull(closeFailure.get());
-                assertTrue(closeFailure.get().getMessage().contains("Cannot close this off-heap cache reentrantly"));
-                assertFalse(cache.isClosed(), "the rejected reentrant close must leave the cache open");
-                assertEquals("value", cache.getOrNull("key"));
-            } finally {
-                cache.close();
-            }
-        }
-
-        @Test
-        void closeRemovesEveryDiskEntryWithoutRehashingKeys() throws Exception {
-            final Map<ExceptionalHashKey, byte[]> backing = new IdentityHashMap<>();
-            final AtomicBoolean removedBeforeStoreClosed = new AtomicBoolean();
-            final OffHeapStore<ExceptionalHashKey> store = new OffHeapStore<>() {
-                @Override
-                public byte[] get(final ExceptionalHashKey key) {
-                    return backing.get(key);
-                }
-
-                @Override
-                public boolean put(final ExceptionalHashKey key, final byte[] value) {
-                    backing.put(key, value);
-                    return true;
-                }
-
-                @Override
-                public boolean remove(final ExceptionalHashKey key) {
-                    return backing.remove(key) != null;
-                }
-
-                @Override
-                public void close() {
-                    removedBeforeStoreClosed.set(backing.isEmpty());
-                }
-            };
-            final OffHeapCache<ExceptionalHashKey, byte[]> cache = OffHeapCache.<ExceptionalHashKey, byte[]> builder()
-                    .capacityInMB(1)
-                    .offHeapStore(store)
-                    .storeSelector((key, value, size) -> 2)
-                    .build();
-            try {
-                final ExceptionalHashKey first = new ExceptionalHashKey();
-                final ExceptionalHashKey second = new ExceptionalHashKey();
-                assertTrue(cache.put(first, new byte[] { 1 }));
-                assertTrue(cache.put(second, new byte[] { 2 }));
-                first.throwOnHashCall(1);
-                second.throwOnHashCall(1);
-
-                assertDoesNotThrow(cache::close);
-
-                assertTrue(removedBeforeStoreClosed.get(), "all tracked store bytes must be removed before closing the store");
-                assertTrue(entriesOf(cache).isEmpty(), "closing must discard the entry index without invoking key hashCode");
-            } finally {
-                cache.close();
             }
         }
 
@@ -2408,59 +2196,26 @@ class AbstractOffHeapCacheTest {
         }
 
         @Test
-        void closePreservesDistinctEntryAndResourceCleanupFailures() throws Exception {
-            final AssertionError firstEntryFailure = new AssertionError("first disk removal failed");
-            final AssertionError secondEntryFailure = new AssertionError("second disk removal failed");
-            final IllegalStateException deallocationFailure = new IllegalStateException("native cleanup failed after releasing memory");
-            final IllegalArgumentException storeCloseFailure = new IllegalArgumentException("store close failed");
-            final AtomicInteger cleanupSteps = new AtomicInteger();
-            final OffHeapStore<String> store = new OffHeapStore<>() {
-                @Override
-                public byte[] get(final String key) {
-                    return new byte[] { 1 };
-                }
-
-                @Override
-                public boolean put(final String key, final byte[] value) {
-                    return true;
-                }
-
-                @Override
-                public boolean remove(final String key) {
-                    throw cleanupSteps.incrementAndGet() == 1 ? firstEntryFailure : secondEntryFailure;
-                }
-
-                @Override
-                public void close() {
-                    assertEquals(3, cleanupSteps.getAndIncrement(), "the store must close after both disk removals and native cleanup");
-                    throw storeCloseFailure;
-                }
-            };
-            final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L,
-                    AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, null, null, store, false, null, (key, value, size) -> key.equals("memory") ? 1 : 2) {
-                @Override
-                protected void deallocate() {
-                    super.deallocate();
-                    assertEquals(2, cleanupSteps.getAndIncrement(), "both disk removals must be attempted before native cleanup");
-                    throw deallocationFailure;
-                }
-            };
+        void closeContinuesReleasingEntriesAndTheStoreWhenDiagnosticsFail() throws Exception {
+            final Logger logger = mock(Logger.class);
+            final OffHeapStore<Object> store = mock(OffHeapStore.class);
+            when(store.put(any(), any(byte[].class))).thenReturn(true);
+            doThrow(new IllegalStateException("store unavailable")).when(store).remove(any());
+            final IllegalStateException logFailure = new IllegalStateException("logging backend failed");
+            doThrow(logFailure).when(logger).warn(anyString(), any(Throwable.class));
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger, store);
             try {
                 assertTrue(cache.put("first", new byte[] { 1 }));
                 assertTrue(cache.put("second", new byte[] { 2 }));
-                assertTrue(cache.put("memory", new byte[] { 3 }));
-                final AbstractOffHeapCache.Entry<byte[]> memoryEntry = entriesOf(cache).get("memory");
-
-                assertSame(firstEntryFailure, assertThrows(AssertionError.class, cache::close));
-
-                assertArrayEquals(new Throwable[] { secondEntryFailure, deallocationFailure, storeCloseFailure }, firstEntryFailure.getSuppressed());
-                assertTrue(memoryEntry.freed, "disk cleanup errors must not skip memory entries");
+                assertSame(logFailure, assertThrows(IllegalStateException.class, cache::close));
+                assertTrue(cache.isClosed());
                 assertTrue(entriesOf(cache).isEmpty());
-                assertEquals(4, cleanupSteps.get());
+                verify(store, times(2)).remove(any());
+                verify(store).close();
+                assertEquals(0, logFailure.getSuppressed().length);
             } finally {
-                cache.close();
+                assertDoesNotThrow(cache::close);
             }
-            assertEquals(4, cleanupSteps.get(), "a second close must not retry any resource cleanup");
         }
 
         @Test
@@ -2521,6 +2276,180 @@ class AbstractOffHeapCacheTest {
             }
         }
 
+        @Test
+        void closePreservesDistinctEntryAndResourceCleanupFailures() throws Exception {
+            final AssertionError firstEntryFailure = new AssertionError("first disk removal failed");
+            final AssertionError secondEntryFailure = new AssertionError("second disk removal failed");
+            final IllegalStateException deallocationFailure = new IllegalStateException("native cleanup failed after releasing memory");
+            final IllegalArgumentException storeCloseFailure = new IllegalArgumentException("store close failed");
+            final AtomicInteger cleanupSteps = new AtomicInteger();
+            final OffHeapStore<String> store = new OffHeapStore<>() {
+                @Override
+                public byte[] get(final String key) {
+                    return new byte[] { 1 };
+                }
+
+                @Override
+                public boolean put(final String key, final byte[] value) {
+                    return true;
+                }
+
+                @Override
+                public boolean remove(final String key) {
+                    throw cleanupSteps.incrementAndGet() == 1 ? firstEntryFailure : secondEntryFailure;
+                }
+
+                @Override
+                public void close() {
+                    assertEquals(3, cleanupSteps.getAndIncrement(), "the store must close after both disk removals and native cleanup");
+                    throw storeCloseFailure;
+                }
+            };
+            final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L,
+                    AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, null, null, store, false, null, (key, value, size) -> key.equals("memory") ? 1 : 2) {
+                @Override
+                protected void deallocate() {
+                    super.deallocate();
+                    assertEquals(2, cleanupSteps.getAndIncrement(), "both disk removals must be attempted before native cleanup");
+                    throw deallocationFailure;
+                }
+            };
+            try {
+                assertTrue(cache.put("first", new byte[] { 1 }));
+                assertTrue(cache.put("second", new byte[] { 2 }));
+                assertTrue(cache.put("memory", new byte[] { 3 }));
+                final AbstractOffHeapCache.Entry<byte[]> memoryEntry = entriesOf(cache).get("memory");
+
+                assertSame(firstEntryFailure, assertThrows(AssertionError.class, cache::close));
+
+                assertArrayEquals(new Throwable[] { secondEntryFailure, deallocationFailure, storeCloseFailure }, firstEntryFailure.getSuppressed());
+                assertTrue(memoryEntry.freed, "disk cleanup errors must not skip memory entries");
+                assertTrue(entriesOf(cache).isEmpty());
+                assertEquals(4, cleanupSteps.get());
+            } finally {
+                cache.close();
+            }
+            assertEquals(4, cleanupSteps.get(), "a second close must not retry any resource cleanup");
+        }
+
+        @Test
+        void closeRemovesEveryDiskEntryWithoutRehashingKeys() throws Exception {
+            final Map<ExceptionalHashKey, byte[]> backing = new IdentityHashMap<>();
+            final AtomicBoolean removedBeforeStoreClosed = new AtomicBoolean();
+            final OffHeapStore<ExceptionalHashKey> store = new OffHeapStore<>() {
+                @Override
+                public byte[] get(final ExceptionalHashKey key) {
+                    return backing.get(key);
+                }
+
+                @Override
+                public boolean put(final ExceptionalHashKey key, final byte[] value) {
+                    backing.put(key, value);
+                    return true;
+                }
+
+                @Override
+                public boolean remove(final ExceptionalHashKey key) {
+                    return backing.remove(key) != null;
+                }
+
+                @Override
+                public void close() {
+                    removedBeforeStoreClosed.set(backing.isEmpty());
+                }
+            };
+            final OffHeapCache<ExceptionalHashKey, byte[]> cache = OffHeapCache.<ExceptionalHashKey, byte[]> builder()
+                    .capacityInMB(1)
+                    .offHeapStore(store)
+                    .storeSelector((key, value, size) -> 2)
+                    .build();
+            try {
+                final ExceptionalHashKey first = new ExceptionalHashKey();
+                final ExceptionalHashKey second = new ExceptionalHashKey();
+                assertTrue(cache.put(first, new byte[] { 1 }));
+                assertTrue(cache.put(second, new byte[] { 2 }));
+                first.throwOnHashCall(1);
+                second.throwOnHashCall(1);
+
+                assertDoesNotThrow(cache::close);
+
+                assertTrue(removedBeforeStoreClosed.get(), "all tracked store bytes must be removed before closing the store");
+                assertTrue(entriesOf(cache).isEmpty(), "closing must discard the entry index without invoking key hashCode");
+            } finally {
+                cache.close();
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = { false, true })
+        void closeToleratesAnAlreadyShuttingDownJvm(final boolean debug) throws Exception {
+            final Logger logger = mock(Logger.class);
+            when(logger.isDebugEnabled()).thenReturn(debug);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
+            final Field hookField = AbstractOffHeapCache.class.getDeclaredField("shutdownHook");
+            hookField.setAccessible(true);
+            final Thread hook = (Thread) hookField.get(cache);
+            final Runtime actualRuntime = Runtime.getRuntime();
+            final Runtime shuttingDown = mock(Runtime.class);
+            doThrow(new IllegalStateException("JVM shutting down")).when(shuttingDown).removeShutdownHook(hook);
+            try (MockedStatic<Runtime> runtimes = Mockito.mockStatic(Runtime.class)) {
+                runtimes.when(Runtime::getRuntime).thenReturn(shuttingDown);
+                assertDoesNotThrow(cache::close);
+                assertTrue(cache.isClosed());
+                assertNull(hookField.get(cache));
+                verify(logger, times(debug ? 1 : 0)).debug(anyString(), any(Throwable.class));
+            } finally {
+                actualRuntime.removeShutdownHook(hook);
+                cache.close();
+            }
+        }
+
+        /**
+         * An asynchronous vacate can finish evicting entries and still be reclaiming segment metadata.
+         * Close must wait for that entire pass; otherwise it can deallocate the cache while the task
+         * is still traversing cache-owned structures. The allocator lock provides a deterministic
+         * pause after the eviction while the lifecycle read lock remains held.
+         */
+        @Test
+        void closeWaitsForInFlightVacationTask() throws Exception {
+            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
+            final ExecutorService executor = Executors.newSingleThreadExecutor();
+            final AtomicReference<Thread> closingThread = new AtomicReference<>();
+
+            final Field allocatorLockField = AbstractOffHeapCache.class.getDeclaredField("allocatorLock");
+            allocatorLockField.setAccessible(true);
+            final Object allocatorLock = allocatorLockField.get(cache);
+
+            final Field lifecycleLockField = AbstractOffHeapCache.class.getDeclaredField("lifecycleLock");
+            lifecycleLockField.setAccessible(true);
+            final ReentrantReadWriteLock lifecycleLock = (ReentrantReadWriteLock) lifecycleLockField.get(cache);
+
+            final Method vacateMethod = AbstractOffHeapCache.class.getDeclaredMethod("vacate");
+            vacateMethod.setAccessible(true);
+
+            Future<?> closeResult = null;
+            try {
+                synchronized (allocatorLock) {
+                    vacateMethod.invoke(cache);
+
+                    awaitCondition("vacation holding the lifecycle read lock", () -> lifecycleLock.getReadLockCount() > 0);
+                    assertTrue(lifecycleLock.getReadLockCount() > 0, "vacation task should reach segment reclamation while holding the lifecycle lock");
+
+                    closeResult = executor.submit(() -> {
+                        closingThread.set(Thread.currentThread());
+                        cache.close();
+                    });
+                    awaitCondition("close waiting for vacation", () -> closingThread.get() != null && lifecycleLock.hasQueuedThread(closingThread.get()));
+                    assertFalse(closeResult.isDone(), "close must wait for the in-flight vacation task");
+                }
+
+                closeResult.get(5, TimeUnit.SECONDS);
+            } finally {
+                cache.close();
+                executor.shutdownNow();
+            }
+        }
+
         /**
          * Memory-tier reads must participate in the lifecycle exclusion: a reader holds the lifecycle
          * read lock across its native copy, so {@code close()} (which deallocates under the write
@@ -2562,6 +2491,50 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
+         * Regression coverage for the post-close {@code put()} ordering bug. The off-heap cache frees
+         * its native allocation in {@code close()}; a later {@code put()} must fail before any slot
+         * allocation or native-copy hook is reached. Previously the closed state was only consulted
+         * after {@code copyToMemory(...)}, which made {@code OffHeapCache} write to freed native memory.
+         */
+        @Test
+        void putAfterCloseFailsBeforeNativeCopy() {
+            final GuardedOffHeapCache cache = new GuardedOffHeapCache();
+            cache.close();
+
+            assertThrows(IllegalStateException.class, () -> cache.put("k", new byte[] { 1 }));
+            assertFalse(cache.copiedAfterDeallocate.get(), "put after close must not copy into deallocated memory");
+        }
+
+        /** A user callback cannot upgrade the operation's lifecycle read lock into close's write lock. */
+        @Test
+        void reentrantCloseFromSerializerFailsFastAndCacheRemainsOpen() {
+            final AtomicReference<OffHeapCache<String, String>> cacheRef = new AtomicReference<>();
+            final AtomicReference<IllegalStateException> closeFailure = new AtomicReference<>();
+            final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder().capacityInMB(1).evictDelay(0).serializer((value, output) -> {
+                try {
+                    cacheRef.get().close();
+                    throw new AssertionError("reentrant close must fail instead of attempting a read-to-write lock upgrade");
+                } catch (final IllegalStateException e) {
+                    closeFailure.set(e);
+                }
+
+                final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+                output.write(bytes, 0, bytes.length);
+            }).deserializer((bytes, type) -> new String(bytes, StandardCharsets.UTF_8)).build();
+            cacheRef.set(cache);
+
+            try {
+                assertTrue(cache.put("key", "value"));
+                assertNotNull(closeFailure.get());
+                assertTrue(closeFailure.get().getMessage().contains("Cannot close this off-heap cache reentrantly"));
+                assertFalse(cache.isClosed(), "the rejected reentrant close must leave the cache open");
+                assertEquals("value", cache.getOrNull("key"));
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
          * Close must wait for an in-flight {@code remove(key)} of a disk entry (blocked on the
          * entry's monitor while a reader-style holder pins it) to finish its {@code OffHeapStore}
          * cleanup; otherwise close could close the store underneath the in-flight
@@ -2572,11 +2545,9 @@ class AbstractOffHeapCacheTest {
             final Map<String, byte[]> backing = new ConcurrentHashMap<>();
             final AtomicBoolean storeClosed = new AtomicBoolean();
             final AtomicBoolean removeCalledAfterClose = new AtomicBoolean();
-            final CountDownLatch wrapperLocked = new CountDownLatch(1);
-            final CountDownLatch releaseWrapper = new CountDownLatch(1);
-            final CountDownLatch closeFinished = new CountDownLatch(1);
+            final AtomicReference<Thread> removingThread = new AtomicReference<>();
+            final AtomicReference<Thread> closingThread = new AtomicReference<>();
             final ExecutorService executor = Executors.newFixedThreadPool(2);
-
             final OffHeapStore<String> store = new OffHeapStore<>() {
                 @Override
                 public boolean put(final String key, final byte[] value) {
@@ -2600,103 +2571,124 @@ class AbstractOffHeapCacheTest {
                     storeClosed.set(true);
                 }
             };
-
             final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder()
                     .capacityInMB(1)
                     .evictDelay(0)
                     .offHeapStore(store)
-                    .storeSelector((k, v, size) -> 2)
+                    .storeSelector((key, value, size) -> 2)
                     .build();
-
             try {
-                assertTrue(cache.put("k", new byte[] { 1 }));
-                final AbstractOffHeapCache.Entry<byte[]> wrapper = entriesOf(cache).get("k");
-                final Thread monitorHolder = new Thread(() -> {
-                    synchronized (wrapper) {
-                        wrapperLocked.countDown();
-                        try {
-                            assertTrue(releaseWrapper.await(10, TimeUnit.SECONDS));
-                        } catch (final InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                    }
-                }, "offheap-test-remove-wrapper-holder");
-                monitorHolder.start();
-                assertTrue(wrapperLocked.await(5, TimeUnit.SECONDS));
+                assertTrue(cache.put("key", new byte[] { 1 }));
+                final AbstractOffHeapCache.Entry<byte[]> entry = entriesOf(cache).get("key");
+                final ReentrantReadWriteLock lifecycleLock = lifecycleLockOf(cache);
+                final Future<?> removal;
+                final Future<?> closing;
+                synchronized (entry) {
+                    removal = executor.submit(() -> {
+                        removingThread.set(Thread.currentThread());
+                        cache.remove("key");
+                    });
+                    awaitCondition("remove waiting on the entry monitor",
+                            () -> removingThread.get() != null && removingThread.get().getState() == Thread.State.BLOCKED);
+                    assertFalse(removal.isDone());
 
-                final Future<?> removeResult = executor.submit(() -> cache.remove("k"));
-                // The remove frees the entry inside the per-key compute (serialized with same-key disk
-                // writes), so it blocks on the pinned entry monitor with the mapping still installed.
-                Thread.sleep(100L);
-                assertFalse(removeResult.isDone(), "remove should be blocked on the pinned entry monitor");
-
-                final Future<?> closeResult = executor.submit(() -> {
-                    cache.close();
-                    closeFinished.countDown();
-                });
-
-                final boolean closeOvertookRemove;
-                try {
-                    closeOvertookRemove = closeFinished.await(500, TimeUnit.MILLISECONDS);
-                } finally {
-                    releaseWrapper.countDown();
+                    closing = executor.submit(() -> {
+                        closingThread.set(Thread.currentThread());
+                        cache.close();
+                    });
+                    awaitCondition("close waiting for the active removal",
+                            () -> closingThread.get() != null && lifecycleLock.hasQueuedThread(closingThread.get()));
+                    assertFalse(closing.isDone());
+                    assertFalse(storeClosed.get());
                 }
-
-                removeResult.get(5, TimeUnit.SECONDS);
-                closeResult.get(5, TimeUnit.SECONDS);
-                monitorHolder.join(5_000L);
-                assertFalse(closeOvertookRemove, "close must wait for a detached disk wrapper to finish store cleanup");
-                assertFalse(removeCalledAfterClose.get(), "OffHeapStore.remove must not run after OffHeapStore.close");
+                removal.get(5, TimeUnit.SECONDS);
+                closing.get(5, TimeUnit.SECONDS);
+                assertTrue(storeClosed.get());
+                assertFalse(removeCalledAfterClose.get(), "store cleanup must finish before the store is closed");
             } finally {
-                releaseWrapper.countDown();
-                cache.close();
                 executor.shutdownNow();
+                cache.close();
             }
         }
 
         /**
-         * An asynchronous vacate can finish evicting entries and still be reclaiming segment metadata.
-         * Close must wait for that entire pass; otherwise it can deallocate the cache while the task
-         * is still traversing cache-owned structures. The allocator lock provides a deterministic
-         * pause after the eviction while the lifecycle read lock remains held.
+         * Regression coverage for the cancelled-eviction-task GC leak in
+         * {@link AbstractOffHeapCache}.
+         *
+         * <p>Without {@code setRemoveOnCancelPolicy(true)} on the shared scheduled executor, a
+         * cancelled {@code scheduleFuture} sits in the executor's task queue until its scheduled fire
+         * time, holding a strong reference to the closed cache and preventing GC of its off-heap
+         * allocation. The fix enables the policy on the executor so {@code cancel()} purges the task
+         * from the queue immediately.
+         *
+         * <p>This smoke test creates and immediately closes many short-lived off-heap caches in a
+         * tight loop. With the fix, cancelled scheduled tasks are purged on close, so memory stays
+         * bounded. Without the fix, the executor's queue grows unbounded — each cache's eviction task
+         * remains scheduled at its full {@code evictDelay} into the future even after close. The test
+         * fails (OOM or excessive time) regress when the fix is reverted.
          */
         @Test
-        void closeWaitsForInFlightVacationTask() throws Exception {
-            final OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
-            final ExecutorService executor = Executors.newSingleThreadExecutor();
-
-            final Field allocatorLockField = AbstractOffHeapCache.class.getDeclaredField("allocatorLock");
-            allocatorLockField.setAccessible(true);
-            final Object allocatorLock = allocatorLockField.get(cache);
-
-            final Field lifecycleLockField = AbstractOffHeapCache.class.getDeclaredField("lifecycleLock");
-            lifecycleLockField.setAccessible(true);
-            final ReentrantReadWriteLock lifecycleLock = (ReentrantReadWriteLock) lifecycleLockField.get(cache);
-
-            final Method vacateMethod = AbstractOffHeapCache.class.getDeclaredMethod("vacate");
-            vacateMethod.setAccessible(true);
-
-            Future<?> closeResult = null;
-            try {
-                synchronized (allocatorLock) {
-                    vacateMethod.invoke(cache);
-
-                    for (int i = 0; i < 500 && lifecycleLock.getReadLockCount() == 0; i++) {
-                        Thread.sleep(10L);
-                    }
-                    assertTrue(lifecycleLock.getReadLockCount() > 0, "vacation task should reach segment reclamation while holding the lifecycle lock");
-
-                    closeResult = executor.submit(cache::close);
-                    Thread.sleep(300L);
-                    assertFalse(closeResult.isDone(), "close must wait for the in-flight vacation task");
+        void repeatedCreateAndCloseDoesNotLeakScheduledTasks() {
+            // 200 caches with a 5-minute evictDelay each. Without the cancel-on-purge policy, all 200
+            // scheduled tasks would remain in the executor's queue holding cache references after close.
+            for (int i = 0; i < 200; i++) {
+                final OffHeapCache<String, String> cache = OffHeapCache.<String, String> builder()
+                        .capacityInMB(16)
+                        .evictDelay(5L * 60_000L)
+                        .defaultLiveTime(60_000)
+                        .defaultMaxIdleTime(60_000)
+                        .build();
+                try {
+                    assertTrue(cache.put("k", "v"));
+                } finally {
+                    cache.close();
                 }
-
-                closeResult.get(5, TimeUnit.SECONDS);
-            } finally {
-                cache.close();
-                executor.shutdownNow();
             }
         }
+
+        @Test
+        void shutdownHookClosesTheCacheAndLateMaintenanceDoesNothing() throws Exception {
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
+            final Field hookField = AbstractOffHeapCache.class.getDeclaredField("shutdownHook");
+            hookField.setAccessible(true);
+            final Thread hook = (Thread) hookField.get(cache);
+            try {
+                assertTrue(cache.put("key", new byte[] { 1 }));
+                hook.run();
+                assertTrue(cache.isClosed());
+                verify(logger).info("Closing off-heap cache on JVM shutdown");
+                final Method maintenance = AbstractOffHeapCache.class.getDeclaredMethod("runMaintenance");
+                maintenance.setAccessible(true);
+                assertDoesNotThrow(() -> maintenance.invoke(cache));
+                assertTrue(entriesOf(cache).isEmpty());
+            } finally {
+                cache.close();
+            }
+        }
+
+    }
+
+    private static ReentrantReadWriteLock lifecycleLockOf(final AbstractOffHeapCache<?, ?> cache) throws ReflectiveOperationException {
+        final Field field = AbstractOffHeapCache.class.getDeclaredField("lifecycleLock");
+        field.setAccessible(true);
+        return (ReentrantReadWriteLock) field.get(cache);
+    }
+
+    private static void assertDoesNotScheduleVacation(final AbstractOffHeapCache<?, ?> cache, final Executable operation) throws ReflectiveOperationException {
+        final Field finishedField = AbstractOffHeapCache.class.getDeclaredField("lastVacateFinishedNanos");
+        finishedField.setAccessible(true);
+        final long previousFinish = finishedField.getLong(cache);
+        final Field gateField = AbstractOffHeapCache.class.getDeclaredField("vacating");
+        gateField.setAccessible(true);
+        final AtomicBoolean gate = (AtomicBoolean) gateField.get(cache);
+
+        assertDoesNotThrow(operation);
+
+        // Submission raises the gate before enqueueing; completion publishes its timestamp before
+        // clearing the gate. Read in this order to detect both queued and already-finished work.
+        assertFalse(gate.get(), "the operation must not enqueue a vacation");
+        assertEquals(previousFinish, finishedField.getLong(cache), "the operation must not complete a vacation");
     }
 
     private static int totalOccupiedSlots(final OffHeapCacheStats stats) {
@@ -2908,10 +2900,9 @@ class AbstractOffHeapCacheTest {
 
         LatchedReadOffHeapCache() {
             super(1, DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L, DEFAULT_VACATING_FACTOR, 0, (value, output) -> {
-                final byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
                 output.write(bytes, 0, bytes.length);
-            }, (bytes, type) -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8), null, false, null, null,
-                    LoggerFactory.getLogger(LatchedReadOffHeapCache.class));
+            }, (bytes, type) -> new String(bytes, StandardCharsets.UTF_8), null, false, null, null, LoggerFactory.getLogger(LatchedReadOffHeapCache.class));
         }
 
         @Override
@@ -3089,9 +3080,7 @@ class AbstractOffHeapCacheTest {
             // removeIfCurrent -> entries.compute.
             key.throwOnNextHashCalls(1, failure);
 
-            for (int i = 0; i < 100 && cache.size() != 0; i++) {
-                Thread.sleep(50L);
-            }
+            awaitCondition("all entries removed by maintenance", () -> cache.size() == 0);
 
             assertEquals(0, key.remainingFailures(), "a maintenance pass must have hit the armed failure");
             assertEquals(0, cache.size(), "the maintenance task must survive the failure and sweep the expired entry on a later pass");

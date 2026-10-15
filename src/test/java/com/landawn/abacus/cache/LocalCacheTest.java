@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.Set;
+
 import org.junit.jupiter.api.Test;
 
 import com.landawn.abacus.pool.KeyedObjectPool;
@@ -68,7 +70,7 @@ class LocalCacheTest {
      * {@code IllegalArgumentException} up front.
      */
     @Test
-    void getOrNullNullKeyThrowsIAE() {
+    void getOrNullNullKeyThrowsIllegalArgumentException() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
             assertThrows(IllegalArgumentException.class, () -> cache.getOrNull(null));
@@ -241,7 +243,22 @@ class LocalCacheTest {
     }
 
     @Test
-    void removeNullKeyThrowsIAE() {
+    void defaultPutAndRemove() {
+        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
+        try {
+            assertTrue(cache.put("a", "1"));
+            assertEquals("1", cache.getOrNull("a"));
+
+            cache.remove("a");
+            assertNull(cache.getOrNull("a"));
+            assertEquals(0, cache.size());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void removeNullKeyThrowsIllegalArgumentException() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
             assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
@@ -250,10 +267,10 @@ class LocalCacheTest {
         }
     }
 
-    // Membership And Views
+    // Membership and views
 
     @Test
-    void containsKeyNullKeyThrowsIAE() {
+    void containsKeyNullKeyThrowsIllegalArgumentException() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);
         try {
             assertThrows(IllegalArgumentException.class, () -> cache.containsKey(null));
@@ -296,7 +313,7 @@ class LocalCacheTest {
             cache.put("a", "1");
             cache.put("b", "2");
             assertEquals(2, cache.size());
-            final java.util.Set<String> keys = cache.keySet();
+            final Set<String> keys = cache.keySet();
             assertEquals(2, keys.size());
             assertTrue(keys.contains("a"));
             assertTrue(keys.contains("b"));
@@ -374,8 +391,6 @@ class LocalCacheTest {
         assertTrue(cache.isClosed());
     }
 
-    // Validation And Failures
-
     /** The state check runs before argument validation: a closed cache reports ISE even for a null key/value. */
     @Test
     void keyOperationsAfterCloseNullArgsThrowIllegalStateExceptionFirst() {
@@ -386,23 +401,6 @@ class LocalCacheTest {
         assertThrows(IllegalStateException.class, () -> cache.put(null, null, 1000, 1000));
         assertThrows(IllegalStateException.class, () -> cache.remove(null));
         assertThrows(IllegalStateException.class, () -> cache.containsKey(null));
-    }
-
-    // Other Behavior
-
-    @Test
-    void defaultPutAndRemove() {
-        final LocalCache<String, String> cache = new LocalCache<>(100, 0);
-        try {
-            assertTrue(cache.put("a", "1"));
-            assertEquals("1", cache.getOrNull("a"));
-
-            cache.remove("a");
-            assertNull(cache.getOrNull("a"));
-            assertEquals(0, cache.size());
-        } finally {
-            cache.close();
-        }
     }
 
     /**
@@ -425,4 +423,5 @@ class LocalCacheTest {
         assertThrows(IllegalStateException.class, cache::clear);
         assertThrows(IllegalStateException.class, cache::stats);
     }
+
 }

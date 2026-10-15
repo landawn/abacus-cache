@@ -45,15 +45,7 @@ class OffHeapCacheContractTest {
         }
     }
 
-    // Writes
-
-    @ParameterizedTest
-    @EnumSource(OffHeapBackend.class)
-    void putAfterCloseRejectsBeforeNativeCopy(final OffHeapBackend backend) {
-        final AbstractOffHeapCache<String, byte[]> cache = backend.create(1, 0);
-        cache.close();
-        assertThrows(IllegalStateException.class, () -> cache.put("key", new byte[] { 1, 2, 3 }));
-    }
+    // Serialization and allocation
 
     @ParameterizedTest(name = "{0}: {1} bytes")
     @MethodSource("boundarySizes")
@@ -138,7 +130,17 @@ class OffHeapCacheContractTest {
         }
     }
 
-    // Validation And Failures
+    // Lifecycle
+
+    @ParameterizedTest
+    @EnumSource(OffHeapBackend.class)
+    void putAfterCloseRejectsBeforeNativeCopy(final OffHeapBackend backend) {
+        final AbstractOffHeapCache<String, byte[]> cache = backend.create(1, 0);
+        cache.close();
+        assertThrows(IllegalStateException.class, () -> cache.put("key", new byte[] { 1, 2, 3 }));
+    }
+
+    // Key validation
 
     @ParameterizedTest
     @EnumSource(OffHeapBackend.class)

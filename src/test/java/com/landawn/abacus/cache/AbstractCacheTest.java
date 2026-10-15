@@ -30,6 +30,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.landawn.abacus.util.ContinuableFuture;
 import com.landawn.abacus.util.Properties;
@@ -44,88 +46,6 @@ class AbstractCacheTest {
 
     // Properties
 
-    @Test
-    void propertyConditionalUpdatesPreserveExistingValues() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            final Properties<String, Object> properties = cache.getProperties();
-            assertEquals("fallback", properties.getOrDefault("missing", "fallback"));
-            assertNull(properties.putIfAbsent("owner", "Ada"));
-            assertEquals("Ada", properties.putIfAbsent("owner", "Grace"));
-            assertEquals("Ada", properties.getOrDefault("owner", "fallback"));
-            assertNull(properties.replace("missing", "value"));
-            assertFalse(properties.replace("owner", "wrong", "value"));
-            assertTrue(properties.replace("owner", "Ada", "Grace"));
-            assertEquals("Grace", properties.replace("owner", "Linus"));
-            assertFalse(properties.remove("owner", "Grace"));
-            assertTrue(properties.remove("owner", "Linus"));
-            assertFalse(properties.containsKey("owner"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void propertyRemappingSupportsCreationReplacementAndRemoval() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            final Properties<String, Object> properties = cache.getProperties();
-            assertNull(properties.computeIfPresent("count", (key, value) -> {
-                throw new AssertionError("Missing values must not invoke the mapper");
-            }));
-            assertEquals(1, properties.compute("count", (key, value) -> value == null ? 1 : 0));
-            assertEquals(2, properties.computeIfPresent("count", (key, value) -> (Integer) value + 1));
-            assertEquals(5, properties.merge("count", 3, (oldValue, value) -> (Integer) oldValue + (Integer) value));
-            assertNull(properties.compute("count", (key, value) -> null));
-            assertFalse(properties.containsKey("count"));
-            properties.put("a", 1);
-            properties.put("b", 2);
-            properties.replaceAll((key, value) -> (Integer) value * 10);
-            final Map<String, Object> visited = new HashMap<>();
-            properties.forEach(visited::put);
-            assertEquals(Map.of("a", 10, "b", 20), visited);
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void propertyCallbacksRejectNullWithoutMutatingValues() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            final Properties<String, Object> properties = cache.getProperties();
-            properties.put("key", "value");
-            assertThrows(IllegalArgumentException.class, () -> properties.forEach(null));
-            assertThrows(IllegalArgumentException.class, () -> properties.replaceAll(null));
-            assertThrows(IllegalArgumentException.class, () -> properties.computeIfAbsent("key", null));
-            assertThrows(IllegalArgumentException.class, () -> properties.computeIfPresent("key", null));
-            assertThrows(IllegalArgumentException.class, () -> properties.compute("key", null));
-            assertThrows(IllegalArgumentException.class, () -> properties.merge("key", "other", null));
-            assertThrows(NullPointerException.class, () -> properties.merge("key", null, (a, b) -> a));
-            assertEquals("value", properties.get("key"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void propertyCopyIsAnIndependentSnapshot() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            final Properties<String, Object> properties = cache.getProperties();
-            properties.put("key", "before");
-            final Properties<String, Object> copy = properties.copy();
-            properties.put("key", "after");
-            copy.put("copyOnly", 1);
-            assertEquals("before", copy.get("key"));
-            assertEquals("after", properties.get("key"));
-            assertFalse(properties.containsKey("copyOnly"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    // Properties bag
     @Test
     void getPropertiesReturnsMutableProperties() {
         final LocalCache<String, String> cache = newCache();
@@ -205,9 +125,6 @@ class AbstractCacheTest {
         }
     }
 
-    // Regression test: the property bag was previously backed by an unsynchronized LinkedHashMap,
-    // so concurrent setProperty calls could lose updates or corrupt the map.
-
     @Test
     void propertiesConcurrentMutationIsThreadSafe() throws Exception {
         final LocalCache<String, String> cache = newCache();
@@ -260,23 +177,6 @@ class AbstractCacheTest {
             assertEquals("this-is-a-property", cache.getProperty("a"));
             assertDoesNotThrow(() -> cache.removeProperty("a"));
             assertEquals("1", cache.getOrNull("a"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void propertiesFunctionalArgumentsNullRejected() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            final Properties<String, Object> props = cache.getProperties();
-
-            assertThrows(IllegalArgumentException.class, () -> props.forEach(null));
-            assertThrows(IllegalArgumentException.class, () -> props.replaceAll(null));
-            assertThrows(IllegalArgumentException.class, () -> props.computeIfAbsent("key", null));
-            assertThrows(IllegalArgumentException.class, () -> props.computeIfPresent("key", null));
-            assertThrows(IllegalArgumentException.class, () -> props.compute("key", null));
-            assertThrows(IllegalArgumentException.class, () -> props.merge("key", "value", null));
         } finally {
             cache.close();
         }
@@ -404,6 +304,92 @@ class AbstractCacheTest {
         }
     }
 
+    @ParameterizedTest(name = "existing property: {0}")
+    @ValueSource(booleans = { false, true })
+    void propertyCallbacksRejectNullWithoutMutatingValues(final boolean existing) {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            if (existing) {
+                properties.put("key", "value");
+            }
+            final Properties<String, Object> before = properties.copy();
+
+            assertThrows(IllegalArgumentException.class, () -> properties.forEach(null));
+            assertThrows(IllegalArgumentException.class, () -> properties.replaceAll(null));
+            assertThrows(IllegalArgumentException.class, () -> properties.computeIfAbsent("key", null));
+            assertThrows(IllegalArgumentException.class, () -> properties.computeIfPresent("key", null));
+            assertThrows(IllegalArgumentException.class, () -> properties.compute("key", null));
+            assertThrows(IllegalArgumentException.class, () -> properties.merge("key", "other", null));
+            assertThrows(NullPointerException.class, () -> properties.merge("key", null, (a, b) -> a));
+            assertEquals(before, properties);
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertyConditionalUpdatesPreserveExistingValues() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            assertEquals("fallback", properties.getOrDefault("missing", "fallback"));
+            assertNull(properties.putIfAbsent("owner", "Ada"));
+            assertEquals("Ada", properties.putIfAbsent("owner", "Grace"));
+            assertEquals("Ada", properties.getOrDefault("owner", "fallback"));
+            assertNull(properties.replace("missing", "value"));
+            assertFalse(properties.replace("owner", "wrong", "value"));
+            assertTrue(properties.replace("owner", "Ada", "Grace"));
+            assertEquals("Grace", properties.replace("owner", "Linus"));
+            assertFalse(properties.remove("owner", "Grace"));
+            assertTrue(properties.remove("owner", "Linus"));
+            assertFalse(properties.containsKey("owner"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertyCopyIsAnIndependentSnapshot() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            properties.put("key", "before");
+            final Properties<String, Object> copy = properties.copy();
+            properties.put("key", "after");
+            copy.put("copyOnly", 1);
+            assertEquals("before", copy.get("key"));
+            assertEquals("after", properties.get("key"));
+            assertFalse(properties.containsKey("copyOnly"));
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void propertyRemappingSupportsCreationReplacementAndRemoval() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            final Properties<String, Object> properties = cache.getProperties();
+            assertNull(properties.computeIfPresent("count", (key, value) -> {
+                throw new AssertionError("Missing values must not invoke the mapper");
+            }));
+            assertEquals(1, properties.compute("count", (key, value) -> value == null ? 1 : 0));
+            assertEquals(2, properties.computeIfPresent("count", (key, value) -> (Integer) value + 1));
+            assertEquals(5, properties.merge("count", 3, (oldValue, value) -> (Integer) oldValue + (Integer) value));
+            assertNull(properties.compute("count", (key, value) -> null));
+            assertFalse(properties.containsKey("count"));
+            properties.put("a", 1);
+            properties.put("b", 2);
+            properties.replaceAll((key, value) -> (Integer) value * 10);
+            final Map<String, Object> visited = new HashMap<>();
+            properties.forEach(visited::put);
+            assertEquals(Map.of("a", 10, "b", 20), visited);
+        } finally {
+            cache.close();
+        }
+    }
+
     @Test
     void removeProperty() {
         final LocalCache<String, String> cache = newCache();
@@ -455,6 +441,71 @@ class AbstractCacheTest {
     // Reads
 
     @Test
+    void getMissing() {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            assertFalse(cache.get("missing").isPresent());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void getWrapsGetOrNull() {
+        final RecordingCache<String, String> cache = new RecordingCache<>();
+        try {
+            cache.put("k", "v");
+            assertTrue(cache.get("k").isPresent());
+            assertEquals("v", cache.get("k").get());
+            assertFalse(cache.get("missing").isPresent());
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Writes
+
+    @Test
+    void putTwoArgDelegatesDefaultLiveAndIdleTimesNoSwap() {
+        final long liveTime = 111_000L;
+        final long idleTime = 222_000L;
+        final RecordingCache<String, String> cache = new RecordingCache<>(liveTime, idleTime);
+        try {
+            assertTrue(cache.put("k", "v"));
+            assertEquals(liveTime, cache.lastLiveTime, "defaultLiveTime must be forwarded as liveTime");
+            assertEquals(idleTime, cache.lastMaxIdleTime, "defaultMaxIdleTime must be forwarded as maxIdleTime");
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
+    void putTwoArgUsesInterfaceDefaultsWhenConstructedWithoutArgs() {
+        final RecordingCache<String, String> cache = new RecordingCache<>();
+        try {
+            assertTrue(cache.put("k", "v"));
+            assertEquals(Cache.DEFAULT_LIVE_TIME, cache.lastLiveTime);
+            assertEquals(Cache.DEFAULT_MAX_IDLE_TIME, cache.lastMaxIdleTime);
+        } finally {
+            cache.close();
+        }
+    }
+
+    // Async operations
+
+    @Test
+    void asyncContainsKeyReportsPresence() throws Exception {
+        final LocalCache<String, String> cache = newCache();
+        try {
+            cache.put("k", "v");
+            assertTrue(cache.asyncContainsKey("k").get());
+            assertFalse(cache.asyncContainsKey("missing").get());
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
     void asyncGetOrNullMissing() throws Exception {
         final LocalCache<String, String> cache = newCache();
         try {
@@ -475,7 +526,6 @@ class AbstractCacheTest {
         }
     }
 
-    // Async operations
     @Test
     void asyncGetReturnsPresentValue() throws Exception {
         final LocalCache<String, String> cache = newCache();
@@ -491,42 +541,10 @@ class AbstractCacheTest {
     }
 
     @Test
-    void getMissing() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            assertFalse(cache.get("missing").isPresent());
-        } finally {
-            cache.close();
-        }
+    void asyncOperationsRunOnDaemonThreads() throws Exception {
+        final Boolean daemon = AbstractCache.asyncExecutor.execute(() -> Thread.currentThread().isDaemon()).get();
+        assertTrue(daemon, "async cache tasks must run on daemon threads");
     }
-
-    @Test
-    void getReturnsPresentValue() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.put("k", "v");
-            final Optional<String> got = cache.get("k");
-            assertTrue(got.isPresent());
-            assertEquals("v", got.get());
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void getWrapsGetOrNull() {
-        final RecordingCache<String, String> cache = new RecordingCache<>();
-        try {
-            cache.put("k", "v");
-            assertTrue(cache.get("k").isPresent());
-            assertEquals("v", cache.get("k").get());
-            assertFalse(cache.get("missing").isPresent());
-        } finally {
-            cache.close();
-        }
-    }
-
-    // Writes
 
     @Test
     void asyncPutStoresValue() throws Exception {
@@ -550,49 +568,6 @@ class AbstractCacheTest {
         }
     }
 
-    // Verifies that AbstractCache.put(k, v) forwards the configured defaults to
-    // put(k, v, liveTime, maxIdleTime) in the correct argument positions (no swap).
-
-    @Test
-    void putTwoArgDelegatesDefaultLiveAndIdleTimesNoSwap() {
-        final long liveTime = 111_000L;
-        final long idleTime = 222_000L;
-        final RecordingCache<String, String> cache = new RecordingCache<>(liveTime, idleTime);
-        try {
-            assertTrue(cache.put("k", "v"));
-            assertEquals(liveTime, cache.lastLiveTime, "defaultLiveTime must be forwarded as liveTime");
-            assertEquals(idleTime, cache.lastMaxIdleTime, "defaultMaxIdleTime must be forwarded as maxIdleTime");
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void putTwoArgUsesDefaults() {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            // Defaults should be applied; verify the entry is stored.
-            assertTrue(cache.put("k", "v"));
-            assertEquals("v", cache.getOrNull("k"));
-        } finally {
-            cache.close();
-        }
-    }
-
-    @Test
-    void putTwoArgUsesInterfaceDefaultsWhenConstructedWithoutArgs() {
-        final RecordingCache<String, String> cache = new RecordingCache<>();
-        try {
-            assertTrue(cache.put("k", "v"));
-            assertEquals(Cache.DEFAULT_LIVE_TIME, cache.lastLiveTime);
-            assertEquals(Cache.DEFAULT_MAX_IDLE_TIME, cache.lastMaxIdleTime);
-        } finally {
-            cache.close();
-        }
-    }
-
-    // Removals
-
     @Test
     void asyncRemoveDeletesValue() throws Exception {
         final LocalCache<String, String> cache = newCache();
@@ -604,22 +579,6 @@ class AbstractCacheTest {
             cache.close();
         }
     }
-
-    // Membership And Views
-
-    @Test
-    void asyncContainsKeyReportsPresence() throws Exception {
-        final LocalCache<String, String> cache = newCache();
-        try {
-            cache.put("k", "v");
-            assertTrue(cache.asyncContainsKey("k").get());
-            assertFalse(cache.asyncContainsKey("missing").get());
-        } finally {
-            cache.close();
-        }
-    }
-
-    // Validation And Failures
 
     @Test
     void asyncValidationFailuresRemainInFuture() {
@@ -662,16 +621,7 @@ class AbstractCacheTest {
         }
     }
 
-    // Other Behavior
-
-    // Regression test: the shared executor previously created non-daemon core threads that never
-    // timed out, so a JVM that had used any async cache operation could not exit normally.
-
-    @Test
-    void asyncOperationsRunOnDaemonThreads() throws Exception {
-        final Boolean daemon = AbstractCache.asyncExecutor.execute(() -> Thread.currentThread().isDaemon()).get();
-        assertTrue(daemon, "async cache tasks must run on daemon threads");
-    }
+    // Lifecycle
 
     @Test
     void cacheContractDeclaresCloseWithoutBeingAutoCloseable() throws NoSuchMethodException {
@@ -686,7 +636,7 @@ class AbstractCacheTest {
      * Property reads remain usable after close, like other configuration accessors.
      */
     @Test
-    void propertyMutatorsAfterCloseThrowISEWhileReadsStayUsable() {
+    void propertyMutatorsAfterCloseThrowIllegalStateExceptionWhileReadsStayUsable() {
         final LocalCache<String, String> cache = newCache();
         cache.setProperty("region", "us-east");
         cache.close();

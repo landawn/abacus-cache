@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.channels.UnresolvedAddressException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -52,6 +53,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
@@ -77,12 +79,12 @@ import net.spy.memcached.transcoders.Transcoder;
 class SpyMemcachedTest {
 
     private static final String SERVER_URL = "localhost:11211";
-    private org.mockito.MockedConstruction<MemcachedClient> construction;
+    private MockedConstruction<MemcachedClient> construction;
     private SpyMemcached<Object> cache;
 
     @BeforeEach
     void setUp() {
-        construction = org.mockito.Mockito.mockConstruction(MemcachedClient.class);
+        construction = Mockito.mockConstruction(MemcachedClient.class);
         cache = new SpyMemcached<>(SERVER_URL);
     }
 
@@ -98,10 +100,23 @@ class SpyMemcachedTest {
     // Construction
 
     @Test
-    void protectedClientFactoryReturnsTheConstructedDelegate() {
-        final MemcachedClient created = SpyMemcached.createSpyMemcachedClient(SERVER_URL, new DefaultConnectionFactory());
-        assertSame(construction.constructed().get(1), created);
-        created.shutdown();
+    void connectionFactoryCreationWrapsIoFailureWithEndpointContext() {
+        construction.close();
+        final IOException failure = new IOException("selector unavailable");
+        final DefaultConnectionFactory factory = new DefaultConnectionFactory() {
+            @Override
+            public MemcachedConnection createConnection(final List<java.net.InetSocketAddress> addresses) throws IOException {
+                throw failure;
+            }
+        };
+        try {
+            final UncheckedIOException thrown = assertThrows(UncheckedIOException.class,
+                    () -> SpyMemcached.createSpyMemcachedClient("127.0.0.1:11211", factory));
+            assertSame(failure, thrown.getCause());
+            assertTrue(thrown.getMessage().contains("127.0.0.1:11211"));
+        } finally {
+            construction = Mockito.mockConstruction(MemcachedClient.class);
+        }
     }
 
     @ParameterizedTest
@@ -120,16 +135,6 @@ class SpyMemcachedTest {
             } finally {
                 local.disconnect();
             }
-        }
-    }
-
-    @Test
-    void emptyAddressListFromResolverFailsBeforeClientCreation() {
-        try (MockedStatic<AddrUtil> addresses = Mockito.mockStatic(AddrUtil.class)) {
-            addresses.when(() -> AddrUtil.getAddressList("127.0.0.1:11211")).thenReturn(List.of());
-            assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>("127.0.0.1:11211")).getMessage()
-                    .contains("No valid server addresses"));
-            assertEquals(1, construction.constructed().size());
         }
     }
 
@@ -154,26 +159,6 @@ class SpyMemcachedTest {
     }
 
     @Test
-    void connectionFactoryCreationWrapsIoFailureWithEndpointContext() {
-        construction.close();
-        final IOException failure = new IOException("selector unavailable");
-        final DefaultConnectionFactory factory = new DefaultConnectionFactory() {
-            @Override
-            public MemcachedConnection createConnection(final List<java.net.InetSocketAddress> addresses) throws IOException {
-                throw failure;
-            }
-        };
-        try {
-            final UncheckedIOException thrown = assertThrows(UncheckedIOException.class,
-                    () -> SpyMemcached.createSpyMemcachedClient("127.0.0.1:11211", factory));
-            assertSame(failure, thrown.getCause());
-            assertTrue(thrown.getMessage().contains("127.0.0.1:11211"));
-        } finally {
-            construction = Mockito.mockConstruction(MemcachedClient.class);
-        }
-    }
-
-    @Test
     void constructorRejectsBlankServerUrl() {
         assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>((String) null));
         assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>(""));
@@ -187,7 +172,7 @@ class SpyMemcachedTest {
     }
 
     @Test
-    void createSpyMemcachedClientRejectsNullConnectionFactoryWithIae() {
+    void createSpyMemcachedClientRejectsNullConnectionFactoryWithIllegalArgumentException() {
         // Rejected before any MemcachedClient (and its IO thread) is created; previously
         // spymemcached threw NullPointerException("Connection factory required").
         assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient("localhost:11211", null));
@@ -195,34 +180,47 @@ class SpyMemcachedTest {
         assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient(null, null));
     }
 
-    // Reads
+    @Test
+    void emptyAddressListFromResolverFailsBeforeClientCreation() {
+        try (MockedStatic<AddrUtil> addresses = Mockito.mockStatic(AddrUtil.class)) {
+            addresses.when(() -> AddrUtil.getAddressList("127.0.0.1:11211")).thenReturn(List.of());
+            assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>("127.0.0.1:11211")).getMessage()
+                    .contains("No valid server addresses"));
+            assertEquals(1, construction.constructed().size());
+        }
+    }
 
     @Test
-    @SuppressWarnings({ "unchecked", "rawtypes" })
-    void synchronousAndAsynchronousReadsReturnDelegateValuesAndSnapshotKeys() throws Exception {
-        final MemcachedClient delegate = construction.constructed().get(0);
-        final GetFuture<Object> get = mock(GetFuture.class);
-        when(delegate.asyncGet("key")).thenReturn(get);
-        when(get.get(anyLong(), any(TimeUnit.class))).thenReturn("value");
-        assertEquals("value", cache.get("key"));
-        assertEquals("value", cache.asyncGet("key").get(1, TimeUnit.SECONDS));
-
-        final Map<String, Object> values = Map.of("a", 1, "b", 2);
-        final BulkFuture<Map<String, Object>> bulk = mock(BulkFuture.class);
-        when(bulk.get(anyLong(), any(TimeUnit.class))).thenReturn(values);
-        when(delegate.asyncGetBulk(any(String[].class))).thenReturn(bulk);
-        when(delegate.asyncGetBulk(any(Collection.class))).thenReturn(bulk);
-        assertEquals(values, cache.getBulk("a", "b"));
-        assertEquals(values, cache.getBulk(List.of("a", "b")));
-        final java.util.ArrayList<String> keys = new java.util.ArrayList<>(List.of("a", "b"));
-        final ContinuableFuture<Map<String, Object>> pending = cache.asyncGetBulk(keys);
-        keys.clear();
-        assertEquals(values, pending.get());
-        final ArgumentCaptor<Collection<String>> captured = ArgumentCaptor.forClass(Collection.class);
-        verify(delegate, times(2)).asyncGetBulk(captured.capture());
-        assertEquals(List.of("a", "b"), captured.getValue());
-        verify(bulk, times(3)).get(DistributedCacheClient.DEFAULT_TIMEOUT, TimeUnit.MILLISECONDS);
+    void protectedClientFactoryReturnsTheConstructedDelegate() {
+        final MemcachedClient created = SpyMemcached.createSpyMemcachedClient(SERVER_URL, new DefaultConnectionFactory());
+        assertSame(construction.constructed().get(1), created);
+        created.shutdown();
     }
+
+    @Test
+    void serverUrlReturnsConstructorValue() {
+        assertEquals(SERVER_URL, cache.serverUrl());
+    }
+
+    /**
+     * An unresolvable host used to reach spymemcached, which opened its NIO selector and a socket
+     * channel per address before the connect to the unresolved address threw
+     * {@code UnresolvedAddressException}, leaking all of them. It must now be rejected before the
+     * connection factory is asked to create any connection.
+     */
+    @Test
+    void unresolvableHostIsRejectedBeforeConnectionResourcesAreCreated() throws Exception {
+        final DefaultConnectionFactory factory = spy(new DefaultConnectionFactory());
+        final String serverUrl = "localhost:11211,spymemcached-unit-test-host.invalid:11211";
+
+        final IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient(serverUrl, factory));
+
+        assertFalse(error instanceof UnresolvedAddressException, "rejected by the wrapper, not by a failed socket connect");
+        verify(factory, never()).createConnection(anyList());
+        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>(serverUrl, 1_000L));
+    }
+
+    // Reads
 
     /**
      * spymemcached's bulk future implements no-argument {@code get()} by waiting for
@@ -267,7 +265,48 @@ class SpyMemcachedTest {
         assertThrows(IllegalArgumentException.class, () -> cache.get(null));
     }
 
-    // Bulk Reads
+    @Test
+    @SuppressWarnings("unchecked")
+    void pairedSurrogatesRemainValidKeys() throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class);
+        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+        final String key = "key:" + new String(Character.toChars(0x1F600));
+        final GetFuture<Object> future = mock(GetFuture.class);
+        when(delegate.asyncGet(key)).thenReturn(future);
+        when(future.get(25L, TimeUnit.MILLISECONDS)).thenReturn("value");
+
+        assertEquals("value", cache.get(key));
+        verify(delegate).asyncGet(key);
+    }
+
+    @Test
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    void synchronousAndAsynchronousReadsReturnDelegateValuesAndSnapshotKeys() throws Exception {
+        final MemcachedClient delegate = construction.constructed().get(0);
+        final GetFuture<Object> get = mock(GetFuture.class);
+        when(delegate.asyncGet("key")).thenReturn(get);
+        when(get.get(anyLong(), any(TimeUnit.class))).thenReturn("value");
+        assertEquals("value", cache.get("key"));
+        assertEquals("value", cache.asyncGet("key").get(1, TimeUnit.SECONDS));
+
+        final Map<String, Object> values = Map.of("a", 1, "b", 2);
+        final BulkFuture<Map<String, Object>> bulk = mock(BulkFuture.class);
+        when(bulk.get(anyLong(), any(TimeUnit.class))).thenReturn(values);
+        when(delegate.asyncGetBulk(any(String[].class))).thenReturn(bulk);
+        when(delegate.asyncGetBulk(any(Collection.class))).thenReturn(bulk);
+        assertEquals(values, cache.getBulk("a", "b"));
+        assertEquals(values, cache.getBulk(List.of("a", "b")));
+        final ArrayList<String> keys = new ArrayList<>(List.of("a", "b"));
+        final ContinuableFuture<Map<String, Object>> pending = cache.asyncGetBulk(keys);
+        keys.clear();
+        assertEquals(values, pending.get());
+        final ArgumentCaptor<Collection<String>> captured = ArgumentCaptor.forClass(Collection.class);
+        verify(delegate, times(2)).asyncGetBulk(captured.capture());
+        assertEquals(List.of("a", "b"), captured.getValue());
+        verify(bulk, times(3)).get(DistributedCacheClient.DEFAULT_TIMEOUT, TimeUnit.MILLISECONDS);
+    }
+
+    // Bulk reads
 
     @Test
     @SuppressWarnings({ "unchecked", "rawtypes" })
@@ -289,7 +328,7 @@ class SpyMemcachedTest {
 
     @Test
     void getBulkCollectionRejectsNullKeys() {
-        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((java.util.Collection<String>) null));
+        assertThrows(IllegalArgumentException.class, () -> cache.getBulk((Collection<String>) null));
         assertThrows(IllegalArgumentException.class, () -> cache.getBulk(Arrays.asList("a", null)));
     }
 
@@ -299,250 +338,12 @@ class SpyMemcachedTest {
         assertThrows(IllegalArgumentException.class, () -> cache.getBulk("a", null));
     }
 
-    // Writes
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void unseededCountersPassTheirDeltaAndReturnTheServerResult() throws Exception {
-        final MemcachedClient delegate = construction.constructed().get(0);
-        final OperationFuture<Long> result = mock(OperationFuture.class);
-        when(result.get(anyLong(), any(TimeUnit.class))).thenReturn(10L, -1L, 7L, 0L);
-        when(delegate.asyncIncr("counter", 1)).thenReturn(result);
-        when(delegate.asyncIncr("counter", 3L)).thenReturn(result);
-        when(delegate.asyncDecr("counter", 1)).thenReturn(result);
-        when(delegate.asyncDecr("counter", 3L)).thenReturn(result);
-        assertEquals(10L, cache.incr("counter"));
-        assertEquals(-1L, cache.incr("counter", 3L));
-        assertEquals(7L, cache.decr("counter"));
-        assertEquals(0L, cache.decr("counter", 3L));
-        verify(delegate).asyncIncr("counter", 1);
-        verify(delegate).asyncIncr("counter", 3L);
-        verify(delegate).asyncDecr("counter", 1);
-        verify(delegate).asyncDecr("counter", 3L);
-    }
+    // Writes and serialization
 
     @Test
     void addRejectsNullKey() {
         assertThrows(IllegalArgumentException.class, () -> cache.add(null, "v", 60_000));
     }
-
-    @Test
-    void asyncSetRejectsNullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncPut(null, "v", 60_000));
-    }
-
-    @Test
-    void decrRejectsNegativeDelta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.decr("counter", -1));
-    }
-
-    @Test
-    void decrRejectsNullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
-    }
-
-    @Test
-    void decrWithDefaultValueValidation() {
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L, 1000L));
-        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L, 1000L));
-    }
-
-    @Test
-    void incrRejectsNegativeDelta() {
-        assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1));
-    }
-
-    @Test
-    void incrRejectsNullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
-    }
-
-    @Test
-    void incrWithDefaultValueValidation() {
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L, 1000L));
-        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L, 1000L));
-    }
-
-    @Test
-    void replaceRejectsNullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.replace(null, "v", 60_000));
-    }
-
-    /**
-     * A liveTime so large that the derived absolute Unix expiration second overflows {@code int}
-     * (while the relative seconds still fit) is rejected before any network call.
-     */
-    @Test
-    void setExpirationOverflowThrows() {
-        assertThrows(IllegalArgumentException.class, () -> cache.put("k", "v", 2_000_000_000_000L));
-    }
-
-    @Test
-    void setRejectsNullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 60_000));
-    }
-
-    // Removals
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void deleteAndFlushPreserveSuccessFailureAndAsyncResults() throws Exception {
-        final MemcachedClient delegate = construction.constructed().get(0);
-        final OperationFuture<Boolean> operation = mock(OperationFuture.class);
-        when(operation.get(anyLong(), any(TimeUnit.class))).thenReturn(true, false, true, true, true, false, null, true);
-        when(delegate.delete("key")).thenReturn(operation);
-        when(delegate.flush()).thenReturn(operation);
-        assertTrue(cache.remove("key"));
-        assertFalse(cache.remove("key"));
-        assertTrue(cache.asyncRemove("key").get(1, TimeUnit.SECONDS));
-        assertTrue(cache.asyncDelete("key").get(1, TimeUnit.SECONDS));
-        cache.flushAll();
-        assertThrows(IllegalStateException.class, cache::flushAll);
-        assertThrows(IllegalStateException.class, cache::flushAll);
-        assertTrue(cache.asyncFlushAll().get(1, TimeUnit.SECONDS));
-        cache.disconnect();
-        assertThrows(IllegalStateException.class, cache::flushAll);
-        assertThrows(IllegalStateException.class, cache::asyncFlushAll);
-    }
-
-    @Test
-    void asyncDeleteRejectsNullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.asyncRemove(null));
-    }
-
-    @Test
-    void deleteRejectsNullKey() {
-        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
-    }
-
-    // Lifecycle
-
-    @Test
-    void gracefulShutdownFailureIsTerminalWithoutInterruptingTheCaller() {
-        final MemcachedClient delegate = construction.constructed().get(0);
-        final IllegalStateException failure = new IllegalStateException("shutdown queue full");
-        doThrow(failure).when(delegate).shutdown(1000L, TimeUnit.MILLISECONDS);
-
-        assertSame(failure, assertThrows(IllegalStateException.class, () -> cache.disconnect(1000)));
-        assertFalse(Thread.currentThread().isInterrupted());
-        cache.disconnect(1000);
-        verify(delegate, times(1)).shutdown(1000L, TimeUnit.MILLISECONDS);
-        assertThrows(IllegalStateException.class, () -> cache.get("after-close"));
-    }
-
-    @Test
-    void disconnectIsIdempotent() {
-        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
-        local.disconnect();
-        local.disconnect(); // safe to call again
-
-        // After shutdown every operation fails in the wrapper, before argument validation or
-        // dispatch into spymemcached. This gives all operation families one lifecycle contract.
-        assertThrows(IllegalStateException.class, () -> local.get("k"));
-        assertThrows(IllegalStateException.class, () -> local.get(null));
-        assertThrows(IllegalStateException.class, () -> local.getBulk((String[]) null));
-        assertThrows(IllegalStateException.class, () -> local.asyncPut("k", "v", 60_000));
-        assertThrows(IllegalStateException.class, () -> local.incr("counter", -1));
-        assertThrows(IllegalStateException.class, local::flushAll);
-    }
-
-    @Test
-    void disconnectRemainsIdempotentOnFailure() throws Exception {
-        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
-        final Field clientField = SpyMemcached.class.getDeclaredField("mc");
-        clientField.setAccessible(true);
-        final MemcachedClient realClient = (MemcachedClient) clientField.get(local);
-        final MemcachedClient failingClient = mock(MemcachedClient.class);
-        clientField.set(local, failingClient);
-
-        final RuntimeException failure = new RuntimeException("unexpected shutdown failure");
-        doThrow(failure).when(failingClient).shutdown();
-
-        try {
-            assertEquals(failure, assertThrows(RuntimeException.class, local::disconnect));
-
-            // The delegate has already entered its terminal shutdown sequence; retrying can only
-            // repeat teardown against a partially released client.
-            local.disconnect();
-            verify(failingClient, times(1)).shutdown();
-        } finally {
-            realClient.shutdown();
-        }
-    }
-
-    @Test
-    void disconnectWithTimeout() {
-        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
-        local.disconnect(5_000);
-        assertThrows(IllegalStateException.class, () -> local.get("k"));
-    }
-
-    /**
-     * Regression coverage for graceful-shutdown interruption. SpyMemcached's delegate wraps the
-     * {@link InterruptedException} raised by its queue wait in a plain RuntimeException and clears
-     * the flag. The wrapper must restore the flag and remember that the delegate has nevertheless
-     * entered its terminal shutdown sequence, so a second disconnect is a no-op.
-     */
-    @Test
-    void disconnectWithTimeoutRestoresInterruptAndRemainsIdempotentOnFailure() throws Exception {
-        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
-        final Field clientField = SpyMemcached.class.getDeclaredField("mc");
-        clientField.setAccessible(true);
-        final MemcachedClient realClient = (MemcachedClient) clientField.get(local);
-        final MemcachedClient failingClient = mock(MemcachedClient.class);
-        clientField.set(local, failingClient);
-
-        final RuntimeException interruption = new RuntimeException("interrupted graceful shutdown", new InterruptedException("test interrupt"));
-        doThrow(interruption).when(failingClient).shutdown(anyLong(), eq(TimeUnit.MILLISECONDS));
-
-        try {
-            assertEquals(interruption, assertThrows(RuntimeException.class, () -> local.disconnect(1_000L)));
-            assertTrue(Thread.currentThread().isInterrupted());
-
-            // The failed call still terminally shut down the delegate; do not invoke it again.
-            local.disconnect(1_000L);
-            verify(failingClient, times(1)).shutdown(1_000L, TimeUnit.MILLISECONDS);
-        } finally {
-            Thread.interrupted(); // Do not leak the intentional interrupt into the JUnit worker.
-            realClient.shutdown();
-        }
-    }
-
-    @Test
-    void shutdownCheckPrecedesInvalidMemcachedKeys() throws Exception {
-        final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));
-        cache.disconnect();
-
-        assertThrows(IllegalStateException.class, () -> cache.put("bad key", new Object(), Long.MAX_VALUE));
-        assertThrows(IllegalStateException.class, () -> cache.incr("", -1));
-        assertThrows(IllegalStateException.class, () -> cache.asyncGetBulk("bad key"));
-    }
-
-    // Compatibility
-
-    /**
-     * An in-place return-type refinement changes a JVM method descriptor even when the new return
-     * type is covariant. These bridge checks protect already-compiled callers that still link to
-     * the original {@link Future}-returning descriptors.
-     */
-    @Test
-    void existingAsyncMethodsRetainLegacyFutureBridges() {
-        assertTrue(hasFutureBridge("asyncGet", String.class));
-        assertTrue(hasFutureBridge("asyncGetBulk", String[].class));
-        assertTrue(hasFutureBridge("asyncGetBulk", Collection.class));
-        assertTrue(hasFutureBridge("asyncAdd", String.class, Object.class, long.class));
-        assertTrue(hasFutureBridge("asyncReplace", String.class, Object.class, long.class));
-        assertTrue(hasFutureBridge("asyncFlushAll"));
-        assertTrue(hasFutureBridge("asyncFlushAll", long.class));
-    }
-
-    // Validation And Failures
 
     @Test
     void asyncAddRejectsNullKey() {
@@ -552,6 +353,11 @@ class SpyMemcachedTest {
     @Test
     void asyncReplaceRejectsNullKey() {
         assertThrows(IllegalArgumentException.class, () -> cache.asyncReplace(null, "v", 60_000));
+    }
+
+    @Test
+    void asyncSetRejectsNullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncPut(null, "v", 60_000));
     }
 
     @Test
@@ -613,17 +419,22 @@ class SpyMemcachedTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void pairedSurrogatesRemainValidKeys() throws Exception {
-        final MemcachedClient delegate = mock(MemcachedClient.class);
-        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
-        final String key = "key:" + new String(Character.toChars(0x1F600));
-        final GetFuture<Object> future = mock(GetFuture.class);
-        when(delegate.asyncGet(key)).thenReturn(future);
-        when(future.get(25L, TimeUnit.MILLISECONDS)).thenReturn("value");
+    void replaceRejectsNullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.replace(null, "v", 60_000));
+    }
 
-        assertEquals("value", cache.get(key));
-        verify(delegate).asyncGet(key);
+    /**
+     * A liveTime so large that the derived absolute Unix expiration second overflows {@code int}
+     * (while the relative seconds still fit) is rejected before any network call.
+     */
+    @Test
+    void setExpirationOverflowThrows() {
+        assertThrows(IllegalArgumentException.class, () -> cache.put("k", "v", 2_000_000_000_000L));
+    }
+
+    @Test
+    void setRejectsNullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.put(null, "v", 60_000));
     }
 
     @Test
@@ -651,98 +462,25 @@ class SpyMemcachedTest {
         verifyNoMoreInteractions(delegate);
     }
 
-    @Test
-    @SuppressWarnings("deprecation")
-    void unpairedSurrogatesAreRejectedByEveryKeyedOperationBeforeDispatch() throws Exception {
-        final MemcachedClient delegate = mock(MemcachedClient.class);
-        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
-        final List<Consumer<String>> operations = List.of(cache::get, cache::asyncGet, key -> cache.getBulk("valid", key),
-                key -> cache.getBulk(List.of("valid", key)), key -> cache.asyncGetBulk("valid", key), key -> cache.asyncGetBulk(List.of("valid", key)),
-                key -> cache.put(key, "value", 1_000), key -> cache.asyncPut(key, "value", 1_000), key -> cache.asyncSet(key, "value", 1_000),
-                key -> cache.add(key, "value", 1_000), key -> cache.asyncAdd(key, "value", 1_000), key -> cache.replace(key, "value", 1_000),
-                key -> cache.asyncReplace(key, "value", 1_000), cache::remove, cache::asyncRemove, cache::asyncDelete, cache::incr, key -> cache.incr(key, 1),
-                key -> cache.incr(key, 1, 0), key -> cache.incr(key, 1, 0, 1_000), cache::decr, key -> cache.decr(key, 1), key -> cache.decr(key, 1, 0),
-                key -> cache.decr(key, 1, 0, 1_000));
+    // Counters
 
-        for (final String malformed : List.of("key" + (char) 0xD800, "key" + (char) 0xDC00, "key" + (char) 0xD800 + "x")) {
-            for (final Consumer<String> operation : operations) {
-                assertThrows(IllegalArgumentException.class, () -> operation.accept(malformed));
-            }
-        }
-        verifyNoInteractions(delegate);
+    @Test
+    void decrRejectsNegativeDelta() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("counter", -1));
     }
 
-    /**
-     * An unresolvable host used to reach spymemcached, which opened its NIO selector and a socket
-     * channel per address before the connect to the unresolved address threw
-     * {@code UnresolvedAddressException}, leaking all of them. It must now be rejected before the
-     * connection factory is asked to create any connection.
-     */
     @Test
-    void unresolvableHostIsRejectedBeforeConnectionResourcesAreCreated() throws Exception {
-        final DefaultConnectionFactory factory = spy(new DefaultConnectionFactory());
-        final String serverUrl = "localhost:11211,spymemcached-unit-test-host.invalid:11211";
-
-        final IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> SpyMemcached.createSpyMemcachedClient(serverUrl, factory));
-
-        assertFalse(error instanceof UnresolvedAddressException, "rejected by the wrapper, not by a failed socket connect");
-        verify(factory, never()).createConnection(anyList());
-        assertThrows(IllegalArgumentException.class, () -> new SpyMemcached<>(serverUrl, 1_000L));
+    void decrRejectsNullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1));
     }
 
-    // Other Behavior
-
-    /**
-     * Store and flush paths share one TTL conversion: a non-positive value means "no expiration"
-     * ({@code 0}; a negative memcached expiration would mean "already expired"), positive
-     * milliseconds round up to whole seconds, exactly 30 days stays relative, anything longer
-     * becomes an absolute Unix timestamp, and a timestamp beyond 2^31-1 is rejected before dispatch.
-     */
     @Test
-    @SuppressWarnings("unchecked")
-    void expirationConversionHonorsThirtyDayBoundaryForStoresAndFlushes() throws Exception {
-        final MemcachedClient delegate = mock(MemcachedClient.class);
-        final OperationFuture<Boolean> accepted = mock(OperationFuture.class);
-        when(accepted.get(25L, TimeUnit.MILLISECONDS)).thenReturn(true);
-        when(accepted.get()).thenReturn(true);
-        when(delegate.set(anyString(), anyInt(), any())).thenReturn(accepted);
-        when(delegate.flush(anyInt())).thenReturn(accepted);
-        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
-        final long thirtyDaysMillis = 30L * 24 * 60 * 60 * 1000;
-
-        for (final long liveTime : new long[] { Long.MIN_VALUE, -1, 0, 1, 1_000, 1_001, thirtyDaysMillis }) {
-            assertTrue(cache.put("relative", "v", liveTime));
-        }
-
-        final ArgumentCaptor<Integer> relative = ArgumentCaptor.forClass(Integer.class);
-        verify(delegate, times(7)).set(eq("relative"), relative.capture(), eq("v"));
-        assertEquals(List.of(0, 0, 0, 1, 1, 2, 2_592_000), relative.getAllValues());
-
-        final long before = System.currentTimeMillis() / 1000L;
-        assertTrue(cache.put("absolute", "v", thirtyDaysMillis + 1));
-        final long after = System.currentTimeMillis() / 1000L;
-        final ArgumentCaptor<Integer> absolute = ArgumentCaptor.forClass(Integer.class);
-        verify(delegate).set(eq("absolute"), absolute.capture(), eq("v"));
-        assertTrue(absolute.getValue() >= before + 2_592_001 && absolute.getValue() <= after + 2_592_001, "absolute = " + absolute.getValue());
-
-        assertTrue(cache.flushAll(-1));
-        assertTrue(cache.flushAll(1_500));
-        assertTrue(cache.asyncFlushAll(thirtyDaysMillis).get());
-        final ArgumentCaptor<Integer> delays = ArgumentCaptor.forClass(Integer.class);
-        verify(delegate, times(3)).flush(delays.capture());
-        assertEquals(List.of(0, 2, 2_592_000), delays.getAllValues());
-
-        final MemcachedClient untouched = mock(MemcachedClient.class);
-        final SpyMemcached<Object> rejecting = clientWithDelegate(untouched);
-        // Relative seconds overflow int, and an int-sized relative value whose absolute form passes 2038.
-        for (final long tooLong : new long[] { Long.MAX_VALUE, 2_000_000_000_000L }) {
-            assertThrows(IllegalArgumentException.class, () -> rejecting.put("k", "v", tooLong));
-            assertThrows(IllegalArgumentException.class, () -> rejecting.asyncAdd("k", "v", tooLong));
-            assertThrows(IllegalArgumentException.class, () -> rejecting.flushAll(tooLong));
-            assertThrows(IllegalArgumentException.class, () -> rejecting.incr("k", 1, 0, tooLong));
-            assertThrows(IllegalArgumentException.class, () -> rejecting.decr("k", 1, 0, tooLong));
-        }
-        verifyNoInteractions(untouched);
+    void decrWithDefaultValueValidation() {
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr(null, 1, 0L, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> cache.decr("k", -1, 0L, 1000L));
     }
 
     /**
@@ -774,40 +512,23 @@ class SpyMemcachedTest {
         verify(delegate, never()).add(anyString(), anyInt(), any(), any());
     }
 
-    /** The protocol limit counts UTF-8 bytes, and an exactly 250-byte key remains valid. */
     @Test
-    @SuppressWarnings("unchecked")
-    void memcachedKeyValidationAcceptsExactUtf8ByteLimit() throws Exception {
-        final MemcachedClient delegate = mock(MemcachedClient.class);
-        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
-        final String key = "\u00e9".repeat(125);
-        final GetFuture<Object> future = mock(GetFuture.class);
-        when(delegate.asyncGet(key)).thenReturn(future);
-        when(future.get(25L, TimeUnit.MILLISECONDS)).thenReturn("value");
-
-        assertEquals("value", cache.get(key));
-        verify(delegate).asyncGet(key);
-        verifyNoMoreInteractions(delegate);
+    void incrRejectsNegativeDelta() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1));
     }
 
     @Test
-    void memcachedKeyValidationPrecedesLaterArgumentsAndDispatch() throws Exception {
-        final MemcachedClient delegate = mock(MemcachedClient.class);
-        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+    void incrRejectsNullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1));
+    }
 
-        for (final String key : List.of("", "bad key", "key\r", "key\n", "key\0", "x".repeat(251), "\u00e9".repeat(126))) {
-            final IllegalArgumentException keyFailure = assertThrows(IllegalArgumentException.class, () -> cache.get(key));
-            assertEquals(keyFailure.getMessage(),
-                    assertThrows(IllegalArgumentException.class, () -> cache.put(key, new Object(), Long.MAX_VALUE)).getMessage());
-            assertEquals(keyFailure.getMessage(),
-                    assertThrows(IllegalArgumentException.class, () -> cache.asyncAdd(key, new Object(), Long.MAX_VALUE)).getMessage());
-            assertEquals(keyFailure.getMessage(), assertThrows(IllegalArgumentException.class, () -> cache.incr(key, -1, -1, Long.MAX_VALUE)).getMessage());
-            assertEquals(keyFailure.getMessage(), assertThrows(IllegalArgumentException.class, () -> cache.decr(key, -1, -1, Long.MAX_VALUE)).getMessage());
-            assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
-            assertThrows(IllegalArgumentException.class, () -> cache.asyncGetBulk(List.of("valid", key)));
-        }
-
-        verifyNoInteractions(delegate);
+    @Test
+    void incrWithDefaultValueValidation() {
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr(null, 1, 0L, 1000L));
+        assertThrows(IllegalArgumentException.class, () -> cache.incr("k", -1, 0L, 1000L));
     }
 
     /**
@@ -914,8 +635,291 @@ class SpyMemcachedTest {
     }
 
     @Test
-    void serverUrlReturnsConstructorValue() {
-        assertEquals(SERVER_URL, cache.serverUrl());
+    @SuppressWarnings("unchecked")
+    void unseededCountersPassTheirDeltaAndReturnTheServerResult() throws Exception {
+        final MemcachedClient delegate = construction.constructed().get(0);
+        final OperationFuture<Long> result = mock(OperationFuture.class);
+        when(result.get(anyLong(), any(TimeUnit.class))).thenReturn(10L, -1L, 7L, 0L);
+        when(delegate.asyncIncr("counter", 1)).thenReturn(result);
+        when(delegate.asyncIncr("counter", 3L)).thenReturn(result);
+        when(delegate.asyncDecr("counter", 1)).thenReturn(result);
+        when(delegate.asyncDecr("counter", 3L)).thenReturn(result);
+        assertEquals(10L, cache.incr("counter"));
+        assertEquals(-1L, cache.incr("counter", 3L));
+        assertEquals(7L, cache.decr("counter"));
+        assertEquals(0L, cache.decr("counter", 3L));
+        verify(delegate).asyncIncr("counter", 1);
+        verify(delegate).asyncIncr("counter", 3L);
+        verify(delegate).asyncDecr("counter", 1);
+        verify(delegate).asyncDecr("counter", 3L);
+    }
+
+    // Removals
+
+    @Test
+    void asyncDeleteRejectsNullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.asyncRemove(null));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deleteAndFlushPreserveSuccessFailureAndAsyncResults() throws Exception {
+        final MemcachedClient delegate = construction.constructed().get(0);
+        final OperationFuture<Boolean> operation = mock(OperationFuture.class);
+        when(operation.get(anyLong(), any(TimeUnit.class))).thenReturn(true, false, true, true, true, false, null, true);
+        when(delegate.delete("key")).thenReturn(operation);
+        when(delegate.flush()).thenReturn(operation);
+        assertTrue(cache.remove("key"));
+        assertFalse(cache.remove("key"));
+        assertTrue(cache.asyncRemove("key").get(1, TimeUnit.SECONDS));
+        assertTrue(cache.asyncDelete("key").get(1, TimeUnit.SECONDS));
+        cache.flushAll();
+        assertThrows(IllegalStateException.class, cache::flushAll);
+        assertThrows(IllegalStateException.class, cache::flushAll);
+        assertTrue(cache.asyncFlushAll().get(1, TimeUnit.SECONDS));
+        cache.disconnect();
+        assertThrows(IllegalStateException.class, cache::flushAll);
+        assertThrows(IllegalStateException.class, cache::asyncFlushAll);
+    }
+
+    @Test
+    void deleteRejectsNullKey() {
+        assertThrows(IllegalArgumentException.class, () -> cache.remove(null));
+    }
+
+    // Expiration
+
+    /**
+     * Store and flush paths share one TTL conversion: a non-positive value means "no expiration"
+     * ({@code 0}; a negative memcached expiration would mean "already expired"), positive
+     * milliseconds round up to whole seconds, exactly 30 days stays relative, anything longer
+     * becomes an absolute Unix timestamp, and a timestamp beyond 2^31-1 is rejected before dispatch.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void expirationConversionHonorsThirtyDayBoundaryForStoresAndFlushes() throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class);
+        final OperationFuture<Boolean> accepted = mock(OperationFuture.class);
+        when(accepted.get(25L, TimeUnit.MILLISECONDS)).thenReturn(true);
+        when(accepted.get()).thenReturn(true);
+        when(delegate.set(anyString(), anyInt(), any())).thenReturn(accepted);
+        when(delegate.flush(anyInt())).thenReturn(accepted);
+        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+        final long thirtyDaysMillis = 30L * 24 * 60 * 60 * 1000;
+
+        for (final long liveTime : new long[] { Long.MIN_VALUE, -1, 0, 1, 1_000, 1_001, thirtyDaysMillis }) {
+            assertTrue(cache.put("relative", "v", liveTime));
+        }
+
+        final ArgumentCaptor<Integer> relative = ArgumentCaptor.forClass(Integer.class);
+        verify(delegate, times(7)).set(eq("relative"), relative.capture(), eq("v"));
+        assertEquals(List.of(0, 0, 0, 1, 1, 2, 2_592_000), relative.getAllValues());
+
+        final long before = System.currentTimeMillis() / 1000L;
+        assertTrue(cache.put("absolute", "v", thirtyDaysMillis + 1));
+        final long after = System.currentTimeMillis() / 1000L;
+        final ArgumentCaptor<Integer> absolute = ArgumentCaptor.forClass(Integer.class);
+        verify(delegate).set(eq("absolute"), absolute.capture(), eq("v"));
+        assertTrue(absolute.getValue() >= before + 2_592_001 && absolute.getValue() <= after + 2_592_001, "absolute = " + absolute.getValue());
+
+        assertTrue(cache.flushAll(-1));
+        assertTrue(cache.flushAll(1_500));
+        assertTrue(cache.asyncFlushAll(thirtyDaysMillis).get());
+        final ArgumentCaptor<Integer> delays = ArgumentCaptor.forClass(Integer.class);
+        verify(delegate, times(3)).flush(delays.capture());
+        assertEquals(List.of(0, 2, 2_592_000), delays.getAllValues());
+
+        final MemcachedClient untouched = mock(MemcachedClient.class);
+        final SpyMemcached<Object> rejecting = clientWithDelegate(untouched);
+        // Relative seconds overflow int, and an int-sized relative value whose absolute form passes 2038.
+        for (final long tooLong : new long[] { Long.MAX_VALUE, 2_000_000_000_000L }) {
+            assertThrows(IllegalArgumentException.class, () -> rejecting.put("k", "v", tooLong));
+            assertThrows(IllegalArgumentException.class, () -> rejecting.asyncAdd("k", "v", tooLong));
+            assertThrows(IllegalArgumentException.class, () -> rejecting.flushAll(tooLong));
+            assertThrows(IllegalArgumentException.class, () -> rejecting.incr("k", 1, 0, tooLong));
+            assertThrows(IllegalArgumentException.class, () -> rejecting.decr("k", 1, 0, tooLong));
+        }
+        verifyNoInteractions(untouched);
+    }
+
+    // Lifecycle
+
+    @Test
+    void disconnectIsIdempotent() {
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
+        local.disconnect();
+        local.disconnect(); // safe to call again
+
+        // After shutdown every operation fails in the wrapper, before argument validation or
+        // dispatch into spymemcached. This gives all operation families one lifecycle contract.
+        assertThrows(IllegalStateException.class, () -> local.get("k"));
+        assertThrows(IllegalStateException.class, () -> local.get(null));
+        assertThrows(IllegalStateException.class, () -> local.getBulk((String[]) null));
+        assertThrows(IllegalStateException.class, () -> local.asyncPut("k", "v", 60_000));
+        assertThrows(IllegalStateException.class, () -> local.incr("counter", -1));
+        assertThrows(IllegalStateException.class, local::flushAll);
+    }
+
+    @Test
+    void disconnectRemainsIdempotentOnFailure() throws Exception {
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
+        final Field clientField = SpyMemcached.class.getDeclaredField("mc");
+        clientField.setAccessible(true);
+        final MemcachedClient realClient = (MemcachedClient) clientField.get(local);
+        final MemcachedClient failingClient = mock(MemcachedClient.class);
+        clientField.set(local, failingClient);
+
+        final RuntimeException failure = new RuntimeException("unexpected shutdown failure");
+        doThrow(failure).when(failingClient).shutdown();
+
+        try {
+            assertEquals(failure, assertThrows(RuntimeException.class, local::disconnect));
+
+            // The delegate has already entered its terminal shutdown sequence; retrying can only
+            // repeat teardown against a partially released client.
+            local.disconnect();
+            verify(failingClient, times(1)).shutdown();
+        } finally {
+            realClient.shutdown();
+        }
+    }
+
+    @Test
+    void disconnectWithTimeout() {
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
+        local.disconnect(5_000);
+        assertThrows(IllegalStateException.class, () -> local.get("k"));
+    }
+
+    /**
+     * Regression coverage for graceful-shutdown interruption. SpyMemcached's delegate wraps the
+     * {@link InterruptedException} raised by its queue wait in a plain RuntimeException and clears
+     * the flag. The wrapper must restore the flag and remember that the delegate has nevertheless
+     * entered its terminal shutdown sequence, so a second disconnect is a no-op.
+     */
+    @Test
+    void disconnectWithTimeoutRestoresInterruptAndRemainsIdempotentOnFailure() throws Exception {
+        final SpyMemcached<Object> local = new SpyMemcached<>(SERVER_URL);
+        final Field clientField = SpyMemcached.class.getDeclaredField("mc");
+        clientField.setAccessible(true);
+        final MemcachedClient realClient = (MemcachedClient) clientField.get(local);
+        final MemcachedClient failingClient = mock(MemcachedClient.class);
+        clientField.set(local, failingClient);
+
+        final RuntimeException interruption = new RuntimeException("interrupted graceful shutdown", new InterruptedException("test interrupt"));
+        doThrow(interruption).when(failingClient).shutdown(anyLong(), eq(TimeUnit.MILLISECONDS));
+
+        try {
+            assertEquals(interruption, assertThrows(RuntimeException.class, () -> local.disconnect(1_000L)));
+            assertTrue(Thread.currentThread().isInterrupted());
+
+            // The failed call still terminally shut down the delegate; do not invoke it again.
+            local.disconnect(1_000L);
+            verify(failingClient, times(1)).shutdown(1_000L, TimeUnit.MILLISECONDS);
+        } finally {
+            Thread.interrupted(); // Do not leak the intentional interrupt into the JUnit worker.
+            realClient.shutdown();
+        }
+    }
+
+    @Test
+    void gracefulShutdownFailureIsTerminalWithoutInterruptingTheCaller() {
+        final MemcachedClient delegate = construction.constructed().get(0);
+        final IllegalStateException failure = new IllegalStateException("shutdown queue full");
+        doThrow(failure).when(delegate).shutdown(1000L, TimeUnit.MILLISECONDS);
+
+        assertSame(failure, assertThrows(IllegalStateException.class, () -> cache.disconnect(1000)));
+        assertFalse(Thread.currentThread().isInterrupted());
+        cache.disconnect(1000);
+        verify(delegate, times(1)).shutdown(1000L, TimeUnit.MILLISECONDS);
+        assertThrows(IllegalStateException.class, () -> cache.get("after-close"));
+    }
+
+    @Test
+    void shutdownCheckPrecedesInvalidMemcachedKeys() throws Exception {
+        final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));
+        cache.disconnect();
+
+        assertThrows(IllegalStateException.class, () -> cache.put("bad key", new Object(), Long.MAX_VALUE));
+        assertThrows(IllegalStateException.class, () -> cache.incr("", -1));
+        assertThrows(IllegalStateException.class, () -> cache.asyncGetBulk("bad key"));
+    }
+
+    // Compatibility
+
+    /**
+     * An in-place return-type refinement changes a JVM method descriptor even when the new return
+     * type is covariant. These bridge checks protect already-compiled callers that still link to
+     * the original {@link Future}-returning descriptors.
+     */
+    @Test
+    void existingAsyncMethodsRetainLegacyFutureBridges() {
+        assertTrue(hasFutureBridge("asyncGet", String.class));
+        assertTrue(hasFutureBridge("asyncGetBulk", String[].class));
+        assertTrue(hasFutureBridge("asyncGetBulk", Collection.class));
+        assertTrue(hasFutureBridge("asyncAdd", String.class, Object.class, long.class));
+        assertTrue(hasFutureBridge("asyncReplace", String.class, Object.class, long.class));
+        assertTrue(hasFutureBridge("asyncFlushAll"));
+        assertTrue(hasFutureBridge("asyncFlushAll", long.class));
+    }
+
+    // Key validation
+
+    /** The protocol limit counts UTF-8 bytes, and an exactly 250-byte key remains valid. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void memcachedKeyValidationAcceptsExactUtf8ByteLimit() throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class);
+        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+        final String key = "\u00e9".repeat(125);
+        final GetFuture<Object> future = mock(GetFuture.class);
+        when(delegate.asyncGet(key)).thenReturn(future);
+        when(future.get(25L, TimeUnit.MILLISECONDS)).thenReturn("value");
+
+        assertEquals("value", cache.get(key));
+        verify(delegate).asyncGet(key);
+        verifyNoMoreInteractions(delegate);
+    }
+
+    @Test
+    void memcachedKeyValidationPrecedesLaterArgumentsAndDispatch() throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class);
+        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+
+        for (final String key : List.of("", "bad key", "key\r", "key\n", "key\0", "x".repeat(251), "\u00e9".repeat(126))) {
+            final IllegalArgumentException keyFailure = assertThrows(IllegalArgumentException.class, () -> cache.get(key));
+            assertEquals(keyFailure.getMessage(),
+                    assertThrows(IllegalArgumentException.class, () -> cache.put(key, new Object(), Long.MAX_VALUE)).getMessage());
+            assertEquals(keyFailure.getMessage(),
+                    assertThrows(IllegalArgumentException.class, () -> cache.asyncAdd(key, new Object(), Long.MAX_VALUE)).getMessage());
+            assertEquals(keyFailure.getMessage(), assertThrows(IllegalArgumentException.class, () -> cache.incr(key, -1, -1, Long.MAX_VALUE)).getMessage());
+            assertEquals(keyFailure.getMessage(), assertThrows(IllegalArgumentException.class, () -> cache.decr(key, -1, -1, Long.MAX_VALUE)).getMessage());
+            assertThrows(IllegalArgumentException.class, () -> cache.getBulk("valid", key));
+            assertThrows(IllegalArgumentException.class, () -> cache.asyncGetBulk(List.of("valid", key)));
+        }
+
+        verifyNoInteractions(delegate);
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
+    void unpairedSurrogatesAreRejectedByEveryKeyedOperationBeforeDispatch() throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class);
+        final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+        final List<Consumer<String>> operations = List.of(cache::get, cache::asyncGet, key -> cache.getBulk("valid", key),
+                key -> cache.getBulk(List.of("valid", key)), key -> cache.asyncGetBulk("valid", key), key -> cache.asyncGetBulk(List.of("valid", key)),
+                key -> cache.put(key, "value", 1_000), key -> cache.asyncPut(key, "value", 1_000), key -> cache.asyncSet(key, "value", 1_000),
+                key -> cache.add(key, "value", 1_000), key -> cache.asyncAdd(key, "value", 1_000), key -> cache.replace(key, "value", 1_000),
+                key -> cache.asyncReplace(key, "value", 1_000), cache::remove, cache::asyncRemove, cache::asyncDelete, cache::incr, key -> cache.incr(key, 1),
+                key -> cache.incr(key, 1, 0), key -> cache.incr(key, 1, 0, 1_000), cache::decr, key -> cache.decr(key, 1), key -> cache.decr(key, 1, 0),
+                key -> cache.decr(key, 1, 0, 1_000));
+
+        for (final String malformed : List.of("key" + (char) 0xD800, "key" + (char) 0xDC00, "key" + (char) 0xD800 + "x")) {
+            for (final Consumer<String> operation : operations) {
+                assertThrows(IllegalArgumentException.class, () -> operation.accept(malformed));
+            }
+        }
+        verifyNoInteractions(delegate);
     }
 
     private static boolean hasFutureBridge(final String name, final Class<?>... parameterTypes) {

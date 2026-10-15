@@ -98,13 +98,15 @@ Use `-Dcache.performance.capacityMb=64` to set each cache allocation. These valu
 ## Conventions for adding or changing tests
 
 - Match production packages. Use package-private test classes and methods, `*Test` for isolated unit tests, and lowerCamelCase method names describing behavior and conditions.
-- Keep fixture fields and lifecycle methods first, group related API behaviors, and put helpers last. Use `@Nested` when a large suite needs named behavior groups. Source ordering is for navigation; tests must not depend on execution order.
+- Keep fixture fields and lifecycle methods first, then named behavior groups in API order: construction/configuration, reads, writes/counters, removals, views/statistics, expiration/allocation, lifecycle/concurrency, compatibility, and validation, omitting groups that do not apply. Alphabetize test methods within each group and put helpers last. Use `@Nested` when a large suite needs named groups. Source ordering is for navigation; tests must not depend on execution order.
 - Keep assertions close to the operation they verify. Use `assertThrows`, exact outcomes and counters, and meaningful mock interaction checks. Avoid print-only checks and assertions that merely restate the setup.
 - Parameterize shared behavior and boundary values, with a separate reported invocation per case. Consolidate only genuinely equivalent scenarios; preserve backend-specific behavior and regression cases.
 - Give each case fresh mutable state. Close native caches, client mocks, managers, stores, and executors even after failure. Use `@TempDir` for disk state.
 - Prefer explicit latches and bounded futures for concurrency. Use `TestSupport.awaitCondition` for asynchronous state changes, with a condition that does not refresh expiry. Do not use sleeps to guess whether a competing operation has started.
 - Keep external service calls in integration tests and heavy workloads in performance tests. Never add a default dependency on a developer's local server.
 - When consolidating, map each removed scenario to its surviving test and compare coverage. A smaller method count alone does not demonstrate equivalent coverage.
+
+See [the implemented cleanup plan](TEST_CLEANUP_PLAN.md) for validation results and the map from removed or moved cases to their surviving owners.
 
 ## Consolidated ownership
 
@@ -115,6 +117,8 @@ Use `-Dcache.performance.capacityMb=64` to set each cache allocation. These valu
 | Optional-dependency startup and background-task submission failures | `OffHeapCacheInitializationTest`, with isolated static state |
 | Native backend details and allocator regressions | `OffHeapCacheTest`, `ForeignMemoryOffHeapCacheTest`, `OffHeapAllocatorTest` |
 | Shared Redis operations and bulk-memory regressions | `AbstractJedisCacheClientTest`; routing and construction stay in `JRedisTest` and `JRedisClusterTest` |
+| Distributed cache operations and argument validation | `DistributedCacheTest`; breaker transitions and recovery races in `DistributedCacheCircuitBreakerTest` |
+| Provider-independent factory validation | `CacheFactoryTest.ProviderValidation`, with shared invalid-timeout and parameter-count matrices |
 | Memcached protocol versus future handling | `SpyMemcachedTest` and `SpyMemcachedFutureTest`; live server cases in `SpyMemcachedIT` |
 | Lock key validation, Unicode, and lifecycle | `com.landawn.abacus.util.MemcachedLockTest`; live leases in `MemcachedLockIT` |
 | Kryo encoding, decoding, limits, and failures | Behavior groups in `KryoTranscoderTest` |

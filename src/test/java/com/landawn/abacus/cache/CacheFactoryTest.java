@@ -17,9 +17,11 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import javax.tools.ToolProvider;
 
@@ -27,7 +29,10 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
@@ -40,6 +45,7 @@ import com.landawn.abacus.util.Suppliers;
 import com.landawn.abacus.util.TypeAttrParser;
 
 import net.spy.memcached.MemcachedClient;
+
 import redis.clients.jedis.RedisClient;
 import redis.clients.jedis.RedisClusterClient;
 import redis.clients.jedis.providers.ClusterConnectionProvider;
@@ -50,6 +56,96 @@ class CacheFactoryTest {
 
     @Nested
     class InProcessCaches {
+
+        /** createCaffeineCache forwards to the CaffeineCache wrapper constructor, which rejects a null delegate. */
+        @Test
+        void createCaffeineCacheNullRejected() {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCaffeineCache(null));
+        }
+
+        /** Factory smoke test: the createCaffeineCache delegation wraps the supplied Caffeine cache. */
+        @Test
+        void createCaffeineCacheSmoke() {
+            final CaffeineCache<String, String> cache = CacheFactory
+                    .createCaffeineCache(com.github.benmanes.caffeine.cache.Caffeine.newBuilder().maximumSize(10).build());
+
+            try {
+                assertTrue(cache.put("k", "v"));
+                assertEquals("v", cache.getOrNull("k"));
+            } finally {
+                cache.close();
+            }
+        }
+
+        /** createEhcache forwards to the Ehcache wrapper constructor, which rejects a null delegate. */
+        @Test
+        void createEhcacheNullRejected() {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createEhcache(null));
+        }
+
+        @Test
+        void createLocalCache() {
+            final LocalCache<String, String> cache = CacheFactory.createLocalCache(100, 0);
+
+            try {
+                assertNotNull(cache);
+                assertTrue(cache.put("k", "v"));
+                assertEquals("v", cache.getOrNull("k"));
+            } finally {
+                cache.close();
+            }
+        }
+
+        @Test
+        void createLocalCacheFourArg() {
+            final LocalCache<String, String> cache = CacheFactory.createLocalCache(100, 0, 60000L, 30000L);
+
+            try {
+                assertNotNull(cache);
+                assertTrue(cache.put("a", "b"));
+            } finally {
+                cache.close();
+            }
+        }
+
+        @Test
+        void createLocalCacheInvalidCapacity() {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createLocalCache(0, 0));
+        }
+
+        @Test
+        void createLocalCacheWithPool() {
+            // Use IntFunctions to create the capacity supplier indirectly.
+            final IntFunction<KeyedObjectPool<String, PoolableAdapter<String>>> poolFactory = cap -> PoolFactory.createKeyedObjectPool(cap, 0);
+            final KeyedObjectPool<String, PoolableAdapter<String>> pool = poolFactory.apply(64);
+
+            final LocalCache<String, String> cache = CacheFactory.createLocalCache(pool, 60000L, 30000L);
+
+            try {
+                assertNotNull(cache);
+                assertTrue(cache.put("x", "y"));
+                assertEquals("y", cache.getOrNull("x"));
+            } finally {
+                cache.close();
+            }
+        }
+
+        @Test
+        void createLocalCacheWithPoolNullPool() {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createLocalCache((KeyedObjectPool<String, PoolableAdapter<String>>) null, 0L, 0L));
+        }
+
+        /** Factory smoke test: the createOffHeapCache delegation produces a working cache. */
+        @Test
+        void createOffHeapCacheSmoke() {
+            final OffHeapCache<String, byte[]> cache = CacheFactory.createOffHeapCache(1);
+            try {
+                assertTrue(cache.put("k", new byte[] { 1, 2 }));
+                assertArrayEquals(new byte[] { 1, 2 }, cache.getOrNull("k"));
+            } finally {
+                cache.close();
+            }
+        }
 
         @Test
         void ehcacheFactoryUsesTheSuppliedDelegate() {
@@ -79,66 +175,11 @@ class CacheFactoryTest {
             assertTrue(cache.isClosed());
         }
 
-        // Two-arg createLocalCache
-        @Test
-        void createLocalCache() {
-            final LocalCache<String, String> cache = CacheFactory.createLocalCache(100, 0);
-
-            try {
-                assertNotNull(cache);
-                assertTrue(cache.put("k", "v"));
-                assertEquals("v", cache.getOrNull("k"));
-            } finally {
-                cache.close();
-            }
-        }
-
-        // Four-arg createLocalCache
-        @Test
-        void createLocalCacheFourArg() {
-            final LocalCache<String, String> cache = CacheFactory.createLocalCache(100, 0, 60000L, 30000L);
-
-            try {
-                assertNotNull(cache);
-                assertTrue(cache.put("a", "b"));
-            } finally {
-                cache.close();
-            }
-        }
-
-        @Test
-        void createLocalCacheInvalidCapacity() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createLocalCache(0, 0));
-        }
-
-        // createLocalCache with KeyedObjectPool
-        @Test
-        void createLocalCacheWithPool() {
-            // Use IntFunctions to create the capacity supplier indirectly.
-            final IntFunction<KeyedObjectPool<String, PoolableAdapter<String>>> poolFactory = cap -> PoolFactory.createKeyedObjectPool(cap, 0);
-            final KeyedObjectPool<String, PoolableAdapter<String>> pool = poolFactory.apply(64);
-
-            final LocalCache<String, String> cache = CacheFactory.createLocalCache(pool, 60000L, 30000L);
-
-            try {
-                assertNotNull(cache);
-                assertTrue(cache.put("x", "y"));
-                assertEquals("y", cache.getOrNull("x"));
-            } finally {
-                cache.close();
-            }
-        }
-
-        @Test
-        void createLocalCacheWithPoolNullPool() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createLocalCache((KeyedObjectPool<String, PoolableAdapter<String>>) null, 0L, 0L));
-        }
     }
 
     @Nested
     class DistributedCaches {
 
-        // createDistributedCache with full circuit breaker configuration
         @Test
         void createDistributedCacheFourArg() {
             try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
@@ -174,7 +215,6 @@ class CacheFactoryTest {
             }
         }
 
-        // createDistributedCache one-arg overload
         @Test
         void createDistributedCacheOneArg() {
             try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
@@ -186,7 +226,6 @@ class CacheFactoryTest {
             }
         }
 
-        // createDistributedCache with key prefix
         @Test
         void createDistributedCacheTwoArg() {
             try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
@@ -196,12 +235,12 @@ class CacheFactoryTest {
                 dc.close();
             }
         }
+
     }
 
     @Nested
     class MemcachedProviders {
 
-        // createCache: Memcached with one parameter
         @Test
         void createCacheMemcached() {
             try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
@@ -216,48 +255,6 @@ class CacheFactoryTest {
         }
 
         @Test
-        void createCacheMemcachedBlankTimeoutRejected() {
-            // A trailing comma yields an empty third parameter. The strict decimal-token check must
-            // reject it ("Invalid timeout parameter") rather than silently constructing a client with a
-            // zero or default timeout.
-            try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,prefix:,)"));
-            }
-        }
-
-        @Test
-        void createCacheMemcachedNonNumericTimeout() {
-            try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,prefix:,abc)"));
-            }
-        }
-
-        @Test
-        void createCacheMemcachedNonPositiveTimeout() {
-            try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,prefix:,0)"));
-            }
-        }
-
-        @Test
-        void createCacheMemcachedOverflowTimeout() {
-            // A numeric token that overflows long makes Numbers.toLong throw ArithmeticException
-            // (not NumberFormatException). The factory must still surface it as the documented
-            // IllegalArgumentException rather than leaking the raw ArithmeticException.
-            try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,prefix:,99999999999999999999)"));
-            }
-        }
-
-        @Test
-        void createCacheMemcachedTooManyParameters() {
-            try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(a,b,1000,extra)"));
-            }
-        }
-
-        // Memcached with prefix
-        @Test
         void createCacheMemcachedWithPrefix() {
             try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
                 final Cache<String, Object> cache = CacheFactory.createCache("Memcached(localhost:11211,prefix:)");
@@ -269,7 +266,6 @@ class CacheFactoryTest {
             }
         }
 
-        // Memcached with prefix and explicit timeout
         @Test
         void createCacheMemcachedWithTimeout() {
             try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
@@ -281,12 +277,33 @@ class CacheFactoryTest {
                 }
             }
         }
+
+        @ParameterizedTest
+        @ValueSource(booleans = { false, true })
+        void wrapperConstructionFailureDisconnectsTheCreatedClient(final boolean cleanupFails) {
+            final IllegalStateException cleanupFailure = new IllegalStateException("disconnect failed");
+            try (MockedConstruction<SpyMemcached> clients = Mockito.mockConstruction(SpyMemcached.class, (client, context) -> {
+                if (cleanupFails) {
+                    Mockito.doThrow(cleanupFailure).when(client).disconnect();
+                }
+            })) {
+                final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                        () -> CacheFactory.createCache("Memcached(127.0.0.1:11211,bad prefix)"));
+                assertTrue(failure.getMessage().contains("keyPrefix"));
+                assertEquals(1, clients.constructed().size());
+                Mockito.verify(clients.constructed().get(0)).disconnect();
+                assertEquals(cleanupFails ? 1 : 0, failure.getSuppressed().length);
+                if (cleanupFails) {
+                    assertSame(cleanupFailure, failure.getSuppressed()[0]);
+                }
+            }
+        }
+
     }
 
     @Nested
     class RedisProviders {
 
-        // Redis
         @Test
         void createCacheRedis() {
             try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
@@ -297,27 +314,6 @@ class CacheFactoryTest {
                 } finally {
                     cache.close();
                 }
-            }
-        }
-
-        @Test
-        void createCacheRedisNonNumericTimeout() {
-            try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Redis(localhost:6379,p:,xyz)"));
-            }
-        }
-
-        @Test
-        void createCacheRedisNonPositiveTimeout() {
-            try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Redis(localhost:6379,p:,0)"));
-            }
-        }
-
-        @Test
-        void createCacheRedisTooManyParameters() {
-            try (MockedConstruction<RedisClient> ctorIntercept = Mockito.mockConstruction(RedisClient.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Redis(a,b,1000,extra)"));
             }
         }
 
@@ -362,66 +358,12 @@ class CacheFactoryTest {
                 }
             }
         }
+
     }
 
     @Nested
     class RedisClusterProviders {
 
-        @Test
-        void rejectsMalformedEarlierSeedBeforeAnExplicitPrefixAndTimeout() {
-            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-                    () -> CacheFactory.createCache("RedisCluster(seed:7000,invalid,prefix:,1000)"));
-            assertTrue(failure.getMessage().contains("seed"));
-        }
-
-        @Test
-        void rejectsTimeoutContainingAPunctuationCharacter() {
-            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-                    () -> CacheFactory.createCache("RedisCluster(seed:7000,prefix:,12/)"));
-            assertTrue(failure.getMessage().contains("Invalid timeout parameter"));
-        }
-
-        @ParameterizedTest
-        @CsvSource(delimiter = '|', value = { "host:7001 | true", "host.name-_1:65535 | true", "[::1]:7002 | true", "[a,b]:7002 | false", "[a[b]:7002 | false",
-                "[a]b]:7002 | false", "[]:7002 | false", "[a:7002 | false", "a]:7002 | false", "abc]:7002 | false", "[abc:7002 | false", "host:0 | false",
-                "host:65536 | false", "host:9a | false", "host:/ | false", "a::1 | false", "a!:1 | false", "'' | false", "+ | false", "- | false" })
-        void distinguishesAdditionalSeedNodesFromPrefixes(final String token, final boolean isSeed) throws Exception {
-            final AtomicReference<java.util.List<?>> arguments = new AtomicReference<>();
-            try (MockedConstruction<JRedisCluster> clients = Mockito.mockConstruction(JRedisCluster.class,
-                    (client, context) -> arguments.set(context.arguments()))) {
-                final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(seed:7000,\"" + token + "\")");
-                try {
-                    assertEquals(isSeed ? "seed:7000," + token : "seed:7000", arguments.get().get(0));
-                    assertEquals(DistributedCacheClient.DEFAULT_TIMEOUT, arguments.get().get(1));
-                    assertEquals((isSeed ? "" : token) + "a2V5", ((DistributedCache<String, Object>) cache).generateKey("key"));
-                } finally {
-                    cache.close();
-                }
-                Mockito.verify(clients.constructed().get(0)).disconnect();
-            }
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = { " ", "[a b]:7002" })
-        void rejectsWhitespacePrefixesAfterClassifyingMalformedEndpoints(final String token) {
-            try (MockedConstruction<JRedisCluster> clients = Mockito.mockConstruction(JRedisCluster.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("RedisCluster(seed:7000,\"" + token + "\")"));
-                Mockito.verify(clients.constructed().get(0)).disconnect();
-            }
-        }
-
-        @Test
-        void rejectsExtraOptionsAfterTheKeyPrefix() {
-            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-                    () -> CacheFactory.createCache("RedisCluster(seed:7000,prefix:,other:7002,last:7003)"));
-            assertTrue(failure.getMessage().contains("Unsupported parameters"));
-        }
-
-        // Redis Cluster
-        //
-        // RedisClusterClient eagerly discovers the cluster topology while it is being built (inside the
-        // ClusterConnectionProvider constructor), so the happy-path tests must intercept BOTH the provider
-        // construction (to suppress the network call) and the client construction (to return a mock).
         @Test
         void createCacheRedisCluster() {
             try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class);
@@ -505,40 +447,6 @@ class CacheFactoryTest {
                 } finally {
                     cache.close();
                 }
-            }
-        }
-
-        @Test
-        void createCacheRedisClusterNonNumericTimeout() {
-            // "Invalid timeout parameter" is thrown by the RedisCluster branch (not the class-loading
-            // fallback), which proves the keyword routed to JRedisCluster.
-            final IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,xyz)"));
-            assertTrue(e.getMessage().contains("Invalid timeout parameter"));
-        }
-
-        @Test
-        void createCacheRedisClusterNonPositiveTimeout() {
-            // Validation throws before the cluster client is built; the provider mock is a safety net.
-            try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,0)"));
-            }
-        }
-
-        @Test
-        void createCacheRedisClusterOverflowTimeout() {
-            // The RedisCluster branch routes through parseRedisClusterParameters -> parseTimeoutParameter,
-            // so an overflowing numeric timeout must also surface as IllegalArgumentException ("Invalid
-            // timeout parameter") rather than a raw ArithmeticException.
-            final IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,99999999999999999999)"));
-            assertTrue(e.getMessage().contains("Invalid timeout parameter"));
-        }
-
-        @Test
-        void createCacheRedisClusterTooManyParameters() {
-            try (MockedConstruction<ClusterConnectionProvider> providerIntercept = Mockito.mockConstruction(ClusterConnectionProvider.class)) {
-                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("RedisCluster(a,b,1000,extra)"));
             }
         }
 
@@ -649,29 +557,157 @@ class CacheFactoryTest {
                 }
             }
         }
+
+        @ParameterizedTest
+        @CsvSource(delimiter = '|', value = { "host:7001 | true", "host.name-_1:65535 | true", "[::1]:7002 | true", "[a,b]:7002 | false", "[a[b]:7002 | false",
+                "[a]b]:7002 | false", "[]:7002 | false", "[a:7002 | false", "a]:7002 | false", "abc]:7002 | false", "[abc:7002 | false", "host:0 | false",
+                "host:65536 | false", "host:9a | false", "host:/ | false", "a::1 | false", "a!:1 | false", "'' | false", "+ | false", "- | false" })
+        void distinguishesAdditionalSeedNodesFromPrefixes(final String token, final boolean isSeed) throws Exception {
+            final AtomicReference<List<?>> arguments = new AtomicReference<>();
+            try (MockedConstruction<JRedisCluster> clients = Mockito.mockConstruction(JRedisCluster.class,
+                    (client, context) -> arguments.set(context.arguments()))) {
+                final Cache<String, Object> cache = CacheFactory.createCache("RedisCluster(seed:7000,\"" + token + "\")");
+                try {
+                    assertEquals(isSeed ? "seed:7000," + token : "seed:7000", arguments.get().get(0));
+                    assertEquals(DistributedCacheClient.DEFAULT_TIMEOUT, arguments.get().get(1));
+                    assertEquals((isSeed ? "" : token) + "a2V5", ((DistributedCache<String, Object>) cache).generateKey("key"));
+                } finally {
+                    cache.close();
+                }
+                Mockito.verify(clients.constructed().get(0)).disconnect();
+            }
+        }
+
+        @Test
+        void rejectsExtraOptionsAfterTheKeyPrefix() {
+            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> CacheFactory.createCache("RedisCluster(seed:7000,prefix:,other:7002,last:7003)"));
+            assertTrue(failure.getMessage().contains("Unsupported parameters"));
+        }
+
+        @Test
+        void rejectsMalformedEarlierSeedBeforeAnExplicitPrefixAndTimeout() {
+            final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> CacheFactory.createCache("RedisCluster(seed:7000,invalid,prefix:,1000)"));
+            assertTrue(failure.getMessage().contains("seed"));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = { " ", "[a b]:7002" })
+        void rejectsWhitespacePrefixesAfterClassifyingMalformedEndpoints(final String token) {
+            try (MockedConstruction<JRedisCluster> clients = Mockito.mockConstruction(JRedisCluster.class)) {
+                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("RedisCluster(seed:7000,\"" + token + "\")"));
+                Mockito.verify(clients.constructed().get(0)).disconnect();
+            }
+        }
+
     }
 
     @Nested
-    class CustomProviders {
+    class ProviderValidation {
 
         @ParameterizedTest
-        @ValueSource(booleans = { false, true })
-        void wrapperConstructionFailureDisconnectsTheCreatedClient(final boolean cleanupFails) {
-            final IllegalStateException cleanupFailure = new IllegalStateException("disconnect failed");
-            try (MockedConstruction<SpyMemcached> clients = Mockito.mockConstruction(SpyMemcached.class, (client, context) -> {
-                if (cleanupFails) {
-                    Mockito.doThrow(cleanupFailure).when(client).disconnect();
+        @NullAndEmptySource
+        @ValueSource(strings = { " ", "\t" })
+        void blankProviderIsRejected(final String provider) {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache(provider));
+        }
+
+        /**
+         * A provider specification with an empty class name (the text before the parenthesis) is rejected
+         * with an {@link IllegalArgumentException} naming the missing class name. Since abacus-common
+         * 7.8.8, {@code TypeAttrParser.parse} rejects the missing class name itself ("Malformed type
+         * attribute: missing class name"); {@code createCache}'s own "class name cannot be empty" branch
+         * remains as defense should the parser's contract change again.
+         */
+        @Test
+        void createCacheEmptyClassName() {
+            final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("(localhost:11211)"));
+            assertTrue(ex.getMessage() != null && (ex.getMessage().contains("missing class name") || ex.getMessage().contains("class name cannot be empty")),
+                    "expected a missing/empty class name message but was: " + ex.getMessage());
+        }
+
+        /**
+         * A non-empty parameter list whose first (server-URL) parameter is empty is rejected with the
+         * "server URL cannot be empty" message. {@code Memcached(,prefix:)} parses to a two-element
+         * parameter array with an empty first element (distinct from {@code Memcached()}, which has no
+         * parameters at all).
+         */
+        @Test
+        void createCacheEmptyServerUrlWithTrailingParam() {
+            final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(,prefix:)"));
+            assertTrue(ex.getMessage() != null && ex.getMessage().contains("server URL cannot be empty"),
+                    "expected a 'server URL cannot be empty' message but was: " + ex.getMessage());
+        }
+
+        @Test
+        void createCacheEmptyUrl() {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached()"));
+        }
+
+        /**
+         * A quoted DSL argument keeps its surrounding whitespace (unquoted ones are stripped by the
+         * parser). The timeout predicate classifies the trimmed token, so the timeout parser must parse
+         * that same trimmed token instead of rejecting a token it had just recognized as a timeout.
+         */
+        @Test
+        void createCacheQuotedTimeoutWithSurroundingWhitespaceIsParsedLikeThePredicateSeesIt() throws ReflectiveOperationException {
+            final Field timeoutField = SpyMemcached.class.getDeclaredField("operationTimeoutMillis");
+            timeoutField.setAccessible(true);
+
+            try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
+                for (final String provider : new String[] { "Memcached(localhost:11211,prefix:,\" 5000 \")", "Memcached(localhost:11211,\" 5000\")" }) {
+                    final Cache<String, Object> cache = CacheFactory.createCache(provider);
+                    try {
+                        assertEquals(5000L, timeoutField.getLong(distributedClient(cache)), provider);
+                    } finally {
+                        cache.close();
+                    }
                 }
-            })) {
+            }
+        }
+
+        /**
+         * Malformed DSL (an unbalanced parenthesis) must be reported as the documented
+         * IllegalArgumentException rather than leaking a low-level parser exception such as
+         * StringIndexOutOfBoundsException.
+         */
+        @Test
+        void createCacheUnbalancedParenthesis() {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,app:"));
+        }
+
+        @Test
+        void createCacheUnparsableProvider() {
+            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("not a valid spec"));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = { "Memcached", "Redis", "RedisCluster" })
+        void extraParametersAreRejectedBeforeClientConstruction(final String provider) {
+            try (MockedConstruction<SpyMemcached> memcached = Mockito.mockConstruction(SpyMemcached.class);
+                 MockedConstruction<JRedis> redis = Mockito.mockConstruction(JRedis.class);
+                 MockedConstruction<JRedisCluster> cluster = Mockito.mockConstruction(JRedisCluster.class)) {
+                assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache(provider + "(127.0.0.1:7000,prefix:,1000,extra)"));
+                assertTrue(memcached.constructed().isEmpty());
+                assertTrue(redis.constructed().isEmpty());
+                assertTrue(cluster.constructed().isEmpty());
+            }
+        }
+
+        @ParameterizedTest(name = "{0}: timeout={1}")
+        @MethodSource("com.landawn.abacus.cache.CacheFactoryTest#invalidTimeouts")
+        void invalidTimeoutIsRejectedBeforeClientConstruction(final String provider, final String timeout) {
+            try (MockedConstruction<SpyMemcached> memcached = Mockito.mockConstruction(SpyMemcached.class);
+                 MockedConstruction<JRedis> redis = Mockito.mockConstruction(JRedis.class);
+                 MockedConstruction<JRedisCluster> cluster = Mockito.mockConstruction(JRedisCluster.class)) {
                 final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-                        () -> CacheFactory.createCache("Memcached(127.0.0.1:11211,bad prefix)"));
-                assertTrue(failure.getMessage().contains("keyPrefix"));
-                assertEquals(1, clients.constructed().size());
-                Mockito.verify(clients.constructed().get(0)).disconnect();
-                assertEquals(cleanupFails ? 1 : 0, failure.getSuppressed().length);
-                if (cleanupFails) {
-                    assertSame(cleanupFailure, failure.getSuppressed()[0]);
-                }
+                        () -> CacheFactory.createCache(provider + "(127.0.0.1:7000,prefix:," + timeout + ")"));
+
+                assertTrue(failure.getMessage().contains("timeout"), failure.getMessage());
+                assertTrue(memcached.constructed().isEmpty());
+                assertTrue(redis.constructed().isEmpty());
+                assertTrue(cluster.constructed().isEmpty());
             }
         }
 
@@ -694,6 +730,11 @@ class CacheFactoryTest {
                         .contains("class name cannot be empty"));
             }
         }
+
+    }
+
+    @Nested
+    class CustomProviders {
 
         @Test
         void contextClassLoaderCanSupplyAnApplicationProvider(@TempDir final Path directory) throws Exception {
@@ -723,39 +764,18 @@ class CacheFactoryTest {
             }
         }
 
-        @ParameterizedTest
-        @ValueSource(booleans = { false, true })
-        void missingCustomClassRetainsTheContextLoaderFailure(final boolean hasContextLoader) {
-            final ClassLoader previous = Thread.currentThread().getContextClassLoader();
-            try {
-                Thread.currentThread().setContextClassLoader(hasContextLoader ? new ClassLoader(null) {
-                } : null);
-                final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-                        () -> CacheFactory.createCache("missing.application.Cache()"));
-                assertTrue(failure.getCause() instanceof ClassNotFoundException);
-                assertEquals(hasContextLoader ? 1 : 0, failure.getCause().getSuppressed().length);
-            } finally {
-                Thread.currentThread().setContextClassLoader(previous);
-            }
-        }
-
         /**
          * Regression: an abstract custom provider with a matching constructor was reflectively invoked and
          * failed with a plain RuntimeException wrapping InstantiationException, unlike every other
          * unusable-class configuration error, which is reported as IllegalArgumentException.
          */
         @Test
-        void createCacheAbstractOrInterfaceCustomClassRejectedWithIae() {
+        void createCacheAbstractOrInterfaceCustomClassRejectedWithIllegalArgumentException() {
             for (final String provider : new String[] { AbstractProviderCache.class.getName() + "(localhost:9999)",
                     AbstractProviderCache.class.getName() + "()", Cache.class.getName() + "()", Cache.class.getName() + "(localhost:9999)" }) {
                 final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache(provider), provider);
                 assertTrue(ex.getMessage().contains("must be a concrete class"), provider + ": " + ex.getMessage());
             }
-        }
-
-        @Test
-        void createCacheClassNotFound() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("com.example.NonExistentCache(localhost)"));
         }
 
         /**
@@ -817,43 +837,6 @@ class CacheFactoryTest {
         }
 
         /**
-         * A provider specification with an empty class name (the text before the parenthesis) is rejected
-         * with an {@link IllegalArgumentException} naming the missing class name. Since abacus-common
-         * 7.8.8, {@code TypeAttrParser.parse} rejects the missing class name itself ("Malformed type
-         * attribute: missing class name"); {@code createCache}'s own "class name cannot be empty" branch
-         * remains as defense should the parser's contract change again.
-         */
-        @Test
-        void createCacheEmptyClassName() {
-            final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("(localhost:11211)"));
-            assertTrue(ex.getMessage() != null && (ex.getMessage().contains("missing class name") || ex.getMessage().contains("class name cannot be empty")),
-                    "expected a missing/empty class name message but was: " + ex.getMessage());
-        }
-
-        @Test
-        void createCacheEmptyProvider() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache(""));
-        }
-
-        /**
-         * A non-empty parameter list whose first (server-URL) parameter is empty is rejected with the
-         * "server URL cannot be empty" message. {@code Memcached(,prefix:)} parses to a two-element
-         * parameter array with an empty first element (distinct from {@code Memcached()}, which has no
-         * parameters at all).
-         */
-        @Test
-        void createCacheEmptyServerUrlWithTrailingParam() {
-            final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(,prefix:)"));
-            assertTrue(ex.getMessage() != null && ex.getMessage().contains("server URL cannot be empty"),
-                    "expected a 'server URL cannot be empty' message but was: " + ex.getMessage());
-        }
-
-        @Test
-        void createCacheEmptyUrl() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached()"));
-        }
-
-        /**
          * Regression: a nested custom provider named by its canonical (dot-separated) name, which
          * {@code ClassUtil.forName} used to resolve and {@code TypeAttrParser} itself produces for
          * {@code Owner<...>.Member} specifications, was reported as "Cannot find class" once class
@@ -900,98 +883,30 @@ class CacheFactoryTest {
             assertFalse(nonCacheProviderInitialized, "type validation must not run an invalid provider's static initializer");
         }
 
-        /** Timeout tokens are strictly decimal; Numbers.toLong's hex/octal/trailing-L forms are rejected. */
-        @Test
-        void createCacheNonDecimalTimeoutRejected() {
-            final IllegalArgumentException hex = assertThrows(IllegalArgumentException.class,
-                    () -> CacheFactory.createCache("RedisCluster(10.0.0.1:7000,p:,0x1F4)"));
-            assertTrue(hex.getMessage().contains("Invalid timeout parameter"));
-
-            final IllegalArgumentException trailingL = assertThrows(IllegalArgumentException.class,
-                    () -> CacheFactory.createCache("Redis(localhost:6379,p:,5000L)"));
-            assertTrue(trailingL.getMessage().contains("Invalid timeout parameter"));
+        @ParameterizedTest
+        @ValueSource(booleans = { false, true })
+        void missingCustomClassRetainsTheContextLoaderFailure(final boolean hasContextLoader) {
+            final ClassLoader previous = Thread.currentThread().getContextClassLoader();
+            try {
+                Thread.currentThread().setContextClassLoader(hasContextLoader ? new ClassLoader(null) {
+                } : null);
+                final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                        () -> CacheFactory.createCache("missing.application.Cache()"));
+                assertTrue(failure.getCause() instanceof ClassNotFoundException);
+                assertEquals(hasContextLoader ? 1 : 0, failure.getCause().getSuppressed().length);
+            } finally {
+                Thread.currentThread().setContextClassLoader(previous);
+            }
         }
 
         // Validation: null/empty provider string
-        @Test
-        void createCacheNullProvider() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache(null));
-        }
 
-        /**
-         * A quoted DSL argument keeps its surrounding whitespace (unquoted ones are stripped by the
-         * parser). The timeout predicate classifies the trimmed token, so the timeout parser must parse
-         * that same trimmed token instead of rejecting a token it had just recognized as a timeout.
-         */
-        @Test
-        void createCacheQuotedTimeoutWithSurroundingWhitespaceIsParsedLikeThePredicateSeesIt() throws ReflectiveOperationException {
-            final Field timeoutField = SpyMemcached.class.getDeclaredField("operationTimeoutMillis");
-            timeoutField.setAccessible(true);
+    }
 
-            try (MockedConstruction<MemcachedClient> ctorIntercept = Mockito.mockConstruction(MemcachedClient.class)) {
-                for (final String provider : new String[] { "Memcached(localhost:11211,prefix:,\" 5000 \")", "Memcached(localhost:11211,\" 5000\")" }) {
-                    final Cache<String, Object> cache = CacheFactory.createCache(provider);
-                    try {
-                        assertEquals(5000L, timeoutField.getLong(distributedClient(cache)), provider);
-                    } finally {
-                        cache.close();
-                    }
-                }
-            }
-        }
-
-        /**
-         * Malformed DSL (an unbalanced parenthesis) must be reported as the documented
-         * IllegalArgumentException rather than leaking a low-level parser exception such as
-         * StringIndexOutOfBoundsException.
-         */
-        @Test
-        void createCacheUnbalancedParenthesis() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("Memcached(localhost:11211,app:"));
-        }
-
-        @Test
-        void createCacheUnparsableProvider() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache("not a valid spec"));
-        }
-
-        /** createCaffeineCache forwards to the CaffeineCache wrapper constructor, which rejects a null delegate. */
-        @Test
-        void createCaffeineCacheNullRejected() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCaffeineCache(null));
-        }
-
-        /** Factory smoke test: the createCaffeineCache delegation wraps the supplied Caffeine cache. */
-        @Test
-        void createCaffeineCacheSmoke() {
-            final CaffeineCache<String, String> cache = CacheFactory
-                    .createCaffeineCache(com.github.benmanes.caffeine.cache.Caffeine.newBuilder().maximumSize(10).build());
-
-            try {
-                assertTrue(cache.put("k", "v"));
-                assertEquals("v", cache.getOrNull("k"));
-            } finally {
-                cache.close();
-            }
-        }
-
-        /** createEhcache forwards to the Ehcache wrapper constructor, which rejects a null delegate. */
-        @Test
-        void createEhcacheNullRejected() {
-            assertThrows(IllegalArgumentException.class, () -> CacheFactory.createEhcache(null));
-        }
-
-        /** Factory smoke test: the createOffHeapCache delegation produces a working cache. */
-        @Test
-        void createOffHeapCacheSmoke() {
-            final OffHeapCache<String, byte[]> cache = CacheFactory.createOffHeapCache(1);
-            try {
-                assertTrue(cache.put("k", new byte[] { 1, 2 }));
-                assertArrayEquals(new byte[] { 1, 2 }, cache.getOrNull("k"));
-            } finally {
-                cache.close();
-            }
-        }
+    private static Stream<Arguments> invalidTimeouts() {
+        return Stream.of("Memcached", "Redis", "RedisCluster")
+                .flatMap(provider -> Stream.of("", "abc", "0", "-1", "99999999999999999999", "0x1F4", "5000L", "12/")
+                        .map(timeout -> Arguments.of(provider, timeout)));
     }
 
     private static final class NonCacheProviderWithInitializer {

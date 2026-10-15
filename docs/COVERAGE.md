@@ -9,7 +9,7 @@ Measured on 2026-10-15 with JDK 25 and JaCoCo 0.8.15. Production code and covera
 | Methods | 90.89% (369/406) | 100% (406/406) | 100% (406/406) |
 | Classes | 100% (41/41) | 100% (41/41) | 100% (41/41) |
 
-The retained `AbacusCacheTestSuite` passed **730 tests**, with no failures, errors, or skips, in randomized order using seed `20261015`. The baseline passed 614 tests. The additional allocator invocation also passed with assertions disabled, exercising the runtime fallback behind its development-time assertion.
+Normal Maven discovery and the retained `AbacusCacheTestSuite` each passed **746 tests**, with no failures, errors, or skips. The launcher used randomized class/method order with seed `20261015`. The initial coverage-expansion baseline passed 614 tests; the fresh pre-cleanup suite passed 730. The cleanup reduced annotated methods from 615 to 562 while exposing more inputs as independently reported parameterized cases. Its normal-mode coverage exactly matches the fresh pre-cleanup report, with no lost covered instructions or branch outcomes on any source line. The additional allocator invocation also passed with assertions disabled, exercising the runtime fallback behind its development-time assertion.
 
 ## Reproduce
 
@@ -27,7 +27,7 @@ mvn "-Dtest=OffHeapAllocatorTest#staleSlotReleaseLeavesAllocatorConsistent" -Den
 
 Open `target/site/jacoco/index.html`. JaCoCo appends the second invocation to the first execution data file. This is intentional: the two runs exercise different assertion modes of the same production bytecode.
 
-The verified run used the suite launcher and explicit data file `target/coverage-verified.exec`. Its full-suite log is `target/coverage-verified.log`; the supplementary log is `target/coverage-assertions-disabled.log`. The report combines only those two successful runs. Generated files are local build artifacts.
+The current verified run used the suite launcher and explicit data file `target/cleanup-suite.exec`. Its full-suite log is `target/cleanup-suite.log`; the supplementary log is `target/cleanup-assertions-disabled.log`. The final report combines only those two successful runs. Normal-discovery validation is recorded in `target/cleanup-after.log`, with before/after XML snapshots in `target/cleanup-before.xml` and `target/cleanup-after-default.xml`. Generated files are local build artifacts. See [the implemented cleanup plan](TEST_CLEANUP_PLAN.md) for the scenario ownership map.
 
 ## Added coverage
 

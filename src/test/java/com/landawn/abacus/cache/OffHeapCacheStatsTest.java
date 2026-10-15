@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -17,7 +18,7 @@ import com.landawn.abacus.cache.OffHeapCacheStats.MinMaxAvg;
 
 class OffHeapCacheStatsTest {
 
-    // Statistics
+    // Construction and validation
 
     @Test
     void minMaxAvgRejectsInconsistentOrdering() {
@@ -53,16 +54,6 @@ class OffHeapCacheStatsTest {
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(Double.POSITIVE_INFINITY, 0, 0));
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, Double.POSITIVE_INFINITY, 0));
         assertThrows(IllegalArgumentException.class, () -> new MinMaxAvg(0, 0, Double.POSITIVE_INFINITY));
-    }
-
-    @Test
-    void ratesCounterSumDoesNotOverflow() {
-        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
-        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, Long.MAX_VALUE, Long.MAX_VALUE, 0, Long.MAX_VALUE, 0, 0, 0, 0, 0, 0, z, z, 0,
-                Map.of());
-
-        assertEquals(0.5D, stats.hitRate());
-        assertEquals(0.5D, stats.missRate());
     }
 
     @Test
@@ -126,14 +117,14 @@ class OffHeapCacheStatsTest {
      * out-of-range numerics.
      */
     @Test
-    void recordNullComponentsThrowNPE() {
+    void recordNullComponentsThrowNullPointerException() {
         final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
 
         assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, z, 1, Map.of()));
         assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, null, 1, Map.of()));
         assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, null));
 
-        final Map<Integer, Map<Integer, Integer>> nullNested = new java.util.HashMap<>();
+        final Map<Integer, Map<Integer, Integer>> nullNested = new HashMap<>();
         nullNested.put(64, null);
         assertThrows(NullPointerException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, 1, nullNested));
     }
@@ -192,4 +183,17 @@ class OffHeapCacheStatsTest {
         assertEquals("readFromDiskTimeStats cannot be null", missingReadStats.getMessage());
         assertThrows(IllegalArgumentException.class, () -> new OffHeapCacheStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, -1, null));
     }
+
+    // Statistics
+
+    @Test
+    void ratesCounterSumDoesNotOverflow() {
+        final MinMaxAvg z = new MinMaxAvg(0, 0, 0);
+        final OffHeapCacheStats stats = new OffHeapCacheStats(0, 0, 0, 0, 0, Long.MAX_VALUE, Long.MAX_VALUE, 0, Long.MAX_VALUE, 0, 0, 0, 0, 0, 0, z, z, 0,
+                Map.of());
+
+        assertEquals(0.5D, stats.hitRate());
+        assertEquals(0.5D, stats.missRate());
+    }
+
 }

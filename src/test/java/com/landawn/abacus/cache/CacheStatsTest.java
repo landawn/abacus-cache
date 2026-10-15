@@ -11,33 +11,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class CacheStatsTest {
 
-    // Statistics
-
-    @Test
-    void ratesCounterSumDoesNotOverflow() {
-        final CacheStats stats = new CacheStats(0, 0, 0L, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, 0L, 0L, 0L);
-
-        assertEquals(0.5D, stats.hitRate());
-        assertEquals(0.5D, stats.missRate());
-    }
-
-    @Test
-    void ratesOrdinaryAsymmetricCounts() {
-        final CacheStats stats = new CacheStats(10, 2, 4L, 4L, 3L, 1L, 0L, 0L, 0L);
-        assertEquals(0.75D, stats.hitRate());
-        assertEquals(0.25D, stats.missRate());
-    }
-
-    @Test
-    void ratesZeroRequestsReturnZero() {
-        // Documented zero-safe guard: no requests recorded -> both rates are 0.0, not NaN.
-        final CacheStats stats = new CacheStats(10, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
-        assertEquals(0.0D, stats.hitRate());
-        assertEquals(0.0D, stats.missRate());
-    }
+    // Construction and validation
 
     @Test
     void recordAccessorsReturnConstructorValues() {
@@ -70,53 +49,43 @@ class CacheStatsTest {
         assertEquals(-1L, stats.dataSize());
     }
 
+    @ParameterizedTest(name = "{0} rejects {2}")
+    @CsvSource({ "capacity,0,-1", "size,1,-1", "putCount,2,-1", "getCount,3,-1", "hitCount,4,-1", "missCount,5,-1", "evictionCount,6,-1", "maxMemory,7,-2",
+            "dataSize,8,-2" })
+    void recordRejectsInvalidNumericComponents(final String component, final int index, final long invalid) {
+        final long[] values = new long[9];
+        values[index] = invalid;
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new CacheStats((int) values[0], (int) values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8]), component);
+    }
+
+    // Statistics
+
     @Test
-    void recordNegativeCapacityRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(-1, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
+    void ratesCounterSumDoesNotOverflow() {
+        final CacheStats stats = new CacheStats(0, 0, 0L, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, 0L, 0L, 0L);
+
+        assertEquals(0.5D, stats.hitRate());
+        assertEquals(0.5D, stats.missRate());
     }
 
     @Test
-    void recordNegativeDataSizeBelowSentinelRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, 0L, -2L));
+    void ratesOrdinaryAsymmetricCounts() {
+        final CacheStats stats = new CacheStats(10, 2, 4L, 4L, 3L, 1L, 0L, 0L, 0L);
+        assertEquals(0.75D, stats.hitRate());
+        assertEquals(0.25D, stats.missRate());
     }
 
     @Test
-    void recordNegativeEvictionCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, -1L, 0L, 0L));
+    void ratesZeroRequestsReturnZero() {
+        // Documented zero-safe guard: no requests recorded -> both rates are 0.0, not NaN.
+        final CacheStats stats = new CacheStats(10, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
+        assertEquals(0.0D, stats.hitRate());
+        assertEquals(0.0D, stats.missRate());
     }
 
-    @Test
-    void recordNegativeGetCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, -1L, 0L, 0L, 0L, 0L, 0L));
-    }
-
-    @Test
-    void recordNegativeHitCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, -1L, 0L, 0L, 0L, 0L));
-    }
-
-    @Test
-    void recordNegativeMaxMemoryBelowSentinelRejected() {
-        // -1 is the documented "not tracked" sentinel; anything more-negative is invalid.
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, 0L, 0L, -2L, 0L));
-    }
-
-    @Test
-    void recordNegativeMissCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, 0L, 0L, 0L, -1L, 0L, 0L, 0L));
-    }
-
-    @Test
-    void recordNegativePutCountRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, 0, -1L, 0L, 0L, 0L, 0L, 0L, 0L));
-    }
-
-    @Test
-    void recordNegativeSizeRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new CacheStats(0, -1, 0L, 0L, 0L, 0L, 0L, 0L, 0L));
-    }
-
-    // Other Behavior
+    // Value semantics
 
     @Test
     void equalsDifferentValues() {
@@ -143,4 +112,5 @@ class CacheStatsTest {
         assertTrue(s.contains("42"));
         assertTrue(s.contains("1024"));
     }
+
 }

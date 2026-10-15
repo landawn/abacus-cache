@@ -22,19 +22,6 @@ class ChronicleMapTest {
     // Construction
 
     @Test
-    void defaultConstructor() {
-        final ChronicleMap<String, String> map = new ChronicleMap<>();
-
-        try {
-            assertNotNull(map);
-            assertTrue(map.put("k", "v"));
-            assertEquals("v", map.getOrNull("k"));
-        } finally {
-            map.close();
-        }
-    }
-
-    @Test
     void constructorFullySpecified() {
         final ChronicleMap<String, String> map = new ChronicleMap<>(128, 0L, 60_000L, 30_000L);
 
@@ -69,6 +56,19 @@ class ChronicleMapTest {
         }
     }
 
+    @Test
+    void defaultConstructor() {
+        final ChronicleMap<String, String> map = new ChronicleMap<>();
+
+        try {
+            assertNotNull(map);
+            assertTrue(map.put("k", "v"));
+            assertEquals("v", map.getOrNull("k"));
+        } finally {
+            map.close();
+        }
+    }
+
     // Removals
 
     @Test
@@ -83,4 +83,5 @@ class ChronicleMapTest {
             map.close();
         }
     }
+
 }
