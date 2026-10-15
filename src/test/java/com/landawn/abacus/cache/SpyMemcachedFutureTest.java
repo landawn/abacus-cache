@@ -169,7 +169,7 @@ class SpyMemcachedFutureTest {
         final Class<?> adapterType = Class.forName(SpyMemcached.class.getName() + "$DefaultTimeoutFuture");
         final Constructor<?> constructor = adapterType.getDeclaredConstructor(Future.class, long.class);
         constructor.setAccessible(true);
-        final Future<String> future = (Future<String>) constructor.newInstance(new CompletableFuture<String>(), 25L);
+        final Future<String> future = (Future<String>) constructor.newInstance(new CompletableFuture<>(), 25L);
 
         assertThrows(NullPointerException.class, () -> future.get(1, null));
     }

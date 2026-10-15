@@ -30,6 +30,7 @@ import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
@@ -418,7 +419,7 @@ class KryoTranscoderTest {
                 output.write(2);
                 output.write(3);
                 return null;
-            }).when(parser).serialize(Mockito.any(), Mockito.any(KryoSerConfig.class), Mockito.any(OutputStream.class));
+            }).when(parser).serialize(ArgumentMatchers.any(), ArgumentMatchers.any(KryoSerConfig.class), ArgumentMatchers.any(OutputStream.class));
             assertArrayEquals(new byte[] { 1, 2, 3 }, new KryoTranscoder<>(3, parser).encode("value").getData());
             assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(2, parser).encode("value"));
         }
@@ -429,7 +430,7 @@ class KryoTranscoderTest {
             final IOException failure = new IOException("serializer I/O failed");
             Mockito.doThrow(new UncheckedIOException(failure))
                     .when(parser)
-                    .serialize(Mockito.isNull(), Mockito.any(KryoSerConfig.class), Mockito.any(OutputStream.class));
+                    .serialize(ArgumentMatchers.isNull(), ArgumentMatchers.any(KryoSerConfig.class), ArgumentMatchers.any(OutputStream.class));
             final KryoException error = assertThrows(KryoException.class, () -> new KryoTranscoder<>(parser).encode(null));
             assertSame(failure, error.getCause());
             assertTrue(error.getMessage().contains("type null"));

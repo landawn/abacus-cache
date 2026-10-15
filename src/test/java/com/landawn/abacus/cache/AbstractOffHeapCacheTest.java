@@ -2205,7 +2205,7 @@ class AbstractOffHeapCacheTest {
         void closeContinuesCleanupAfterANativeReleaseRuntimeFailure() throws Exception {
             final IllegalStateException failure = new IllegalStateException("native release failed after freeing memory");
             final OffHeapStore<String> store = mock(OffHeapStore.class);
-            final OffHeapCache<String, byte[]> cache = new OffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000, 0,
+            final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000, 0,
                     AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, null, null, store, false, null, null) {
                 @Override
                 protected void deallocate() {
@@ -2380,7 +2380,7 @@ class AbstractOffHeapCacheTest {
                     throw sharedFailure;
                 }
             };
-            final OffHeapCache<String, byte[]> cache = new OffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L,
+            final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L,
                     AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, null, null, store, false, null, (key, value, size) -> 2) {
                 @Override
                 protected void deallocate() {
@@ -2436,7 +2436,7 @@ class AbstractOffHeapCacheTest {
                     throw storeCloseFailure;
                 }
             };
-            final OffHeapCache<String, byte[]> cache = new OffHeapCache<String, byte[]>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L,
+            final OffHeapCache<String, byte[]> cache = new OffHeapCache<>(1, AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE, 0, 60_000L, 60_000L,
                     AbstractOffHeapCache.DEFAULT_VACATING_FACTOR, null, null, store, false, null, (key, value, size) -> key.equals("memory") ? 1 : 2) {
                 @Override
                 protected void deallocate() {

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
+import org.ehcache.config.builders.ResourcePoolsBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -93,12 +94,11 @@ class OffHeapCachePerformance {
 
     @Test
     void ehcacheComparisonRoundTripsLargeObjects() {
+        org.ehcache.config.builders.ResourcePoolsBuilder.newResourcePoolsBuilder();
         try (final org.ehcache.CacheManager manager = org.ehcache.config.builders.CacheManagerBuilder.newCacheManagerBuilder()
                 .withCache("comparison",
                         org.ehcache.config.builders.CacheConfigurationBuilder.newCacheConfigurationBuilder(String.class, Account.class,
-                                org.ehcache.config.builders.ResourcePoolsBuilder.newResourcePoolsBuilder()
-                                        .heap(1_000)
-                                        .offheap(CAPACITY_MB, org.ehcache.config.units.MemoryUnit.MB)))
+                                ResourcePoolsBuilder.heap(1_000).offheap(CAPACITY_MB, org.ehcache.config.units.MemoryUnit.MB)))
                 .withSerializer(Account.class, KryoSerializer.class)
                 .build(true)) {
             final org.ehcache.Cache<String, Account> cache = manager.getCache("comparison", String.class, Account.class);

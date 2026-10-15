@@ -152,7 +152,7 @@ class JRedisTest {
     void constructorRejectsInvalidTimeout() {
         assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", 0L));
         assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", -1L));
-        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", (long) Integer.MAX_VALUE + 1L));
+        assertThrows(IllegalArgumentException.class, () -> new JRedis<>("localhost:6379", Integer.MAX_VALUE + 1L));
     }
 
     @Test

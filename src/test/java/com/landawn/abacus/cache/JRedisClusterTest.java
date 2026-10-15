@@ -113,7 +113,7 @@ class JRedisClusterTest {
     void constructorRejectsInvalidTimeout() {
         assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", 0L));
         assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", -1L));
-        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", (long) Integer.MAX_VALUE + 1L));
+        assertThrows(IllegalArgumentException.class, () -> new JRedisCluster<>("10.0.0.1:7000", Integer.MAX_VALUE + 1L));
     }
 
     @Test

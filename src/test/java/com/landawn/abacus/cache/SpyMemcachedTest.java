@@ -52,7 +52,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
-import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
@@ -211,8 +210,8 @@ class SpyMemcachedTest {
         final Map<String, Object> values = Map.of("a", 1, "b", 2);
         final BulkFuture<Map<String, Object>> bulk = mock(BulkFuture.class);
         when(bulk.get(anyLong(), any(TimeUnit.class))).thenReturn(values);
-        when(delegate.asyncGetBulk(any(String[].class))).thenReturn((BulkFuture) bulk);
-        when(delegate.asyncGetBulk(any(Collection.class))).thenReturn((BulkFuture) bulk);
+        when(delegate.asyncGetBulk(any(String[].class))).thenReturn(bulk);
+        when(delegate.asyncGetBulk(any(Collection.class))).thenReturn(bulk);
         assertEquals(values, cache.getBulk("a", "b"));
         assertEquals(values, cache.getBulk(List.of("a", "b")));
         final java.util.ArrayList<String> keys = new java.util.ArrayList<>(List.of("a", "b"));
@@ -242,7 +241,7 @@ class SpyMemcachedTest {
         final MemcachedClient mockedClient = mock(MemcachedClient.class);
         final BulkFuture<Map<String, Object>> bulkFuture = mock(BulkFuture.class);
 
-        when(mockedClient.asyncGetBulk(any(String[].class))).thenReturn((BulkFuture) bulkFuture);
+        when(mockedClient.asyncGetBulk(any(String[].class))).thenReturn(bulkFuture);
         when(bulkFuture.get(timeoutMillis, TimeUnit.MILLISECONDS)).thenThrow(new TimeoutException("test timeout"));
         clientField.set(local, mockedClient);
 
@@ -275,7 +274,7 @@ class SpyMemcachedTest {
     void bulkFutureForwardsCompletionAndCancellation() throws Exception {
         final MemcachedClient delegate = construction.constructed().get(0);
         final BulkFuture<Map<String, Object>> bulk = mock(BulkFuture.class);
-        when(delegate.asyncGetBulk(any(Collection.class))).thenReturn((BulkFuture) bulk);
+        when(delegate.asyncGetBulk(any(Collection.class))).thenReturn(bulk);
         when(bulk.cancel(true)).thenReturn(true);
         final ContinuableFuture<Map<String, Object>> future = cache.asyncGetBulk(List.of());
         assertFalse(future.isDone());
@@ -582,7 +581,7 @@ class SpyMemcachedTest {
             }
         };
 
-        for (final Transcoder<Object> transcoder : List.of(new KryoTranscoder<Object>(), custom)) {
+        for (final Transcoder<Object> transcoder : List.of(new KryoTranscoder<>(), custom)) {
             final MemcachedClient delegate = mock(MemcachedClient.class);
             when(delegate.getTranscoder()).thenReturn(transcoder);
             final OperationFuture<Boolean> result = mock(OperationFuture.class);

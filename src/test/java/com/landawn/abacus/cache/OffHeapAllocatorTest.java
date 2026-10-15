@@ -338,7 +338,7 @@ class OffHeapAllocatorTest {
     private static void releaseSlots(final AbstractOffHeapCache<?, ?> cache, final long[] slots) throws Exception {
         final Method method = AbstractOffHeapCache.class.getDeclaredMethod("releaseSlots", long[].class);
         method.setAccessible(true);
-        method.invoke(cache, (Object) slots);
+        method.invoke(cache, slots);
     }
 
     /**

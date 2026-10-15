@@ -253,7 +253,7 @@ class AbstractDistributedCacheClientTest {
     @Test
     void toSecondsOverflow() {
         // (Integer.MAX_VALUE + 1) * 1000 milliseconds -> seconds exceeds Integer.MAX_VALUE.
-        assertThrows(IllegalArgumentException.class, () -> client.callToSeconds(((long) Integer.MAX_VALUE + 1L) * 1000L));
+        assertThrows(IllegalArgumentException.class, () -> client.callToSeconds((Integer.MAX_VALUE + 1L) * 1000L));
     }
 
     @ParameterizedTest
