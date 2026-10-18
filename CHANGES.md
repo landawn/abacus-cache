@@ -1,3 +1,6 @@
+## 2.9.0
+* Improvements and bug fixes
+
 ## 2.8.12
 * Improvements and bug fixes
 
