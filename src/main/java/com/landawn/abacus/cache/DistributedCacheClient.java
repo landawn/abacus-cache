@@ -49,7 +49,7 @@ import java.util.Map;
  * User user = new User("John", "john@example.com");
  * client.put("user:123", user, 3600000);   // Cache for 1 hour
  * User cached = client.get("user:123");
- * long visits = client.incr("visits:123");
+ * long visits = client.incr("visits:123");   // -1 on Memcached until the counter is seeded (see incr)
  * }</pre>
  *
  * @param <T> the type of objects to be cached
@@ -515,7 +515,9 @@ public interface DistributedCacheClient<T> {
      * // contrast, auto-initializes the counter on the first incr.
      * long count = client.incr("counter:visits");   // -1 on Memcached if the counter was never seeded
      *
-     * // Rate limiting
+     * // Rate limiting. Redis creates the counter on the first incr WITHOUT an expiration, so expire
+     * // or reset it per time window out of band, or a user who once exceeds the limit stays limited.
+     * // On Memcached an unseeded counter returns -1 and never trips this check.
      * String key = "rate:limit:" + userId;
      * long attempts = client.incr(key);
      * if (attempts > MAX_ATTEMPTS) {
@@ -551,6 +553,9 @@ public interface DistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
+     * // On Memcached each counter below must already be seeded: an absent key returns -1 and is
+     * // not created, so, for example, the quota check at the end would never fire.
+     *
      * // Game score increment
      * long score = client.incr("player:score", 10);
      * System.out.println("New score: " + score);
@@ -598,22 +603,28 @@ public interface DistributedCacheClient<T> {
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
+     * // decr returns the value AFTER the decrement, so with a counter seeded at exactly the number
+     * // of available units, the caller that takes the last unit also gets 0 - the same result as an
+     * // exhausted counter clamped at 0 on Memcached. The examples below therefore ASSUME the caller
+     * // seeded each counter at (available units + 1) beforehand, so that a result > 0 means a unit
+     * // was taken. This interface has no seeding method; for example:
+     * //   memcached.incr("api:tokens:" + userId, 0, units + 1);   // SpyMemcached: seeds an absent key
+     * //   redis.incr("api:tokens:" + userId, units + 1);          // Redis: creates the counter at units + 1
+     * // (The Redis form is not idempotent: run it once, when the counter is created.)
+     *
      * // Token bucket rate limiting
      * long remainingTokens = client.decr("api:tokens:" + userId);
      * if (remainingTokens <= 0) {
      *     throw new RateLimitException("Rate limit exceeded");
      * }
      *
-     * // Inventory management. Branch on == -1 (key never seeded) and == 0 (depleted): on
-     * // Memcached an existing counter is clamped at 0 and never goes negative; -1 is returned
-     * // only as the absent-key sentinel, so a "< 0" guard fires only for a never-seeded key
-     * // and can never detect depletion.
+     * // Inventory management: a result <= 0 means no unit was taken, on both backends. Do not
+     * // read -1 as "never seeded": that holds only on Memcached, which clamps an existing counter
+     * // at 0 and returns -1 solely for an absent key. Redis keeps decrementing a depleted
+     * // counter (0, then -1, -2, ...) and creates an absent one at -1.
      * long stock = client.decr("product:stock:123");
-     * if (stock == -1) {
-     *     throw new IllegalStateException("Stock counter was never seeded");   // Memcached: absent key
-     * } else if (stock == 0) {
-     *     // Depleted; on Memcached this also fires when an already-zero counter was clamped
-     *     throw new OutOfStockException();
+     * if (stock <= 0) {
+     *     throw new OutOfStockException();   // depleted (or, on Memcached with -1, never seeded)
      * }
      *
      * // Download counter: seed the counter at (limit + 1) so that "> 0" cleanly means "allowed".

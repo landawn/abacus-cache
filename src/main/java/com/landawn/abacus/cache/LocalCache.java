@@ -285,7 +285,7 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * <p><b>&#9888;&#65039; Replacement failure:</b> The underlying pool (including the default
-     * {@code GenericKeyedObjectPool}) removes and destroys an existing mapping <i>before</i>
+     * {@code GenericKeyedObjectPool}) removes an existing mapping <i>before</i>
      * checking whether its replacement can be stored. If the pool then rejects the new entry
      * (for example a memory limit configured on a custom pool, or the entry expiring by the time the
      * pool re-checks it under its lock), this method returns {@code false} and the previous mapping
@@ -615,7 +615,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * effect beyond the first invocation. The method is synchronized to ensure proper
      * shutdown coordination. Local caches are commonly application-scoped; call this method
      * only when deliberately decommissioning one before process termination and no component
-     * will use it again. It is not per-operation or per-request cleanup.
+     * will use it again. It is not per-operation or per-request cleanup. A pool created by
+     * {@code PoolFactory}, including the default one, also registers a JVM shutdown hook that closes
+     * it during JVM shutdown, so code running in another shutdown hook may find this cache already closed.
      *
      * <p><b>Thread Safety:</b> This method is synchronized on the cache instance, so concurrent
      * invocations of {@code close()} are serialized. Other cache methods are not synchronized on
@@ -645,8 +647,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
     }
 
     /**
-     * Checks whether the underlying pool has been closed, either through {@link #close()} or
-     * directly by code that supplied a custom pool.
+     * Checks whether the underlying pool has been closed, either through {@link #close()}, by the
+     * pool's own JVM shutdown hook during JVM shutdown, or directly by code that supplied a custom pool.
      * Use this method to verify whether the cache is still operational before
      * performing operations, especially in long-running applications or when
      * sharing cache instances across components. Once closed, the cache cannot

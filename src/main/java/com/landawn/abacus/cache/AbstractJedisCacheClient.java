@@ -752,12 +752,22 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
      *
      * <p><b>Thread Safety:</b> Thread-safe; the {@link KryoParser} instance is shared and safe for concurrent use.
      *
-     * <p>A payload that is not Kryo data (for example, the ASCII digits of a counter written by
-     * {@code incr}/{@code decr}) fails with a {@code KryoException}. When the payload's leading bytes
-     * resolve to an abstract registered class (the digits {@code '6'} and {@code '9'} map to
+     * <p>A payload that is not Kryo data, such as the ASCII digits of a counter written by
+     * {@code incr}/{@code decr}, fails with a {@code KryoException}. Kryo data carries no format
+     * marker, so other foreign bytes (for example, text written by another Redis client) are not
+     * always detected: they usually fail the same way, but some short strings decode into an
+     * unrelated object (such as an empty {@code OptionalInt}). Some foreign payloads make
+     * decoding fail with an {@link IncompatibleClassChangeError}: when the leading bytes resolve to
+     * an abstract registered class (the digits {@code '6'} and {@code '9'} map to
      * {@code InputStream}/{@code OutputStream}), Kryo's generated constructor accessor raises an
-     * {@link InstantiationError} instead; that error is converted to a {@code KryoException} so a
-     * foreign payload does not escape as an {@link Error}.
+     * {@link InstantiationError}, and other bytes can build a type-confused object graph whose
+     * interface calls fail. That error is converted to a {@code KryoException}, with the error as its
+     * cause, so a foreign payload does not escape as an {@link Error}. An incompatibly changed
+     * application class (for example, one that no longer implements an interface a custom
+     * serializer calls) can raise the same two errors, and their type cannot tell the cases apart,
+     * so the exception message names both causes. The other subclasses ({@link NoSuchMethodError},
+     * {@link NoSuchFieldError}, {@link IllegalAccessError}, {@link AbstractMethodError}) only signal
+     * such a class incompatibility and are not converted.
      *
      * @param bytes the byte array to decode. May be {@code null} or empty.
      * @return the deserialized object, or {@code null} if the byte array is {@code null} or empty
@@ -772,7 +782,15 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
 
         try {
             return KryoParserHolder.KRYO_PARSER.decode(bytes);
-        } catch (final InstantiationError e) {
+        } catch (final IncompatibleClassChangeError e) {
+            // InstantiationError (counter digits) and the bare parent thrown by a type-confused graph
+            // decoded from foreign text are the foreign-payload signatures, though an incompatibly
+            // changed application class can raise them too; see the method documentation. The other
+            // subclasses are linkage failures of the application's classes only.
+            if (e.getClass() != IncompatibleClassChangeError.class && !(e instanceof InstantiationError)) {
+                throw e;
+            }
+
             throw KryoDecodeFailure.of(e);
         }
     }
@@ -788,9 +806,10 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
         private KryoDecodeFailure() {
         }
 
-        static RuntimeException of(final InstantiationError e) {
+        static RuntimeException of(final IncompatibleClassChangeError e) {
             return new KryoException("Cannot decode the cached bytes as a Kryo payload (" + e.getMessage()
-                    + "); the entry was not written by this client's Kryo encoding (e.g. an incr/decr counter)", e);
+                    + "): either the entry was not written by this client's Kryo encoding (e.g. an incr/decr counter), or a class used while decoding"
+                    + " is binary-incompatible with the code that uses it", e);
         }
     }
 }

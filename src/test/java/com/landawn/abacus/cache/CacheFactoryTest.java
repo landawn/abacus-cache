@@ -883,6 +883,148 @@ class CacheFactoryTest {
             assertFalse(nonCacheProviderInitialized, "type validation must not run an invalid provider's static initializer");
         }
 
+        /**
+         * Regression: a custom provider name that differs from the real class only in letter case must be
+         * reported as the documented "Cannot find class" IllegalArgumentException. On a case-insensitive
+         * file system (Windows, default macOS) the class loader finds the differently-cased class file and
+         * rejects it with {@code NoClassDefFoundError (wrong name: ...)}, an Error that used to escape
+         * createCache, also from the canonical nested-name retry. A case-sensitive file system reports a
+         * plain ClassNotFoundException, so the assertions hold on every platform.
+         */
+        @Test
+        void createCacheWrongCaseCustomClassNameIsReportedAsNotFound() {
+            final String wrongCaseTopLevel = DummyProviderCache.class.getName().toLowerCase(java.util.Locale.ROOT);
+            final String wrongCaseNested = CacheFactoryTest.class.getName() + ".nestedProviderCache";
+
+            for (final String className : new String[] { wrongCaseTopLevel, wrongCaseNested }) {
+                final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> CacheFactory.createCache(className + "(localhost:9999)"),
+                        className);
+                assertTrue(ex.getMessage().contains("Cannot find class: " + className), ex.getMessage());
+            }
+        }
+
+        /**
+         * A NoClassDefFoundError from a class loader (the JDK's "wrong name" rejection, or a class whose
+         * superclass is missing) is a failure to load the class under the requested name: it must not
+         * escape as an Error, and the context class loader's failure is retained like a
+         * ClassNotFoundException.
+         */
+        @Test
+        void contextLoaderNoClassDefFoundErrorIsReportedAsClassNotFound() {
+            final NoClassDefFoundError loaderFailure = new NoClassDefFoundError("missing/application/Cache (wrong name: missing/application/CACHE)");
+            final ClassLoader previous = Thread.currentThread().getContextClassLoader();
+
+            try {
+                Thread.currentThread().setContextClassLoader(new ClassLoader(null) {
+                    @Override
+                    protected Class<?> findClass(final String name) throws ClassNotFoundException {
+                        if (name.startsWith("missing.")) {
+                            throw loaderFailure;
+                        }
+
+                        return super.findClass(name);
+                    }
+                });
+
+                final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                        () -> CacheFactory.createCache("missing.application.Cache()"));
+                assertTrue(failure.getMessage().contains("Cannot find class: missing.application.Cache"), failure.getMessage());
+                assertTrue(failure.getCause() instanceof ClassNotFoundException);
+                assertEquals(1, failure.getCause().getSuppressed().length);
+                assertSame(loaderFailure, failure.getCause().getSuppressed()[0].getCause());
+            } finally {
+                Thread.currentThread().setContextClassLoader(previous);
+            }
+        }
+
+        /**
+         * Regression: class loaders may reuse one ClassNotFoundException instance for every miss. When
+         * that instance carries a cause, keeping a failed '$' spelling as suppressed attempted
+         * self-suppression, whose IllegalArgumentException aborted the remaining spellings, so a valid
+         * provider named canonically ({@code Outer.Mid.Provider}) could not be found as
+         * {@code Outer$Mid$Provider}, and a missing one was reported as "Self-suppression not permitted".
+         */
+        @Test
+        void contextLoaderReusingOneMissInstanceStillResolvesCanonicalNestedName(@TempDir final Path directory) throws Exception {
+            final Path javaFile = directory.resolve("Outer.java");
+            Files.writeString(javaFile, """
+                    package isolated;
+                    public final class Outer {
+                        public static final class Mid {
+                            public static final class Provider extends com.landawn.abacus.cache.LocalCache<String, Object> {
+                                public Provider() { super(4, 0); }
+                            }
+                        }
+                    }
+                    """);
+            final String classPath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+            assertEquals(0, ToolProvider.getSystemJavaCompiler()
+                    .run(null, null, null, "-proc:none", "-classpath", classPath, "-d", directory.toString(), javaFile.toString()));
+            final ClassNotFoundException reusedMiss = new ClassNotFoundException("not found", new IllegalStateException("loader detail"));
+            final ClassLoader previous = Thread.currentThread().getContextClassLoader();
+
+            try (URLClassLoader applicationLoader = new URLClassLoader(new URL[] { directory.toUri().toURL() }, CacheFactory.class.getClassLoader()) {
+                @Override
+                protected Class<?> loadClass(final String name, final boolean resolve) throws ClassNotFoundException {
+                    try {
+                        return super.loadClass(name, resolve);
+                    } catch (final ClassNotFoundException e) {
+                        throw reusedMiss;
+                    }
+                }
+            }) {
+                Thread.currentThread().setContextClassLoader(applicationLoader);
+
+                final Cache<String, Object> cache = CacheFactory.createCache("isolated.Outer.Mid.Provider()");
+                try {
+                    assertEquals("isolated.Outer$Mid$Provider", cache.getClass().getName());
+                } finally {
+                    cache.close();
+                }
+
+                final IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                        () -> CacheFactory.createCache("isolated.Outer.Mid.Missing()"));
+                assertTrue(missing.getMessage().contains("Cannot find class: isolated.Outer.Mid.Missing"), missing.getMessage());
+                assertEquals(0, reusedMiss.getSuppressed().length, "a reused miss must never suppress itself");
+            } finally {
+                Thread.currentThread().setContextClassLoader(previous);
+            }
+        }
+
+        /**
+         * A NoClassDefFoundError raised for an alternate '$' spelling of a canonical nested name means a
+         * class file was found but could not be loaded. It must survive as a suppressed exception on the
+         * exact-name failure instead of being discarded with the plain misses of the other spellings.
+         */
+        @Test
+        void alternateSpellingLoadFailureIsKeptAsSuppressed() {
+            final NoClassDefFoundError nestedFailure = new NoClassDefFoundError(
+                    "missing/application/Outer$Inner (wrong name: missing/application/OUTER$Inner)");
+            final ClassLoader previous = Thread.currentThread().getContextClassLoader();
+
+            try {
+                Thread.currentThread().setContextClassLoader(new ClassLoader(null) {
+                    @Override
+                    protected Class<?> findClass(final String name) throws ClassNotFoundException {
+                        if (name.equals("missing.application.Outer$Inner")) {
+                            throw nestedFailure;
+                        }
+
+                        return super.findClass(name);
+                    }
+                });
+
+                final IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                        () -> CacheFactory.createCache("missing.application.Outer.Inner()"));
+                assertTrue(failure.getMessage().contains("Cannot find class: missing.application.Outer.Inner"), failure.getMessage());
+                final Throwable contextFailure = failure.getCause().getSuppressed()[0];
+                assertEquals(1, contextFailure.getSuppressed().length, "only the spelling that found a class file is kept");
+                assertSame(nestedFailure, contextFailure.getSuppressed()[0].getCause());
+            } finally {
+                Thread.currentThread().setContextClassLoader(previous);
+            }
+        }
+
         @ParameterizedTest
         @ValueSource(booleans = { false, true })
         void missingCustomClassRetainsTheContextLoaderFailure(final boolean hasContextLoader) {

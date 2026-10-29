@@ -219,6 +219,20 @@ class DistributedCacheTest {
         verify(client).disconnect();
     }
 
+    /** The inherited two-argument put stores with the framework default TTL, as the class documentation states. */
+    @Test
+    void twoArgumentPutUsesFrameworkDefaultLiveTime() {
+        final DistributedCacheClient<String> client = newClient();
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "p:");
+        try {
+            when(client.put("p:a2V5", "value", Cache.DEFAULT_LIVE_TIME)).thenReturn(true);
+            assertTrue(cache.put("key", "value"));
+            verify(client).put("p:a2V5", "value", Cache.DEFAULT_LIVE_TIME);
+        } finally {
+            cache.close();
+        }
+    }
+
     // Membership and views
 
     @Test
@@ -299,6 +313,25 @@ class DistributedCacheTest {
         cache.close(); // idempotent
         assertTrue(cache.isClosed());
         verify(client, times(1)).disconnect();
+    }
+
+    /**
+     * Only exceptions from the client's disconnect are logged and swallowed. An Error (the bundled Redis
+     * clients rethrow one after attempting every underlying client) propagates, but the wrapper is
+     * already closed and a repeated close does not retry the disconnect.
+     */
+    @Test
+    void closePropagatesDisconnectErrorButStaysClosed() {
+        final DistributedCacheClient<String> client = newClient();
+        final Error failure = new Error("disconnect error");
+        doThrow(failure).when(client).disconnect();
+        final DistributedCache<String, String> cache = new DistributedCache<>(client);
+
+        assertSame(failure, assertThrows(Error.class, cache::close));
+        assertTrue(cache.isClosed());
+        cache.close();
+        verify(client, times(1)).disconnect();
+        assertThrows(IllegalStateException.class, () -> cache.getOrNull("k"));
     }
 
     @Test

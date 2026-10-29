@@ -50,7 +50,8 @@ import com.landawn.abacus.util.N;
  *     counted in {@code hitCount} (there is no separate counter for exceptional reconstruction)
  *     but is not counted in {@code hitCountFromDisk}.</li>
  * <li>Put metrics: {@code putCount} counts successful {@code put} operations — those that stored
- *     the value in off-heap memory or in the disk store. Failed attempts (no memory available and
+ *     the value in off-heap memory or in the disk store, including a put that threw after its value
+ *     was already mapped (a throwing key method; see the cache's {@code put}). Failed attempts (no memory available and
  *     no disk fallback, or a rejected/failed store write) are not counted, and internal
  *     disk-to-memory promotions are not counted either. As an approximate identity,
  *     {@code putCount} &asymp; {@code size + evictionCount + removed/replaced entries}
@@ -60,10 +61,13 @@ import com.landawn.abacus.util.N;
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code
+ * // OffHeapStore is an interface; supply your own implementation (e.g., a file-backed store).
+ * OffHeapStore<String> diskStore = myFileBackedOffHeapStore(Paths.get("/tmp/cache"));
  * OffHeapCache<String, byte[]> cache = OffHeapCache.<String, byte[]>builder()
  *     .capacityInMB(100)
  *     .evictDelay(60000)
- *     .statsTimeOnDisk(true)   // required for the disk-timing stats below; defaults to false
+ *     .offHeapStore(diskStore) // the disk metrics below stay 0 without a disk store
+ *     .statsTimeOnDisk(true)   // also required for the disk-timing stats below; defaults to false
  *     .build();
  * // ... use cache ...
  * OffHeapCacheStats stats = cache.stats();
@@ -101,8 +105,9 @@ import com.landawn.abacus.util.N;
  *                   {@link OffHeapStore}. These entries are still counted in {@code size}; only their
  *                   payloads live on disk.
  * @param putCount the total number of successful put operations since cache creation, counting values
- *                 stored in off-heap memory and values written to the disk store. A put that fails
- *                 (e.g., neither memory nor disk could accept the value) is not counted; internal
+ *                 stored in off-heap memory and values written to the disk store. A put that throws
+ *                 after its value was already mapped is counted. A put that fails (e.g., neither
+ *                 memory nor disk could accept the value) is not counted; internal
  *                 disk-to-memory promotions are not counted either.
  * @param putCountToDisk the number of put operations that resulted in writing data to disk. This occurs
  *                       when off-heap memory is full, or the value can never fit in off-heap memory, and the
@@ -123,7 +128,8 @@ import com.landawn.abacus.util.N;
  *                       {@code hitCount}, but independently sampled counters can be transiently inconsistent.
  * @param missCount the number of failed get operations where the entry was not found in either memory or
  *                  disk. This can occur when the key never existed, was explicitly removed, has expired, or
- *                  still had a cache mapping whose backing-store bytes were missing.
+ *                  still had a cache mapping whose backing-store bytes were missing. A lookup that finds an
+ *                  entry just as a concurrent operation removes or replaces it also counts as a miss.
  * @param evictionCount the total number of entries removed because they expired (lazily on access or by
  *                      the periodic maintenance sweep) or were reclaimed by the memory-pressure vacate
  *                      pass. Explicit {@code remove()} / {@code clear()} calls and {@code put()}

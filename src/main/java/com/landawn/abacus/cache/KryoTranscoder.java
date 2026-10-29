@@ -23,6 +23,7 @@ import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.KryoSerConfig;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.ByteArrayOutputStream;
+import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Objectory;
 
@@ -370,13 +371,10 @@ public class KryoTranscoder<T> implements Transcoder<T> {
     }
 
     private static boolean isCausedBy(final Throwable e, final Throwable cause) {
-        for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t == cause) {
-                return true;
-            }
-        }
-
-        return false;
+        // Throwable.initCause rejects only self-causation, so a serializer's failure can carry a
+        // cyclic cause chain (A -> B -> A); findCause stops at the first repeated link instead of
+        // spinning forever like a plain getCause() walk.
+        return ExceptionUtil.findCause(e, t -> t == cause).isPresent();
     }
 
     /** Limits writes before the pooled buffer grows; the usual small-entry buffer remains reusable. */
@@ -436,7 +434,10 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * (e.g., fields added or removed), deserialization may fail or produce unexpected results.
      * A type may encode successfully yet fail to decode if it lacks a no-argument constructor
      * and no configured serializer provides its instantiation. Custom serializers and class
-     * registrations must match those used to encode the entry.
+     * registrations must match those used to encode the entry. Kryo payloads carry no format
+     * marker, so foreign data is not always detected: a counter's ASCII digits always fail, but
+     * other bytes (for example, a raw string stored by the stock transcoder) can decode into an
+     * unrelated object, such as an empty {@code OptionalInt}.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -465,7 +466,12 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *         two different classes
      * @throws RuntimeException if the payload is corrupt, truncated, uses an unavailable or incompatible
      *         class, or was not written with compatible Kryo serializers (for example, a counter's ASCII
-     *         digits); normally a {@link KryoException}
+     *         digits); normally a {@link KryoException}. A bare {@link IncompatibleClassChangeError} or an
+     *         {@link InstantiationError} raised while decoding is converted to a {@code KryoException}
+     *         with that error as its cause: foreign bytes and an incompatibly changed application class
+     *         can raise the same error, and its type cannot tell them apart. The other
+     *         {@code IncompatibleClassChangeError} subclasses (such as {@link NoSuchMethodError}), which
+     *         only an application class incompatibility raises, propagate unchanged.
      * @see #encode(Object)
      * @see CachedData#getData()
      */
@@ -481,11 +487,21 @@ public class KryoTranscoder<T> implements Transcoder<T> {
 
         try {
             return kryoParser.decode(data);
-        } catch (final InstantiationError e) {
+        } catch (final IncompatibleClassChangeError e) {
             // Kryo's generated (ReflectASM) constructor accessor executes `new` directly, so a foreign
             // payload whose leading bytes resolve to an abstract registered class (e.g. the ASCII
-            // digits '6'/'9' of a memcached counter -> InputStream/OutputStream) surfaces as a
-            // LinkageError rather than the documented KryoException.
+            // digits '6'/'9' of a memcached counter -> InputStream/OutputStream) surfaces as an
+            // InstantiationError rather than the documented KryoException. Other foreign bytes (e.g.
+            // a raw string stored by another transcoder) can decode into a type-confused object graph
+            // whose interface calls throw the parent IncompatibleClassChangeError. An incompatibly
+            // changed application class can raise those same two errors, which the type cannot tell
+            // apart, so the message names both causes and keeps the error. The other subclasses
+            // (NoSuchMethodError, IllegalAccessError, ...) come only from such a class change, so
+            // they propagate unchanged.
+            if (e.getClass() != IncompatibleClassChangeError.class && !(e instanceof InstantiationError)) {
+                throw e;
+            }
+
             throw KryoFailures.ofDecode(e);
         }
     }
@@ -507,9 +523,10 @@ public class KryoTranscoder<T> implements Transcoder<T> {
                     + (value == null ? "null" : value.getClass().getName()) + ": " + cause, cause);
         }
 
-        static RuntimeException ofDecode(final InstantiationError e) {
+        static RuntimeException ofDecode(final IncompatibleClassChangeError e) {
             return new KryoException("Cannot decode the cached bytes as a Kryo payload (" + e.getMessage()
-                    + "); the entry was not written by a compatible KryoTranscoder (e.g. an incr/decr counter)", e);
+                    + "): either the entry was not written by a compatible KryoTranscoder (e.g. an incr/decr counter), or a class used while decoding"
+                    + " is binary-incompatible with the code that uses it", e);
         }
     }
 

@@ -49,12 +49,15 @@ import com.landawn.abacus.logging.LoggerFactory;
  *
  * <p><b>&#9888;&#65039; Lease safety limitation:</b> this is a best-effort, expiring lease rather than a
  * correctness-grade distributed lock. The classic memcached text protocol used by the underlying
- * client has no atomic compare-and-delete operation (modern memcached offers one only via the meta
- * protocol, which SpyMemcached does not speak), so {@link #tryUnlock(Object)} deletes the key without
+ * client has no atomic compare-and-delete operation (memcached offers one only through its binary
+ * protocol's CAS-checked delete or its meta protocol, neither of which the text-protocol connection
+ * created by {@link SpyMemcached} uses), so {@link #tryUnlock(Object)} deletes the key without
  * proving ownership. If a holder pauses longer than
  * the TTL, another client can acquire the expired key and the original holder can subsequently
  * delete that newer lease. Memcached eviction, restart, failover, or a global flush may also remove
- * the key before its TTL, allowing overlapping holders even without a pause. Do not use this class
+ * the key before its TTL, allowing overlapping holders even without a pause. Memcached also checks
+ * expiry against a clock with one-second resolution, so a lease can end up to about a second before
+ * its rounded-up TTL elapses; leave that margin when choosing a TTL. Do not use this class
  * where overlapping critical sections could corrupt data; prefer a coordination system with
  * ownership tokens/fencing and atomic conditional release.
  *
@@ -153,8 +156,10 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * locks don't persist indefinitely if a holder crashes or fails to release them.
      *
      * <p>This is a non-spinning operation: it makes a single atomic attempt and never retries
-     * or busy-waits. It does, however, block the calling thread for the duration of the one
-     * Memcached round-trip (up to the configured SpyMemcached operation timeout). If the lock
+     * or busy-waits. It does, however, block the calling thread for that one Memcached round-trip:
+     * the response wait is bounded by the client's operation timeout (one second for the client this
+     * class creates), and enqueueing the command can additionally block, for up to spymemcached's
+     * 10-second default queue block time, while the client's operation queue is full. If the lock
      * is already held by another client, this method returns {@code false} without retrying. The requested
      * {@code liveTime} is converted to Memcached's second-granularity TTL before being forwarded
      * to the server, so sub-second values are rounded up to the next second.
@@ -504,6 +509,12 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * calling {@code tryUnlock} is <b>also racy</b> (the lock can expire between the read and the
      * delete) and only narrows the window — it does not eliminate it.
      *
+     * <p><b>Interruption:</b> like {@link java.util.concurrent.locks.Lock#unlock()}, the release is
+     * attempted even if the calling thread's interrupt status is already set (for example, in the
+     * {@code finally} block of a cancelled task). The status is cleared only for this call's Memcached
+     * operation and is restored before the method returns or throws. An interrupt that arrives while
+     * waiting for the server's response still ends that wait and is reported as a release failure.
+     *
      * <p>Best practices:
      * <ul>
      * <li>Release the lock in a finally block to ensure cleanup; in a finally block prefer
@@ -558,7 +569,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
         final String key = validatedKey(target);
 
         try {
-            final boolean released = mc.remove(key);
+            final boolean released = removeEvenIfInterrupted(key);
 
             if (logger.isDebugEnabled()) {
                 logger.debug(released ? "Released lock for key: " + key : "No lock to release for key: " + key);
@@ -593,7 +604,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * still rejected with {@link IllegalArgumentException} (exactly as in {@code tryUnlock}), because
      * those are deterministic programming errors rather than transient failures. With the intended
      * immutable target and deterministic {@code toKey} implementation, a key accepted by
-     * {@code tryLock()} cannot become invalid at release time.
+     * {@code tryLock()} cannot become invalid at release time. As with {@code tryUnlock}, the release
+     * is attempted even if the calling thread's interrupt status is already set, and that status is
+     * preserved.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -639,7 +652,7 @@ public class MemcachedLock<K, V> implements AutoCloseable {
         try {
             assertOpen();
 
-            final boolean released = mc.remove(key);
+            final boolean released = removeEvenIfInterrupted(key);
 
             if (logger.isDebugEnabled()) {
                 logger.debug(released ? "Released lock for key: " + key : "No lock to release for key: " + key);
@@ -837,6 +850,33 @@ public class MemcachedLock<K, V> implements AutoCloseable {
         final String key = N.checkArgNotNull(toKey(target), "The key returned by toKey must not be null");
         SpyMemcached.checkKey(key);
         return key;
+    }
+
+    /**
+     * Deletes the lock key, attempting the delete even if the calling thread's interrupt status is
+     * already set; that status is restored before this method returns or throws.
+     *
+     * @param key the validated lock key
+     * @return {@code true} if an entry was deleted, {@code false} if no entry existed
+     * @throws IllegalStateException if the client has been disconnected or the delete cannot be enqueued
+     * @throws IllegalArgumentException if the client rejects {@code key}
+     * @throws RuntimeException if the delete fails, times out, or its response wait is interrupted
+     */
+    private boolean removeEvenIfInterrupted(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
+        // spymemcached waits interruptibly before enqueueing ANY operation (TCPMemcachedNodeImpl.addOp
+        // awaits a latch), so on an already-interrupted thread - typically the finally block of a
+        // cancelled task - the delete would never be sent and the lease would stay held until its TTL.
+        // Release is cleanup, like Lock.unlock(): clear the status for this one call and restore it.
+        // An interrupt that arrives during the response wait still ends that wait.
+        final boolean interrupted = Thread.interrupted();
+
+        try {
+            return mc.remove(key);
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**

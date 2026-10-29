@@ -569,7 +569,12 @@ public final class CacheFactory {
      *         server address or, for Memcached, a hostname that cannot be resolved) or the timeout (a Redis/RedisCluster
      *         timeout above {@link Integer#MAX_VALUE}), or if the key prefix contains a non-printable-ASCII character, a space, or a control character (the
      *         already-constructed client is disconnected first); for custom classes, also if the class cannot
-     *         be found (checked against this library's classloader, then the thread context classloader), does
+     *         be found under the given name (checked against this library's classloader, then the thread
+     *         context classloader; this includes a {@link NoClassDefFoundError} raised while loading it,
+     *         e.g. for a name differing only in letter case on a case-insensitive file system, which is kept
+     *         as the cause or as a suppressed exception; any other {@link LinkageError} while loading, such as
+     *         {@link UnsupportedClassVersionError} or {@link ClassFormatError}, means the class exists but
+     *         cannot be used and propagates unchanged), does
      *         not implement {@link Cache}, is an interface or abstract class, or declares no constructor matching
      *         the specified parameters. A
      *         candidate class is loaded without running its static initializer until after this type check. A
@@ -670,8 +675,8 @@ public final class CacheFactory {
      *
      * @param className the fully qualified name of the custom cache class
      * @return the resolved, uninitialized class
-     * @throws IllegalArgumentException if the class cannot be found by this library's classloader or by the
-     *         thread context classloader
+     * @throws IllegalArgumentException if the class cannot be found (including a {@link NoClassDefFoundError}
+     *         while loading it) by this library's classloader or by the thread context classloader
      */
     private static Class<?> loadCustomCacheClass(final String className) throws IllegalArgumentException {
         final ClassLoader libraryClassLoader = CacheFactory.class.getClassLoader();
@@ -713,11 +718,12 @@ public final class CacheFactory {
      * @param classLoader the class loader to use
      * @return the resolved, uninitialized class
      * @throws ClassNotFoundException if no spelling of {@code className} can be loaded; this is the
-     *         failure for the name exactly as given
+     *         failure for the name exactly as given, with the {@code NoClassDefFoundError}-backed failures
+     *         of the alternate spellings attached as suppressed exceptions
      */
     private static Class<?> forNameWithoutInitializing(final String className, final ClassLoader classLoader) throws ClassNotFoundException {
         try {
-            return Class.forName(className, false, classLoader);
+            return loadWithoutInitializing(className, classLoader);
         } catch (final ClassNotFoundException e) {
             // Class.forName accepts only binary names, but the DSL accepted the canonical spelling of a
             // nested class while resolution went through ClassUtil.forName, and TypeAttrParser itself
@@ -730,13 +736,44 @@ public final class CacheFactory {
                 binaryName = binaryName.substring(0, lastPeriodIndex) + '$' + binaryName.substring(lastPeriodIndex + 1);
 
                 try {
-                    return Class.forName(binaryName, false, classLoader);
-                } catch (final ClassNotFoundException ignored) {
-                    // try the next enclosing level
+                    return loadWithoutInitializing(binaryName, classLoader);
+                } catch (final ClassNotFoundException retryFailure) {
+                    // Try the next enclosing level. A plain miss is expected for every wrong spelling,
+                    // but a converted NoClassDefFoundError (which carries a cause) means this spelling
+                    // found a class file that could not be loaded: keep that diagnostic. A custom loader
+                    // may reuse one exception instance for every miss; self-suppression would throw
+                    // IllegalArgumentException and abort the remaining spellings.
+                    if (retryFailure != e && retryFailure.getCause() != null) {
+                        e.addSuppressed(retryFailure);
+                    }
                 }
             }
 
             throw e;
+        }
+    }
+
+    /**
+     * {@code Class.forName(className, false, classLoader)} that also reports a
+     * {@link NoClassDefFoundError} as a {@link ClassNotFoundException}.
+     *
+     * @param className the binary class name
+     * @param classLoader the class loader to use
+     * @return the resolved, uninitialized class
+     * @throws ClassNotFoundException if the class cannot be found, or its class file cannot be defined
+     *         under {@code className} (the {@code NoClassDefFoundError} is the cause)
+     */
+    private static Class<?> loadWithoutInitializing(final String className, final ClassLoader classLoader) throws ClassNotFoundException {
+        try {
+            return Class.forName(className, false, classLoader);
+        } catch (final NoClassDefFoundError e) {
+            // On a case-insensitive file system a name that differs only in case (e.g. "mycache")
+            // finds MyCache.class, which the loader then rejects with "NoClassDefFoundError (wrong
+            // name: ...)"; a class whose superclass is not visible to this loader fails the same way.
+            // Either way the class cannot be loaded under this name here. Letting the Error escape
+            // would skip the remaining spellings and the context-classloader fallback, and would
+            // bypass the documented IllegalArgumentException.
+            throw new ClassNotFoundException(className, e);
         }
     }
 

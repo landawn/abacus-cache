@@ -7,6 +7,7 @@ package com.landawn.abacus.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -20,6 +21,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import java.lang.management.ManagementFactory;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.util.AbstractCollection;
@@ -46,6 +48,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.Serializer;
+import com.esotericsoftware.kryo.io.Input;
+import com.esotericsoftware.kryo.io.Output;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
@@ -128,6 +134,54 @@ class AbstractJedisCacheClientTest {
         assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.get("jredis-review:counter"), counter);
         assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.getBulk("jredis-review:counter"), counter);
 
+    }
+
+    /**
+     * Regression test: plain text written by another Redis client is not a Kryo payload either.
+     * Under abacus-common's built-in Kryo registrations these strings decode into collections of
+     * {@code Multimap}s whose backing-map field holds a non-{@code Map} object; hashing one throws a
+     * bare {@link IncompatibleClassChangeError} (the parent of the {@link InstantiationError} that
+     * counter payloads raise), which escaped {@code get}/{@code getBulk} as an {@link Error}.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "{F1ZFa[8zgaGr[^+u FC[IWd1,Nay+", "-z*D50XyWEb1{E\"ZDm HfYx Y-N$N,ntYozv", "-*x^c3|X(vF FT#fy}Cibd" })
+    void getForeignTextPayloadFailsWithKryoExceptionNotError(final String text) {
+        when(mockJedis.get(utf8("foreign"))).thenReturn(text.getBytes(StandardCharsets.US_ASCII));
+
+        assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.get("foreign"), text);
+        assertThrows(com.esotericsoftware.kryo.KryoException.class, () -> cache.getBulk("foreign"), text);
+    }
+
+    /**
+     * A NoSuchMethodError (or another IncompatibleClassChangeError subclass) raised while decoding means
+     * the application's own classes are binary-incompatible, not that the payload is foreign: it must
+     * propagate unchanged rather than be reported as "not written by this client's Kryo encoding".
+     */
+    @Test
+    void getPropagatesABinaryIncompatibilityOfTheApplicationsOwnClasses() throws Exception {
+        final Field holder = Class.forName(AbstractJedisCacheClient.class.getName() + "$KryoParserHolder").getDeclaredField("KRYO_PARSER");
+        holder.setAccessible(true);
+        final KryoParser shared = (KryoParser) holder.get(null);
+        final NoSuchMethodError linkage = new NoSuchMethodError("'void LinkageFailingValue.migrate()'");
+        shared.register(LinkageFailingValue.class, new Serializer<LinkageFailingValue>() {
+            @Override
+            public void write(final Kryo kryo, final Output output, final LinkageFailingValue object) {
+                output.writeByte(1);
+            }
+
+            @Override
+            public LinkageFailingValue read(final Kryo kryo, final Input input, final Class<? extends LinkageFailingValue> type) {
+                input.readByte();
+                throw linkage;
+            }
+        }, 50_101);
+
+        when(mockJedis.get(utf8("linkage"))).thenReturn(shared.encode(new LinkageFailingValue()));
+
+        assertSame(linkage, assertThrows(NoSuchMethodError.class, () -> cache.get("linkage")));
+    }
+
+    private static final class LinkageFailingValue {
     }
 
     @ParameterizedTest

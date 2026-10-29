@@ -4,6 +4,7 @@
 
 package com.landawn.abacus.cache;
 
+import static com.landawn.abacus.TestSupport.awaitCondition;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -19,10 +20,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.AfterEach;
@@ -105,6 +111,43 @@ class JRedisTest {
         assertEquals(2, built.size());
         verify(built.get(0)).close();
         verify(built.get(1)).close();
+    }
+
+    /**
+     * With no RESP version configured, Jedis 8 probes each shard once while building its client
+     * (UnifiedJedis borrows a connection to learn the negotiated protocol). The class documentation
+     * describes that; this pins it against a Jedis upgrade. The local servers accept and immediately
+     * close each connection, so every probe fails at once, and a failed probe must not fail construction.
+     */
+    @Test
+    void constructionProbesEveryShardOnceAndIgnoresAFailedProbe() throws Exception {
+        ctorIntercept.close(); // build real clients for this test
+        ctorIntercept = null;
+        final AtomicInteger accepted = new AtomicInteger();
+
+        try (ServerSocket first = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+             ServerSocket second = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+            for (final ServerSocket server : List.of(first, second)) {
+                final Thread acceptor = new Thread(() -> {
+                    try {
+                        while (true) {
+                            try (Socket ignored = server.accept()) {
+                                accepted.incrementAndGet();
+                            }
+                        }
+                    } catch (final IOException closed) {
+                        // the server socket was closed at the end of the test
+                    }
+                }, "jredis-probe-acceptor");
+                acceptor.setDaemon(true);
+                acceptor.start();
+            }
+
+            additionalCaches.add(new JRedis<>("127.0.0.1:" + first.getLocalPort() + " 127.0.0.1:" + second.getLocalPort(), 5_000));
+
+            awaitCondition("each shard must be probed during construction", () -> accepted.get() == 2);
+            assertEquals(2, accepted.get(), "exactly one probe per shard");
+        }
     }
 
     @Test

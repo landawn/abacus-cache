@@ -144,6 +144,44 @@ class DistributedCacheCircuitBreakerTest {
         }
     }
 
+    /**
+     * Once the retry window has elapsed, reads probe the backend again. The count stays capped at the
+     * threshold, so a single failed probe re-opens the circuit at once; that is not a closed-to-open
+     * transition, so no second WARN is logged. A successful probe closes the circuit.
+     */
+    @Test
+    @ResourceLock(LogCapture.RESOURCE)
+    void expiredRetryWindowProbesBackendAndOneFailedProbeReopensWithoutNewWarning() throws Exception {
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get("a2V5")).thenThrow(new IllegalStateException("still unavailable")).thenReturn("value");
+
+        try (LogCapture logs = new LogCapture(DistributedCache.class, Level.WARN)) {
+            final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 3, 60_000L);
+            try {
+                final long expiredFailureTime = System.nanoTime() - TimeUnit.SECONDS.toNanos(61);
+                setBreakerState(cache, 3, expiredFailureTime);
+
+                assertNull(cache.getOrNull("key")); // probe reaches the backend and fails
+                verify(client, times(1)).get("a2V5");
+                final Object reopened = breakerState(cache);
+                assertEquals(3, intField(reopened, "failedCount"));
+                assertTrue(longField(reopened, "lastFailedTime") - expiredFailureTime > 0, "the failed probe must restart the retry window");
+
+                assertNull(cache.getOrNull("key")); // short-circuited by the re-opened circuit
+                verify(client, times(1)).get("a2V5");
+                assertTrue(logs.messages().isEmpty(), "re-opening an already-open circuit is not a new transition");
+
+                setBreakerState(cache, 3, expiredFailureTime);
+                assertEquals("value", cache.getOrNull("key")); // successful probe
+                assertFalse(booleanField(breakerState(cache), "hasFailure"));
+                verify(client, times(2)).get("a2V5");
+            } finally {
+                cache.close();
+            }
+        }
+    }
+
     @Test
     void zeroThresholdOpensAfterFirstRecordedFailure() {
         @SuppressWarnings("unchecked")

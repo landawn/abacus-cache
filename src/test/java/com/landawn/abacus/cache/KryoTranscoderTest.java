@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -22,6 +23,7 @@ import java.io.Serializable;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -237,6 +239,56 @@ class KryoTranscoderTest {
             }
         }
 
+        /**
+         * Regression test: a raw string stored by another client (e.g. the stock transcoder, which
+         * also uses flag 0) is a foreign payload. Under abacus-common's built-in Kryo registrations
+         * these strings decode into collections of {@code Multimap}s whose backing-map field holds a
+         * non-{@code Map} object; hashing one throws a bare {@link IncompatibleClassChangeError}
+         * (the parent of the {@link InstantiationError} that counter payloads raise), which escaped
+         * as an {@link Error} instead of the documented {@link KryoException}.
+         */
+        @Test
+        void decodeForeignTextPayloadThrowsKryoExceptionNotError() {
+            final KryoTranscoder<Object> tx = new KryoTranscoder<>();
+
+            for (final String text : new String[] { "{F1ZFa[8zgaGr[^+u FC[IWd1,Nay+", "-z*D50XyWEb1{E\"ZDm HfYx Y-N$N,ntYozv", "-*x^c3|X(vF FT#fy}Cibd" }) {
+                final CachedData cd = new CachedData(0, text.getBytes(StandardCharsets.US_ASCII), CachedData.MAX_SIZE);
+                assertThrows(KryoException.class, () -> tx.decode(cd), text);
+            }
+        }
+
+        @Test
+        void decodeIncompatibleClassChangeErrorIsReportedAsKryoException() {
+            final KryoParser parser = Mockito.mock(KryoParser.class);
+            final IncompatibleClassChangeError linkage = new IncompatibleClassChangeError("Class X does not implement the requested interface java.util.Map");
+            Mockito.when(parser.decode(ArgumentMatchers.any(byte[].class))).thenThrow(linkage);
+
+            final KryoException e = assertThrows(KryoException.class, () -> new KryoTranscoder<>(parser).decode(new CachedData(0, new byte[] { 1 }, 16)));
+            assertSame(linkage, e.getCause());
+            // The bare error is also what an incompatibly changed application class raises, so the
+            // message must not claim the entry is foreign; it names both causes.
+            assertTrue(e.getMessage().contains("not written by a compatible KryoTranscoder"), e.getMessage());
+            assertTrue(e.getMessage().contains("binary-incompatible"), e.getMessage());
+        }
+
+        /**
+         * Only the bare IncompatibleClassChangeError (a type-confused graph from foreign bytes) and
+         * InstantiationError (counter digits) mean "not a compatible payload". Its other subclasses are
+         * binary incompatibilities of the application's own classes and must not be disguised as such.
+         */
+        @Test
+        void decodeBinaryIncompatibilityErrorsPropagateUnchanged() {
+            for (final IncompatibleClassChangeError linkage : new IncompatibleClassChangeError[] { new NoSuchMethodError("'void Value.migrate()'"),
+                    new NoSuchFieldError("version"), new IllegalAccessError("Value.version"), new AbstractMethodError("Value.migrate()") }) {
+                final KryoParser parser = Mockito.mock(KryoParser.class);
+                Mockito.when(parser.decode(ArgumentMatchers.any(byte[].class))).thenThrow(linkage);
+
+                assertSame(linkage,
+                        assertThrows(IncompatibleClassChangeError.class, () -> new KryoTranscoder<>(parser).decode(new CachedData(0, new byte[] { 1 }, 16))),
+                        linkage.getClass().getName());
+            }
+        }
+
         @Test
         void decodeNullCachedData() {
             final KryoTranscoder<String> tx = new KryoTranscoder<>();
@@ -342,6 +394,40 @@ class KryoTranscoderTest {
 
             final IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                     () -> new KryoTranscoder<>(64, parser).encode(new ChunkedPayload()));
+            assertArrayEquals(new Throwable[] { later }, e.getSuppressed());
+        }
+
+        /**
+         * {@link Throwable#initCause} rejects only self-causation, so a cause chain can be cyclic
+         * (A -> B -> A). The size-failure cause check used to walk {@code getCause()} without a cycle
+         * guard and spun forever on such a failure thrown after a swallowed rejection.
+         */
+        @Test
+        void cyclicCauseChainAfterASwallowedRejectionDoesNotHangEncode() {
+            final KryoParser parser = ParserFactory.createKryoParser();
+            final IllegalStateException later = new IllegalStateException("later serializer failure");
+            final IllegalStateException cause = new IllegalStateException("cause", later);
+            later.initCause(cause);
+            parser.register(ChunkedPayload.class, new Serializer<ChunkedPayload>() {
+                @Override
+                public void write(final Kryo kryo, final Output output, final ChunkedPayload object) {
+                    output.writeBytes(new byte[128]);
+                    try {
+                        output.flush();
+                    } catch (final RuntimeException ignored) {
+                        // Swallow the rejection, then fail with a cyclic cause chain.
+                    }
+                    throw later;
+                }
+
+                @Override
+                public ChunkedPayload read(final Kryo kryo, final Input input, final Class<? extends ChunkedPayload> type) {
+                    throw new UnsupportedOperationException();
+                }
+            }, 50_001);
+
+            final IllegalArgumentException e = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                    () -> assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(64, parser).encode(new ChunkedPayload())));
             assertArrayEquals(new Throwable[] { later }, e.getSuppressed());
         }
 

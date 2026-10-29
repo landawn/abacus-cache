@@ -36,7 +36,9 @@ import com.landawn.abacus.util.Strings;
  * <li>Base64 encoding of keys for compatibility with cache systems that restrict key characters</li>
  * <li>Circuit breaker pattern on read operations to protect against cascading failures</li>
  * <li>Transparent error recovery via a configurable fail-fast window after repeated failures</li>
- * <li>Adapts the TTL+idle Cache interface to the TTL-only model used by most distributed caches ({@code maxIdleTime} is ignored)</li>
+ * <li>Adapts the TTL+idle Cache interface to the TTL-only model used by most distributed caches ({@code maxIdleTime} is ignored);
+ *     the two-argument {@link #put(Object, Object)} stores with the framework default TTL,
+ *     {@link Cache#DEFAULT_LIVE_TIME} (3 hours)</li>
  * </ul>
  *
  * <p><b>Thread Safety:</b>
@@ -884,9 +886,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * submitted task, so the call site receives a normally-returned future that <em>completes
      * exceptionally</em> with the {@code IllegalStateException} rather than throwing directly.
      *
-     * <p><b>&#9888;&#65039; Best-effort disconnect:</b> if the underlying client's disconnect fails, this
-     * method logs the failure and still leaves this wrapper permanently closed; client-side
-     * connections or threads may therefore require external diagnosis.
+     * <p><b>&#9888;&#65039; Best-effort disconnect:</b> if the underlying client's disconnect throws an
+     * exception, this method logs it and still leaves this wrapper permanently closed; client-side
+     * connections or threads may therefore require external diagnosis. An {@link Error} (which the
+     * bundled Redis clients rethrow after attempting to close every underlying client) is not caught: it
+     * propagates from this call, but this wrapper has already been marked closed and a repeated call does
+     * not retry the disconnect.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

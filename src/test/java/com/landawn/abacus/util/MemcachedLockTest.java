@@ -23,7 +23,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.logging.log4j.Level;
@@ -161,6 +164,96 @@ class MemcachedLockTest {
         local.close();
 
         assertFalse(local.unlockQuietly("k"));
+    }
+
+    /**
+     * A release in the {@code finally} block of a cancelled task runs with the interrupt status set.
+     * spymemcached 2.12.3 cannot enqueue any operation on such a thread: {@code TCPMemcachedNodeImpl.addOp}
+     * first calls {@code authLatch.await(...)}, which throws {@link InterruptedException} for an interrupted
+     * thread even when the latch is already open, and rethrows it as
+     * {@code IllegalStateException("Interrupted while waiting to add ...")}. The delegate below reproduces
+     * that path, so without special handling the delete is never sent and the lease stays held until its TTL.
+     */
+    @Test
+    @SuppressWarnings("removal")
+    void releaseFromAnInterruptedThreadIsSentAndPreservesTheInterruptStatus() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        when(delegate.remove("key")).thenAnswer(invocation -> {
+            try {
+                new CountDownLatch(0).await(1, TimeUnit.SECONDS);
+            } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting to add delete", e);
+            }
+            return true;
+        });
+
+        try (MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
+            Thread.currentThread().interrupt();
+            assertTrue(lock.unlockQuietly("key"));
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertTrue(lock.tryUnlock("key"));
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertTrue(lock.unlock("key"));
+            assertTrue(lock.tryUnlockQuietly("key"));
+            assertTrue(Thread.currentThread().isInterrupted());
+            verify(delegate, times(4)).remove("key");
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    /**
+     * The interrupt status is cleared only for the delete itself and restored when the release fails:
+     * {@code tryUnlock} throws and {@code unlockQuietly} returns {@code false}, both with the status set.
+     */
+    @Test
+    void failedReleaseFromAnInterruptedThreadRestoresTheInterruptStatus() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final List<Boolean> interruptedDuringDelete = new ArrayList<>();
+        when(delegate.remove("key")).thenAnswer(invocation -> {
+            interruptedDuringDelete.add(Thread.currentThread().isInterrupted());
+            throw new IllegalStateException("delete failed");
+        });
+
+        try (MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
+            Thread.currentThread().interrupt();
+            final RuntimeException failure = assertThrows(RuntimeException.class, () -> lock.tryUnlock("key"));
+            assertEquals("delete failed", failure.getCause().getMessage());
+            assertTrue(Thread.currentThread().isInterrupted(), "tryUnlock must restore the status when it throws");
+
+            assertFalse(lock.unlockQuietly("key"));
+            assertTrue(Thread.currentThread().isInterrupted(), "unlockQuietly must restore the status when it fails");
+            assertEquals(List.of(false, false), interruptedDuringDelete, "the status is cleared only while the delete runs");
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    /**
+     * An interrupt that arrives while waiting for the server's response ends the wait: SpyMemcached
+     * restores the status and throws, and the lock reports a failed release (the status stays set).
+     */
+    @Test
+    void interruptDuringTheResponseWaitIsReportedAsAReleaseFailure() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        when(delegate.remove("key")).thenAnswer(invocation -> {
+            // Mirrors SpyMemcached.resultOf: restore the status, then throw an unchecked wrapper.
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(new InterruptedException("response wait interrupted"));
+        });
+
+        try (MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
+            assertFalse(Thread.currentThread().isInterrupted());
+            final RuntimeException failure = assertThrows(RuntimeException.class, () -> lock.tryUnlock("key"));
+            assertTrue(failure.getCause().getCause() instanceof InterruptedException);
+            assertTrue(Thread.interrupted(), "the interrupt must stay visible to the caller");
+
+            assertFalse(lock.unlockQuietly("key"));
+            assertTrue(Thread.interrupted(), "the interrupt must stay visible to the caller");
+        } finally {
+            Thread.interrupted();
+        }
     }
 
     // Lifecycle

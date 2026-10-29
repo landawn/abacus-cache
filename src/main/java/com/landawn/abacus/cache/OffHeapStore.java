@@ -275,8 +275,10 @@ public interface OffHeapStore<K> extends AutoCloseable {
      * than once). During normal cache shutdown an unchecked exception raised here propagates from
      * the cache's {@code close()} (or is attached as a suppressed exception when an earlier cleanup
      * step already failed); the cache's other cleanup steps still run. If cache construction fails
-     * after acquiring the store, a store-close failure is attached to the construction failure as a
-     * suppressed exception.
+     * after the cache's native memory was allocated, the cache closes the store during its cleanup
+     * and attaches a store-close failure to the construction failure as a suppressed exception; a
+     * construction failure before that point (such as an invalid argument) leaves the store open
+     * and owned by the caller.
      */
     @Override
     default void close() {

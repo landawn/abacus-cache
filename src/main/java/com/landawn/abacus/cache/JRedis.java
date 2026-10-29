@@ -60,11 +60,15 @@ import redis.clients.jedis.RedisClient;
  *
  * <p><b>Connection pooling:</b> Each shard's {@link RedisClient} uses the default connection pool
  * configuration (Apache Commons Pool). Each shard's pool object (and its idle-eviction task) is
- * created eagerly during construction, but connections are established lazily on first use —
- * constructing a {@code JRedis} does not open a Redis socket. Address parsing (malformed
- * {@code host:port}, invalid port) fails during construction with {@link IllegalArgumentException};
- * an unresolvable hostname, however, does NOT fail construction — like an unreachable server, it
- * surfaces on the first operation routed to that shard.
+ * created eagerly during construction. Because no RESP protocol version is configured, Jedis also
+ * probes each shard once while building its client: it borrows one pooled connection (performing the
+ * protocol handshake) and returns it to the pool, so constructing a {@code JRedis} contacts every
+ * server, one shard at a time. A failed probe is ignored: an unreachable or unresponsive shard delays
+ * construction (by up to the connect timeout plus the socket timeout) but does not fail it. Address
+ * parsing (malformed {@code host:port}, invalid port) fails during construction with
+ * {@link IllegalArgumentException}; an unresolvable hostname, however, does NOT fail construction:
+ * its probe fails at once, without a connection attempt or a timeout, and, like an unreachable
+ * server, it surfaces on the first operation routed to that shard.
  *
  * <p><b>Usage Examples:</b>
  * <pre>{@code

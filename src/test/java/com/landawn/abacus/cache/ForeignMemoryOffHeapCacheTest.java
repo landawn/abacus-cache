@@ -14,7 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.foreign.Arena;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -223,6 +225,63 @@ class ForeignMemoryOffHeapCacheTest {
     void deallocationBeforeArenaInitializationIsHarmless() {
         final ForeignMemoryOffHeapCache<?, ?> uninitialized = Mockito.mock(ForeignMemoryOffHeapCache.class, Mockito.CALLS_REAL_METHODS);
         assertDoesNotThrow(uninitialized::deallocate);
+    }
+
+    /** {@code close()} releases the arena, and a repeated {@code close()} must not try to close it again. */
+    @Test
+    void closeReleasesTheArenaExactlyOnce() throws Exception {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+        final Field arenaField = ForeignMemoryOffHeapCache.class.getDeclaredField("arena");
+        arenaField.setAccessible(true);
+        final Arena arena = (Arena) arenaField.get(cache);
+
+        try {
+            assertTrue(arena.scope().isAlive());
+        } finally {
+            cache.close();
+        }
+
+        assertFalse(arena.scope().isAlive());
+        assertDoesNotThrow(cache::close);
+    }
+
+    /**
+     * Fills a two-segment region up to its last 64-byte slot: 16384 slots per segment is the largest
+     * slot index the 14-bit slot handle encodes, and the final copy ends exactly at the end of the
+     * segment. The bounds-checked copy rejects any offset past the region, and distinct per-entry
+     * payloads expose any overlapping or misplaced slot.
+     */
+    @Test
+    void regionFilledToItsLastSlotRoundTripsEveryEntry() {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(2).build();
+        final int slotCount = 2 * AbstractOffHeapCache.SEGMENT_SIZE / AbstractOffHeapCache.MIN_BLOCK_SIZE;
+
+        try {
+            for (int i = 0; i < slotCount; i++) {
+                assertTrue(cache.put("k" + i, distinctSlotPayload(i)), "slot " + i);
+            }
+
+            final OffHeapCacheStats stats = cache.stats();
+            assertEquals(stats.allocatedMemory(), stats.occupiedMemory());
+            assertEquals(Map.of(64, Map.of(0, slotCount / 2, 1, slotCount / 2)), stats.occupiedSlots());
+
+            for (int i = 0; i < slotCount; i++) {
+                assertArrayEquals(distinctSlotPayload(i), cache.getOrNull("k" + i), "slot " + i);
+            }
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** A 64-byte payload whose first four bytes encode {@code i}, so every entry's bytes differ. */
+    private static byte[] distinctSlotPayload(final int i) {
+        final byte[] bytes = new byte[AbstractOffHeapCache.MIN_BLOCK_SIZE];
+
+        for (int j = 0; j < bytes.length; j++) {
+            bytes[j] = (byte) ((i >>> (j % 4) * 8) ^ j);
+        }
+
+        return bytes;
     }
 
 }

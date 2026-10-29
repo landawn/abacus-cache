@@ -19,8 +19,10 @@ import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -185,6 +187,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private static final int STORE_DISK_ONLY = 2;
 
     /**
+     * Number of keys with orphaned store bytes at which the first high-water warning is logged. Each
+     * cache's warning mark starts here, doubles after every warning, and restarts here only once a
+     * {@code clear()} has removed all of them.
+     */
+    static final int ORPHANED_STORE_KEYS_WARN_THRESHOLD = 1024;
+
+    /**
      * Shared scheduled executor used for the periodic maintenance task of all off-heap cache
      * instances created from this class.
      */
@@ -202,7 +211,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private enum FreeCause {
         /** Superseded by a new same-key entry; never counted as an eviction. */
         REPLACED,
-        /** Explicit remove()/clear()/close(), or a stale mapping whose store bytes vanished. */
+        /** Explicit remove()/clear()/close(), a stale mapping whose store bytes vanished, or a put's entry the map failed to link. */
         REMOVED,
         /** TTL/idle expiry (lazy on access, or the maintenance sweep). Counted as an eviction. */
         EXPIRED,
@@ -226,6 +235,23 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
     /** All entries, both memory-backed and disk-backed. Same-key mutations use the map's atomic per-key compute. */
     private final ConcurrentHashMap<K, Entry<V>> entries = new ConcurrentHashMap<>();
+
+    /**
+     * Keys whose store bytes a failed disk put left behind and whose guarded removal also failed;
+     * clear() retries them and close() removes them. Identity-based, because hashing the keys would
+     * call the same failing methods. Unbounded: the store key-only API offers no other way to find
+     * those bytes again, and each key reference is small next to the bytes it accounts for.
+     * Guarded by its own monitor.
+     */
+    private final Set<K> orphanedStoreKeys = Collections.newSetFromMap(new IdentityHashMap<>());
+    /** Size of {@link #orphanedStoreKeys} at which the next high-water warning is logged; guarded by that set's monitor. */
+    private int orphanedStoreKeysWarnAt = ORPHANED_STORE_KEYS_WARN_THRESHOLD;
+    /**
+     * Keys drained by clear() retries that are still running, and so may yet be recorded again;
+     * guarded by the set's monitor. Concurrent clear() calls (they share the lifecycle read lock)
+     * must not take a momentarily empty set for "all removed".
+     */
+    private int orphanedStoreKeysInRetry;
 
     /**
      * Close() takes the write side while operations touching native memory or the store hold the
@@ -266,6 +292,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     private final LongAdder totalDataSize = new LongAdder();
     private final LongAdder dataSizeOnDisk = new LongAdder();
     private final LongAdder sizeOnDisk = new LongAdder();
+    /**
+     * Live entries, maintained by install/free; read by size() and stats() instead of
+     * entries.size(). ConcurrentHashMap updates its own count only after a compute has linked the
+     * node and reorganized its bin, so a failure there (e.g. a key whose compareTo throws while an
+     * overlong bin is treeified) leaves that count permanently off by the linked entry.
+     */
+    private final LongAdder entryCount = new LongAdder();
     // Named after the OffHeapCacheStats components they populate.
     private final LongAdder putCountToDisk = new LongAdder();
     private final LongAdder hitCountFromDisk = new LongAdder();
@@ -514,8 +547,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * @param key the key whose associated value is to be returned; must not be {@code null}
      * @return the cached value, or {@code null} if the key is not present, the entry has expired,
-     *         the disk-backed entry's bytes are missing from the store, or the entry was removed
-     *         concurrently
+     *         the disk-backed entry's bytes are missing from the store, or the entry found by the
+     *         lookup was removed or replaced (by a same-key put or a promotion back into memory)
+     *         concurrently, even if the key stayed mapped throughout
      * @throws IllegalStateException if the cache has been closed, or if a value cannot be
      *                               reconstructed because the fetched size no longer matches the
      *                               recorded size (data corruption), or because a configured
@@ -678,7 +712,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             // Throwable rather than RuntimeException | Error so an undeclared checked exception
             // (Kotlin, sneaky throws) cannot strand the slots until close(); still rethrown.
             if (!installed[0]) {
-                runCleanupStep(e, () -> discardUninstalledSlots(slots));
+                suppressCleanupFailure(e, () -> discardUninstalledSlots(slots));
             }
             throw e;
         }
@@ -706,7 +740,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <p><b>Replacement failure:</b> a failed replacement never loses the prior entry. The new
      * entry is installed atomically with the retirement of the old one, and a failed or throwing
      * disk write leaves the prior mapping and its bytes unchanged per the {@link OffHeapStore#put}
-     * contract.
+     * contract. The one exception to "a throwing put changed nothing" is a failure of the key
+     * methods described under <i>Key requirements</i> below, which can arrive after the replacement
+     * has already been applied.
      *
      * <p>Non-positive {@code liveTime}/{@code maxIdleTime} values mean "no expiration"/"no idle
      * limit". For a {@link ByteBuffer} value, the bytes from index 0 up to the current position
@@ -716,6 +752,21 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *
      * <p>An unchecked exception thrown by a custom serializer, by the {@code storeSelector}, or by
      * the {@link OffHeapStore} write is propagated, leaving any prior mapping unchanged.
+     *
+     * <p><b>Key requirements:</b> keys must implement {@code hashCode}, {@code equals}, and, for a
+     * {@link Comparable} key, {@code compareTo} consistently and without throwing. The internal
+     * index also calls them while serving other keys' operations ({@code compareTo} when a bin of
+     * colliding keys is converted to a tree), so such a failure can surface from a put of another
+     * key. That put then propagates the failure unchanged (an {@link Error} included), but its
+     * value may already have been mapped (replacing any prior entry); such a value is counted in
+     * {@code putCount} like any stored value and stays readable until it is replaced or removed,
+     * possibly by a concurrent operation on the same key. Otherwise the value's memory slots and
+     * counters are released and its store bytes removed. If that removal fails (the key's lookup
+     * fails again, or the store's {@code remove} throws), the bytes, unreachable through the cache,
+     * are removed by a later {@link #clear()} or by {@link #close()} (if the store's {@code remove}
+     * fails during {@code close()}, that failure is logged and the bytes stay). Until then the cache
+     * keeps a reference to each such key, and logs a warning when their number first reaches 1,024
+     * and again each time it doubles; the count restarts once a {@code clear()} has removed them all.
      *
      * @param key the key; must not be {@code null}
      * @param value the value; must not be {@code null}
@@ -727,7 +778,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or if
      *                                  {@code storeSelector} returns {@code null} or a value outside 0..2
      * @throws RuntimeException if serialization, the store selector, the native-memory copy, or the
-     *         backing-store write throws an unchecked exception
+     *         backing-store write throws an unchecked exception, or if the key's {@code hashCode},
+     *         {@code equals}, or {@code compareTo} (or a colliding key's {@code compareTo}) throws one
+     *         while the value is being mapped
      * @throws RejectedExecutionException if the put fails under memory pressure and the shared
      *         executor rejects the vacate task
      */
@@ -801,6 +854,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
                 if (slots != null) {
                     final Entry<V> entry = createMemoryEntry(type, size, effectiveLiveTime, effectiveMaxIdleTime, slots, bytes);
+                    final boolean[] installed = { false };
 
                     try {
                         entries.compute(key, (k, old) -> {
@@ -809,15 +863,27 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                             }
 
                             install(entry);
+                            installed[0] = true;
                             return entry;
                         });
                     } catch (final Throwable e) {
-                        // A throwing key hashCode/equals aborts the compute before the lambda
-                        // installs the entry; release its freshly allocated slots. Throwable, as in
-                        // runMaintenance: code written in Kotlin (or using sneaky throws) can throw a
-                        // checked exception undeclared, and it must not strand the slots either.
-                        // Rethrown afterwards, so nothing is swallowed.
-                        discardUninstalledMemoryEntry(entry);
+                        // Throwable, as in runMaintenance: code written in Kotlin (or using sneaky
+                        // throws) can throw a checked exception undeclared, and it must not strand the
+                        // slots either. Rethrown afterwards, so nothing is swallowed.
+                        if (!installed[0]) {
+                            // A throwing key hashCode/equals aborts the compute before the lambda
+                            // installs the entry; release its freshly allocated slots.
+                            discardUninstalledMemoryEntry(entry);
+                        } else {
+                            final boolean[] stored = { false };
+                            suppressCleanupFailure(e, () -> stored[0] = discardIfUnlinked(key, entry));
+
+                            if (stored[0]) {
+                                // The value reached the map although the put throws: count it like any stored value.
+                                putCount.increment();
+                            }
+                        }
+
                         throw e;
                     }
 
@@ -870,7 +936,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * monitor is held across the overwriting store write and its retirement, so no reader can
      * fetch the new bytes against the prior entry's metadata. A failed or throwing write leaves
      * the prior mapping (and, per the {@link OffHeapStore#put} contract, the prior bytes)
-     * completely untouched.
+     * completely untouched. If the map fails after the entry was installed, an entry it did not
+     * link is discarded together with its store bytes (see {@link #discardIfUnlinked}).
      *
      * @return {@code true} if the value was stored and installed
      * @throws RuntimeException if the backing-store write throws an unchecked exception
@@ -882,54 +949,75 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // own byte[]/ByteBuffer contents.
         final byte[] bytesToStore = N.copyOfRange(bytes, 0, size);
 
-        final boolean[] stored = { false };
         final long[] writeMillis = { -1L };
+        // The installed entry; created inside the compute, so its TTL starts after the store write.
+        @SuppressWarnings("unchecked")
+        final Entry<V>[] installed = new Entry[1];
 
-        entries.compute(key, (k, old) -> {
-            final boolean ok;
+        try {
+            entries.compute(key, (k, old) -> {
+                final boolean ok;
 
-            if (old != null && !old.isMemory()) {
-                // The write overwrites the prior entry's bytes under the same store key: exclude
-                // the prior's readers for the write AND the retirement, so they either complete
-                // before the overwrite or observe the entry as freed.
-                synchronized (old) {
+                if (old != null && !old.isMemory()) {
+                    // The write overwrites the prior entry's bytes under the same store key: exclude
+                    // the prior's readers for the write AND the retirement, so they either complete
+                    // before the overwrite or observe the entry as freed.
+                    synchronized (old) {
+                        ok = timedStorePut(k, bytesToStore, writeMillis);
+
+                        if (ok) {
+                            // The bytes now belong to the new entry; do not remove them.
+                            free(k, old, FreeCause.REPLACED, false);
+                        }
+                    }
+                } else {
                     ok = timedStorePut(k, bytesToStore, writeMillis);
 
-                    if (ok) {
-                        // The bytes now belong to the new entry; do not remove them.
-                        free(k, old, FreeCause.REPLACED, false);
+                    if (ok && old != null) {
+                        free(k, old, FreeCause.REPLACED, true);
                     }
                 }
-            } else {
-                ok = timedStorePut(k, bytesToStore, writeMillis);
 
-                if (ok && old != null) {
-                    free(k, old, FreeCause.REPLACED, true);
+                if (!ok) {
+                    return old; // The prior mapping and its bytes are untouched.
+                }
+
+                final Entry<V> entry = new Entry<>(type, size, liveTime, maxIdleTime, null);
+                install(entry);
+                installed[0] = entry;
+                return entry;
+            });
+        } catch (final Throwable e) {
+            // Throwable for the same reason as doPut's memory path; rethrown afterwards.
+            if (installed[0] != null) {
+                final boolean[] stored = { false };
+                suppressCleanupFailure(e, () -> stored[0] = discardIfUnlinked(key, installed[0]));
+
+                if (stored[0]) {
+                    // The value reached the map although the put throws: count it like any stored value.
+                    recordDiskPut(writeMillis[0]);
                 }
             }
 
-            if (!ok) {
-                return old; // The prior mapping and its bytes are untouched.
-            }
+            throw e;
+        }
 
-            final Entry<V> entry = new Entry<>(type, size, liveTime, maxIdleTime, null);
-            install(entry);
-            stored[0] = true;
-            return entry;
-        });
-
-        if (!stored[0]) {
+        if (installed[0] == null) {
             return false;
         }
 
+        recordDiskPut(writeMillis[0]);
+        return true;
+    }
+
+    private void recordDiskPut(final long writeMillis) {
         putCountToDisk.increment();
 
-        if (writeMillis[0] >= 0) {
-            writeToDiskTimes.record(writeMillis[0]);
+        if (writeMillis >= 0) {
+            writeToDiskTimes.record(writeMillis);
         }
 
         putCount.increment();
-        return true;
     }
 
     /**
@@ -1034,7 +1122,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     public int size() throws IllegalStateException {
         assertNotClosed();
 
-        return entries.size();
+        return currentEntryCount();
+    }
+
+    /** The live-entry gauge, clamped to the int range; LongAdder.sum() is not an atomic snapshot and can transiently read below zero. */
+    private int currentEntryCount() {
+        return (int) Math.min(Math.max(0L, entryCount.sum()), Integer.MAX_VALUE);
     }
 
     /**
@@ -1042,7 +1135,13 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * now-empty segments for reuse by any slot size. As with {@link #remove(Object)}, a failure of
      * the {@link OffHeapStore} to remove an entry's disk bytes is logged rather than propagated,
      * while an {@link Error} thrown by the store propagates and leaves that entry, and any not yet
-     * visited, in place. Entries put concurrently with this call may survive it.
+     * visited, in place. Entries put concurrently with this call may survive it. This call also
+     * retries removing store bytes left behind by a failed disk put (see {@link #put(Object, Object, long, long)});
+     * a key whose retry fails again, in its lookup or in the store's {@code remove}, stays recorded
+     * for the next {@code clear()} or {@link #close()}. Such failures are reported by one summary
+     * warning per call, except that the first {@link Error} among them is rethrown once every
+     * recorded key has been tried. The retry runs even when removing the entries throws; that
+     * failure is then rethrown, with any retry failure attached to it as suppressed.
      *
      * @throws IllegalStateException if the cache has been closed
      */
@@ -1052,8 +1151,18 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         try {
             assertNotClosed();
 
-            removeAllEntries(FreeCause.REMOVED);
-            reclaimEmptySegments();
+            try {
+                removeAllEntries(FreeCause.REMOVED);
+                reclaimEmptySegments();
+            } catch (final Throwable e) {
+                // Retry the orphaned store bytes even when a live entry cannot be removed: a clear()
+                // that keeps failing on one entry would otherwise never reach them while the cache
+                // stays open. A retry failure is attached to this one, which is rethrown.
+                suppressCleanupFailure(e, this::retryOrphanedStoreKeys);
+                throw e;
+            }
+
+            retryOrphanedStoreKeys();
         } finally {
             lifecycleLock.readLock().unlock();
         }
@@ -1072,7 +1181,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Deliberately decommissions this application-scoped cache before JVM termination. It cancels
      * the maintenance task, removes the JVM shutdown hook, frees every entry (removing disk-backed
-     * entries' bytes from the store), deallocates the native region, and closes the configured
+     * entries' bytes from the store, along with any bytes a failed disk put left behind),
+     * deallocates the native region, and closes the configured
      * {@link OffHeapStore}, if any. If the cache remains active for the application lifetime, the
      * registered shutdown hook invokes this method automatically during JVM shutdown.
      * Every entry and cleanup step is attempted even when an earlier one fails. The entry index
@@ -1116,6 +1226,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             });
             failure = runCleanupStep(failure, this::removeShutdownHook);
             failure = runCleanupStep(failure, this::removeAllEntriesOnClose);
+            failure = runCleanupStep(failure, this::removeOrphanedStoreBytesOnClose);
             failure = runCleanupStep(failure, this::deallocate);
             failure = runCleanupStep(failure, () -> {
                 if (offHeapStore != null) {
@@ -1144,6 +1255,22 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 }
             } finally {
                 shutdownHook = null;
+            }
+        }
+    }
+
+    /**
+     * Runs a cleanup step from inside a failure handler, attaching any failure of its own to
+     * {@code primary} as suppressed. Unlike {@link #runCleanupStep}, it also catches a checked
+     * exception thrown undeclared (Kotlin, sneaky throws) by a key method or store, which would
+     * otherwise escape and replace the failure being handled.
+     */
+    private static void suppressCleanupFailure(final Throwable primary, final Runnable step) {
+        try {
+            step.run();
+        } catch (final Throwable e) {
+            if (e != primary) {
+                primary.addSuppressed(e);
             }
         }
     }
@@ -1200,7 +1327,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         // transiently observed decrement-without-increment cannot make the stats record throw.
         final long gets = hits > Long.MAX_VALUE - misses ? Long.MAX_VALUE : hits + misses;
 
-        return new OffHeapCacheStats(capacity, entries.size(), Math.max(0L, sizeOnDisk.sum()), putCount.sum(), putCountToDisk.sum(), gets, hits,
+        return new OffHeapCacheStats(capacity, currentEntryCount(), Math.max(0L, sizeOnDisk.sum()), putCount.sum(), putCountToDisk.sum(), gets, hits,
                 hitCountFromDisk.sum(), misses, evictionCount.sum(), Math.max(0L, evictionCountFromDisk.sum()), capacityInBytes,
                 Math.max(0L, totalOccupiedMemorySize.sum()), Math.max(0L, totalDataSize.sum()), Math.max(0L, dataSizeOnDisk.sum()), writeToDiskTimes.snapshot(),
                 readFromDiskTimes.snapshot(), SEGMENT_SIZE, snapshotOccupiedSlots());
@@ -1221,6 +1348,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         totalDataSize.add(entry.size);
+        entryCount.increment();
     }
 
     /**
@@ -1231,8 +1359,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      * <p>An exception from the store's {@code remove} is logged and the entry is freed anyway (only
      * store space leaks). An {@link Error} from it propagates and leaves the entry live, with its
      * counters untouched. Callers free inside a map {@code compute}, which the Error aborts, so the
-     * entry is still mapped and must stay readable and removable by a later attempt. (The one
-     * exception, {@link #close()}, clears the map regardless.)
+     * entry is still mapped and must stay readable and removable by a later attempt. (The
+     * exceptions: {@link #close()} clears the map regardless, and {@link #discardIfUnlinked}
+     * frees an entry the map failed to link without removing store bytes.)
      *
      * @param removeDiskBytes for a disk-backed entry, whether its store bytes are removed; a
      *                        caller that has just overwritten the bytes under the same key
@@ -1276,6 +1405,7 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         totalDataSize.add(-entry.size);
+        entryCount.decrement();
 
         if (cause == FreeCause.EXPIRED || cause == FreeCause.EVICTED) {
             evictionCount.increment();
@@ -1309,6 +1439,178 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 return null;
             }
         });
+    }
+
+    /**
+     * Cleans up after a put's {@code compute} failed once its remapping function had installed
+     * {@code entry}. The map can fail after the function returns: treeifying an overlong bin
+     * (which calls the keys' {@code compareTo}) or resizing runs once the entry is linked, while a
+     * failed node allocation or tree insertion leaves it unlinked. A linked entry stays: releasing
+     * its slots would let the next allocation overwrite them under a live mapping. An unlinked one
+     * is unreachable, so it is freed here, outside any compute; the identity scan never touches
+     * the key. An entry already marked freed was linked and has since been retired by a same-key
+     * mutation, which also handled its slots or store bytes: only this method frees an unlinked entry.
+     *
+     * <p>A disk entry's store bytes were written under {@code key} before the failure and are
+     * removed by {@link #removeStoreBytesIfUnowned}. That compute can fail the same way (a key
+     * whose {@code compareTo} answers inconsistently, or a bin reshaped in between), and the
+     * store's {@code remove} can throw; the caller then keeps the failure as suppressed, and the
+     * key is recorded so that {@link #clear()} retries the removal and {@link #close()} completes
+     * it. Until then the bytes are unreachable through this cache.
+     *
+     * @return {@code true} if the map linked the entry (it is still mapped, or was retired since),
+     *         so the put stored its value despite the failure
+     */
+    private boolean discardIfUnlinked(final K key, final Entry<V> entry) {
+        // A retirer sets freed before it unlinks the node, so a scan that misses a retired entry
+        // still observes the flag.
+        if (entries.containsValue(entry) || entry.freed) {
+            return true;
+        }
+
+        free(key, entry, FreeCause.REMOVED, false);
+
+        if (!entry.isMemory()) {
+            try {
+                removeStoreBytesIfUnowned(key);
+            } catch (final Throwable e) {
+                recordOrphanedStoreKey(key);
+                throw e;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Removes the store bytes held under {@code key} unless a disk mapping owns them. Runs inside
+     * the key's own compute, like every other byte removal, so it cannot clobber bytes that a
+     * concurrent same-key disk put has written; a newer disk mapping owns whatever the store holds
+     * for the key, so only an unmapped or memory-mapped key loses its bytes.
+     */
+    private void removeStoreBytesIfUnowned(final K key) {
+        entries.compute(key, (k, current) -> {
+            if (current == null || current.isMemory()) {
+                // Unlike free(), a store failure propagates: the caller records the key, so the
+                // removal is retried by the next clear() or close() instead of only leaking space.
+                // The compute leaves the mapping unchanged either way.
+                offHeapStore.remove(k);
+            }
+
+            return current;
+        });
+    }
+
+    /**
+     * Records a key for a later removal of its orphaned store bytes; identity-deduplicated. Logs a
+     * warning each time the number of recorded keys doubles from {@link #ORPHANED_STORE_KEYS_WARN_THRESHOLD}.
+     */
+    private void recordOrphanedStoreKey(final K key) {
+        final int recorded;
+
+        synchronized (orphanedStoreKeys) {
+            if (!orphanedStoreKeys.add(key) || orphanedStoreKeys.size() < orphanedStoreKeysWarnAt) {
+                return;
+            }
+
+            recorded = orphanedStoreKeys.size();
+            orphanedStoreKeysWarnAt = orphanedStoreKeysWarnAt > Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE : orphanedStoreKeysWarnAt * 2;
+        }
+
+        logger.warn(recorded + " off-heap cache keys have orphaned OffHeapStore bytes awaiting removal by clear() or close(); a key type whose "
+                + "hashCode, equals, or compareTo keeps failing, or a failing OffHeapStore.remove, is retaining them");
+    }
+
+    private List<K> drainOrphanedStoreKeys() {
+        synchronized (orphanedStoreKeys) {
+            if (orphanedStoreKeys.isEmpty()) {
+                return List.of();
+            }
+
+            final List<K> keys = new ArrayList<>(orphanedStoreKeys);
+            orphanedStoreKeys.clear();
+            return keys;
+        }
+    }
+
+    /**
+     * Retries the guarded removal for every recorded key. A key that fails again stays recorded.
+     * Failures other than the first {@link Error} are reported by one summary warning per call, so
+     * a set of persistently failing keys does not log a line per key on every clear(); the first
+     * Error is rethrown once every key has been tried. The high-water warning mark restarts only
+     * once the set is empty: re-recording keys that keep failing must not repeat its warnings.
+     */
+    private void retryOrphanedStoreKeys() {
+        final List<K> keys;
+
+        synchronized (orphanedStoreKeys) {
+            keys = drainOrphanedStoreKeys();
+            orphanedStoreKeysInRetry += keys.size();
+        }
+
+        Error error = null;
+        Throwable firstFailure = null;
+        int failedCount = 0;
+
+        try {
+            for (final K key : keys) {
+                try {
+                    removeStoreBytesIfUnowned(key);
+                } catch (final Throwable e) {
+                    recordOrphanedStoreKey(key);
+                    failedCount++;
+
+                    if (e instanceof final Error err && error == null) {
+                        error = err;
+                    } else if (firstFailure == null) {
+                        firstFailure = e;
+                    }
+                }
+            }
+        } finally {
+            synchronized (orphanedStoreKeys) {
+                orphanedStoreKeysInRetry -= keys.size();
+
+                if (orphanedStoreKeys.isEmpty() && orphanedStoreKeysInRetry == 0) {
+                    orphanedStoreKeysWarnAt = ORPHANED_STORE_KEYS_WARN_THRESHOLD;
+                }
+            }
+        }
+
+        if (firstFailure != null) {
+            logger.warn(
+                    failedCount + " of " + keys.size()
+                            + " off-heap cache keys with orphaned OffHeapStore bytes could not be removed; retrying on the next clear() or close()",
+                    firstFailure);
+        }
+
+        if (error != null) {
+            throw error;
+        }
+    }
+
+    /**
+     * Removes every recorded key's store bytes directly. Safe without a per-key compute only here:
+     * close() holds the lifecycle write lock, so no operation runs concurrently, and every mapping
+     * has already been released, so no entry can own the bytes. Store failures other than an
+     * {@link Error} are logged, as in {@code free}; the first Error is rethrown after all keys.
+     */
+    private void removeOrphanedStoreBytesOnClose() {
+        Throwable failure = null;
+
+        for (final K key : drainOrphanedStoreKeys()) {
+            failure = runCleanupStep(failure, () -> {
+                try {
+                    offHeapStore.remove(key);
+                } catch (final Exception e) {
+                    logger.warn("Failed to remove orphaned backing bytes of an off-heap cache key from the OffHeapStore", e);
+                }
+            });
+        }
+
+        if (failure instanceof final Error error) {
+            throw error;
+        }
     }
 
     private void removeAllEntries(final FreeCause cause) {

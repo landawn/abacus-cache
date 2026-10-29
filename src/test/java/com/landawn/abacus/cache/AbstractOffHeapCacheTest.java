@@ -16,8 +16,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isA;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
@@ -37,10 +39,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -437,6 +441,562 @@ class AbstractOffHeapCacheTest {
                 assertTrue(cache.stats().occupiedSlots().isEmpty(), "an aborted put must release its freshly allocated slots");
                 assertEquals(0, cache.size());
                 assertEquals(0L, cache.stats().putCount());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * {@code ConcurrentHashMap.compute} can fail after the put's remapping function installed the
+         * new entry: treeifying an overlong bin (which calls the colliding keys' {@code compareTo}), or
+         * resizing the table, runs after the node is linked. The put must propagate the failure without
+         * releasing the slots of the now-mapped entry; otherwise the next allocation reuses them and
+         * the mapping reads another value's bytes.
+         */
+        @Test
+        void putKeepsSlotsOfAnEntryTheMapLinkedBeforeFailing() {
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class));
+            try {
+                CollidingComparableKey linked = null;
+                int mapped = 0;
+
+                // All keys share one bin and fail every comparison. List-bin operations never compare,
+                // so puts succeed until the bin (and table) is large enough to be treeified.
+                for (int id = 0; id < 64 && linked == null; id++) {
+                    final CollidingComparableKey key = new CollidingComparableKey(id, 0);
+
+                    try {
+                        assertTrue(cache.put(key, new byte[] { (byte) id, 1, 2 }));
+                        mapped++;
+                    } catch (final IllegalStateException e) {
+                        assertEquals("forced compareTo failure", e.getMessage());
+                        linked = key;
+                    }
+                }
+
+                assertNotNull(linked, "an overlong colliding bin must eventually be treeified");
+                final byte[] expected = { (byte) linked.id, 1, 2 };
+                assertArrayEquals(expected, cache.getOrNull(linked), "the map linked the entry before treeification failed");
+                assertEquals(mapped + 1, cache.stats().putCount(), "a put whose value was stored is counted even though it threw");
+
+                // The map skipped its own count update for the linked entry; the cache's count must not.
+                assertEquals(mapped + 1, cache.size(), "the linked entry must be counted");
+                assertEquals(mapped + 1, cache.stats().size());
+
+                // Integer 7 hashes to a different bin, so this put does not touch the colliding bin.
+                assertTrue(cache.put(7, new byte[] { 9, 9, 9 }));
+                assertArrayEquals(expected, cache.getOrNull(linked), "a later same-class put must not reuse the linked entry's slot");
+                assertEquals(mapped + 2, totalOccupiedSlots(cache.stats()));
+                assertEquals(mapped + 2, cache.size());
+
+                // Clearing removes every linked entry; the map's own count would now be one below zero.
+                cache.clear();
+                assertEquals(0, cache.size());
+                assertTrue(cache.put("after-clear", new byte[] { 5 }));
+                assertEquals(1, cache.size());
+                assertEquals(1, cache.stats().size());
+                assertEquals(1, totalOccupiedSlots(cache.stats()));
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * The opposite failure: the map can run the put's remapping function and then fail to link the
+         * new node (inserting into a tree bin calls the key's {@code compareTo}; allocating the node can
+         * run out of memory). That entry is not mapped, so both its slots and the size counters its
+         * installation added must be released.
+         */
+        @Test
+        void putReleasesSlotsAndCountersOfAnEntryTheMapFailedToLink() {
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class));
+            try {
+                // Comparable colliding keys are treeified once the bin and the table are large enough.
+                final int mapped = 16;
+
+                for (int id = 0; id < mapped; id++) {
+                    assertTrue(cache.put(new CollidingComparableKey(id, Integer.MAX_VALUE), new byte[] { 1, 2, 3 }));
+                }
+
+                final CollidingComparableKey key = new CollidingComparableKey(mapped, Integer.MAX_VALUE);
+                // A tree-bin lookup makes the same comparisons as the put's search before its remapping
+                // function, so failing the next comparison fails the tree insertion that follows it.
+                assertFalse(cache.containsKey(key));
+                final int lookupComparisons = key.comparisons();
+                assertTrue(lookupComparisons > 0, "the colliding keys must have been treeified");
+                key.allowComparisons(lookupComparisons);
+
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 4, 5, 6 }));
+                assertEquals("forced compareTo failure", failure.getMessage());
+                key.allowComparisons(Integer.MAX_VALUE);
+
+                assertFalse(cache.containsKey(key));
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(mapped, totalOccupiedSlots(stats), "the unlinked entry's slot must be released");
+                assertEquals(mapped * (long) AbstractOffHeapCache.MIN_BLOCK_SIZE, stats.occupiedMemory());
+                assertEquals(mapped * 3L, stats.dataSize());
+                assertEquals(mapped, stats.size());
+                assertEquals(mapped, cache.size());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * Disk-path twin of {@link #putKeepsSlotsOfAnEntryTheMapLinkedBeforeFailing}: the entry is
+         * linked before treeification fails, so its store bytes must stay and the put must be counted
+         * (putCount, putCountToDisk) although it throws.
+         */
+        @Test
+        void diskPutCountsAndKeepsAnEntryTheMapLinkedBeforeFailing() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class), newIdentityStore(backing));
+            try {
+                CollidingComparableKey linked = null;
+                int mapped = 0;
+
+                for (int id = 0; id < 64 && linked == null; id++) {
+                    final CollidingComparableKey key = new CollidingComparableKey(id, 0);
+
+                    try {
+                        assertTrue(cache.put(key, new byte[] { (byte) id, 1, 2 }));
+                        mapped++;
+                    } catch (final IllegalStateException e) {
+                        assertEquals("forced compareTo failure", e.getMessage());
+                        linked = key;
+                    }
+                }
+
+                assertNotNull(linked, "an overlong colliding bin must eventually be treeified");
+                assertArrayEquals(new byte[] { (byte) linked.id, 1, 2 }, cache.getOrNull(linked));
+                assertTrue(backing.containsKey(linked), "a linked entry's store bytes must not be removed");
+                assertEquals(mapped + 1, backing.size());
+
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(mapped + 1, stats.size());
+                assertEquals(mapped + 1, stats.sizeOnDisk());
+                assertEquals(mapped + 1, stats.putCount());
+                assertEquals(mapped + 1, stats.putCountToDisk());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * The disk-path twin: the store write succeeded inside the compute, then the map failed to
+         * link the entry. Its disk counters and its store bytes must both be released; otherwise the
+         * bytes are unreachable through the cache (clear() and close() iterate mappings only).
+         */
+        @Test
+        void diskPutReleasesStoreBytesAndCountersOfAnEntryTheMapFailedToLink() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class), newIdentityStore(backing));
+            try {
+                final int mapped = 16;
+
+                for (int id = 0; id < mapped; id++) {
+                    assertTrue(cache.put(new CollidingComparableKey(id, Integer.MAX_VALUE), new byte[] { 1, 2, 3 }));
+                }
+
+                final CollidingComparableKey key = new CollidingComparableKey(mapped, Integer.MAX_VALUE);
+                assertFalse(cache.containsKey(key));
+                final int lookupComparisons = key.comparisons();
+                assertTrue(lookupComparisons > 0, "the colliding keys must have been treeified");
+                // Fail only the tree insertion's first comparison, so the cleanup's own lookup succeeds.
+                key.failOnlyComparison(lookupComparisons + 1);
+
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 4, 5, 6 }));
+                assertEquals("forced compareTo failure", failure.getMessage());
+                assertEquals(0, failure.getSuppressed().length);
+
+                assertFalse(cache.containsKey(key));
+                assertFalse(backing.containsKey(key), "the unlinked entry's store bytes must be removed");
+                assertEquals(mapped, backing.size());
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(mapped, stats.sizeOnDisk());
+                assertEquals(mapped * 3L, stats.dataSizeOnDisk());
+                assertEquals(mapped * 3L, stats.dataSize());
+                assertEquals(mapped, stats.size());
+                assertEquals(mapped, cache.size());
+
+                key.allowComparisons(Integer.MAX_VALUE);
+                assertTrue(cache.put(key, new byte[] { 7 }));
+                assertArrayEquals(new byte[] { 7 }, cache.getOrNull(key));
+                cache.clear();
+                assertTrue(backing.isEmpty());
+                assertEquals(0, cache.size());
+                assertEquals(0, cache.stats().sizeOnDisk());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * If the cleanup's own per-key lookup fails as well, the original failure is propagated with the
+         * cleanup failure suppressed. The disk counters are still released (that needs no key access);
+         * the orphaned bytes stay in the store, unreachable through the cache, until clear() retries them.
+         */
+        @Test
+        void diskPutKeepsTheOriginalFailureWhenTheStoreCleanupCannotRun() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class), newIdentityStore(backing));
+            try {
+                final int mapped = 16;
+
+                for (int id = 0; id < mapped; id++) {
+                    assertTrue(cache.put(new CollidingComparableKey(id, Integer.MAX_VALUE), new byte[] { 1, 2, 3 }));
+                }
+
+                final CollidingComparableKey key = new CollidingComparableKey(mapped, Integer.MAX_VALUE);
+                assertFalse(cache.containsKey(key));
+                key.allowComparisons(key.comparisons()); // every comparison after the put's lookup fails
+
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 4, 5, 6 }));
+                assertEquals("forced compareTo failure", failure.getMessage());
+                assertEquals(1, failure.getSuppressed().length);
+                assertEquals("forced compareTo failure", failure.getSuppressed()[0].getMessage());
+                key.allowComparisons(Integer.MAX_VALUE);
+
+                assertFalse(cache.containsKey(key));
+                assertTrue(backing.containsKey(key), "the cleanup could not run under the key's lookup");
+                final OffHeapCacheStats stats = cache.stats();
+                assertEquals(mapped, stats.sizeOnDisk());
+                assertEquals(mapped * 3L, stats.dataSizeOnDisk());
+                assertEquals(mapped, cache.size());
+
+                // The key was recorded; clear() retries the guarded removal, which now succeeds.
+                cache.clear();
+                assertTrue(backing.isEmpty(), "clear() must also remove the orphaned bytes");
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * Regression: the keys awaiting a retried removal used to be capped at 1,024, so the bytes of
+         * every further key survived clear() and close(). Every recorded key's bytes must be removed,
+         * however many there are, and the growth stays visible: a warning each time the count doubles
+         * from 1,024.
+         */
+        @Test
+        void everyOrphanedStoreKeyIsRemovedByCloseWithoutABound() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger, newIdentityStore(backing));
+            final int failedPuts = 2 * AbstractOffHeapCache.ORPHANED_STORE_KEYS_WARN_THRESHOLD + 52;
+
+            try {
+                for (int id = 0; id < 16; id++) {
+                    assertTrue(cache.put(new CollidingComparableKey(id, Integer.MAX_VALUE), new byte[] { 1, 2, 3 }));
+                }
+
+                for (int i = 0; i < failedPuts; i++) {
+                    final CollidingComparableKey key = new CollidingComparableKey(1_000 + i, Integer.MAX_VALUE);
+                    assertFalse(cache.containsKey(key));
+                    key.allowComparisons(key.comparisons()); // the insertion and the cleanup's lookup both fail
+                    assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 4, 5, 6 }));
+                }
+
+                assertEquals(16 + failedPuts, backing.size());
+                assertEquals(16, cache.size());
+                verify(logger).warn(startsWith("1024 off-heap cache keys have orphaned OffHeapStore bytes"));
+                verify(logger).warn(startsWith("2048 off-heap cache keys have orphaned OffHeapStore bytes"));
+                verify(logger, times(2)).warn(contains("off-heap cache keys have orphaned OffHeapStore bytes"));
+            } finally {
+                cache.close();
+            }
+
+            assertTrue(backing.isEmpty(), "close() must remove the bytes of every recorded key");
+        }
+
+        /**
+         * While recorded keys keep failing their retry, every clear() re-records them; that must not
+         * repeat the high-water warnings already logged, and the failures are summarized in one warning
+         * per clear() instead of one per key. Once a clear() has removed them all, the count restarts.
+         */
+        @Test
+        void highWaterWarningsDoNotRepeatWhileRetriesFailAndRestartOnceAllAreRemoved() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger, newIdentityStore(backing));
+            final int threshold = AbstractOffHeapCache.ORPHANED_STORE_KEYS_WARN_THRESHOLD;
+
+            try {
+                putCollidingEntries(cache, 16);
+                final List<CollidingComparableKey> orphaned = orphanStoreBytes(cache, 1_000, threshold);
+                verify(logger, times(1)).warn(startsWith(threshold + " off-heap cache keys have orphaned OffHeapStore bytes"));
+
+                orphaned.forEach(key -> key.failHashCode(true)); // every retry fails and re-records its key
+                cache.clear();
+                cache.clear();
+                assertEquals(threshold, backing.size());
+                verify(logger, times(1)).warn(contains("off-heap cache keys have orphaned OffHeapStore bytes"));
+                verify(logger, times(2)).warn(
+                        eq(threshold + " of " + threshold
+                                + " off-heap cache keys with orphaned OffHeapStore bytes could not be removed; retrying on the next clear() or close()"),
+                        isA(IllegalStateException.class));
+
+                orphaned.forEach(key -> key.failHashCode(false));
+                cache.clear(); // every retry succeeds
+                assertTrue(backing.isEmpty());
+
+                putCollidingEntries(cache, 16);
+                orphanStoreBytes(cache, 5_000, threshold);
+                verify(logger, times(2)).warn(startsWith(threshold + " off-heap cache keys have orphaned OffHeapStore bytes"));
+            } finally {
+                cache.close();
+            }
+
+            assertTrue(backing.isEmpty());
+        }
+
+        /**
+         * Concurrent clear() calls share the lifecycle read lock. While one is still retrying the keys it
+         * drained, another finds the set empty; it must not take that for "all removed" and restart the
+         * high-water count, or the first call's failed retries would log the 1,024 warning again.
+         */
+        @Test
+        void concurrentClearDoesNotRestartTheWarningWhileAnotherIsStillRetrying() throws Exception {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final OffHeapStore<Object> identityStore = newIdentityStore(backing);
+            final AtomicBoolean failOrphanRemovals = new AtomicBoolean();
+            final CountDownLatch retryEntered = new CountDownLatch(1);
+            final CountDownLatch releaseRetry = new CountDownLatch(1);
+            final OffHeapStore<Object> store = new OffHeapStore<>() {
+                @Override
+                public boolean put(final Object key, final byte[] value) {
+                    return identityStore.put(key, value);
+                }
+
+                @Override
+                public byte[] get(final Object key) {
+                    return identityStore.get(key);
+                }
+
+                @Override
+                public boolean remove(final Object key) {
+                    if (failOrphanRemovals.get() && key instanceof final CollidingComparableKey colliding && colliding.id >= 1_000) {
+                        if (retryEntered.getCount() > 0) {
+                            retryEntered.countDown();
+
+                            try {
+                                releaseRetry.await(10, TimeUnit.SECONDS);
+                            } catch (final InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                        }
+
+                        throw new IllegalStateException("store remove failed");
+                    }
+
+                    return identityStore.remove(key);
+                }
+            };
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger, store);
+            final ExecutorService executor = Executors.newSingleThreadExecutor();
+            final int threshold = AbstractOffHeapCache.ORPHANED_STORE_KEYS_WARN_THRESHOLD;
+
+            try {
+                putCollidingEntries(cache, 16);
+                orphanStoreBytes(cache, 1_000, threshold);
+                verify(logger, times(1)).warn(startsWith(threshold + " off-heap cache keys have orphaned OffHeapStore bytes"));
+
+                failOrphanRemovals.set(true);
+                final Future<?> retryingClear = executor.submit(cache::clear);
+                assertTrue(retryEntered.await(10, TimeUnit.SECONDS), "the first clear() must reach its retries");
+
+                cache.clear(); // finds the set empty while the first call still holds every drained key
+                releaseRetry.countDown();
+                retryingClear.get(10, TimeUnit.SECONDS);
+
+                assertEquals(threshold, backing.size(), "every retry failed and re-recorded its key");
+                verify(logger, times(1)).warn(startsWith(threshold + " off-heap cache keys have orphaned OffHeapStore bytes"));
+            } finally {
+                releaseRetry.countDown();
+                executor.shutdownNow();
+                failOrphanRemovals.set(false);
+                cache.close();
+            }
+
+            assertTrue(backing.isEmpty());
+        }
+
+        /**
+         * Regression: clear() returned as soon as removing a live entry threw (here an Error from the
+         * store, which leaves that entry mapped), without retrying the recorded keys. A clear() that
+         * keeps failing on one entry then never reached their bytes while the cache stayed open.
+         */
+        @Test
+        void clearStillRetriesOrphanedStoreBytesWhenRemovingALiveEntryFails() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final AtomicBoolean failLiveRemoval = new AtomicBoolean();
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class),
+                    newIdentityStoreFailingRemovalOf(backing, key -> failLiveRemoval.get() && "live".equals(key)));
+            try {
+                putCollidingEntries(cache, 16);
+                final CollidingComparableKey orphan = orphanStoreBytes(cache, 1_000, 1).get(0);
+                orphan.allowComparisons(Integer.MAX_VALUE); // its retry can now succeed
+                assertTrue(cache.put("live", new byte[] { 7 }));
+
+                failLiveRemoval.set(true);
+                final StoreError failure = assertThrows(StoreError.class, cache::clear);
+                assertEquals(0, failure.getSuppressed().length, "the retry itself succeeded");
+                assertFalse(backing.containsKey(orphan), "the recorded key must be retried although an entry removal failed");
+                assertTrue(cache.containsKey("live"), "the Error leaves the live entry mapped");
+            } finally {
+                failLiveRemoval.set(false);
+                cache.close();
+            }
+
+            assertTrue(backing.isEmpty());
+        }
+
+        /** An Error from one retried removal is rethrown only after every other recorded key was tried. */
+        @Test
+        void retriedRemovalErrorIsRethrownOnlyAfterEveryRecordedKeyWasTried() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final AtomicReference<Object> failingKey = new AtomicReference<>();
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class),
+                    newIdentityStoreFailingRemovalOf(backing, key -> key == failingKey.get()));
+            try {
+                putCollidingEntries(cache, 16);
+                final List<CollidingComparableKey> orphans = orphanStoreBytes(cache, 1_000, 2);
+                orphans.forEach(key -> key.allowComparisons(Integer.MAX_VALUE));
+                failingKey.set(orphans.get(0));
+
+                assertThrows(StoreError.class, cache::clear);
+                assertFalse(backing.containsKey(orphans.get(1)), "the other recorded key must still be retried");
+                assertTrue(backing.containsKey(orphans.get(0)));
+
+                failingKey.set(null);
+                cache.clear();
+                assertTrue(backing.isEmpty(), "the failed key stays recorded for the next clear()");
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * A key method written in Kotlin (or using sneaky throws) can throw a checked exception
+         * undeclared. If it does so during the cleanup's own lookup, the put must still propagate its
+         * original failure with the checked one suppressed, and the key must still be recorded.
+         */
+        @Test
+        void diskPutKeepsTheOriginalFailureWhenTheCleanupThrowsAnUndeclaredCheckedException() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class), newIdentityStore(backing));
+            try {
+                for (int id = 0; id < 16; id++) {
+                    assertTrue(cache.put(new CollidingComparableKey(id, Integer.MAX_VALUE), new byte[] { 1, 2, 3 }));
+                }
+
+                final CollidingComparableKey key = new CollidingComparableKey(16, Integer.MAX_VALUE);
+                assertFalse(cache.containsKey(key));
+                final int lookupComparisons = key.comparisons();
+                key.allowComparisons(lookupComparisons); // the tree insertion fails with an unchecked exception...
+                key.throwCheckedFrom(lookupComparisons + 2); // ...and the cleanup's lookup with a checked one
+
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 4, 5, 6 }));
+                assertEquals("forced compareTo failure", failure.getMessage());
+                assertEquals(1, failure.getSuppressed().length);
+                assertTrue(failure.getSuppressed()[0] instanceof IOException, String.valueOf(failure.getSuppressed()[0]));
+                assertTrue(backing.containsKey(key));
+
+                key.allowComparisons(Integer.MAX_VALUE);
+                cache.clear();
+                assertTrue(backing.isEmpty(), "the key must have been recorded for clear() to retry");
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * A store whose remove throws during the cleanup: the failure is suppressed on the put's own
+         * failure and the key is recorded, so the next clear() retries the removal instead of the bytes
+         * leaking for good.
+         */
+        @Test
+        void storeRemovalFailureDuringCleanupIsRetriedByTheNextClear() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final AtomicInteger failingRemoves = new AtomicInteger();
+            final OffHeapStore<Object> identityStore = newIdentityStore(backing);
+            final OffHeapStore<Object> store = new OffHeapStore<>() {
+                @Override
+                public boolean put(final Object key, final byte[] value) {
+                    return identityStore.put(key, value);
+                }
+
+                @Override
+                public byte[] get(final Object key) {
+                    return identityStore.get(key);
+                }
+
+                @Override
+                public boolean remove(final Object key) {
+                    if (failingRemoves.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+                        throw new IllegalStateException("store remove failed");
+                    }
+
+                    return identityStore.remove(key);
+                }
+            };
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class), store);
+            try {
+                for (int id = 0; id < 16; id++) {
+                    assertTrue(cache.put(new CollidingComparableKey(id, Integer.MAX_VALUE), new byte[] { 1, 2, 3 }));
+                }
+
+                final CollidingComparableKey key = new CollidingComparableKey(16, Integer.MAX_VALUE);
+                assertFalse(cache.containsKey(key));
+                key.failOnlyComparison(key.comparisons() + 1); // only the tree insertion fails; the cleanup's lookup succeeds
+                failingRemoves.set(1);
+
+                final IllegalStateException failure = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 4, 5, 6 }));
+                assertEquals("forced compareTo failure", failure.getMessage());
+                assertEquals(1, failure.getSuppressed().length);
+                assertEquals("store remove failed", failure.getSuppressed()[0].getMessage());
+                assertTrue(backing.containsKey(key));
+
+                cache.clear();
+                assertTrue(backing.isEmpty(), "clear() must retry the failed removal");
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * A recorded key whose retried removal fails again stays recorded, and clear() does not fail
+         * because of it. close() then removes its bytes directly: with every operation excluded and
+         * every mapping released, no per-key lookup is needed.
+         */
+        @Test
+        void orphanedStoreBytesWhoseRetryFailsAreRemovedByClose() {
+            final Map<Object, byte[]> backing = new IdentityHashMap<>();
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger, newIdentityStore(backing));
+            try {
+                for (int id = 0; id < 16; id++) {
+                    assertTrue(cache.put(new CollidingComparableKey(id, Integer.MAX_VALUE), new byte[] { 1, 2, 3 }));
+                }
+
+                final CollidingComparableKey key = new CollidingComparableKey(16, Integer.MAX_VALUE);
+                assertFalse(cache.containsKey(key));
+                key.allowComparisons(key.comparisons()); // the insertion and the cleanup's lookup both fail
+                assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 4, 5, 6 }));
+                assertTrue(backing.containsKey(key));
+
+                key.failHashCode(true); // every later lookup of this key fails, including clear()'s retry
+                cache.clear();
+                cache.clear();
+                assertEquals(1, backing.size());
+                assertTrue(backing.containsKey(key), "a failed retry must leave the bytes for a later attempt");
+                verify(logger, times(2)).warn(
+                        eq("1 of 1 off-heap cache keys with orphaned OffHeapStore bytes could not be removed; retrying on the next clear() or close()"),
+                        isA(IllegalStateException.class));
+
+                cache.close();
+                assertTrue(backing.isEmpty(), "close() must remove the recorded key's bytes directly");
             } finally {
                 cache.close();
             }
@@ -2729,6 +3289,88 @@ class AbstractOffHeapCacheTest {
         };
     }
 
+    /** Maps {@code count} colliding keys (ids from 0), enough for their shared bin to be a tree. */
+    private static void putCollidingEntries(final AbstractOffHeapCache<Object, byte[]> cache, final int count) {
+        for (int id = 0; id < count; id++) {
+            assertTrue(cache.put(new CollidingComparableKey(id, Integer.MAX_VALUE), new byte[] { 1, 2, 3 }));
+        }
+    }
+
+    /**
+     * Makes {@code count} disk puts whose tree insertion and cleanup lookup both fail, leaving their
+     * store bytes orphaned and their keys recorded. Requires the colliding bin to be a tree already.
+     */
+    private static List<CollidingComparableKey> orphanStoreBytes(final AbstractOffHeapCache<Object, byte[]> cache, final int firstId, final int count) {
+        final List<CollidingComparableKey> keys = new ArrayList<>(count);
+
+        for (int i = 0; i < count; i++) {
+            final CollidingComparableKey key = new CollidingComparableKey(firstId + i, Integer.MAX_VALUE);
+            assertFalse(cache.containsKey(key));
+            key.allowComparisons(key.comparisons()); // every comparison after the put's lookup fails
+            assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 4, 5, 6 }));
+            keys.add(key);
+        }
+
+        return keys;
+    }
+
+    /** {@link #newIdentityStore} whose {@code remove} throws a {@link StoreError} for keys matching {@code failRemoval}. */
+    private static OffHeapStore<Object> newIdentityStoreFailingRemovalOf(final Map<Object, byte[]> backing,
+            final java.util.function.Predicate<Object> failRemoval) {
+        final OffHeapStore<Object> identityStore = newIdentityStore(backing);
+
+        return new OffHeapStore<>() {
+            @Override
+            public boolean put(final Object key, final byte[] value) {
+                return identityStore.put(key, value);
+            }
+
+            @Override
+            public byte[] get(final Object key) {
+                return identityStore.get(key);
+            }
+
+            @Override
+            public boolean remove(final Object key) {
+                if (failRemoval.test(key)) {
+                    throw new StoreError("store remove failed for " + key);
+                }
+
+                return identityStore.remove(key);
+            }
+        };
+    }
+
+    /** An Error a store throws; {@code free} lets it propagate, unlike a store Exception. */
+    private static final class StoreError extends Error {
+        private static final long serialVersionUID = 1L;
+
+        StoreError(final String message) {
+            super(message);
+        }
+    }
+
+    /** A store keyed by identity, so colliding test keys do not exercise the backing map's own hashing. */
+    private static OffHeapStore<Object> newIdentityStore(final Map<Object, byte[]> backing) {
+        return new OffHeapStore<>() {
+            @Override
+            public boolean put(final Object key, final byte[] value) {
+                backing.put(key, value);
+                return true;
+            }
+
+            @Override
+            public byte[] get(final Object key) {
+                return backing.get(key);
+            }
+
+            @Override
+            public boolean remove(final Object key) {
+                return backing.remove(key) != null;
+            }
+        };
+    }
+
     @SuppressWarnings("unchecked")
     private static <K, V> ConcurrentHashMap<K, AbstractOffHeapCache.Entry<V>> entriesOf(final AbstractOffHeapCache<K, V> cache)
             throws ReflectiveOperationException {
@@ -3142,6 +3784,88 @@ class AbstractOffHeapCacheTest {
             }
 
             return 31;
+        }
+    }
+
+    /**
+     * Key whose instances all share one hash (and thus one map bin) and are {@code Comparable}, so the
+     * map compares them when it treeifies or searches that bin. After the allowed number of
+     * comparisons, {@code compareTo} throws; alternatively, only one numbered comparison throws.
+     *
+     * <p>The tests using it depend on JDK 25 {@code ConcurrentHashMap} internals: a bin is treeified
+     * at 8 nodes once the table has 64 bins, and a tree-bin lookup makes the same comparisons as the
+     * search that precedes a compute's remapping function, while the tree insertion after it compares
+     * again. If a later JDK changes that, their precondition assertions ("must eventually be
+     * treeified", "must have been treeified") fail with an explicit message rather than passing vacuously.
+     */
+    private static final class CollidingComparableKey implements Comparable<CollidingComparableKey> {
+        private final int id;
+        private final AtomicInteger comparisons = new AtomicInteger();
+        private volatile int allowedComparisons;
+        private volatile int failingComparison;
+        private volatile boolean failHashCode;
+        private volatile int checkedFromComparison;
+
+        CollidingComparableKey(final int id, final int allowedComparisons) {
+            this.id = id;
+            this.allowedComparisons = allowedComparisons;
+        }
+
+        int comparisons() {
+            return comparisons.get();
+        }
+
+        /** Resets the comparison count and allows {@code count} further comparisons. */
+        void allowComparisons(final int count) {
+            comparisons.set(0);
+            allowedComparisons = count;
+            failingComparison = 0;
+            checkedFromComparison = 0;
+        }
+
+        /** From the {@code number}-th comparison on (counted since the last reset), a failure is an undeclared checked exception. */
+        void throwCheckedFrom(final int number) {
+            checkedFromComparison = number;
+        }
+
+        /** Resets the comparison count and fails only the {@code number}-th comparison from now. */
+        void failOnlyComparison(final int number) {
+            allowComparisons(Integer.MAX_VALUE);
+            failingComparison = number;
+        }
+
+        /** Makes {@code hashCode} throw, so any map lookup of this key fails before it compares. */
+        void failHashCode(final boolean fail) {
+            failHashCode = fail;
+        }
+
+        @Override
+        public int compareTo(final CollidingComparableKey other) {
+            final int number = comparisons.incrementAndGet();
+
+            if (number > allowedComparisons || number == failingComparison) {
+                if (checkedFromComparison > 0 && number >= checkedFromComparison) {
+                    throw AbstractOffHeapCacheTest.<RuntimeException> sneakyThrow(new IOException("forced checked compareTo failure"));
+                }
+
+                throw new IllegalStateException("forced compareTo failure");
+            }
+
+            return Integer.compare(id, other.id);
+        }
+
+        @Override
+        public boolean equals(final Object obj) {
+            return obj instanceof final CollidingComparableKey other && other.id == id;
+        }
+
+        @Override
+        public int hashCode() {
+            if (failHashCode) {
+                throw new IllegalStateException("forced hashCode failure");
+            }
+
+            return 42;
         }
     }
 
