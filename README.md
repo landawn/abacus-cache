@@ -6,8 +6,6 @@
 
 abacus-cache is a Java caching library with a common `Cache<K, V>` API for on-heap, native-memory, and distributed storage. It includes local caches, two off-heap implementations, Caffeine and Ehcache adapters, Memcached and Redis clients, and a Memcached lease utility.
 
-This guide describes the source in this checkout, whose [pom.xml](pom.xml) declares version **2.9.1** and **Java 25**. Dependency versions below match that POM; they do not claim to be the latest published releases. Select a published artifact version when consuming the library from a repository, or build this checkout locally.
-
 ## Contents
 
 - [Installation](#installation)
@@ -48,11 +46,6 @@ The minimum dependencies for `LocalCache` are:
         <artifactId>abacus-cache</artifactId>
         <version>2.9.1</version>
     </dependency>
-    <dependency>
-        <groupId>com.landawn.abacus</groupId>
-        <artifactId>abacus-common</artifactId>
-        <version>8.3.1</version>
-    </dependency>
 </dependencies>
 ```
 
@@ -61,7 +54,6 @@ The minimum dependencies for `LocalCache` are:
 ```groovy
 dependencies {
     implementation 'com.landawn.abacus:abacus-cache:2.9.1'
-    implementation 'com.landawn.abacus:abacus-common:8.3.1'
 }
 ```
 
