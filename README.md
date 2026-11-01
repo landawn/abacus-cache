@@ -62,11 +62,11 @@ Add the relevant backend libraries using normal application dependency scope (`c
 | Feature | Additional coordinates in this checkout | Notes |
 | --- | --- | --- |
 | `LocalCache` | None beyond `abacus-common` | Values remain Java objects on the heap. |
-| Off-heap caches | Optionally `com.esotericsoftware:kryo:5.6.2` | Object serialization uses Kryo when available, otherwise the abacus-common JSON parser; byte arrays and byte buffers use raw-byte paths. |
-| `CaffeineCache` | `com.github.ben-manes.caffeine:caffeine:3.3.0` | Configure the Caffeine instance before wrapping it. |
+| Off-heap caches | Optionally `com.esotericsoftware:kryo:5.7.1` | Object serialization uses Kryo when available, otherwise the abacus-common JSON parser; byte arrays and byte buffers use raw-byte paths. |
+| `CaffeineCache` | `com.github.ben-manes.caffeine:caffeine:3.3.1` | Configure the Caffeine instance before wrapping it. |
 | `Ehcache` | `org.ehcache:ehcache:3.12.0` | The project excludes `org.glassfish.jaxb:jaxb-runtime` for programmatic configuration. XML configuration requires a suitable JAXB setup. |
 | `SpyMemcached`, `MemcachedLock` | `net.spy:spymemcached:2.12.3` | Kryo is optional; without it, SpyMemcached's default transcoder is used. |
-| `JRedis`, `JRedisCluster` | `redis.clients:jedis:8.0.1` and `com.esotericsoftware:kryo:5.6.2` | These clients require Kryo to initialize successfully. |
+| `JRedis`, `JRedisCluster` | `redis.clients:jedis:8.0.2` and `com.esotericsoftware:kryo:5.7.1` | These clients require Kryo to initialize successfully. |
 | Custom disk spillover | Your `OffHeapStore<K>` implementation and its dependencies | RocksDB is a test dependency; no production RocksDB adapter is bundled. |
 
 Lombok is used to build the fluent builders. Applications using the compiled artifact do not need Lombok annotation processing to call them. JVM options for native-memory and serializer access are discussed under [off-heap caches](#off-heap-caches).

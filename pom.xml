@@ -82,7 +82,7 @@
 		<dependency>
 			<groupId>com.esotericsoftware</groupId>
 			<artifactId>kryo</artifactId>
-			<version>5.6.2</version>
+			<version>5.7.1</version>
 			<scope>provided</scope>
 		</dependency>
 
@@ -96,14 +96,14 @@
 		<dependency>
 			<groupId>redis.clients</groupId>
 			<artifactId>jedis</artifactId>
-			<version>8.0.1</version>
+			<version>8.0.2</version>
 			<scope>provided</scope>
 		</dependency>
 
 		<dependency>
 			<groupId>com.github.ben-manes.caffeine</groupId>
 			<artifactId>caffeine</artifactId>
-			<version>3.3.0</version>
+			<version>3.3.1</version>
 			<scope>provided</scope>
 		</dependency>
 
@@ -126,7 +126,7 @@
 		<dependency>
 			<groupId>org.rocksdb</groupId>
 			<artifactId>rocksdbjni</artifactId>
-			<version>10.10.1.1</version>
+			<version>11.8.1</version>
 			<classifier>win64</classifier>
 			<scope>test</scope>
 		</dependency>
@@ -248,7 +248,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
-				<version>3.6.0</version>
+				<version>3.6.1</version>
 				<configuration>
 					<!-- Discover unit classes directly; the optional *TestSuite launcher must not run them a second time. -->
 					<includes>
@@ -264,7 +264,7 @@
 			<plugin>
 				<groupId>org.jacoco</groupId>
 				<artifactId>jacoco-maven-plugin</artifactId>
-				<version>0.8.15</version>
+				<version>0.8.16</version>
 				<executions>
 					<!-- Keep the coverage agent in the fork alongside the native-memory JVM options. -->
 					<execution>
@@ -287,7 +287,7 @@
 			<plugin>
 				<groupId>org.sonatype.central</groupId>
 				<artifactId>central-publishing-maven-plugin</artifactId>
-				<version>0.11.0</version>
+				<version>0.12.0</version>
 				<extensions>true</extensions>
 				<configuration>
 					<publishingServerId>central</publishingServerId>
@@ -319,7 +319,7 @@
 					<plugin>
 						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-failsafe-plugin</artifactId>
-						<version>3.6.0</version>
+						<version>3.6.1</version>
 						<configuration>
 							<includes><include>**/*IT.java</include></includes>
 							<useModulePath>false</useModulePath>
