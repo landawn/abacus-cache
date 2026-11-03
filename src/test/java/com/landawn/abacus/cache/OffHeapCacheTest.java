@@ -800,18 +800,31 @@ class OffHeapCacheTest {
      * pool (here: the key's own prior mapping, turning a failed replacement into data loss that
      * won the race against this test's get() only by timing). A failed put of a value that COULD
      * fit still legitimately schedules a vacate, and the prior mapping may then be evicted.
+     *
+     * <p>Checking only the entry and the eviction count would race the asynchronous pass, so the
+     * test also inspects the vacate bookkeeping: a scheduled pass holds the single-flight gate
+     * until it finishes, and stamps its finish time before releasing the gate.
      */
     @Test
-    void failedMemoryReplacementPreservesExistingEntry() {
+    void failedMemoryReplacementPreservesExistingEntry() throws Exception {
         final OffHeapCache<String, byte[]> c = OffHeapCache.<String, byte[]> builder().capacityInMB(1).evictDelay(0).build();
+        final Field vacatingField = AbstractOffHeapCache.class.getDeclaredField("vacating");
+        vacatingField.setAccessible(true);
+        final Field finishedField = AbstractOffHeapCache.class.getDeclaredField("lastVacateFinishedNanos");
+        finishedField.setAccessible(true);
 
         try {
             final byte[] oldValue = new byte[] { 1, 2, 3, 4 };
 
             assertTrue(c.put("k", oldValue));
+            final long lastVacateFinished = finishedField.getLong(c);
             assertFalse(c.put("k", new byte[2 * 1024 * 1024]));
+
+            // Gate first: a finished pass updates the stamp before it releases the gate.
+            assertFalse(((AtomicBoolean) vacatingField.get(c)).get(), "a doomed oversized put must not schedule a vacate");
+            assertEquals(lastVacateFinished, finishedField.getLong(c), "a doomed oversized put must not schedule a vacate");
             assertArrayEquals(oldValue, c.get("k").orElse(null));
-            assertEquals(0, c.stats().evictionCount(), "a doomed oversized put must not schedule a vacate");
+            assertEquals(0, c.stats().evictionCount());
         } finally {
             c.close();
         }

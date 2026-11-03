@@ -468,6 +468,9 @@ class LocalCacheTest {
             assertEquals(2, stats.getCount());
             assertEquals(1, stats.hitCount());
             assertEquals(1, stats.missCount());
+            // Documented: the default pool tracks no memory, so both report the -1 sentinel.
+            assertEquals(-1L, stats.maxMemory());
+            assertEquals(-1L, stats.dataSize());
         } finally {
             cache.close();
         }

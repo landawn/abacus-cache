@@ -60,7 +60,9 @@ import lombok.experimental.Accessors;
  * <li>Objects are copied, so modifications don't affect cached values</li>
  * <li>{@link java.nio.ByteBuffer} values store bytes from index 0 to the current position. Reads
  *     return independent writable, array-backed heap buffers for all inputs, including direct,
- *     read-only, and file-mapped buffers. Directness, read-only status, and the original file mapping
+ *     read-only, and file-mapped buffers. A returned buffer's position and limit both equal the
+ *     number of stored bytes, mirroring how a put reads its value, so call {@code flip()} before
+ *     reading from it. Directness, read-only status, and the original file mapping
  *     are not preserved. Use {@code ByteBuffer} as the cache's buffer value type;
  *     {@code V = MappedByteBuffer} is unsupported because that subtype is not preserved</li>
  * <li>Requires a JVM flag for Unsafe memory access on JDK 24+ (see below)</li>
@@ -507,7 +509,9 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
      * shutdown hook. If {@link #build()} fails after the native memory was allocated (a
      * {@link RejectedExecutionException} or {@link IllegalStateException}), the store is closed as
      * part of that cleanup; a failure before or during the allocation (an invalid argument or an
-     * {@link OutOfMemoryError}) leaves it open and owned by the caller.
+     * {@link OutOfMemoryError}) leaves it open and owned by the caller. Give a store to one cache
+     * only: calling {@code build()} again on a builder that holds a store hands the same store to a
+     * second owner, which shares its key namespace and closes it independently.
      *
      * <p><b>Default Values:</b>
      * <ul>
@@ -836,7 +840,8 @@ public class OffHeapCache<K, V> extends AbstractOffHeapCache<K, V> {
          *                                  {@code maxBlockSizeInBytes} is non-zero and outside
          *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192),
          *                                  or if {@code vacatingFactor} is NaN or outside [0.0, 1.0]
-         * @throws OutOfMemoryError if native memory allocation fails
+         * @throws OutOfMemoryError if native memory allocation fails, or if the Java heap cannot hold the
+         *                          cache's per-megabyte segment bookkeeping (possible for a very large {@code capacityInMB})
          * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
          * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
          */

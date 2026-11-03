@@ -66,7 +66,9 @@ import lombok.experimental.Accessors;
  * <li>Objects are copied, so modifications don't affect cached values</li>
  * <li>{@link java.nio.ByteBuffer} values store bytes from index 0 to the current position. Reads
  *     return independent writable, array-backed heap buffers for all inputs, including direct,
- *     read-only, and file-mapped buffers. Directness, read-only status, and the original file mapping
+ *     read-only, and file-mapped buffers. A returned buffer's position and limit both equal the
+ *     number of stored bytes, mirroring how a put reads its value, so call {@code flip()} before
+ *     reading from it. Directness, read-only status, and the original file mapping
  *     are not preserved. Use {@code ByteBuffer} as the cache's buffer value type;
  *     {@code V = MappedByteBuffer} is unsupported because that subtype is not preserved</li>
  * <li>Memory is allocated during construction and normally retained for the application lifetime;
@@ -312,9 +314,12 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * <p>The memory is allocated from the native heap and is not managed by the Java garbage collector.
      * This reduces GC pressure but requires explicit release via {@link #deallocate()} to avoid leaks.
      *
-     * <p><b>Construction cost:</b> {@link Arena#allocate(long)} returns zero-initialized memory.
-     * Allocation latency and when physical pages become resident are operating-system dependent,
-     * so applications should measure construction and resident-memory behavior for their platform.
+     * <p><b>Construction cost:</b> {@link Arena#allocate(long)} returns zero-initialized memory: the
+     * JDK writes zeros over the entire region before this method returns. Construction time therefore
+     * grows linearly with the capacity, and every page of the region is touched up front, which
+     * normally makes the whole capacity resident in physical memory immediately. {@link OffHeapCache}
+     * leaves its region uninitialized instead, so its untouched pages typically become resident only
+     * as slots are first written.
      *
      * @param capacityInBytes the number of bytes to allocate. Must be positive. Through normal
      *                        construction this is always a multiple of {@code SEGMENT_SIZE} (1,048,576 bytes).
@@ -512,7 +517,9 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
      * shutdown hook. If {@link #build()} fails after the native memory was allocated (a
      * {@link RejectedExecutionException} or {@link IllegalStateException}), the store is closed as
      * part of that cleanup; a failure before or during the allocation (an invalid argument or an
-     * {@link OutOfMemoryError}) leaves it open and owned by the caller.
+     * {@link OutOfMemoryError}) leaves it open and owned by the caller. Give a store to one cache
+     * only: calling {@code build()} again on a builder that holds a store hands the same store to a
+     * second owner, which shares its key namespace and closes it independently.
      *
      * <p><b>Default Values:</b>
      * <ul>
@@ -791,7 +798,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          * If {@code maxBlockSizeInBytes} is {@code 0}, the default block size (8192) is applied.
          *
          * <p><b>Memory Management:</b>
-         * Calling this method immediately allocates native memory using the Foreign Memory API.
+         * Calling this method immediately allocates native memory using the Foreign Memory API and
+         * zero-fills all of it (see the construction-cost note on {@link ForeignMemoryOffHeapCache#allocate(long)}).
          * The cache registers a JVM shutdown hook for application-lifetime cleanup; call
          * {@link ForeignMemoryOffHeapCache#close()} only to release it deliberately before JVM shutdown.
          *
@@ -831,7 +839,8 @@ public class ForeignMemoryOffHeapCache<K, V> extends AbstractOffHeapCache<K, V> 
          *                                  {@code maxBlockSizeInBytes} is non-zero and outside
          *                                  [1024, 1048576] (a value of 0 is replaced with the default 8192),
          *                                  or if {@code vacatingFactor} is NaN or outside [0.0, 1.0]
-         * @throws OutOfMemoryError if native memory allocation fails
+         * @throws OutOfMemoryError if native memory allocation fails, or if the Java heap cannot hold the
+         *                          cache's per-megabyte segment bookkeeping (possible for a very large {@code capacityInMB})
          * @throws RejectedExecutionException if {@code evictDelay} is positive and the maintenance scheduler rejects its task
          * @throws IllegalStateException if the JVM is already shutting down when the cache registers its shutdown hook
          */

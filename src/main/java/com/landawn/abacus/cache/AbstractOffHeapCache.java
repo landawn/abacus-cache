@@ -71,10 +71,11 @@ import com.landawn.abacus.util.function.TriPredicate;
  * of the smallest sufficient size class; a larger value is split into {@code maxBlockSize}-sized
  * chunks, each in its own slot (the final, possibly smaller chunk uses the smallest sufficient
  * class). A segment whose slots are all freed is reclaimed &mdash; by an allocation that finds no
- * free segment, the periodic maintenance pass, a vacate pass, or {@link #clear()} &mdash; and can
- * then be re-dedicated to a different slot size. A value that could not be placed even in an
- * otherwise empty region &mdash; because its serialized form, or the whole segments its
- * slot-rounded chunks require, exceed the capacity &mdash; never attempts in-memory placement.
+ * free segment, a put or promotion that gives back slots it could not use, the periodic
+ * maintenance pass, a vacate pass, or {@link #clear()} &mdash; and can then be re-dedicated to a
+ * different slot size. A value that could not be placed even in an otherwise empty region &mdash;
+ * because its serialized form, or the whole segments its slot-rounded chunks require, exceed the
+ * capacity &mdash; never attempts in-memory placement.
  *
  * <p><b>Concurrency.</b> Four mechanisms, with the lock order map bin &rarr; entry monitor
  * &rarr; allocator lock (no code path acquires them in any other order):
@@ -118,7 +119,8 @@ import com.landawn.abacus.util.function.TriPredicate;
  * <p><b>Value handling.</b> {@code byte[]} values are stored raw (exactly {@code array.length}
  * bytes); {@link ByteBuffer} values store the bytes from index 0 up to the current position
  * (position, limit, and mark are left untouched). All buffer inputs, including direct, read-only,
- * and file-mapped buffers, read back as independent writable, array-backed heap buffers. Directness,
+ * and file-mapped buffers, read back as independent writable, array-backed heap buffers whose position
+ * and limit both equal the number of stored bytes, so call {@code flip()} before reading. Directness,
  * read-only status, and the original file mapping are not preserved. Use {@code ByteBuffer} as the
  * cache's buffer value type; {@code V = MappedByteBuffer} is unsupported because the
  * {@link java.nio.MappedByteBuffer} subtype is not preserved. All other types go through the configured
@@ -784,12 +786,14 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      *         backing-store write throws an unchecked exception, or if the key's {@code hashCode},
      *         {@code equals}, or {@code compareTo} (or a colliding key's {@code compareTo}) throws one
      *         while the value is being mapped
+     * @throws StackOverflowError if the default Kryo serializer encounters a cycle made only of
+     *         collections, maps, or arrays in {@code value}; the cache is left unchanged
      * @throws RejectedExecutionException if the put fails under memory pressure and the shared
      *         executor rejects the vacate task
      */
     @Override
     public boolean put(final K key, final V value, final long liveTime, final long maxIdleTime)
-            throws IllegalStateException, IllegalArgumentException, RuntimeException, RejectedExecutionException {
+            throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError, RejectedExecutionException {
         lifecycleLock.readLock().lock();
         try {
             assertNotClosed();
@@ -875,8 +879,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                         // slots either. Rethrown afterwards, so nothing is swallowed.
                         if (!installed[0]) {
                             // A throwing key hashCode/equals aborts the compute before the lambda
-                            // installs the entry; release its freshly allocated slots.
-                            discardUninstalledMemoryEntry(entry);
+                            // installs the entry; release its freshly allocated slots. As in
+                            // maybePromoteToMemory, a cleanup failure is attached, never substituted.
+                            suppressCleanupFailure(e, () -> discardUninstalledMemoryEntry(entry));
                         } else {
                             final boolean[] stored = { false };
                             suppressCleanupFailure(e, () -> stored[0] = discardIfUnlinked(key, entry));
@@ -1083,7 +1088,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Returns whether the cache contains a live (non-expired) mapping for the specified key.
      * This is a read-only probe: an expired entry encountered here is reported as absent but is
-     * left for the maintenance pass or the next {@code get} to remove.
+     * left for the maintenance pass or the next {@code get} to remove. Like
+     * {@link #getOrNull(Object)}, it can also report {@code false} when the entry it finds is being
+     * replaced concurrently (by a same-key put or a promotion back into memory), even though the key
+     * stays mapped throughout.
      *
      * @param key the key to test; must not be {@code null}
      * @return {@code true} if a live mapping exists
@@ -1651,14 +1659,37 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
     }
 
-    /** Removes and frees every expired entry. Called by the periodic maintenance pass. */
+    /**
+     * Removes and frees every expired entry. Called by the periodic maintenance pass. An entry whose
+     * removal fails (a throwing key method, or an {@link Error} from the store's {@code remove}) stays
+     * in place for the next pass; the sweep goes on with the remaining entries and reports such
+     * failures by one summary warning.
+     */
     private void sweepExpiredEntries() {
+        Throwable firstFailure = null;
+        int failedCount = 0;
+
         for (final Map.Entry<K, Entry<V>> mapEntry : entries.entrySet()) {
             final Entry<V> entry = mapEntry.getValue();
 
             if (!entry.freed && entry.activityPrint.isExpired()) {
-                removeIfCurrent(mapEntry.getKey(), entry, FreeCause.EXPIRED);
+                try {
+                    removeIfCurrent(mapEntry.getKey(), entry, FreeCause.EXPIRED);
+                } catch (final Throwable e) {
+                    // Throwable, as in runMaintenance. Stopping here would let one entry that keeps
+                    // failing keep every entry after it (in the map's stable iteration order) from
+                    // ever being swept, and skip this pass's segment reclamation as well.
+                    failedCount++;
+
+                    if (firstFailure == null) {
+                        firstFailure = e;
+                    }
+                }
             }
+        }
+
+        if (firstFailure != null) {
+            logger.warn(failedCount + " expired off-heap cache entries could not be removed; the next maintenance pass will retry", firstFailure);
         }
     }
 
@@ -1690,8 +1721,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
                 } catch (final Throwable e) {
                     // The task's future is never read; without this catch a failed pass would
                     // abort silently. Throwable, as in runMaintenance: an Error or an undeclared
-                    // checked exception from a key must be logged too. The next put under
-                    // pressure schedules a fresh pass.
+                    // checked exception must be logged too (a victim's own removal failure is
+                    // already handled per victim). The next put under pressure schedules a fresh pass.
                     logger.warn("Off-heap cache vacate pass failed; a later put under memory pressure will retry", e);
                 } finally {
                     lifecycleLock.readLock().unlock();
@@ -1709,7 +1740,9 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
     /**
      * Evicts the least-recently-accessed ~{@code vacatingFactor} of memory-resident entries.
      * Disk-backed entries are not candidates: evicting them frees no native memory, which is the
-     * only pressure a vacate exists to relieve.
+     * only pressure a vacate exists to relieve. A victim whose removal fails (a throwing key method)
+     * is skipped, so the other victims are still evicted; such failures are reported by one summary
+     * warning.
      */
     private void evictLeastRecentlyAccessed() {
         // Each candidate carries a frozen copy of its access time: sorting on the live (volatile,
@@ -1732,10 +1765,31 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         candidates.sort(Map.Entry.comparingByKey());
 
         final int evictTargetCount = evictTargetCountOf(candidates.size());
+        Throwable firstFailure = null;
+        int failedCount = 0;
 
         for (int i = 0; i < evictTargetCount; i++) {
             final Map.Entry<K, Entry<V>> victim = candidates.get(i).getValue();
-            removeIfCurrent(victim.getKey(), victim.getValue(), FreeCause.EVICTED);
+
+            try {
+                removeIfCurrent(victim.getKey(), victim.getValue(), FreeCause.EVICTED);
+            } catch (final Throwable e) {
+                // Throwable, as in the vacate task. A victim that cannot be removed is never accessed
+                // again (its lookups fail too), so it stays the least recently accessed entry: stopping
+                // here would make every later pass fail at the same victim without freeing anything.
+                failedCount++;
+
+                if (firstFailure == null) {
+                    firstFailure = e;
+                }
+            }
+        }
+
+        if (firstFailure != null) {
+            logger.warn(
+                    failedCount + " of " + evictTargetCount
+                            + " off-heap cache entries selected by the vacate pass could not be evicted; a later put under memory pressure will retry",
+                    firstFailure);
         }
     }
 
@@ -2078,8 +2132,10 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             // matching the disk path, whose clock starts only after its store write completes.
             copyToAllocatedSlots(size, slots, bytes);
             return new Entry<>(type, size, liveTime, maxIdleTime, slots);
-        } catch (final RuntimeException | Error e) {
-            discardUninstalledSlots(slots);
+        } catch (final Throwable e) {
+            // Throwable, as in doPut: a copy hook can throw a checked exception undeclared, which must
+            // not strand the slots either. A cleanup failure must not replace the copy failure.
+            suppressCleanupFailure(e, () -> discardUninstalledSlots(slots));
             throw e;
         }
     }

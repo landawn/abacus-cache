@@ -77,6 +77,30 @@ class OffHeapCacheContractTest {
         }
     }
 
+    /**
+     * The copy hooks take zero-based array indices on both sides (each backend adds any object
+     * header offset itself) and absolute native addresses; the region's last byte is addressable.
+     * Distinct source and destination indices expose an offset applied on the wrong side.
+     */
+    @ParameterizedTest
+    @EnumSource(OffHeapBackend.class)
+    void copyHooksApplyArrayIndicesAndNativeAddressesUpToTheRegionEnd(final OffHeapBackend backend) {
+        final AbstractOffHeapCache<String, byte[]> cache = backend.create(1, 0);
+        try {
+            final long lastThreeBytes = cache.baseAddress + cache.capacityInBytes - 3;
+            cache.copyToMemory(lastThreeBytes, new byte[] { 1, 2, 3, 4, 5 }, 2, 3);
+
+            final byte[] read = new byte[6];
+            cache.copyFromMemory(lastThreeBytes, read, 1, 3);
+            assertArrayEquals(new byte[] { 0, 3, 4, 5, 0, 0 }, read);
+
+            cache.copyFromMemory(lastThreeBytes + 1, read, 4, 2);
+            assertArrayEquals(new byte[] { 0, 3, 4, 5, 4, 5 }, read);
+        } finally {
+            cache.close();
+        }
+    }
+
     // Removals
 
     @ParameterizedTest

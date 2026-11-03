@@ -121,7 +121,8 @@ public interface DistributedCacheClient<T> {
      * }</pre>
      *
      * @param key the cache key, must not be {@code null}
-     * @return the cached value, or {@code null} if not found, expired, or evicted
+     * @return the cached value, or {@code null} if not found, expired, evicted, or stored as {@code null}
+     *         (where the implementation supports {@code null} values)
      * @throws IllegalStateException if this client has been disconnected or is being disconnected
      * @throws IllegalArgumentException if {@code key} is {@code null}, contains an unpaired UTF-16 surrogate,
      *         or violates an implementation-specific key restriction

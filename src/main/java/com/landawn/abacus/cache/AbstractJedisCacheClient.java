@@ -15,9 +15,13 @@
 package com.landawn.abacus.cache;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +33,6 @@ import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
 import com.landawn.abacus.util.Charsets;
-import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.N;
 
 import redis.clients.jedis.DefaultJedisClientConfig;
@@ -91,7 +94,11 @@ import redis.clients.jedis.params.SetParams;
  * {@link InterruptedException} in a {@link JedisException} without restoring the thread's interrupt
  * status. Every command of this client restores that status before the exception propagates, so
  * the interrupt is not lost and callers such as {@link DistributedCache} can tell the failure from
- * a backend failure. A Redis socket read itself is not interruptible.
+ * a backend failure. One gap is internal to Jedis: when a cluster node's interrupted pool wait is
+ * followed by a successful attempt on another node (the random-node fallback or a slot-cache
+ * refresh), Jedis discards that failure, and the command completes with the interrupt lost. A
+ * socket read on a platform thread is not interruptible; on a virtual thread, an interrupt closes
+ * the connection and the command fails with the interrupt status still set.
  *
  * @param <T> the type of objects to be cached
  * @see JRedis
@@ -563,10 +570,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     @Override
     public long incr(final String key, final long delta) throws IllegalStateException, IllegalArgumentException, JedisException {
         assertNotShutdown();
-        checkUtf8Key(key);
-        N.checkArgNotNegative(delta, cs.delta);
 
         final byte[] keyBytes = getKeyBytes(key);
+        N.checkArgNotNegative(delta, cs.delta);
 
         return runCommand(() -> clientFor(keyBytes).incrBy(keyBytes, delta));
     }
@@ -647,10 +653,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     @Override
     public long decr(final String key, final long delta) throws IllegalStateException, IllegalArgumentException, JedisException {
         assertNotShutdown();
-        checkUtf8Key(key);
-        N.checkArgNotNegative(delta, cs.delta);
 
         final byte[] keyBytes = getKeyBytes(key);
+        N.checkArgNotNegative(delta, cs.delta);
 
         return runCommand(() -> clientFor(keyBytes).decrBy(keyBytes, delta));
     }
@@ -724,7 +729,9 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     /**
      * Runs one Jedis command, restoring the calling thread's interrupt status if Jedis consumed it
      * (see {@link #restoreInterruptIfConsumed(RuntimeException)}). Concrete topology-specific
-     * operations such as {@code flushAll()} route their commands through this hook as well.
+     * operations route their commands through this hook as well, or, when they must continue past a
+     * failure (as {@code JRedis.flushAll()} does across shards), call
+     * {@code restoreInterruptIfConsumed} directly.
      *
      * @param <R> the command's result type
      * @param command the command to run on the calling thread
@@ -741,14 +748,16 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
     }
 
     /**
-     * Fix: Jedis turns an interrupted wait into a {@link JedisException} without restoring the
+     * Jedis turns an interrupted wait into a {@link JedisException} without restoring the
      * interrupt status ({@code Pool.getResource} for an exhausted connection pool,
      * {@code ClusterCommandExecutor.sleep} for a cluster retry backoff). Because the
      * {@link InterruptedException} was thrown, and its status cleared, on the calling thread itself,
      * re-assert it here; otherwise a cancelled task keeps running, and {@link DistributedCache}'s
-     * circuit breaker counts the caller's interrupt as a backend failure. A cluster broadcast
-     * ({@code FLUSHALL}) reports per-node failures as {@link JedisBroadcastException} replies rather
-     * than causes, so those are inspected too.
+     * circuit breaker counts the caller's interrupt as a backend failure. Jedis does not always
+     * report that wait as a cause: a cluster broadcast ({@code FLUSHALL}) reports per-node failures
+     * as {@link JedisBroadcastException} replies, and the cluster's random-node fallback
+     * ({@code ClusterConnectionProvider.getConnection()}) attaches a node's failure to its
+     * "No reachable node" exception as a suppressed exception. Both are inspected too.
      *
      * @param e a failure thrown by a Jedis command on the calling thread
      */
@@ -758,11 +767,50 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
         }
     }
 
-    private static boolean carriesInterrupt(final Throwable e) {
-        return ExceptionUtil
-                .findCause(e, t -> t instanceof InterruptedException || (t instanceof final JedisBroadcastException broadcast
-                        && broadcast.getReplies().values().stream().anyMatch(reply -> reply instanceof final Throwable failure && carriesInterrupt(failure))))
-                .isPresent();
+    /**
+     * Searches the whole failure graph (causes, suppressed exceptions, and broadcast replies) for an
+     * {@link InterruptedException}. Iterative, with identity-based tracking, so a graph that refers
+     * back to itself is inspected once rather than recursed into until the stack overflows.
+     *
+     * @param failure the failure to inspect
+     * @return {@code true} if an {@link InterruptedException} is reachable from {@code failure}
+     */
+    private static boolean carriesInterrupt(final Throwable failure) {
+        final Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        final Deque<Throwable> pending = new ArrayDeque<>();
+        pending.push(failure);
+
+        while (!pending.isEmpty()) {
+            final Throwable t = pending.pop();
+
+            if (!visited.add(t)) {
+                continue;
+            }
+
+            if (t instanceof InterruptedException) {
+                return true;
+            }
+
+            final Throwable cause = t.getCause();
+
+            if (cause != null) {
+                pending.push(cause);
+            }
+
+            for (final Throwable suppressed : t.getSuppressed()) {
+                pending.push(suppressed);
+            }
+
+            if (t instanceof final JedisBroadcastException broadcast) {
+                for (final Object reply : broadcast.getReplies().values()) {
+                    if (reply instanceof final Throwable replyFailure) {
+                        pending.push(replyFailure);
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

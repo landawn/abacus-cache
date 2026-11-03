@@ -204,6 +204,37 @@ class MemcachedLockTest {
     }
 
     /**
+     * Acquisition, unlike release, does not clear the interrupt status: spymemcached refuses the add before
+     * sending it, so the caller gets a failure without a lock, and the status stays set for its own handling.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void acquisitionOnAnInterruptedThreadFailsWithoutClearingTheStatus() throws Exception {
+        final SpyMemcached<String> delegate = mock(SpyMemcached.class);
+        final List<Boolean> interruptedDuringAdd = new ArrayList<>();
+        when(delegate.add("key", "holder", 1_000L)).thenAnswer(invocation -> {
+            interruptedDuringAdd.add(Thread.currentThread().isInterrupted());
+            try {
+                new CountDownLatch(0).await(1, TimeUnit.SECONDS);
+            } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting to add store", e);
+            }
+            return true;
+        });
+
+        try (MemcachedLock<String, String> lock = lockWithDelegate(delegate)) {
+            Thread.currentThread().interrupt();
+            final RuntimeException failure = assertThrows(RuntimeException.class, () -> lock.tryLock("key", "holder", 1_000L));
+            assertTrue(failure.getCause() instanceof IllegalStateException);
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertEquals(List.of(true), interruptedDuringAdd);
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    /**
      * The interrupt status is cleared only for the delete itself and restored when the release fails:
      * {@code tryUnlock} throws and {@code unlockQuietly} returns {@code false}, both with the status set.
      */
@@ -546,8 +577,8 @@ class MemcachedLockTest {
 
     /**
      * A minimal subclass that namespaces keys, used to verify {@link MemcachedLock#toKey(Object)} can be
-     * overridden. It connects to the real server (its constructor builds a {@code SpyMemcached}); the
-     * test only exercises {@link #testToKey(Object)}, which is a pure transformation.
+     * overridden. Its constructor builds a {@code SpyMemcached}, which the construction mock intercepts;
+     * the test only exercises {@link #testToKey(Object)}, which is a pure transformation.
      */
     static final class NamespacedLock<V> extends MemcachedLock<String, V> {
         NamespacedLock(final String url) {

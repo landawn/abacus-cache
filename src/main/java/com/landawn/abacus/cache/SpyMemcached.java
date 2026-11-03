@@ -220,8 +220,12 @@ interface LegacySpyMemcachedAsyncApi<T> {
  * invoked while the calling thread's interrupt status is already set fails with
  * {@link IllegalStateException} before anything is enqueued, even when the queue has room; the
  * interrupt status is preserved, and this wrapper gives that exception an
- * {@link InterruptedException} cause so callers can tell it from a backend failure. An interrupt during a synchronous method's response wait cancels
- * the operation, restores the interrupt status, and surfaces as a {@link RuntimeException}.
+ * {@link InterruptedException} cause so callers can tell it from a backend failure. An interrupt
+ * during a synchronous method's response wait cancels the operation, restores the interrupt status,
+ * and surfaces as a {@link RuntimeException}; a response wait that times out cancels it the same
+ * way. Cancellation only stops a request that has not been written to its server yet; one already
+ * sent may still take effect, so after such a failure the outcome of a write, counter update, or
+ * flush is unknown.
  *
  * <p><b>Key validation:</b> every key must be non-null and contain well-formed UTF-16; unpaired
  * surrogates are rejected before encoding because UTF-8 replacement would alias a different key.
@@ -2051,6 +2055,12 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * flush completes or times out. Use with extreme caution in production environments
      * as this is a destructive operation that cannot be undone.
      *
+     * <p><b>Partial flushes:</b> the command is enqueued to each server in turn, so if enqueueing
+     * fails for one server of a multi-server configuration, servers enqueued before it can still be
+     * flushed although this method throws. If the response wait times out or is interrupted, the
+     * flush is cancelled, which stops it only on servers it has not been sent to yet. After either
+     * failure, some servers may have been flushed and others not.
+     *
      * <p><b>Thread Safety:</b> This method is thread-safe. A server that accepts the command makes
      * the flush visible to all of its clients immediately; the invalidated data cannot be recovered.
      *
@@ -2107,6 +2117,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * shared result flag, so the last callback wins. In a multi-server configuration, {@code true}
      * means the final response was successful; it does not prove that every server accepted the
      * flush. A {@code false} result likewise reflects the final response rather than a full tally.
+     * As described for {@link #flushAll()}, an enqueue failure can leave earlier servers flushed, and
+     * cancelling the returned future stops the flush only on servers it has not been sent to yet.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients
      * once the flush completes.
@@ -2126,7 +2138,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *     boolean flushedInTime = timedFlush.get(2000, TimeUnit.MILLISECONDS); // waits up to 2s
      *     System.out.println("Flush completed: " + flushedInTime); // final callback's result
      * } catch (TimeoutException e) {
-     *     timedFlush.cancel(true); // abandon the wait if confirmation did not arrive in time
+     *     timedFlush.cancel(true); // stops the flush on servers it was not sent to yet; others stay flushed
      *     logger.warn("Flush operation timed out"); // emitted if the result was not ready within 2s
      * }
      * }</pre>
@@ -2151,6 +2163,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * to seconds for Memcached (rounded up if not exact).
      * In a multi-server configuration, the boolean is spymemcached's last-callback-wins aggregate
      * and does not prove that every server accepted the request (see {@link #asyncFlushAll()}).
+     * The partial-flush caveats of {@link #flushAll()} apply to the scheduling request as well.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients
      * after the delay period expires.
@@ -2204,7 +2217,8 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * full. The flush will occur on each server that accepted it after the delay expires. This is a
      * destructive operation that removes all keys from those servers and cannot be undone. The
      * delay is converted from milliseconds to seconds for Memcached (rounded up if not exact).
-     * The returned boolean has the same last-callback-wins limitation as {@link #asyncFlushAll()}.
+     * The returned boolean has the same last-callback-wins limitation, and enqueue failure or
+     * cancellation the same partial effect, as {@link #asyncFlushAll()}.
      *
      * <p><b>Thread Safety:</b> This method is thread-safe but its effects are visible immediately to all clients
      * after the delay period expires.
@@ -2225,7 +2239,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      *     boolean scheduledInTime = timedSchedule.get(1000, TimeUnit.MILLISECONDS); // waits up to 1s
      *     System.out.println("Flush scheduled: " + scheduledInTime);                // final callback's result
      * } catch (TimeoutException e) {
-     *     timedSchedule.cancel(true);              // abandon the wait if confirmation did not arrive in time
+     *     timedSchedule.cancel(true);              // stops the request only on servers it was not sent to yet
      *     logger.warn("Failed to schedule flush"); // emitted if confirmation was not received within 1s
      * }
      * }</pre>
@@ -2348,9 +2362,11 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * @throws IllegalArgumentException if {@code timeout} is negative
      * @throws RuntimeException if the calling thread is interrupted during the graceful wait, or if the
      *         no-op operations used for that wait cannot be enqueued ({@link IllegalStateException});
-     *         the client is shut down in either case. If the underlying cause is
-     *         {@link InterruptedException}, this method restores the calling thread's interrupt status
-     *         before propagating the exception.
+     *         the client is shut down in either case. With a positive timeout, a caller whose
+     *         interrupt status is already set is refused at that enqueue step, and, as for cache
+     *         operations, the refusal carries an {@link InterruptedException} cause. Whenever the cause
+     *         is {@link InterruptedException}, the calling thread's interrupt status is set when this
+     *         method throws.
      */
     public synchronized void disconnect(final long timeout) throws IllegalArgumentException, RuntimeException {
         N.checkArgNotNegative(timeout, cs.timeout);
@@ -2361,7 +2377,10 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
             isShutdown = true;
 
             try {
-                mc.shutdown(timeout, TimeUnit.MILLISECONDS);
+                // The graceful wait first enqueues a no-op per server through the same addOp as a
+                // cache operation, so an interrupted caller gets the same cause-less refusal; route
+                // it through enqueue so that refusal is tagged like every other dispatch.
+                enqueue(() -> mc.shutdown(timeout, TimeUnit.MILLISECONDS));
             } catch (final RuntimeException e) {
                 // spymemcached wraps InterruptedException from its graceful queue wait without
                 // restoring the flag. Preserve cooperative cancellation just as resultOf does.

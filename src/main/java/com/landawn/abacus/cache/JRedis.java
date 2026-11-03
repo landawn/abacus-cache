@@ -59,12 +59,14 @@ import redis.clients.jedis.RedisClient;
  * {@link #disconnect()} once during application shutdown rather than around each cache use.
  *
  * <p><b>Connection pooling:</b> Each shard's {@link RedisClient} uses the default connection pool
- * configuration (Apache Commons Pool). Each shard's pool object (and its idle-eviction task) is
- * created eagerly during construction. Because no RESP protocol version is configured, Jedis also
- * probes each shard once while building its client: it borrows one pooled connection (performing the
- * protocol handshake) and returns it to the pool, so constructing a {@code JRedis} contacts every
- * server, one shard at a time. A failed probe is ignored: an unreachable or unresponsive shard delays
- * construction (by up to the connect timeout plus the socket timeout) but does not fail it. Address
+ * configuration (Apache Commons Pool): at most 8 connections per shard, and a command that finds
+ * all of them in use waits, with no time limit, until one is returned. Each shard's pool object
+ * (and its idle-eviction task) is created eagerly during construction. Because no RESP protocol
+ * version is configured, Jedis also probes each shard once while building its client: it borrows
+ * one pooled connection (performing the protocol handshake) and returns it to the pool, so
+ * constructing a {@code JRedis} contacts every server, one shard at a time. A failed probe is
+ * ignored: an unreachable or unresponsive shard delays construction (by up to the connect timeout
+ * plus the socket timeout) but does not fail it. Address
  * parsing (malformed {@code host:port}, invalid port) fails during construction with
  * {@link IllegalArgumentException}; an unresolvable hostname, however, does NOT fail construction:
  * its probe fails at once, without a connection attempt or a timeout, and, like an unreachable
@@ -149,8 +151,9 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
      * shard. Data is distributed across all specified Redis instances using client-side sharding.
      *
      * <p>The timeout bounds individual connection and socket read waits. It is not an end-to-end
-     * deadline: waiting for a pooled connection and serialization add time, and socket writes are
-     * not bounded by a socket read timeout.
+     * deadline: waiting for a pooled connection (unbounded while all of the shard's connections are
+     * in use; see the class documentation) and serialization add time, and socket writes are not
+     * bounded by a socket read timeout.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

@@ -246,6 +246,41 @@ class ForeignMemoryOffHeapCacheTest {
     }
 
     /**
+     * Documented copy-hook contract: unlike the {@code Unsafe} variant, every copy is bounds-checked
+     * against the arena's segment and the heap array, failing with {@link IndexOutOfBoundsException}
+     * without touching memory, and any access after {@code close()} fails with
+     * {@link IllegalStateException} instead of reading released memory.
+     */
+    @Test
+    void copyHooksRejectOutOfRangeAccessAndUseAfterClose() {
+        final ForeignMemoryOffHeapCache<String, byte[]> cache = ForeignMemoryOffHeapCache.<String, byte[]> builder().capacityInMB(1).build();
+        final long base = cache.baseAddress;
+        final long end = base + cache.capacityInBytes;
+
+        try {
+            cache.copyToMemory(end - 1, new byte[] { 7 }, 0, 1);
+
+            assertThrows(IndexOutOfBoundsException.class, () -> cache.copyToMemory(end - 1, new byte[2], 0, 2));
+            assertThrows(IndexOutOfBoundsException.class, () -> cache.copyFromMemory(end - 1, new byte[2], 0, 2));
+            assertThrows(IndexOutOfBoundsException.class, () -> cache.copyToMemory(base - 1, new byte[1], 0, 1));
+            assertThrows(IndexOutOfBoundsException.class, () -> cache.copyFromMemory(base - 1, new byte[1], 0, 1));
+            assertThrows(IndexOutOfBoundsException.class, () -> cache.copyToMemory(base, new byte[1], 0, -1));
+            assertThrows(IndexOutOfBoundsException.class, () -> cache.copyFromMemory(base, new byte[1], 0, -1));
+            assertThrows(IndexOutOfBoundsException.class, () -> cache.copyToMemory(base, new byte[1], 1, 1));
+            assertThrows(IndexOutOfBoundsException.class, () -> cache.copyFromMemory(base, new byte[1], -1, 1));
+
+            final byte[] last = new byte[1];
+            cache.copyFromMemory(end - 1, last, 0, 1);
+            assertArrayEquals(new byte[] { 7 }, last, "rejected copies must not have written anything");
+        } finally {
+            cache.close();
+        }
+
+        assertThrows(IllegalStateException.class, () -> cache.copyFromMemory(base, new byte[1], 0, 1));
+        assertThrows(IllegalStateException.class, () -> cache.copyToMemory(base, new byte[1], 0, 1));
+    }
+
+    /**
      * Fills a two-segment region up to its last 64-byte slot: 16384 slots per segment is the largest
      * slot index the 14-bit slot handle encodes, and the final copy ends exactly at the end of the
      * segment. The bounds-checked copy rejects any offset past the region, and distinct per-entry

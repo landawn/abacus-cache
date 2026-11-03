@@ -28,6 +28,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -160,6 +161,32 @@ class KryoTranscoderTest {
             assertNotNull(cd.getData());
             assertTrue(cd.getData().length > 0);
             assertNull(tx.decode(cd));
+        }
+
+        /**
+         * A payload larger than Kryo's internal output buffer reaches the size-limited stream in several
+         * writes, which encode must join in order. Non-uniform content catches misplaced chunks that a
+         * zero-filled array would hide.
+         */
+        @Test
+        void multiWritePayloadsAreJoinedInOrderUpToTheExactLimit() {
+            final KryoParser parser = ParserFactory.createKryoParser();
+            final byte[] bytes = new byte[40_000];
+            new Random(42).nextBytes(bytes);
+            final StringBuilder text = new StringBuilder();
+            for (int i = 0; text.length() < 30_000; i++) {
+                text.append(i).append(',');
+            }
+
+            for (final Object value : List.of(bytes, text.toString())) {
+                final byte[] originalFormat = parser.encode(value);
+                assertTrue(originalFormat.length > 16_384, "must span several Kryo buffer flushes");
+
+                final KryoTranscoder<Object> exactFit = new KryoTranscoder<>(originalFormat.length, parser);
+                assertArrayEquals(originalFormat, exactFit.encode(value).getData());
+                assertArrayEquals(originalFormat, parser.encode(exactFit.decode(exactFit.encode(value))));
+                assertThrows(IllegalArgumentException.class, () -> new KryoTranscoder<>(originalFormat.length - 1, parser).encode(value));
+            }
         }
 
         @Test

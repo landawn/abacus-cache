@@ -1058,7 +1058,21 @@ class CacheFactoryTest {
             assertThrows(NoClassDefFoundError.class, () -> CacheFactory.createCache(spec));
         }
 
-        // Validation: null/empty provider string
+        /**
+         * Pins the documented {@code @throws RuntimeException} wording: unlike the custom class's own
+         * static-initializer failure, an {@link Error} thrown by the constructor body is wrapped in a
+         * plain {@code RuntimeException} (by the reflective helpers) on both the parameterized and the
+         * no-argument construction path, with the original Error as the cause.
+         */
+        @Test
+        void customClassConstructorErrorIsWrappedInRuntimeException() {
+            for (final String spec : new String[] { ErrorThrowingProviderCache.class.getName() + "(localhost:9999)",
+                    ErrorThrowingProviderCache.class.getName() + "()" }) {
+                final RuntimeException failure = assertThrows(RuntimeException.class, () -> CacheFactory.createCache(spec), spec);
+                assertEquals(RuntimeException.class, failure.getClass(), spec);
+                assertSame(ErrorThrowingProviderCache.CONSTRUCTOR_FAILURE, failure.getCause(), spec);
+            }
+        }
 
     }
 
@@ -1099,6 +1113,21 @@ class CacheFactoryTest {
 
         private static Object failInitialization() {
             throw new IllegalStateException("static initializer failure");
+        }
+    }
+
+    /** A concrete custom provider whose constructor body always throws the same {@link Error}. */
+    public static class ErrorThrowingProviderCache<K, V> extends DummyProviderCache<K, V> {
+        static final Error CONSTRUCTOR_FAILURE = new AssertionError("constructor failure");
+
+        public ErrorThrowingProviderCache() {
+            this("");
+        }
+
+        public ErrorThrowingProviderCache(final String serverUrl) {
+            super(serverUrl);
+
+            throw CONSTRUCTOR_FAILURE;
         }
     }
 

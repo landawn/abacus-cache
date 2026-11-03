@@ -209,8 +209,9 @@ public interface Cache<K, V> {
      *         also reject a {@code null} value. The implementation may also reject a key or configured
      *         default expiration that its backend cannot encode
      * @throws RuntimeException if the implementation propagates a backend write, serialization, or cache callback failure
-     * @throws StackOverflowError if a Kryo-backed distributed client encounters a cycle made only of
-     *         collections, maps, or arrays while serializing {@code value}
+     * @throws StackOverflowError if Kryo serialization (used by the Kryo-backed distributed clients and, by
+     *         default, the off-heap caches) encounters a cycle made only of collections, maps, or arrays in
+     *         {@code value}
      * @see #put(Object, Object, long, long)
      * @see #asyncPut(Object, Object)
      */
@@ -267,8 +268,9 @@ public interface Cache<K, V> {
      *         their backend cannot encode (e.g. {@link DistributedCache} with a {@code liveTime} beyond
      *         the client's expiration range)
      * @throws RuntimeException if the implementation propagates a backend write, serialization, or cache callback failure
-     * @throws StackOverflowError if a Kryo-backed distributed client encounters a cycle made only of
-     *         collections, maps, or arrays while serializing {@code value}
+     * @throws StackOverflowError if Kryo serialization (used by the Kryo-backed distributed clients and, by
+     *         default, the off-heap caches) encounters a cycle made only of collections, maps, or arrays in
+     *         {@code value}
      * @see #put(Object, Object)
      * @see #asyncPut(Object, Object, long, long)
      */
@@ -445,9 +447,10 @@ public interface Cache<K, V> {
      * cache.asyncPut("session:abc", session, 3600000, 1800000)
      *      .thenRunAsync(success -> log("Session cached: " + success));
      *
-     * // Short-lived temporary data
+     * // Short-lived temporary data. Inspect the result: a no-argument continuation would
+     * // also run when the put is rejected (the future completes normally with false).
      * cache.asyncPut("temp:data", data, 5000, 0)
-     *      .thenRunAsync(() -> log("Temporary data cached for 5 seconds"));
+     *      .thenRunAsync(stored -> log(stored ? "Temporary data cached for 5 seconds" : "Temporary data rejected"));
      * }</pre>
      *
      * @param key the cache key to store the value under; null-handling is implementation-defined (most implementations reject null)

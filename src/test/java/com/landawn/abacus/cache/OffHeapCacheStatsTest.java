@@ -186,6 +186,13 @@ class OffHeapCacheStatsTest {
 
     // Statistics
 
+    /** Pins the documented {@code MinMaxAvg.toString()} format, including the no-observation case. */
+    @Test
+    void minMaxAvgToStringUsesTheDocumentedFormat() {
+        assertEquals("{min: 5.2, max: 150.8, avg: 45.3}", new MinMaxAvg(5.2, 150.8, 45.3).toString());
+        assertEquals("{min: 0.0, max: 0.0, avg: 0.0}", new MinMaxAvg(0, 0, 0).toString());
+    }
+
     @Test
     void ratesCounterSumDoesNotOverflow() {
         final MinMaxAvg z = new MinMaxAvg(0, 0, 0);

@@ -16,16 +16,18 @@ package com.landawn.abacus.cache;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
 
 import com.esotericsoftware.kryo.KryoException;
 import com.landawn.abacus.exception.UncheckedIOException;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.KryoSerConfig;
 import com.landawn.abacus.parser.ParserFactory;
-import com.landawn.abacus.util.ByteArrayOutputStream;
 import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.N;
-import com.landawn.abacus.util.Objectory;
 
 import net.spy.memcached.CachedData;
 import net.spy.memcached.transcoders.Transcoder;
@@ -134,6 +136,13 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * The default value is {@link CachedData#MAX_SIZE}. Objects whose serialized form
      * exceeds this size will fail to cache and {@link #encode(Object)} will throw
      * {@link IllegalArgumentException}.
+     *
+     * <p>This 20 MB default is larger than memcached's default item size limit of 1 MB (the
+     * server's {@code -I} option, which also counts the key and per-item overhead). A payload
+     * between the two limits passes {@code encode} but is refused by the server with a
+     * {@code SERVER_ERROR}, which spymemcached's text protocol handles as a connection failure: it
+     * reconnects, cancelling the other operations awaiting replies on that connection. To reject
+     * such values locally, use {@link #KryoTranscoder(int)} with a limit below the server's.
      *
      * <p>This constructor is suitable for most use cases where the default size limit
      * is appropriate. For custom size requirements, use {@link #KryoTranscoder(int)}.
@@ -338,15 +347,14 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      */
     @Override
     public CachedData encode(final T o) throws RuntimeException, StackOverflowError, IllegalArgumentException {
-        final ByteArrayOutputStream bytes = Objectory.createByteArrayOutputStream();
-        final SizeLimitedOutputStream output = new SizeLimitedOutputStream(bytes, maxSize);
+        final SizeLimitedOutputStream output = new SizeLimitedOutputStream(maxSize);
 
         try {
             // writeClass=true preserves KryoParser.encode's wire format, while the streaming path
             // stops oversized values before they can grow an unrestricted buffer and a full copy.
             kryoParser.serialize(o, ENCODING_CONFIG, output);
             output.throwIfRejected(); // A custom serializer may have swallowed a rejected write.
-            return new CachedData(0, bytes.toByteArray(), maxSize);
+            return new CachedData(0, output.toByteArray(), maxSize);
         } catch (final RuntimeException e) {
             final IllegalArgumentException sizeFailure = output.sizeFailure;
 
@@ -369,8 +377,6 @@ public class KryoTranscoder<T> implements Transcoder<T> {
             }
 
             throw e;
-        } finally {
-            Objectory.recycle(bytes);
         }
     }
 
@@ -381,34 +387,76 @@ public class KryoTranscoder<T> implements Transcoder<T> {
         return ExceptionUtil.findCause(e, t -> t == cause).isPresent();
     }
 
-    /** Limits writes before the pooled buffer grows; the usual small-entry buffer remains reusable. */
+    /**
+     * Collects the encoded payload, rejecting a write that would exceed {@code maxSize} before copying it.
+     * Kryo hands this stream its whole internal buffer on each flush, so a payload that fits that buffer
+     * (the common case) arrives in one write, whose exact-size copy becomes the payload itself. A larger
+     * payload is kept as one chunk per write and joined once at the end, so nothing is regrown or
+     * recopied. Unlike a pooled {@code ByteArrayOutputStream}, it needs no buffer borrowed from
+     * {@code Objectory} and wiped per entry. (Each encode still borrows a pooled Kryo {@code Output},
+     * under {@code KryoParser}'s own global pool lock, inside {@code KryoParser.serialize}.)
+     */
     private static final class SizeLimitedOutputStream extends OutputStream {
-        private final ByteArrayOutputStream bytes;
         private final int maxSize;
+        private byte[] firstChunk;
+        private List<byte[]> laterChunks;
+        private int size;
         private IllegalArgumentException sizeFailure;
 
-        SizeLimitedOutputStream(final ByteArrayOutputStream bytes, final int maxSize) {
-            this.bytes = bytes;
+        SizeLimitedOutputStream(final int maxSize) {
             this.maxSize = maxSize;
         }
 
         @Override
         public void write(final int value) {
-            checkSize(1);
-            bytes.write(value);
+            write(new byte[] { (byte) value }, 0, 1);
         }
 
         @Override
         public void write(final byte[] data, final int offset, final int length) {
+            Objects.checkFromIndexSize(offset, length, data.length);
             checkSize(length);
-            bytes.write(data, offset, length);
+
+            if (length == 0) {
+                return;
+            }
+
+            final byte[] chunk = Arrays.copyOfRange(data, offset, offset + length);
+
+            if (firstChunk == null) {
+                firstChunk = chunk;
+            } else {
+                if (laterChunks == null) {
+                    laterChunks = new ArrayList<>();
+                }
+
+                laterChunks.add(chunk);
+            }
+
+            size += length;
+        }
+
+        byte[] toByteArray() {
+            if (laterChunks == null) {
+                return firstChunk == null ? N.EMPTY_BYTE_ARRAY : firstChunk;
+            }
+
+            final byte[] payload = Arrays.copyOf(firstChunk, size);
+            int position = firstChunk.length;
+
+            for (final byte[] chunk : laterChunks) {
+                System.arraycopy(chunk, 0, payload, position, chunk.length);
+                position += chunk.length;
+            }
+
+            return payload;
         }
 
         private void checkSize(final int length) {
-            if (sizeFailure == null && length > maxSize - bytes.size()) {
+            if (sizeFailure == null && length > maxSize - size) {
                 // Serialization stops here, so the full size is unknown; report what it reached.
                 sizeFailure = new IllegalArgumentException(
-                        "Encoded data size (at least " + ((long) bytes.size() + length) + " bytes) exceeds maxSize (" + maxSize + " bytes)");
+                        "Encoded data size (at least " + ((long) size + length) + " bytes) exceeds maxSize (" + maxSize + " bytes)");
             }
 
             throwIfRejected();

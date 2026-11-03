@@ -55,6 +55,11 @@ package com.landawn.abacus.cache;
  * <li>Argument validation - the cache always passes non-null, already-validated keys and values, so
  *     implementations need not null-check arguments; behavior on a {@code null} key or value is left
  *     to the implementation.</li>
+ * <li>No callbacks into the cache - the owning cache calls these methods while holding its own
+ *     internal locks (the key's map-bin lock around {@code put} and {@code remove}, the entry's
+ *     monitor around {@code get}, and an exclusive lifecycle lock while the cache closes), so an
+ *     implementation must not call back into that cache. A slow {@code put} or {@code remove} also
+ *     delays concurrent writes to other keys that share the same internal map bin.</li>
  * </ul>
  *
  * <p><b>Usage Examples:</b>

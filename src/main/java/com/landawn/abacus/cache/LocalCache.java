@@ -46,6 +46,10 @@ import com.landawn.abacus.util.N;
  * Replacing an existing key never evicts other entries. A custom pool supplied via
  * {@link #LocalCache(long, long, KeyedObjectPool)} applies its own eviction policy.
  *
+ * <p><b>Clock:</b> each entry's TTL and idle time are tracked with the wall clock
+ * ({@link System#currentTimeMillis()}, via the pool's {@code ActivityPrint}), so stepping the system
+ * clock forward can expire entries early, and stepping it back delays their expiration by the same amount.
+ *
  * <p>Example of an application-wide cache:
  * <pre>{@code
  * // Create cache with 1000 max entries, 60 second eviction delay
@@ -278,7 +282,9 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * if (success) {
      *     System.out.println("Entry cached successfully");   // prints this branch
      * } else {
-     *     System.out.println("Cache is full and cannot accept new entries");   // not reached here (store succeeded)
+     *     // Not reached here. A full default pool evicts older entries to admit a new key, so false
+     *     // means the pool rejected the entry (e.g. it had already expired), not "cache is full".
+     *     System.out.println("Entry rejected by the pool");
      * }
      *
      * // Temporary data with 5 second TTL, no idle timeout
@@ -286,7 +292,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * cache.put("temp:data", tempUser, 5000, 0);     // returns true (maxIdleTime <= 0 means "no idle timeout")
      *
      * // Permanent entry (no TTL or idle timeout, evicted only when cache is full)
-     * cache.put("config:app", configData, 0, 0);     // returns true (both <= 0 means "no expiration")
+     * User admin = new User("Admin");
+     * cache.put("user:admin", admin, 0, 0);          // returns true (both <= 0 means "no expiration")
      *
      * // A null value is rejected, consistent with the other in-memory caches (CaffeineCache, Ehcache, OffHeapCache).
      * cache.put("nullable", (User) null, 1000, 1000);   // throws IllegalArgumentException (value must not be null)
@@ -558,8 +565,10 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * <li><b>hitCount</b> - Number of successful cache hits (entry found and not expired)</li>
      * <li><b>missCount</b> - Number of cache misses (entry not found or expired)</li>
      * <li><b>evictionCount</b> - Number of entries evicted (due to capacity, TTL, or idle timeout)</li>
-     * <li><b>maxMemory</b> - Maximum memory available (implementation-specific)</li>
-     * <li><b>dataSize</b> - Current data size (implementation-specific)</li>
+     * <li><b>maxMemory</b> - The pool's memory limit, or {@code -1} if none is configured
+     *     (always {@code -1} for the default pool)</li>
+     * <li><b>dataSize</b> - The pool's measured data size, or {@code -1} if the pool does not measure
+     *     entries (always {@code -1} for the default pool)</li>
      * </ul>
      *
      * <p><b>Thread Safety:</b> This method is thread-safe and can be called concurrently.

@@ -453,6 +453,17 @@ class AbstractJedisCacheClientTest {
         verify(mockJedis).incrBy(utf8("counter"), 5L);
     }
 
+    /** The key is validated before the delta, so an invalid key is reported even with a negative delta. */
+    @Test
+    void counterKeyIsValidatedBeforeDelta() {
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> cache.incr(null, -1)).getMessage().contains("key"));
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> cache.decr(null, -1)).getMessage().contains("key"));
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> cache.incr("\uD800", -1)).getMessage().contains("surrogate"));
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> cache.decr("\uD800", -1)).getMessage().contains("surrogate"));
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1)).getMessage().contains("delta"));
+        Mockito.verifyNoInteractions(mockJedis);
+    }
+
     @Test
     void incrWithDeltaRejectsNegativeDelta() {
         assertThrows(IllegalArgumentException.class, () -> cache.incr("counter", -1));
@@ -605,6 +616,48 @@ class AbstractJedisCacheClientTest {
 
             AbstractJedisCacheClient.restoreInterruptIfConsumed(interrupted);
             assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    /**
+     * Jedis's cluster random-primary fallback reports a node's failed pool wait only as a suppressed
+     * exception ("No reachable node in cluster."), also when that failure is a broadcast reply.
+     */
+    @Test
+    void interruptReportedOnlyAsASuppressedExceptionIsRestored() {
+        final JedisClusterOperationException noReachableNode = new JedisClusterOperationException("No reachable node in cluster.");
+        noReachableNode.addSuppressed(new JedisException("Could not get a resource from the pool", new InterruptedException()));
+        final JedisBroadcastException broadcast = new JedisBroadcastException();
+        broadcast.addReply(new HostAndPort("10.0.0.1", 7000), noReachableNode);
+
+        for (final RuntimeException failure : List.of(noReachableNode, broadcast)) {
+            Thread.interrupted();
+
+            try {
+                AbstractJedisCacheClient.restoreInterruptIfConsumed(failure);
+                assertTrue(Thread.currentThread().isInterrupted(), String.valueOf(failure));
+            } finally {
+                Thread.interrupted();
+            }
+        }
+    }
+
+    /** A failure graph that refers back to itself must be inspected once, not recursed into forever. */
+    @Test
+    void cyclicFailureGraphWithoutInterruptTerminates() {
+        final JedisBroadcastException broadcast = new JedisBroadcastException();
+        final JedisException reply = new JedisException("node failed", broadcast);
+        broadcast.addReply(new HostAndPort("10.0.0.1", 7000), reply);
+        broadcast.addSuppressed(reply);
+        reply.addSuppressed(broadcast);
+        Thread.interrupted();
+
+        try {
+            AbstractJedisCacheClient.restoreInterruptIfConsumed(broadcast);
+            AbstractJedisCacheClient.restoreInterruptIfConsumed(reply);
+            assertFalse(Thread.currentThread().isInterrupted());
         } finally {
             Thread.interrupted();
         }

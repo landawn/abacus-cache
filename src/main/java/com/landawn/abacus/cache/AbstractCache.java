@@ -41,7 +41,9 @@ import com.landawn.abacus.util.u.Optional;
  *
  * <p>Key features provided:
  * <ul>
- * <li>Asynchronous operation implementations using a shared thread pool.</li>
+ * <li>Asynchronous operation implementations using a shared thread pool. Each one only submits a
+ *     task: argument validation and the closed-state check run inside that task, so their exceptions
+ *     complete the returned future exceptionally instead of being thrown by the call.</li>
  * <li>Default TTL and idle time management.</li>
  * <li>Property bag for custom configuration.</li>
  * <li>{@link Optional}-based wrapper methods.</li>
@@ -97,7 +99,13 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * grows beyond the core size (the maximum is effectively unused). Idle threads are reclaimed
      * after 180 seconds. Worker threads are daemon threads and the pool is shut down
      * by a JVM exit hook, so an application that only used async cache operations can
-     * still exit normally.
+     * still exit normally. That hook stops accepting new tasks and then waits up to 120 seconds
+     * for queued and running ones to finish, so a backlog of slow backend calls can delay JVM
+     * exit by up to that long.
+     *
+     * <p>The executor is shared by every cache instance in the JVM: subclasses may submit work
+     * to it but must never shut it down, which would make the asynchronous operations of all
+     * caches fail.
      */
     protected static final AsyncExecutor asyncExecutor = createAsyncExecutor();
 
@@ -375,8 +383,9 @@ public abstract class AbstractCache<K, V> implements Cache<K, V> {
      * @throws IllegalStateException {@inheritDoc}
      * @throws IllegalArgumentException {@inheritDoc}
      * @throws RuntimeException if the delegated cache operation propagates a backend write, serialization, or cache callback failure
-     * @throws StackOverflowError if the delegated Kryo-backed distributed client encounters a cycle made only of
-     *         collections, maps, or arrays while serializing {@code value}
+     * @throws StackOverflowError if Kryo serialization in the delegated put (a Kryo-backed distributed client,
+     *         or an off-heap cache's default serializer) encounters a cycle made only of collections, maps, or
+     *         arrays in {@code value}
      */
     @Override
     public boolean put(final K key, final V value) throws IllegalStateException, IllegalArgumentException, RuntimeException, StackOverflowError {

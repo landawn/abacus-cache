@@ -55,7 +55,11 @@ import com.landawn.abacus.logging.LoggerFactory;
  * proving ownership. If a holder pauses longer than
  * the TTL, another client can acquire the expired key and the original holder can subsequently
  * delete that newer lease. Memcached eviction, restart, failover, or a global flush may also remove
- * the key before its TTL, allowing overlapping holders even without a pause. Memcached also checks
+ * the key before its TTL, allowing overlapping holders even without a pause. With several servers,
+ * the client's default failure mode also redirects an operation whose key maps to a server it
+ * considers disconnected (including one still connecting just after construction) to another
+ * server, where the lease key is absent, so an outage or a partition between one client and that
+ * server can admit a second holder, and a release can miss the key. Memcached also checks
  * expiry against a clock with one-second resolution, so a lease can end up to about a second before
  * its rounded-up TTL elapses; leave that margin when choosing a TTL. Do not use this class
  * where overlapping critical sections could corrupt data; prefer a coordination system with
@@ -123,7 +127,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
 
     /**
      * Creates a new MemcachedLock instance backed by the specified Memcached server(s).
-     * Multiple {@code host:port} addresses may be separated by commas, whitespace, or both.
+     * Multiple {@code host:port} addresses may be separated by commas, whitespace, or both. Each
+     * lock key lives on one of them; see the class-level lease-safety note for how a multi-server
+     * client redirects operations while a server is unreachable.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -165,6 +171,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * to the server, so sub-second values are rounded up to the next second.
      * The implementation uses Memcached's atomic add operation so only one client can acquire the
      * key while it remains present; expiry or key loss is subject to the lease limitations above.
+     * Unlike the release methods, acquisition does not clear the caller's interrupt status: on an
+     * already-interrupted thread spymemcached refuses the command before sending it, so this method
+     * throws a {@code RuntimeException} without acquiring the lock, and the status stays set.
      *
      * <p>Important considerations:
      * <ul>
@@ -301,7 +310,8 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      * @throws RuntimeException if key conversion fails; if the client's transcoder fails to serialize
      *         {@code value} for another reason (for example, a {@code KryoException} for a cycle through
      *         object fields), in which case nothing was sent and no lock was acquired; or if the Memcached
-     *         operation fails. After command dispatch the lock state can be indeterminate: the {@code add}
+     *         operation fails. A transcoder or Memcached failure is thrown as a plain {@code RuntimeException}
+     *         whose cause is the original exception. After command dispatch the lock state can be indeterminate: the {@code add}
      *         command may have reached the server even though its response was lost or timed out, in which case the lock IS held server-side (under this
      *         client's value) until the TTL expires unless something releases it (the failed caller cannot tell that it holds the lock).
      *         Prefer short TTLs where this matters for availability.
@@ -810,7 +820,9 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *             if (!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(key)) {
      *                 throw new IllegalArgumentException("Lock key contains an unpaired surrogate");
      *             }
-     *             return "lock:hash:" + java.util.UUID.nameUUIDFromBytes(
+     *             // "lock-hash:" can never start a "lock:" key, so a short target such as
+     *             // "hash:<uuid>" cannot map to the same key (and lease) as a hashed one.
+     *             return "lock-hash:" + java.util.UUID.nameUUIDFromBytes(
      *                     key.getBytes(java.nio.charset.StandardCharsets.UTF_8));
      *         }
      *         return "lock:" + key;

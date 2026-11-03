@@ -390,7 +390,8 @@ public class Ehcache<K, V> extends AbstractCache<K, V> {
      * @param keys the set of cache keys to retrieve; must not be {@code null} and must not contain a {@code null} element
      * @return a map keyed by the requested keys, with each value being the cached value or
      *         {@code null} if the key is not present in the cache (subject to the cache-loader
-     *         semantics described above)
+     *         semantics described above). Treat it as read-only: for an empty {@code keys} set,
+     *         Ehcache returns an immutable empty map
      * @throws IllegalStateException if the cache has been closed, or if the underlying Ehcache instance is not
      *         available (for example, it was removed from or closed with its {@code CacheManager})
      * @throws IllegalArgumentException if {@code keys} is {@code null} or contains a {@code null} element

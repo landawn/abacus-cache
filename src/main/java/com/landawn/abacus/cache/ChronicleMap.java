@@ -76,7 +76,8 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      * map.put("count", 42);                                                     // returns true (uses default 3h TTL / 30min idle)
      * map.getOrNull("count");                                                   // returns 42
      *
-     * // An evictDelay of 0 is allowed and disables automatic background eviction.
+     * // An evictDelay of 0 is allowed and disables only the background expiry scan
+     * // (capacity eviction and on-access expiry still apply).
      * Cache<String, Integer> noEvict = new ChronicleMap<>(64, 0L);   // valid
      * noEvict.close();                                               // release cache resources
      * map.close();                                                   // stop its background eviction task

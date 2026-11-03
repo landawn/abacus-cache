@@ -385,6 +385,88 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
+         * As above, for a checked exception that a native-copy hook throws undeclared (a subclass
+         * written in Kotlin, or using sneaky throws). A catch limited to {@link RuntimeException} and
+         * {@link Error} let it escape with the freshly allocated slots still taken, so the only segment
+         * stayed dedicated to the failed put's class for the cache's lifetime.
+         */
+        @Test
+        void initialCopyFailureWithUndeclaredCheckedExceptionDoesNotStrandSegment() {
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class));
+            try {
+                cache.beforeNextCopy.set(() -> {
+                    throw AbstractOffHeapCacheTest.<RuntimeException> sneakyThrow(new IOException("forced copy failure"));
+                });
+
+                assertThrows(IOException.class, () -> cache.put("large", new byte[AbstractOffHeapCache.DEFAULT_MAX_BLOCK_SIZE]));
+                assertEquals(0, cache.size());
+                assertTrue(cache.stats().occupiedSlots().isEmpty(), "the failed put must release and reclaim its slots");
+
+                assertTrue(cache.put("small", new byte[] { 1 }), "a different size class must reuse the segment immediately after the failed copy");
+                assertArrayEquals(new byte[] { 1 }, cache.getOrNull("small"));
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * Returning a failed put's slots can fail in turn (here the reclamation that follows the
+         * release). That failure must be attached to the copy failure as suppressed instead of
+         * replacing it, as the promotion path already does.
+         */
+        @Test
+        void cleanupFailureAfterAFailedCopyIsSuppressedOnTheCopyFailure() throws Exception {
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class));
+            try {
+                final Deque<AbstractOffHeapCache.Segment>[] queues = segmentQueuesOf(cache);
+                final IllegalStateException copyFailure = new IllegalStateException("forced copy failure");
+                cache.beforeNextCopy.set(() -> {
+                    // The put's allocation has just created the 64-byte class's queue.
+                    queues[0] = new FailingReclamationQueue(queues[0]);
+                    throw copyFailure;
+                });
+
+                final IllegalStateException thrown = assertThrows(IllegalStateException.class, () -> cache.put("k", new byte[] { 1 }));
+                assertSame(copyFailure, thrown, "the cleanup failure must not replace the copy failure");
+                assertEquals(1, thrown.getSuppressed().length);
+                assertEquals("forced reclamation iterator failure", thrown.getSuppressed()[0].getMessage());
+
+                assertEquals(0, cache.size());
+                assertEquals(0, totalOccupiedSlots(cache.stats()), "the slot must have been released before reclamation failed");
+                cache.clear();
+                assertTrue(cache.stats().occupiedSlots().isEmpty());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /** As above, when the put's slots are returned because its key's {@code hashCode} aborted the mapping. */
+        @Test
+        void cleanupFailureAfterAFailedMappingIsSuppressedOnTheKeyFailure() throws Exception {
+            final HeapOffHeapCache cache = new HeapOffHeapCache(LoggerFactory.getLogger(HeapOffHeapCache.class));
+            try {
+                final Deque<AbstractOffHeapCache.Segment>[] queues = segmentQueuesOf(cache);
+                cache.beforeNextCopy.set(() -> queues[0] = new FailingReclamationQueue(queues[0]));
+                final ThrowingHashKey key = new ThrowingHashKey();
+                final IllegalStateException hashFailure = new IllegalStateException("forced hashCode failure");
+                // The put's entries.compute is the first operation to hash the key.
+                key.throwOnNextHashCalls(1, hashFailure);
+
+                final IllegalStateException thrown = assertThrows(IllegalStateException.class, () -> cache.put(key, new byte[] { 1 }));
+                assertSame(hashFailure, thrown, "the cleanup failure must not replace the key failure");
+                assertEquals(1, thrown.getSuppressed().length);
+                assertEquals("forced reclamation iterator failure", thrown.getSuppressed()[0].getMessage());
+
+                assertEquals(0, cache.size());
+                assertEquals(0, totalOccupiedSlots(cache.stats()), "the slot must have been released before reclamation failed");
+                cache.clear();
+                assertTrue(cache.stats().occupiedSlots().isEmpty());
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
          * A failed multi-class allocation followed by a successful disk fallback must not leave its
          * now-empty segment dedicated to the attempted class; the very next differently sized memory
          * put must be able to reuse it without waiting for an asynchronous vacate pass.
@@ -2459,6 +2541,51 @@ class AbstractOffHeapCacheTest {
             assertMaintenancePassSurvivesAndKeepsSweeping(new IOException("forced hashCode failure"));
         }
 
+        /**
+         * A pass that cannot remove one expired entry (here its key's {@code hashCode} keeps throwing)
+         * must still sweep every other expired entry. It used to stop at that entry, on every pass, so
+         * the expired entries after it in the map's iteration order were never swept and kept their slots.
+         */
+        @Test
+        void maintenancePassSweepsPastAnEntryItCannotRemove() throws Exception {
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
+            final ThrowingHashKey poisoned = new ThrowingHashKey();
+            try {
+                assertTrue(cache.put(poisoned, new byte[] { 1 }));
+
+                for (int i = 0; i < 32; i++) {
+                    assertTrue(cache.put("k" + i, new byte[] { 2 }));
+                }
+
+                final ConcurrentHashMap<Object, AbstractOffHeapCache.Entry<byte[]>> entries = entriesOf(cache);
+                final List<Object> order = new ArrayList<>(entries.keySet());
+                assertTrue(order.indexOf(poisoned) < order.size() - 1, "precondition: an entry must follow the poisoned one in iteration order");
+
+                for (final AbstractOffHeapCache.Entry<byte[]> entry : entries.values()) {
+                    setActivityTime(entry.activityPrint, "createdTime", 0L);
+                }
+
+                poisoned.throwOnNextHashCalls(Integer.MAX_VALUE, new IllegalStateException("forced hashCode failure"));
+                runMaintenance(cache);
+
+                assertEquals(1, cache.size(), "every other expired entry must be swept");
+                assertEquals(32L, cache.stats().evictionCount());
+                verify(logger).warn(eq("1 expired off-heap cache entries could not be removed; the next maintenance pass will retry"),
+                        isA(IllegalStateException.class));
+
+                poisoned.throwOnNextHashCalls(0, null);
+                runMaintenance(cache);
+
+                assertEquals(0, cache.size(), "the next pass must retry the entry it could not remove");
+                assertEquals(33L, cache.stats().evictionCount());
+                assertTrue(cache.stats().occupiedSlots().isEmpty(), "the pass must reclaim the emptied segment");
+            } finally {
+                poisoned.throwOnNextHashCalls(0, null);
+                cache.close();
+            }
+        }
+
         /** A sweep must recheck idle expiry after an in-flight read releases the entry monitor. */
         @Test
         void maintenancePreservesEntryRefreshedWhileWaitingForItsMonitor() throws Exception {
@@ -2588,9 +2715,10 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
-         * The vacate task's future is never read, so a failed pass is visible only through its log line.
-         * An undeclared checked exception (here from a key's {@code hashCode} while the pass evicts it) must
-         * be logged like an {@link Error} or {@link RuntimeException}, and the single-flight gate released.
+         * The vacate task's future is never read, so a failed eviction is visible only through its log
+         * line. An undeclared checked exception (here from a key's {@code hashCode} while the pass evicts
+         * it) must be logged like an {@link Error} or {@link RuntimeException} (by the pass's summary
+         * warning), and the single-flight gate released.
          */
         @Test
         void vacatePassLogsUndeclaredCheckedExceptionAndReleasesGate() throws Exception {
@@ -2604,7 +2732,8 @@ class AbstractOffHeapCacheTest {
                 occupant.throwOnNextHashCalls(1, new IOException("forced hashCode failure"));
                 assertFalse(cache.put("crowded-out", new byte[100 * 8192]), "the segment is full; this put fails and schedules a vacate");
 
-                verify(logger, timeout(5_000)).warn(eq("Off-heap cache vacate pass failed; a later put under memory pressure will retry"),
+                verify(logger, timeout(5_000)).warn(
+                        eq("1 of 1 off-heap cache entries selected by the vacate pass could not be evicted; a later put under memory pressure will retry"),
                         isA(IOException.class));
                 assertEquals(0, occupant.remainingFailures());
 
@@ -2617,6 +2746,46 @@ class AbstractOffHeapCacheTest {
                 assertFalse(vacating.get(), "a failed vacate pass must release the single-flight gate");
                 assertEquals(1, cache.size(), "the failed pass evicted nothing");
             } finally {
+                cache.close();
+            }
+        }
+
+        /**
+         * A vacate pass evicts the least-recently-accessed entries first. A victim that cannot be
+         * removed (here a key whose {@code hashCode} keeps throwing; its own lookups fail too, so it is
+         * never accessed again and stays first) used to abort every pass before anything was evicted,
+         * so a full memory-only cache could never make room again. The pass must skip that victim,
+         * evict the others, and report the failure.
+         */
+        @Test
+        void vacatePassEvictsTheOtherVictimsWhenOneCannotBeRemoved() throws Exception {
+            final Logger logger = mock(Logger.class);
+            final HeapOffHeapCache cache = new HeapOffHeapCache(logger);
+            final ThrowingHashKey poisoned = new ThrowingHashKey();
+            try {
+                // 128 exact 8192-byte values fill the single segment's 8192-byte class.
+                assertTrue(cache.put(poisoned, new byte[8192]));
+                setActivityTime(entriesOf(cache).get(poisoned).activityPrint, "lastAccessTime", System.currentTimeMillis() - 10_000);
+
+                for (int i = 1; i < 128; i++) {
+                    assertTrue(cache.put("k" + i, new byte[8192]));
+                }
+
+                poisoned.throwOnNextHashCalls(Integer.MAX_VALUE, new IllegalStateException("forced hashCode failure"));
+                assertFalse(cache.put("crowded-out", new byte[8192]), "the segment is full; this put fails and schedules a vacate");
+
+                // The default factor (0.2) selects 25 of the 128 memory-resident entries, the poisoned one first.
+                verify(logger, timeout(5_000)).warn(
+                        eq("1 of 25 off-heap cache entries selected by the vacate pass could not be evicted; a later put under memory pressure will retry"),
+                        isA(IllegalStateException.class));
+                final AtomicBoolean vacating = vacatingGateOf(cache);
+                awaitCondition("vacation gate released", () -> !vacating.get());
+
+                assertEquals(24L, cache.stats().evictionCount(), "the other victims must still be evicted");
+                assertEquals(104, cache.size());
+                assertTrue(cache.put("crowded-out", new byte[8192]), "the evicted victims' slots must be reusable");
+            } finally {
+                poisoned.throwOnNextHashCalls(0, null);
                 cache.close();
             }
         }
@@ -3956,9 +4125,13 @@ class AbstractOffHeapCacheTest {
         }
     }
 
-    /** Heap-array fixture over {@code Object} keys whose logger can be observed. */
+    /**
+     * Heap-array fixture over {@code Object} keys whose logger can be observed, and whose next
+     * native-memory write can first run a one-shot hook.
+     */
     private static final class HeapOffHeapCache extends AbstractOffHeapCache<Object, byte[]> {
         private final byte[] memory = new byte[SEGMENT_SIZE];
+        private final AtomicReference<Runnable> beforeNextCopy = new AtomicReference<>();
 
         HeapOffHeapCache(final Logger logger) {
             this(logger, null);
@@ -3981,6 +4154,12 @@ class AbstractOffHeapCacheTest {
 
         @Override
         protected void copyToMemory(final long startPtr, final byte[] bytes, final int srcOffset, final int len) {
+            final Runnable hook = beforeNextCopy.getAndSet(null);
+
+            if (hook != null) {
+                hook.run();
+            }
+
             System.arraycopy(bytes, srcOffset, memory, (int) startPtr, len);
         }
 
@@ -3988,5 +4167,24 @@ class AbstractOffHeapCacheTest {
         protected void copyFromMemory(final long startPtr, final byte[] bytes, final int destOffset, final int len) {
             System.arraycopy(memory, (int) startPtr, bytes, destOffset, len);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Deque<AbstractOffHeapCache.Segment>[] segmentQueuesOf(final AbstractOffHeapCache<?, ?> cache) throws ReflectiveOperationException {
+        final Field queuesField = AbstractOffHeapCache.class.getDeclaredField("segmentQueues");
+        queuesField.setAccessible(true);
+        return (Deque<AbstractOffHeapCache.Segment>[]) queuesField.get(cache);
+    }
+
+    private static AtomicBoolean vacatingGateOf(final AbstractOffHeapCache<?, ?> cache) throws ReflectiveOperationException {
+        final Field vacatingField = AbstractOffHeapCache.class.getDeclaredField("vacating");
+        vacatingField.setAccessible(true);
+        return (AtomicBoolean) vacatingField.get(cache);
+    }
+
+    private static void runMaintenance(final AbstractOffHeapCache<?, ?> cache) throws ReflectiveOperationException {
+        final Method maintenance = AbstractOffHeapCache.class.getDeclaredMethod("runMaintenance");
+        maintenance.setAccessible(true);
+        maintenance.invoke(cache);
     }
 }

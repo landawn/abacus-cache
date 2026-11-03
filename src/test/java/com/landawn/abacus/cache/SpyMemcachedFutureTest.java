@@ -9,11 +9,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Constructor;
 import java.net.InetSocketAddress;
+import java.nio.channels.SocketChannel;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -33,9 +35,11 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import com.landawn.abacus.LogCapture;
 
+import net.spy.memcached.BroadcastOpFactory;
 import net.spy.memcached.DefaultConnectionFactory;
 import net.spy.memcached.MemcachedClient;
 import net.spy.memcached.MemcachedConnection;
+import net.spy.memcached.MemcachedNode;
 import net.spy.memcached.NodeLocator;
 
 /** Service-free regression coverage for future handling and pre-dispatch validation. */
@@ -252,6 +256,62 @@ class SpyMemcachedFutureTest {
         }
 
         assertFalse(worker.isAlive(), "The shutdown probe must leave no worker running");
+    }
+
+    /**
+     * A graceful disconnect first enqueues a no-op through the node's real {@code addOp}, which
+     * refuses an interrupted caller with the same cause-less {@code IllegalStateException} as a
+     * cache operation. That refusal must carry an {@link InterruptedException} cause like every
+     * other dispatch, keep the interrupt status, and still leave the client terminally shut down.
+     */
+    @Test
+    void interruptedGracefulDisconnectRefusalCarriesInterruptedExceptionCause() throws Exception {
+        final DefaultConnectionFactory factory = new DefaultConnectionFactory() {
+            private final MemcachedConnection connection = mock(MemcachedConnection.class);
+
+            @Override
+            public MemcachedConnection createConnection(final List<InetSocketAddress> addresses) {
+                return connection; // No selector, socket connect, or network thread is created.
+            }
+        };
+        final InetSocketAddress address = new InetSocketAddress("127.0.0.1", 11211);
+        final MemcachedConnection connection = factory.createConnection(List.of(address));
+        final NodeLocator locator = mock(NodeLocator.class);
+
+        try (SocketChannel channel = SocketChannel.open()) {
+            // A real ASCII node: its addOp is spymemcached's actual queue-admission path.
+            final MemcachedNode node = factory.createMemcachedNode(address, channel, factory.getReadBufSize());
+            when(connection.getLocator()).thenReturn(locator);
+            when(locator.getAll()).thenReturn(List.of(node));
+            when(connection.broadcastOperation(any(), any())).thenAnswer(invocation -> {
+                final CountDownLatch latch = new CountDownLatch(1);
+                node.addOp(invocation.<BroadcastOpFactory> getArgument(0).newOp(node, latch));
+                return latch;
+            });
+
+            final MemcachedClient delegate = new MemcachedClient(factory, List.of(address));
+            final SpyMemcached<Object> cache = clientWithDelegate(delegate);
+            final IllegalStateException refusal;
+
+            Thread.currentThread().interrupt();
+
+            try {
+                refusal = assertThrows(IllegalStateException.class, () -> cache.disconnect(1_000L));
+                assertTrue(Thread.currentThread().isInterrupted());
+            } finally {
+                Thread.interrupted();
+            }
+
+            assertTrue(refusal.getMessage().startsWith(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX), refusal.getMessage());
+            assertTrue(refusal.getCause() instanceof InterruptedException, "the graceful no-op enqueue was dispatched without the tagging wrapper");
+            verify(connection).shutdown(); // The delegate still ran its terminal shutdown sequence.
+
+            cache.disconnect(1_000L);
+            verify(connection, times(1)).broadcastOperation(any(), any());
+            assertThrows(IllegalStateException.class, () -> cache.get("k"));
+            // The timeout is validated on every call, even after shutdown.
+            assertThrows(IllegalArgumentException.class, () -> cache.disconnect(-1L));
+        }
     }
 
 }

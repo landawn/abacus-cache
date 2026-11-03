@@ -15,8 +15,13 @@
 package com.landawn.abacus.cache;
 
 import java.io.InterruptedIOException;
+import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.channels.ClosedByInterruptException;
+import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -24,7 +29,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.util.Charsets;
-import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Strings;
 
@@ -113,6 +117,10 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
     // Base64 of an empty byte sequence is the empty string, which is not a legal Memcached key.
     // '-' is outside the standard Base64 alphabet, so it cannot collide with any non-empty encoded key.
     private static final String EMPTY_KEY_MARKER = "-";
+
+    // The exact message of the SocketException that java.net.Socket throws (JDK 21+) when an
+    // interrupt closes a virtual thread's blocking socket; see isSocketClosedByInterrupt.
+    private static final String SOCKET_CLOSED_BY_INTERRUPT_MESSAGE = "Closed by interrupt";
 
     // Precomputed from retryDelay; TimeUnit.toNanos saturates at Long.MAX_VALUE for huge delays.
     private final long retryDelayNanos;
@@ -239,13 +247,12 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *        printable ASCII characters without spaces or control characters. Including at least one character
      *        outside the Base64 alphabet (such as {@code ':'}) is recommended: it guarantees prefixed and
      *        unprefixed namespaces can never collide
-     * @param maxFailuresBeforeCircuitOpen maximum consecutive failures before opening the circuit breaker
-     *                             (must be non-negative); {@code 0} opens it after the first
-     *                             recorded backend failure.
-     *        A value of {@code 0} is a degenerate configuration in which the circuit opens on every failure for
-     *        {@code retryDelay} ms; in that mode the failure counter stays at 0, and the closed-to-open WARN
-     *        transition is logged once per transition — that is, on the first failure and on each later failure
-     *        that follows a successful read
+     * @param maxFailuresBeforeCircuitOpen the number of consecutive recorded read failures that opens the circuit
+     *        breaker (must be non-negative): the failure that brings the count to this value opens it.
+     *        {@code 0} behaves exactly like {@code 1} (only the internal failure counter, which stays at 0,
+     *        differs): every recorded failure opens the circuit for {@code retryDelay} ms, and the
+     *        closed-to-open WARN is logged on the first failure and on each later failure that follows a
+     *        successful read
      * @param retryDelay delay in milliseconds, measured from the most recent recorded failure, before an open circuit
      *        lets reads attempt the backend again (must be non-negative);
      *        {@code 0} disables fail-fast entirely, so every read attempts the backend (failures are still counted)
@@ -324,13 +331,21 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     {@code SpyMemcached} client refuses every operation from such a thread), which is reported as a
      *     miss ({@code null}) without touching the breaker state and with the interrupt status preserved.
      *     A failure counts as interrupt-caused only while the calling thread's interrupt status is still set
-     *     <i>and</i> its cause chain contains an {@link InterruptedException},
-     *     {@link java.nio.channels.ClosedByInterruptException}, or an {@link java.io.InterruptedIOException}
-     *     other than {@link java.net.SocketTimeoutException} (a socket timeout is a backend failure); any
-     *     other failure on an interrupted thread is still counted. The bundled Jedis clients re-assert the
-     *     interrupt status that Jedis clears when an interrupt ends its connection-pool wait, so such a
-     *     failure qualifies as well. The closed-to-open transition is logged
-     *     once at WARN level</li>
+     *     <i>and</i> its causes or suppressed exceptions (searched transitively: Jedis reports a failed
+     *     connect attempt, and a Redis Cluster's random-node fallback reports each node's failed pool wait,
+     *     only as suppressed exceptions) include an {@link InterruptedException},
+     *     {@link java.nio.channels.ClosedByInterruptException}, an {@link java.io.InterruptedIOException}
+     *     other than {@link java.net.SocketTimeoutException} (a socket timeout is a backend failure), or the
+     *     {@link java.net.SocketException} with the message {@code "Closed by interrupt"} that
+     *     {@link java.net.Socket} throws when an interrupt closes a virtual thread's blocking socket (as it
+     *     does for a bundled Jedis client's read or connect on a virtual thread); any other failure on an
+     *     interrupted thread is still counted. The bundled Jedis clients re-assert the interrupt status
+     *     that Jedis clears when an interrupt ends its connection-pool wait, so such a failure qualifies
+     *     as well. An {@link Error} thrown by the
+     *     client is not caught: it propagates and leaves the breaker state unchanged</li>
+     * <li>A read that was already in flight when {@link #close()} began and then fails (typically
+     *     because close disconnects the client) is reported as a miss without touching the breaker state</li>
+     * <li>The closed-to-open transition is logged once at WARN level</li>
      * </ul>
      *
      * <p><b>Thread Safety:</b>
@@ -443,6 +458,14 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
                     logger.debug("Distributed cache read failed on an interrupted thread (treated as cache miss; not counted by the circuit breaker)", e);
                 }
 
+                return null;
+            }
+
+            if (isClosed) {
+                // close() marks the cache closed before it disconnects the client, so a read still
+                // in flight then typically fails because of that disconnect. The breaker no longer
+                // matters (every later operation throws), and counting such failures could log a
+                // spurious "circuit breaker opened" WARN during a normal shutdown.
                 return null;
             }
 
@@ -1066,12 +1089,15 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      * a prefix made purely of Base64-alphabet characters with a length divisible by 4 could in theory
      * collide with the Base64 encoding of a different unprefixed key.
      *
+     * <p><b>Key Identity:</b>
+     * Callers must supply stable string representations for their keys. Distinct keys with the same
+     * string representation, such as the {@code String} {@code "12345"} and the {@code Integer}
+     * {@code 12345}, address the same cache entry; this wrapper does not use {@code equals} or
+     * include the key's Java type in its encoding.
+     *
      * <p><b>Thread Safety:</b>
      * This method is thread-safe and stateless. Multiple threads can call this method
      * concurrently without synchronization.
-     * Callers must supply stable string representations for their keys. Distinct non-string keys
-     * with the same {@link N#stringOf(Object)} result address the same cache entry; this wrapper
-     * does not use {@code equals} or include the key's Java type in its encoding.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -1188,17 +1214,66 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
 
     /**
      * Whether {@code e} was caused by the calling thread's own interrupt rather than by the backend:
-     * the interrupt status must still be set and the cause chain must carry interrupt evidence.
+     * the interrupt status must still be set and the failure graph must carry interrupt evidence.
      * {@link SocketTimeoutException} extends {@link InterruptedIOException} but reports an
      * unresponsive server, so it does not qualify.
      */
     private static boolean isCausedByCallerInterrupt(final Throwable e) {
-        return Thread.currentThread().isInterrupted()
-                && ExceptionUtil
-                        .findCause(e,
-                                t -> t instanceof InterruptedException || t instanceof ClosedByInterruptException
-                                        || (t instanceof InterruptedIOException && !(t instanceof SocketTimeoutException)))
-                        .isPresent();
+        return Thread.currentThread().isInterrupted() && hasInterruptEvidence(e);
+    }
+
+    /**
+     * Searches the whole failure graph (causes and suppressed exceptions, transitively) for interrupt
+     * evidence. A cause-chain search is not enough: Jedis records a failed connect attempt, and a Redis
+     * Cluster's random-node fallback ({@code ClusterConnectionProvider.getConnection()}) records each
+     * node's failed (possibly interrupted) pool wait, only as suppressed exceptions of the exception it
+     * throws. This mirrors the graph {@code AbstractJedisCacheClient} searches when it restores the
+     * interrupt status Jedis consumed, so a failure whose interrupt was restored there is recognized
+     * here. Iterative, with identity-based tracking, so a graph that refers back to itself terminates.
+     */
+    private static boolean hasInterruptEvidence(final Throwable failure) {
+        final Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        final Deque<Throwable> pending = new ArrayDeque<>();
+        pending.push(failure);
+
+        while (!pending.isEmpty()) {
+            final Throwable t = pending.pop();
+
+            if (!visited.add(t)) {
+                continue;
+            }
+
+            if (isInterruptEvidence(t)) {
+                return true;
+            }
+
+            final Throwable cause = t.getCause();
+
+            if (cause != null) {
+                pending.push(cause);
+            }
+
+            for (final Throwable suppressed : t.getSuppressed()) {
+                pending.push(suppressed);
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean isInterruptEvidence(final Throwable t) {
+        return t instanceof InterruptedException || t instanceof ClosedByInterruptException
+                || (t instanceof InterruptedIOException && !(t instanceof SocketTimeoutException)) || isSocketClosedByInterrupt(t);
+    }
+
+    /**
+     * When an interrupt ends a virtual thread's blocking {@code java.net.Socket} read, write, or
+     * connect, the JDK closes the socket and throws {@code SocketException("Closed by interrupt")}
+     * in place of the {@code InterruptedIOException}, without a cause. Jedis wraps a failed read or
+     * write in a {@code JedisConnectionException} (as its cause).
+     */
+    private static boolean isSocketClosedByInterrupt(final Throwable t) {
+        return t instanceof SocketException && SOCKET_CLOSED_BY_INTERRUPT_MESSAGE.equals(t.getMessage());
     }
 
     /**

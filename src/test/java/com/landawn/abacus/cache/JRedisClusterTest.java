@@ -5,6 +5,8 @@
 package com.landawn.abacus.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -17,11 +19,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
 
+import org.apache.commons.pool2.PooledObjectFactory;
+import org.apache.commons.pool2.impl.DefaultPooledObject;
+import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.ThrowingConsumer;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -30,9 +38,13 @@ import org.mockito.Mockito;
 
 import com.landawn.abacus.LogCapture;
 
+import redis.clients.jedis.Connection;
+import redis.clients.jedis.ConnectionPool;
 import redis.clients.jedis.HostAndPort;
+import redis.clients.jedis.JedisClusterInfoCache;
 import redis.clients.jedis.RedisClusterClient;
 import redis.clients.jedis.exceptions.JedisBroadcastException;
+import redis.clients.jedis.exceptions.JedisClusterOperationException;
 import redis.clients.jedis.exceptions.JedisException;
 import redis.clients.jedis.providers.ClusterConnectionProvider;
 
@@ -158,6 +170,98 @@ class JRedisClusterTest {
             assertTrue(Thread.currentThread().isInterrupted());
         } finally {
             Thread.interrupted();
+        }
+    }
+
+    /**
+     * Regression test: when a key's slot has no pool, Jedis falls back to a random primary
+     * ({@code ClusterConnectionProvider.getConnection()}), which reports a node's failed pool wait
+     * only as a <em>suppressed</em> exception of "No reachable node in cluster.", not as a cause, so
+     * the interrupt that wait consumed used to be lost. Real Jedis client, executor, connection
+     * provider, and pool; only the topology cache and the seed connection are stubbed.
+     */
+    @Test
+    void interruptConsumedByTheRandomPrimaryFallbackIsRestored() throws Throwable {
+        withRandomPrimaryFallbackIntoAnExhaustedPool(real -> {
+            Thread.interrupted();
+
+            try {
+                Thread.currentThread().interrupt();
+                final JedisClusterOperationException failure = assertThrows(JedisClusterOperationException.class, () -> real.get("key"));
+
+                // Pin the Jedis shape this fix depends on: the interrupt is reachable only through a suppressed exception.
+                assertNull(failure.getCause());
+                assertInstanceOf(InterruptedException.class, failure.getSuppressed()[0].getCause());
+                assertTrue(Thread.currentThread().isInterrupted(), "the interrupt the pool wait consumed must be restored");
+            } finally {
+                Thread.interrupted();
+            }
+        });
+    }
+
+    /**
+     * Regression test, end to end through {@link DistributedCache}: the interrupt that the
+     * random-primary fallback reports only as a suppressed exception must also keep the read out of the
+     * circuit breaker. Recognizing it only in the cause chain counted the caller's interrupt as a
+     * backend failure, which with a threshold of 1 opened the circuit for every thread.
+     */
+    @Test
+    void interruptReportedOnlyAsSuppressedByTheRandomPrimaryFallbackIsNotCountedByTheBreaker() throws Throwable {
+        withRandomPrimaryFallbackIntoAnExhaustedPool(real -> {
+            final DistributedCache<String, Object> distributed = new DistributedCache<>(real, "", 1, 60_000L);
+
+            try {
+                final Object closedState = DistributedCacheBreakerAccess.breakerState(distributed);
+                Thread.interrupted();
+
+                try {
+                    Thread.currentThread().interrupt();
+                    assertNull(distributed.getOrNull("key"));
+                    assertTrue(Thread.currentThread().isInterrupted(), "the interrupt the pool wait consumed must be restored");
+                } finally {
+                    Thread.interrupted();
+                }
+
+                assertSame(closedState, DistributedCacheBreakerAccess.breakerState(distributed));
+
+                // The circuit is still closed, so an uninterrupted read reaches the cluster again; its genuine
+                // pool timeout is then recorded, which an open circuit (no backend call) would not do.
+                assertNull(distributed.getOrNull("key"));
+                assertTrue(DistributedCacheBreakerAccess.booleanField(DistributedCacheBreakerAccess.breakerState(distributed), "hasFailure"));
+            } finally {
+                distributed.close();
+            }
+        });
+    }
+
+    /**
+     * Runs {@code test} against a real cluster client (real Jedis client, executor, connection provider,
+     * and pool; only the topology cache and the seed connection are stubbed) whose only node pool is
+     * exhausted. No slot is mapped, so every keyed command takes the random-primary fallback, and its pool
+     * wait times out after 10 ms, or fails at once on an interrupted thread.
+     */
+    private static void withRandomPrimaryFallbackIntoAnExhaustedPool(final ThrowingConsumer<JRedisCluster<Object>> test) throws Throwable {
+        final GenericObjectPoolConfig<Connection> poolConfig = new GenericObjectPoolConfig<>();
+        poolConfig.setMaxTotal(1);
+        poolConfig.setMaxWait(Duration.ofMillis(10));
+        poolConfig.setJmxEnabled(false);
+        @SuppressWarnings("unchecked")
+        final PooledObjectFactory<Connection> factory = mock(PooledObjectFactory.class);
+        when(factory.makeObject()).thenAnswer(invocation -> new DefaultPooledObject<>(mock(Connection.class)));
+
+        try (ConnectionPool exhausted = new ConnectionPool(factory, poolConfig);
+             MockedConstruction<JedisClusterInfoCache> topology = Mockito.mockConstruction(JedisClusterInfoCache.class,
+                     (slots, context) -> when(slots.getShuffledPrimaryNodesPool()).thenReturn(List.of(exhausted)));
+             MockedConstruction<Connection> seed = Mockito.mockConstruction(Connection.class)) {
+            exhausted.getResource(); // the pool's only connection stays borrowed, so the next borrow waits
+
+            final JRedisCluster<Object> real = new JRedisCluster<>("10.0.0.1:7000", 1_000);
+
+            try {
+                test.accept(real);
+            } finally {
+                real.disconnect();
+            }
         }
     }
 

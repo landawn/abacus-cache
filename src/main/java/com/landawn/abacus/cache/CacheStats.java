@@ -36,7 +36,7 @@ import com.landawn.abacus.util.N;
  * to get updated statistics, call the implementation's {@code stats()} method again to obtain a
  * new snapshot. {@code stats()} is not part of the {@link Cache} interface: {@link LocalCache#stats()}
  * and {@link CaffeineCache#stats()} return this record, the off-heap caches return the separate
- * {@link OffHeapCacheStats} record, and {@link Ehcache} exposes no snapshot.
+ * {@link OffHeapCacheStats} record, and {@link Ehcache} and {@link DistributedCache} expose no snapshot.
  *
  * <p><b>Statistics categories:</b>
  * <ul>

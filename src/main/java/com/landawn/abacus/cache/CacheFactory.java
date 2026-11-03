@@ -585,10 +585,13 @@ public final class CacheFactory {
      * @throws UncheckedIOException if creating the Memcached client's selector or sockets fails
      * @throws RuntimeException if Redis client-pool setup, RedisCluster seed resolution, or initial
      *         topology discovery fails, or if reflective construction cannot access the custom cache's
-     *         matching constructor or that constructor throws
+     *         matching constructor or that constructor throws. A {@code RuntimeException} thrown by that
+     *         constructor propagates as is; a checked exception or an {@link Error} (including a
+     *         {@link LinkageError} raised while the constructor body runs) arrives wrapped in a
+     *         {@code RuntimeException} whose cause is the original
      * @throws ExceptionInInitializerError if the custom cache class's static initializer, which first runs
      *         when the validated class is instantiated, throws (later attempts in the same JVM then fail with
-     *         {@link NoClassDefFoundError}); like other {@link LinkageError}s, it propagates unwrapped
+     *         {@link NoClassDefFoundError}); unlike an Error thrown by the constructor body, it propagates unwrapped
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createLocalCache(int, long)

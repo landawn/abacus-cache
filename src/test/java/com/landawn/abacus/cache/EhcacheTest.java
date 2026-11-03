@@ -204,6 +204,21 @@ class EhcacheTest {
         }
     }
 
+    /** Pins the documented read-only caveat: Ehcache answers an empty key set with an immutable empty map. */
+    @Test
+    void getAllEmptyKeysReturnsImmutableEmptyMap() {
+        final CacheManager cm = CacheManagerBuilder.newCacheManagerBuilder().build(true);
+        try {
+            final Ehcache<String, String> wrapper = new Ehcache<>(newUnderlyingCache(cm));
+            final Map<String, String> got = wrapper.getAll(Collections.emptySet());
+
+            assertTrue(got.isEmpty());
+            assertThrows(UnsupportedOperationException.class, () -> got.put("k", "v"));
+        } finally {
+            cm.close();
+        }
+    }
+
     @Test
     void getAllBatchedWriteBehindPendingDeleteAnsweredWithoutLoader() throws Exception {
         final RecordingWriter loader = new RecordingWriter(0);

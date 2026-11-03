@@ -19,9 +19,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.channels.ClosedByInterruptException;
 import java.util.concurrent.CountDownLatch;
@@ -40,6 +45,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.landawn.abacus.LogCapture;
+
+import redis.clients.jedis.exceptions.JedisClusterOperationException;
+import redis.clients.jedis.exceptions.JedisConnectionException;
+import redis.clients.jedis.exceptions.JedisException;
 
 /** Service-free regression coverage for {@link DistributedCache}'s circuit-breaker state. */
 
@@ -412,6 +421,51 @@ class DistributedCacheCircuitBreakerTest {
         }
     }
 
+    /** An Error from the client is not caught: it propagates and leaves the breaker state unchanged, as documented. */
+    @Test
+    void clientErrorPropagatesWithoutChangingBreakerState() throws Exception {
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        final StackOverflowError failure = new StackOverflowError("decoding a deeply nested value");
+        when(client.get("a2V5")).thenThrow(failure);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 0, 60_000L);
+
+        try {
+            final Object closedState = breakerState(cache);
+            assertSame(failure, assertThrows(StackOverflowError.class, () -> cache.getOrNull("key")));
+            assertSame(closedState, breakerState(cache));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * A read in flight when close() disconnects the client fails because of that disconnect; it must
+     * not be counted, or a normal shutdown logs a spurious circuit-opened WARN.
+     */
+    @Test
+    @ResourceLock(LogCapture.RESOURCE)
+    void readFailingAfterCloseBeganIsAMissThatDoesNotChangeBreakerState() throws Exception {
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        final AtomicReference<DistributedCache<String, String>> cacheRef = new AtomicReference<>();
+        when(client.get("a2V5")).thenAnswer(invocation -> {
+            cacheRef.get().close(); // close() lands while this read is in flight
+            throw new IllegalStateException("Shutting down");
+        });
+
+        try (LogCapture logs = new LogCapture(DistributedCache.class, Level.WARN)) {
+            final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 0, 60_000L);
+            cacheRef.set(cache);
+            final Object closedState = breakerState(cache);
+
+            assertNull(cache.getOrNull("key"));
+            assertTrue(cache.isClosed());
+            assertSame(closedState, breakerState(cache));
+            assertTrue(logs.messages().isEmpty(), () -> "unexpected WARN: " + logs.messages());
+        }
+    }
+
     /**
      * A read that fails because the calling thread is interrupted carries no backend-availability
      * information (SpyMemcached refuses every operation from such a thread before contacting the
@@ -419,7 +473,8 @@ class DistributedCacheCircuitBreakerTest {
      * for every thread; here a zero threshold would open it on the first such read.
      */
     @ParameterizedTest
-    @ValueSource(strings = { "tagged-enqueue-refusal", "wrapped-interrupted-exception", "closed-by-interrupt", "interrupted-io" })
+    @ValueSource(strings = { "tagged-enqueue-refusal", "wrapped-interrupted-exception", "closed-by-interrupt", "interrupted-io",
+            "virtual-thread-socket-closed-by-interrupt", "virtual-thread-connect-closed-by-interrupt", "cluster-fallback-suppressed-pool-wait" })
     void readFailingFromTheCallersInterruptIsAMissThatDoesNotChangeBreakerState(final String failureKind) throws Exception {
         final RuntimeException failure = switch (failureKind) {
             // The shape SpyMemcached.tagInterruptedEnqueue produces (tagging itself needs the flag set;
@@ -428,6 +483,16 @@ class DistributedCacheCircuitBreakerTest {
                     new InterruptedException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " op"));
             case "wrapped-interrupted-exception" -> new RuntimeException(new InterruptedException("response wait"));
             case "closed-by-interrupt" -> new UncheckedIOException(new ClosedByInterruptException());
+            // The shape a Jedis read takes on an interrupted virtual thread (see
+            // virtualThreadSocketReadEndedByTheCallersInterruptDoesNotChangeBreakerState for the real path).
+            case "virtual-thread-socket-closed-by-interrupt" -> new JedisConnectionException(new SocketException("Closed by interrupt"));
+            // Jedis's DefaultJedisSocketFactory records each failed connect attempt as a suppressed exception.
+            case "virtual-thread-connect-closed-by-interrupt" -> new JedisException("Could not get a resource from the pool",
+                    connectFailure(new SocketException("Closed by interrupt")));
+            // Jedis's cluster random-node fallback reports a node's interrupted pool wait only as a suppressed
+            // exception (see JRedisClusterTest.interruptReportedOnlyAsSuppressedByTheRandomPrimaryFallbackIsNotCountedByTheBreaker).
+            case "cluster-fallback-suppressed-pool-wait" -> suppressing(new JedisClusterOperationException("No reachable node in cluster."),
+                    new JedisException("Could not get a resource from the pool", new InterruptedException()));
             default -> new UncheckedIOException(new InterruptedIOException("interrupted read"));
         };
         @SuppressWarnings("unchecked")
@@ -467,11 +532,23 @@ class DistributedCacheCircuitBreakerTest {
      * InterruptedIOException, or an ISE with no interrupt cause) must still count toward the breaker.
      */
     @ParameterizedTest
-    @ValueSource(strings = { "untagged-state", "connection-error", "socket-timeout" })
+    @ValueSource(strings = { "untagged-state", "connection-error", "socket-timeout", "socket-reset", "connect-refused", "cluster-fallback-pool-timeout",
+            "cyclic-suppressed-without-interrupt" })
     void backendFailureOnAnInterruptedThreadIsStillCounted(final String failureKind) throws Exception {
         final RuntimeException failure = switch (failureKind) {
             case "untagged-state" -> new IllegalStateException("backend unavailable");
             case "connection-error" -> new RuntimeException("connection refused", new java.net.ConnectException("refused"));
+            case "socket-reset" -> new JedisConnectionException(new SocketException("Connection reset"));
+            case "connect-refused" -> connectFailure(new java.net.ConnectException("Connection refused"));
+            case "cluster-fallback-pool-timeout" -> suppressing(new JedisClusterOperationException("No reachable node in cluster."),
+                    new JedisException("Could not get a resource from the pool", new java.util.NoSuchElementException("Timeout waiting for idle object")));
+            case "cyclic-suppressed-without-interrupt" -> {
+                // The interrupt-evidence search must terminate on a graph that refers back to itself.
+                final IllegalStateException outer = new IllegalStateException("backend unavailable");
+                final IllegalStateException inner = new IllegalStateException("node failed", outer);
+                outer.addSuppressed(inner);
+                yield outer;
+            }
             default -> new UncheckedIOException(new SocketTimeoutException("read timed out"));
         };
         @SuppressWarnings("unchecked")
@@ -488,6 +565,50 @@ class DistributedCacheCircuitBreakerTest {
             } finally {
                 Thread.interrupted();
             }
+
+            final Object state = breakerState(cache);
+            assertFalse(closedState == state, "the failure must be recorded");
+            assertTrue(booleanField(state, "hasFailure"));
+
+            // The zero threshold opened the circuit: the next read fails fast without the backend.
+            assertNull(cache.getOrNull("key"));
+            verify(client, times(1)).get("a2V5");
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * The converse of the test above: interrupt evidence alone is not enough either. A failure that
+     * carries it while the calling thread's interrupt status is clear (an interrupt the caller has
+     * already handled and cleared, or evidence left over from another thread) says nothing about this
+     * caller, so it must still count toward the breaker.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "wrapped-interrupted-exception", "closed-by-interrupt", "interrupted-io", "virtual-thread-socket-closed-by-interrupt",
+            "virtual-thread-connect-closed-by-interrupt", "cluster-fallback-suppressed-pool-wait" })
+    void interruptEvidenceWithoutTheCallersInterruptStatusIsStillCounted(final String failureKind) throws Exception {
+        final RuntimeException failure = switch (failureKind) {
+            case "wrapped-interrupted-exception" -> new RuntimeException(new InterruptedException("response wait"));
+            case "closed-by-interrupt" -> new UncheckedIOException(new ClosedByInterruptException());
+            case "virtual-thread-socket-closed-by-interrupt" -> new JedisConnectionException(new SocketException("Closed by interrupt"));
+            case "virtual-thread-connect-closed-by-interrupt" -> new JedisException("Could not get a resource from the pool",
+                    connectFailure(new SocketException("Closed by interrupt")));
+            case "cluster-fallback-suppressed-pool-wait" -> suppressing(new JedisClusterOperationException("No reachable node in cluster."),
+                    new JedisException("Could not get a resource from the pool", new InterruptedException()));
+            default -> new UncheckedIOException(new InterruptedIOException("interrupted read"));
+        };
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get("a2V5")).thenThrow(failure);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 0, 60_000L);
+
+        try {
+            final Object closedState = breakerState(cache);
+            Thread.interrupted();
+
+            assertNull(cache.getOrNull("key"));
+            assertFalse(Thread.currentThread().isInterrupted());
 
             final Object state = breakerState(cache);
             assertFalse(closedState == state, "the failure must be recorded");
@@ -527,6 +648,57 @@ class DistributedCacheCircuitBreakerTest {
         }
     }
 
+    /**
+     * End to end on a virtual thread: interrupting a virtual thread blocked in a {@link java.net.Socket}
+     * read closes the socket, and the JDK reports it as {@code SocketException("Closed by interrupt")}
+     * with the interrupt status set but no interrupt cause. Jedis wraps that exception in a
+     * {@link JedisConnectionException} ({@code RedisInputStream.ensureFill}). The stub client below
+     * performs the same blocking read against a loopback server that never replies.
+     */
+    @Test
+    void virtualThreadSocketReadEndedByTheCallersInterruptDoesNotChangeBreakerState() throws Exception {
+        try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            @SuppressWarnings("unchecked")
+            final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+            when(client.get("a2V5")).thenAnswer(invocation -> {
+                try (Socket socket = new Socket(server.getInetAddress(), server.getLocalPort())) {
+                    // A missed interrupt ends the read with a SocketTimeoutException, which is counted.
+                    socket.setSoTimeout(10_000);
+                    socket.getInputStream().read();
+                    throw new AssertionError("the loopback server never replies");
+                } catch (final IOException e) {
+                    throw new JedisConnectionException(e);
+                }
+            });
+            final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 0, 60_000L);
+
+            try {
+                final Object closedState = breakerState(cache);
+                final AtomicReference<Object> result = new AtomicReference<>("not completed");
+                final AtomicBoolean interruptPreserved = new AtomicBoolean();
+                final Thread reader = Thread.ofVirtual().start(() -> {
+                    result.set(cache.getOrNull("key"));
+                    interruptPreserved.set(Thread.currentThread().isInterrupted());
+                });
+
+                server.setSoTimeout(20_000);
+                // The accepted connection stays open, so only the interrupt can end the reader's socket I/O
+                // (its connect, if still finishing, or the read that follows).
+                try (Socket accepted = server.accept()) {
+                    reader.interrupt();
+                    reader.join(TimeUnit.SECONDS.toMillis(20));
+                }
+
+                assertFalse(reader.isAlive());
+                assertNull(result.get());
+                assertTrue(interruptPreserved.get(), "the caller's interrupt status must be preserved");
+                assertSame(closedState, breakerState(cache));
+            } finally {
+                cache.close();
+            }
+        }
+    }
+
     @Test
     void malformedUnicodeKeysAreRejectedWhileCircuitIsOpen() throws Exception {
         @SuppressWarnings("unchecked")
@@ -547,4 +719,15 @@ class DistributedCacheCircuitBreakerTest {
         }
     }
 
+    /** The shape of Jedis's DefaultJedisSocketFactory connect failure: the attempt is suppressed, not the cause. */
+    private static JedisConnectionException connectFailure(final Exception attempt) {
+        final JedisConnectionException failure = new JedisConnectionException("Failed to connect to 127.0.0.1:6379.");
+        failure.addSuppressed(attempt);
+        return failure;
+    }
+
+    private static <E extends RuntimeException> E suppressing(final E failure, final Throwable suppressed) {
+        failure.addSuppressed(suppressed);
+        return failure;
+    }
 }

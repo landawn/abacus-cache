@@ -93,12 +93,13 @@ import com.landawn.abacus.util.N;
  * System.out.println("Memory overhead: " + ((occupancyRatio - 1) * 100) + "%");
  * }</pre>
  *
- * @param capacity a theoretical upper bound on the number of in-memory entries, derived from the off-heap
- *                 memory budget as {@code allocatedMemory / MIN_BLOCK_SIZE} (currently
- *                 {@code allocatedMemory / 64}), capped at {@link Integer#MAX_VALUE}. Because each entry
- *                 consumes a slot whose size is rounded up to the per-entry block size, the cache will
- *                 typically exhaust off-heap memory and start evicting long before {@code size} approaches
- *                 this value.
+ * @param capacity a theoretical upper bound on the number of memory-resident entries, derived from the
+ *                 off-heap memory budget as {@code allocatedMemory / MIN_BLOCK_SIZE} (currently
+ *                 {@code allocatedMemory / 64}), capped at {@link Integer#MAX_VALUE}: every such entry
+ *                 occupies at least one 64-byte slot. Entries above 64 bytes need larger or additional
+ *                 slots, so off-heap memory typically fills long before the memory-resident count
+ *                 ({@code size - sizeOnDisk}) approaches this value. It does not bound {@code size},
+ *                 which also counts disk-spilled entries.
  * @param size the current number of entries in the cache, counting both memory-resident and disk-spilled
  *             entries. To compute the memory-only entry count, use {@code size - sizeOnDisk}.
  * @param sizeOnDisk the current number of entries whose value bytes are stored on disk via the configured
