@@ -160,6 +160,98 @@ class LocalCacheTest {
         }
     }
 
+    /**
+     * Pins the documented capacity eviction of the default pool: admitting a new key into a full
+     * cache evicts {@code max(1, 20%)} of the entries, choosing the oldest last-access times.
+     */
+    @Test
+    void putNewKeyIntoFullCacheEvictsLeastRecentlyAccessedBatch() throws Exception {
+        final LocalCache<String, String> cache = new LocalCache<>(10, 0);
+        try {
+            for (int i = 0; i < 10; i++) {
+                assertTrue(cache.put("k" + i, "v" + i));
+            }
+
+            // Give k2..k9 a strictly later last-access time than k0 and k1.
+            Thread.sleep(50);
+            for (int i = 2; i < 10; i++) {
+                assertNotNull(cache.getOrNull("k" + i));
+            }
+
+            assertTrue(cache.put("new", "v"));
+
+            assertEquals(9, cache.size());
+            assertEquals(2L, cache.stats().evictionCount());
+            assertFalse(cache.containsKey("k0"));
+            assertFalse(cache.containsKey("k1"));
+            assertTrue(cache.containsKey("new"));
+            for (int i = 2; i < 10; i++) {
+                assertTrue(cache.containsKey("k" + i));
+            }
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** Pins the documented rule that replacing an existing key in a full cache never evicts other entries. */
+    @Test
+    void replacingAnExistingKeyInAFullCacheEvictsNothing() {
+        final LocalCache<String, String> cache = new LocalCache<>(10, 0);
+        try {
+            for (int i = 0; i < 10; i++) {
+                assertTrue(cache.put("k" + i, "v" + i));
+            }
+
+            assertTrue(cache.put("k3", "replaced"));
+
+            assertEquals(10, cache.size());
+            assertEquals(0L, cache.stats().evictionCount());
+            assertEquals("replaced", cache.getOrNull("k3"));
+            for (int i = 0; i < 10; i++) {
+                assertTrue(cache.containsKey("k" + i));
+            }
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * Pins the documented rule that {@code containsKey} does not refresh last-access time: entries
+     * probed only with {@code containsKey} stay the oldest and are the ones evicted.
+     */
+    @Test
+    void containsKeyDoesNotProtectAnEntryFromCapacityEviction() throws Exception {
+        final LocalCache<String, String> cache = new LocalCache<>(10, 0);
+        try {
+            for (int i = 0; i < 10; i++) {
+                assertTrue(cache.put("k" + i, "v" + i));
+            }
+
+            Thread.sleep(50);
+            // k2..k9 are read, which refreshes their last-access time.
+            for (int i = 2; i < 10; i++) {
+                assertNotNull(cache.getOrNull("k" + i));
+            }
+
+            // Probed last: if containsKey refreshed access, k0 and k1 would become the newest
+            // entries and k2/k3 would be evicted instead.
+            Thread.sleep(50);
+            assertTrue(cache.containsKey("k0"));
+            assertTrue(cache.containsKey("k1"));
+
+            assertTrue(cache.put("new", "v"));
+
+            assertEquals(2L, cache.stats().evictionCount());
+            assertFalse(cache.containsKey("k0"));
+            assertFalse(cache.containsKey("k1"));
+            for (int i = 2; i < 10; i++) {
+                assertTrue(cache.containsKey("k" + i));
+            }
+        } finally {
+            cache.close();
+        }
+    }
+
     @Test
     void putWithNegativeTimesDoesNotThrow() {
         final LocalCache<String, String> cache = new LocalCache<>(100, 0);

@@ -639,8 +639,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
 
             final boolean readFromDisk = !entry.isMemory();
             // A custom deserializer is allowed to decode in place. Preserve the pristine store
-            // bytes when this read may subsequently install them in the memory tier.
-            final byte[] bytesToDeserialize = readFromDisk && testerForLoadingItemFromDiskToMemory != null ? bytes.clone() : bytes;
+            // bytes when this read may subsequently install them in the memory tier. Raw byte[] and
+            // ByteBuffer values never reach a deserializer, and the promotion copies the bytes into
+            // native memory before the value is returned to the caller, so they can share the array.
+            final byte[] bytesToDeserialize = readFromDisk && testerForLoadingItemFromDiskToMemory != null && !isRawValueType(entry.type) ? bytes.clone()
+                    : bytes;
             final V value = deserializeValue(bytesToDeserialize, entry.type);
 
             if (readFromDisk) {
@@ -831,8 +834,8 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
             } else if (type.isByteBuffer()) {
                 // Moving a buffer's position to zero to read [0, position) would invalidate its
                 // mark. Operate on a duplicate so put() is observationally read-only for the
-                // caller's buffer, independent of ByteBufferType's own (currently duplicating)
-                // implementation.
+                // caller's buffer, independent of how ByteBufferType reads it. The result is a new,
+                // exactly sized array that nothing else references (see putToDisk).
                 bytes = ByteBufferType.byteArrayOf(((ByteBuffer) value).duplicate());
                 size = bytes.length;
             } else {
@@ -944,10 +947,12 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
      */
     private boolean putToDisk(final K key, final Type<V> type, final byte[] bytes, final int size, final long liveTime, final long maxIdleTime)
             throws RuntimeException {
-        // Always hand the store a private copy: `bytes` may alias a pooled serialization buffer
+        // Always hand the store a private array: `bytes` may alias a pooled serialization buffer
         // that is recycled (and reused by other threads) right after this put, or the caller's
-        // own byte[]/ByteBuffer contents.
-        final byte[] bytesToStore = N.copyOfRange(bytes, 0, size);
+        // own byte[]. Only a ByteBuffer value's bytes are already a new, exactly sized array that
+        // nothing else references or modifies (ByteBufferType.byteArrayOf), so copying it again
+        // would only double the allocation.
+        final byte[] bytesToStore = type.isByteBuffer() ? bytes : N.copyOfRange(bytes, 0, size);
 
         final long[] writeMillis = { -1L };
         // The installed entry; created inside the compute, so its TTL starts after the store write.
@@ -2120,6 +2125,11 @@ abstract class AbstractOffHeapCache<K, V> extends AbstractCache<K, V> {
         }
 
         return value;
+    }
+
+    /** Whether values of this type are stored as their raw bytes, bypassing the serializer and deserializer. */
+    private static boolean isRawValueType(final Type<?> type) {
+        return type.isPrimitiveByteArray() || type.isByteBuffer();
     }
 
     private static long elapsedMillisSince(final long startNanos) {

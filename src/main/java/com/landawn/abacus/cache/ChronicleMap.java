@@ -88,7 +88,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * @param capacity the maximum number of entries the cache can hold (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative;
-     *                   0 disables automatic eviction)
+     *                   0 disables the background expiry scan; capacity eviction still applies)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      * @throws RejectedExecutionException if {@code evictDelay} is positive and the pool's maintenance scheduler rejects the eviction task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
@@ -129,7 +129,7 @@ public class ChronicleMap<K, V> extends LocalCache<K, V> {
      *
      * @param capacity the maximum number of entries the cache can hold (must be positive)
      * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative;
-     *                   0 disables automatic eviction)
+     *                   0 disables the background expiry scan; capacity eviction still applies)
      * @param defaultLiveTime default TTL in milliseconds for entries added without explicit
      *                        expiration (0 or negative for no TTL expiration)
      * @param defaultMaxIdleTime default max idle time in milliseconds for entries added without

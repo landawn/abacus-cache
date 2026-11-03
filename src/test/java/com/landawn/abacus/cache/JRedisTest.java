@@ -44,6 +44,7 @@ import org.mockito.Mockito;
 import com.landawn.abacus.LogCapture;
 
 import redis.clients.jedis.RedisClient;
+import redis.clients.jedis.exceptions.JedisException;
 import redis.clients.jedis.params.SetParams;
 
 /**
@@ -283,6 +284,28 @@ class JRedisTest {
         RuntimeException thrown = assertThrows(RuntimeException.class, sharded::flushAll);
         assertEquals("shard 1 down", thrown.getMessage());
         // shard2 must still have been flushed even though shard1 threw
+        verify(shards.get(1)).flushAll();
+    }
+
+    /**
+     * A shard whose pool wait was interrupted (Jedis clears the status) must have the interrupt
+     * restored, while the remaining shards are still attempted.
+     */
+    @Test
+    void flushAllRestoresTheInterruptAShardPoolConsumedAndContinues() {
+        final JRedis<Object> sharded = newShardedCache("h1:6379,h2:6379");
+        final JedisException interrupted = new JedisException("Could not get a resource from the pool", new InterruptedException());
+        when(shards.get(0).flushAll()).thenThrow(interrupted);
+        when(shards.get(1).flushAll()).thenReturn("OK");
+        Thread.interrupted();
+
+        try {
+            assertSame(interrupted, assertThrows(JedisException.class, sharded::flushAll));
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+
         verify(shards.get(1)).flushAll();
     }
 

@@ -281,6 +281,10 @@ public class JRedis<T> extends AbstractJedisCacheClient<T> {
             try {
                 shardClient.flushAll();
             } catch (final RuntimeException e) {
+                // Re-assert an interrupt that the shard's pool consumed (see runCommand) before the
+                // remaining shards are attempted.
+                restoreInterruptIfConsumed(e);
+
                 if (logger.isWarnEnabled()) {
                     // The log line is the only place the failing shard's INDEX is recorded; the
                     // exception itself is rethrown (or attached as suppressed) for programmatic use.

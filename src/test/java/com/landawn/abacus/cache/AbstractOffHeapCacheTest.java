@@ -1278,6 +1278,38 @@ class AbstractOffHeapCacheTest {
         }
 
         /**
+         * A disk-routed ByteBuffer hands the store its extracted bytes without a second copy; that
+         * array must still be private: exactly sized, and independent of the caller's buffer.
+         */
+        @Test
+        void byteBufferDiskPutStoresPrivateExactlySizedBytes() {
+            final Map<String, byte[]> backing = new ConcurrentHashMap<>();
+            final byte[] data = { 1, 2, 3, 4, 5 };
+            final OffHeapCache<String, ByteBuffer> cache = OffHeapCache.<String, ByteBuffer> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(backing))
+                    .storeSelector((k, v, size) -> 2) // disk only
+                    .build();
+            try {
+                final ByteBuffer input = ByteBuffer.allocate(16);
+                input.put(data);
+                assertTrue(cache.put("k", input));
+                assertEquals(data.length, input.position(), "put must leave the caller's buffer untouched");
+
+                final byte[] stored = backing.get("k");
+                assertArrayEquals(data, stored, "the store must receive exactly the bytes up to the buffer's position");
+                assertFalse(stored == input.array(), "the store must never receive the caller's backing array");
+
+                Arrays.fill(input.array(), (byte) 0);
+                assertArrayEquals(data, backing.get("k"), "changing the caller's buffer after put must not alter the stored bytes");
+                assertArrayEquals(data, ByteBufferType.byteArrayOf(cache.getOrNull("k")));
+            } finally {
+                cache.close();
+            }
+        }
+
+        /**
          * A same-key disk replacement spans both the store and the entry map. The whole transition
          * runs inside the map's per-key atomic compute, so a second put cannot overwrite the bytes
          * while the first put is paused retiring its prior entry - the final mapping and the store
@@ -2082,6 +2114,61 @@ class AbstractOffHeapCacheTest {
         @Test
         void mappedByteBufferDiskReadsAndPromotionReturnHeapBuffers(@TempDir final Path directory) throws Exception {
             assertMappedByteBufferRoundTrip(directory, true);
+        }
+
+        /**
+         * Raw byte[] and ByteBuffer disk reads share one private array between the returned value
+         * and the promotion copy; the promotion completes before the value is returned, so mutating
+         * the returned value must never reach the promoted memory copy or the store.
+         */
+        @Test
+        void mutatingAPromotedRawValueCannotCorruptTheMemoryCopy() {
+            final byte[] data = { 9, 8, 7, 6, 5, 4 };
+
+            final Map<String, byte[]> arrayBacking = new ConcurrentHashMap<>();
+            final OffHeapCache<String, byte[]> arrayCache = OffHeapCache.<String, byte[]> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(arrayBacking))
+                    .storeSelector((key, value, size) -> 2)
+                    .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> true)
+                    .build();
+            try {
+                assertTrue(arrayCache.put("key", data.clone()));
+                final byte[] retainedByStore = arrayBacking.get("key");
+
+                final byte[] first = arrayCache.getOrNull("key"); // disk read + promotion
+                assertArrayEquals(data, first);
+                assertEquals(0L, arrayCache.stats().sizeOnDisk(), "the entry should have been promoted");
+                assertFalse(first == retainedByStore, "the store's retained array must never be returned");
+
+                Arrays.fill(first, (byte) 0);
+                assertArrayEquals(data, retainedByStore, "the store's retained array must be untouched");
+                assertArrayEquals(data, arrayCache.getOrNull("key"), "the promoted memory copy must keep the original bytes");
+            } finally {
+                arrayCache.close();
+            }
+
+            final Map<String, byte[]> bufferBacking = new ConcurrentHashMap<>();
+            final OffHeapCache<String, ByteBuffer> bufferCache = OffHeapCache.<String, ByteBuffer> builder()
+                    .capacityInMB(1)
+                    .evictDelay(0)
+                    .offHeapStore(newInMemoryStore(bufferBacking))
+                    .storeSelector((key, value, size) -> 2)
+                    .testerForLoadingItemFromDiskToMemory((activity, size, elapsed) -> true)
+                    .build();
+            try {
+                assertTrue(bufferCache.put("key", bufferOf(data)));
+
+                final ByteBuffer first = bufferCache.getOrNull("key"); // disk read + promotion
+                assertArrayEquals(data, ByteBufferType.byteArrayOf(first));
+                assertEquals(0L, bufferCache.stats().sizeOnDisk(), "the entry should have been promoted");
+
+                Arrays.fill(first.array(), (byte) 0);
+                assertArrayEquals(data, ByteBufferType.byteArrayOf(bufferCache.getOrNull("key")), "the promoted memory copy must keep the original bytes");
+            } finally {
+                bufferCache.close();
+            }
         }
 
         /** A custom in-place decoder must not alter bytes that a successful disk read promotes. */

@@ -14,6 +14,9 @@
 
 package com.landawn.abacus.cache;
 
+import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
+import java.nio.channels.ClosedByInterruptException;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -21,6 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.landawn.abacus.logging.Logger;
 import com.landawn.abacus.logging.LoggerFactory;
 import com.landawn.abacus.util.Charsets;
+import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.N;
 import com.landawn.abacus.util.Strings;
 
@@ -315,8 +319,18 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
      *     is rejected consistently even while the circuit is open.</li>
      * <li>All exceptions from the underlying cache client are caught and treated as failures, except
      *     {@link IllegalArgumentException} (a deterministic client-side validation error, e.g. an over-long
-     *     generated key), which is rethrown without touching the breaker state; the closed-to-open
-     *     transition is logged once at WARN level</li>
+     *     generated key), which is rethrown without touching the breaker state, and a failure caused by the
+     *     caller's own interrupt (an interrupted caller says nothing about backend availability; the bundled
+     *     {@code SpyMemcached} client refuses every operation from such a thread), which is reported as a
+     *     miss ({@code null}) without touching the breaker state and with the interrupt status preserved.
+     *     A failure counts as interrupt-caused only while the calling thread's interrupt status is still set
+     *     <i>and</i> its cause chain contains an {@link InterruptedException},
+     *     {@link java.nio.channels.ClosedByInterruptException}, or an {@link java.io.InterruptedIOException}
+     *     other than {@link java.net.SocketTimeoutException} (a socket timeout is a backend failure); any
+     *     other failure on an interrupted thread is still counted. The bundled Jedis clients re-assert the
+     *     interrupt status that Jedis clears when an interrupt ends its connection-pool wait, so such a
+     *     failure qualifies as well. The closed-to-open transition is logged
+     *     once at WARN level</li>
      * </ul>
      *
      * <p><b>Thread Safety:</b>
@@ -399,8 +413,9 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         }
 
         V result = null;
-        // TRUE = success, FALSE = availability failure, null = client-side validation error
-        // (rethrown; must neither reset nor advance the breaker).
+        // TRUE = success, FALSE = availability failure, null = an outcome that must neither reset
+        // nor advance the breaker: a client-side validation error (rethrown) or a failure caused by
+        // the caller's own interrupt (reported as a miss).
         Boolean isOK = null;
         long successNanos = 0L;
 
@@ -416,6 +431,21 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             // reads for ALL keys, with only debug-level evidence.
             throw e;
         } catch (final Exception e) {
+            if (isCausedByCallerInterrupt(e)) {
+                // The caller's own interrupt, not backend availability, explains this failure:
+                // SpyMemcached, for example, refuses every operation from a thread whose interrupt
+                // status is set before contacting the server. Counting it would let a single thread
+                // that keeps its interrupt flag set open the circuit for ALL threads. Report a miss
+                // without touching the breaker (isOK stays null) and leave the interrupt status set.
+                // The flag alone is not evidence: a genuine backend failure on an interrupted thread
+                // (e.g. a Redis connection error) carries no interrupt cause and is still counted.
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Distributed cache read failed on an interrupted thread (treated as cache miss; not counted by the circuit breaker)", e);
+                }
+
+                return null;
+            }
+
             isOK = Boolean.FALSE;
 
             // Swallowed by design: the circuit breaker (updated in the finally block) handles
@@ -429,7 +459,7 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
             }
         } finally {
             if (isOK == null) {
-                // Validation error: leave the breaker state untouched.
+                // Validation error or caller interrupt: leave the breaker state untouched.
             } else if (isOK) {
                 // Steady-state fast path: skip the atomic write when the circuit is already closed.
                 if (circuitBreaker.get() != CLOSED_CIRCUIT) {
@@ -1154,6 +1184,21 @@ public class DistributedCache<K, V> extends AbstractCache<K, V> {
         }
 
         return current.failedCount <= 1 ? current : new CircuitBreakerState(1, current.lastFailedTime, true);
+    }
+
+    /**
+     * Whether {@code e} was caused by the calling thread's own interrupt rather than by the backend:
+     * the interrupt status must still be set and the cause chain must carry interrupt evidence.
+     * {@link SocketTimeoutException} extends {@link InterruptedIOException} but reports an
+     * unresponsive server, so it does not qualify.
+     */
+    private static boolean isCausedByCallerInterrupt(final Throwable e) {
+        return Thread.currentThread().isInterrupted()
+                && ExceptionUtil
+                        .findCause(e,
+                                t -> t instanceof InterruptedException || t instanceof ClosedByInterruptException
+                                        || (t instanceof InterruptedIOException && !(t instanceof SocketTimeoutException)))
+                        .isPresent();
     }
 
     /**

@@ -30,7 +30,10 @@ import org.mockito.Mockito;
 
 import com.landawn.abacus.LogCapture;
 
+import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.RedisClusterClient;
+import redis.clients.jedis.exceptions.JedisBroadcastException;
+import redis.clients.jedis.exceptions.JedisException;
 import redis.clients.jedis.providers.ClusterConnectionProvider;
 
 /**
@@ -139,6 +142,41 @@ class JRedisClusterTest {
 
         RuntimeException thrown = assertThrows(RuntimeException.class, cache::flushAll);
         assertEquals("cluster down", thrown.getMessage());
+    }
+
+    /** A node's interrupted pool wait arrives as a broadcast reply; the interrupt must be restored. */
+    @Test
+    void flushAllRestoresTheInterruptReportedInABroadcastReply() {
+        final JedisBroadcastException broadcast = new JedisBroadcastException();
+        broadcast.addReply(new HostAndPort("10.0.0.1", 7000), "OK");
+        broadcast.addReply(new HostAndPort("10.0.0.2", 7000), new JedisException("Could not get a resource from the pool", new InterruptedException()));
+        when(mockCluster.flushAll()).thenThrow(broadcast);
+        Thread.interrupted();
+
+        try {
+            assertSame(broadcast, assertThrows(JedisBroadcastException.class, cache::flushAll));
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    /** End to end: a get whose pool wait was interrupted is a miss that leaves the breaker closed. */
+    @Test
+    void interruptedPoolWaitIsNotCountedByTheDistributedCacheBreaker() throws Exception {
+        when(mockCluster.get(any(byte[].class))).thenThrow(new JedisException("Could not get a resource from the pool", new InterruptedException()));
+        final DistributedCache<String, Object> distributed = new DistributedCache<>(cache, "", 0, 60_000L);
+        final Object closedState = DistributedCacheBreakerAccess.breakerState(distributed);
+        Thread.interrupted();
+
+        try {
+            assertEquals(null, distributed.getOrNull("key"));
+            assertTrue(Thread.currentThread().isInterrupted(), "the interrupt Jedis consumed must be restored");
+        } finally {
+            Thread.interrupted();
+        }
+
+        assertSame(closedState, DistributedCacheBreakerAccess.breakerState(distributed));
     }
 
     // Lifecycle

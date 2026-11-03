@@ -244,7 +244,7 @@ public class JRedisCluster<T> extends AbstractJedisCacheClient<T> {
 
         // RedisClusterClient.flushAll() is a broadcast command: Jedis sends FLUSHALL to every primary
         // node and aggregates the per-node results, so no manual node iteration is required here.
-        cluster.flushAll();
+        runCommand(cluster::flushAll);
     }
 
     /**

@@ -165,7 +165,9 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * cache and helps maintain predictable memory usage.
      *
      * <p>Use this constructor when you need to enforce custom size limits based on your
-     * application's memory constraints or cache infrastructure requirements.
+     * application's memory constraints or cache infrastructure requirements. The limit also
+     * applies to reads (see {@link #getMaxSize()}): do not set it below the size of entries
+     * written by other clients that share the cache.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -255,9 +257,11 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      * executor. Decoding cost depends on the payload and configured serializers.
      *
      * <p>This method is called by SpyMemcached to determine whether the decode operation should
-     * be scheduled on a worker thread. Returning {@code false} makes SpyMemcached decode lazily
-     * on the thread that retrieves the future's value; a timed future wait does not bound this
-     * synchronous decoding work.
+     * be scheduled on a worker thread. For plain and bulk gets, returning {@code false} makes
+     * SpyMemcached decode lazily on the thread that retrieves the future's value; a timed future
+     * wait does not bound this synchronous decoding work. SpyMemcached's CAS reads ({@code gets})
+     * and get-and-touch operations do not consult this method: they decode eagerly on the
+     * client's I/O thread, where a decode failure is handled as a connection error.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code
@@ -537,6 +541,12 @@ public class KryoTranscoder<T> implements Transcoder<T> {
      *
      * <p>The returned value is fixed at construction time. It lets callers query the size limit
      * and decide whether to attempt caching particular objects.
+     *
+     * <p>SpyMemcached also applies this limit to entries it reads: it wraps each received payload
+     * in a {@link CachedData} bounded by this value before {@link #decode(CachedData)} is called.
+     * A stored entry larger than this limit (for example, one written by a client configured with
+     * a larger limit) is therefore rejected on SpyMemcached's I/O thread, which treats the
+     * rejection as a connection error, and the read does not return the value.
      *
      * <p><b>Usage Examples:</b>
      * <pre>{@code

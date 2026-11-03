@@ -27,6 +27,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 import com.landawn.abacus.exception.UncheckedIOException;
 import com.landawn.abacus.logging.Logger;
@@ -218,7 +219,8 @@ interface LegacySpyMemcachedAsyncApi<T> {
  * <p><b>Interruption:</b> the delegate's enqueue path waits interruptibly, so an operation
  * invoked while the calling thread's interrupt status is already set fails with
  * {@link IllegalStateException} before anything is enqueued, even when the queue has room; the
- * interrupt status is preserved. An interrupt during a synchronous method's response wait cancels
+ * interrupt status is preserved, and this wrapper gives that exception an
+ * {@link InterruptedException} cause so callers can tell it from a backend failure. An interrupt during a synchronous method's response wait cancels
  * the operation, restores the interrupt status, and surfaces as a {@link RuntimeException}.
  *
  * <p><b>Key validation:</b> every key must be non-null and contain well-formed UTF-16; unpaired
@@ -291,6 +293,9 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
      * without the overflow.
      */
     private static final long MAX_SAFE_OPERATION_TIMEOUT_MILLIS = Long.MAX_VALUE / 2_000_000L;
+
+    /** Message prefix of spymemcached 2.12.x's cause-less interrupted-enqueue refusal. */
+    static final String INTERRUPTED_ENQUEUE_MESSAGE_PREFIX = "Interrupted while waiting to add";
 
     /**
      * Stores counter seeds as raw ASCII decimal bytes (flags 0) — the only representation
@@ -504,7 +509,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         // restores the thread's interrupt flag: spymemcached's sync methods wrap
         // InterruptedException in a RuntimeException WITHOUT restoring the flag, silently
         // defeating cooperative cancellation in thread pools.
-        return (T) resultOf(mc.asyncGet(key));
+        return (T) resultOf(enqueue(() -> mc.asyncGet(key)));
     }
 
     /**
@@ -550,7 +555,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public ContinuableFuture<T> asyncGet(final String key) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
         checkKey(key);
-        return ContinuableFuture.wrap((Future<T>) mc.asyncGet(key));
+        return ContinuableFuture.wrap((Future<T>) enqueue(() -> mc.asyncGet(key)));
     }
 
     /**
@@ -610,7 +615,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         final String[] keySnapshot = snapshotBulkKeys(keys);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
-        return (Map<String, T>) resultOf(mc.asyncGetBulk(keySnapshot));
+        return (Map<String, T>) resultOf(enqueue(() -> mc.asyncGetBulk(keySnapshot)));
     }
 
     /**
@@ -666,7 +671,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public final ContinuableFuture<Map<String, T>> asyncGetBulk(final String... keys) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
         final String[] keySnapshot = snapshotBulkKeys(keys);
-        return wrapBulkFuture((Future) mc.asyncGetBulk(keySnapshot));
+        return wrapBulkFuture((Future) enqueue(() -> mc.asyncGetBulk(keySnapshot)));
     }
 
     /**
@@ -724,7 +729,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         final List<String> keySnapshot = snapshotBulkKeys(keys);
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
-        return (Map<String, T>) resultOf(mc.asyncGetBulk(keySnapshot));
+        return (Map<String, T>) resultOf(enqueue(() -> mc.asyncGetBulk(keySnapshot)));
     }
 
     /**
@@ -775,7 +780,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public final ContinuableFuture<Map<String, T>> asyncGetBulk(final Collection<String> keys) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
         final List<String> keySnapshot = snapshotBulkKeys(keys);
-        return wrapBulkFuture((Future) mc.asyncGetBulk(keySnapshot));
+        return wrapBulkFuture((Future) enqueue(() -> mc.asyncGetBulk(keySnapshot)));
     }
 
     /**
@@ -994,7 +999,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         checkKey(key);
         checkValue(value);
-        return Boolean.TRUE.equals(resultOf(mc.set(key, toMemcachedExpiration(liveTime), value)));
+        return Boolean.TRUE.equals(resultOf(enqueue(() -> mc.set(key, toMemcachedExpiration(liveTime), value))));
     }
 
     /**
@@ -1058,7 +1063,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         checkKey(key);
         checkValue(value);
-        return ContinuableFuture.wrap(mc.set(key, toMemcachedExpiration(liveTime), value));
+        return ContinuableFuture.wrap(enqueue(() -> mc.set(key, toMemcachedExpiration(liveTime), value)));
     }
 
     /**
@@ -1146,7 +1151,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         checkKey(key);
         checkValue(value);
-        return Boolean.TRUE.equals(resultOf(mc.add(key, toMemcachedExpiration(liveTime), value)));
+        return Boolean.TRUE.equals(resultOf(enqueue(() -> mc.add(key, toMemcachedExpiration(liveTime), value))));
     }
 
     /**
@@ -1214,7 +1219,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         checkKey(key);
         checkValue(value);
-        return ContinuableFuture.wrap(mc.add(key, toMemcachedExpiration(liveTime), value));
+        return ContinuableFuture.wrap(enqueue(() -> mc.add(key, toMemcachedExpiration(liveTime), value)));
     }
 
     /**
@@ -1279,7 +1284,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         checkKey(key);
         checkValue(value);
-        return Boolean.TRUE.equals(resultOf(mc.replace(key, toMemcachedExpiration(liveTime), value)));
+        return Boolean.TRUE.equals(resultOf(enqueue(() -> mc.replace(key, toMemcachedExpiration(liveTime), value))));
     }
 
     /**
@@ -1346,7 +1351,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         checkKey(key);
         checkValue(value);
-        return ContinuableFuture.wrap(mc.replace(key, toMemcachedExpiration(liveTime), value));
+        return ContinuableFuture.wrap(enqueue(() -> mc.replace(key, toMemcachedExpiration(liveTime), value)));
     }
 
     /**
@@ -1398,7 +1403,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public boolean remove(final String key) throws IllegalStateException, IllegalArgumentException, RuntimeException {
         assertNotShutdown();
         checkKey(key);
-        return Boolean.TRUE.equals(resultOf(mc.delete(key)));
+        return Boolean.TRUE.equals(resultOf(enqueue(() -> mc.delete(key))));
     }
 
     /**
@@ -1444,7 +1449,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     public ContinuableFuture<Boolean> asyncRemove(final String key) throws IllegalStateException, IllegalArgumentException {
         assertNotShutdown();
         checkKey(key);
-        return ContinuableFuture.wrap(mc.delete(key));
+        return ContinuableFuture.wrap(enqueue(() -> mc.delete(key)));
     }
 
     /**
@@ -1523,7 +1528,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         // See get(String): resultOf preserves the interrupt flag, unlike the sync client call.
         // It also surfaces errored/cancelled operations as RuntimeException instead of the
         // ambiguous -1 the sync client returns for ANY failure, so -1 reliably means "absent".
-        return resultOf(mc.asyncIncr(key, 1));
+        return resultOf(enqueue(() -> mc.asyncIncr(key, 1)));
     }
 
     /**
@@ -1589,7 +1594,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         checkKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
-        return resultOf(mc.asyncIncr(key, delta));
+        return resultOf(enqueue(() -> mc.asyncIncr(key, delta)));
     }
 
     /**
@@ -1780,7 +1785,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         checkKey(key);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
-        return resultOf(mc.asyncDecr(key, 1));
+        return resultOf(enqueue(() -> mc.asyncDecr(key, 1)));
     }
 
     /**
@@ -1846,7 +1851,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         checkKey(key);
         N.checkArgNotNegative(delta, cs.delta);
         // See incr(String): resultOf preserves the interrupt flag and disambiguates -1.
-        return resultOf(mc.asyncDecr(key, delta));
+        return resultOf(enqueue(() -> mc.asyncDecr(key, delta)));
     }
 
     /**
@@ -2025,16 +2030,16 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
             throws IllegalStateException, RuntimeException {
         // The async variants + resultOf preserve the interrupt flag and surface errored or
         // cancelled operations as RuntimeException, so -1 here reliably means "key absent".
-        long result = resultOf(isIncrement ? mc.asyncIncr(key, delta) : mc.asyncDecr(key, delta));
+        long result = resultOf(isIncrement ? enqueue(() -> mc.asyncIncr(key, delta)) : enqueue(() -> mc.asyncDecr(key, delta)));
 
         if (result == -1) {
             // Key absent: seed it atomically (add succeeds only if still absent).
-            if (Boolean.TRUE.equals(resultOf(mc.add(key, expiration, String.valueOf(defaultValue), ASCII_COUNTER_TRANSCODER)))) {
+            if (Boolean.TRUE.equals(resultOf(enqueue(() -> mc.add(key, expiration, String.valueOf(defaultValue), ASCII_COUNTER_TRANSCODER))))) {
                 return defaultValue;
             }
 
             // Another thread seeded the key concurrently; apply the mutation to the existing value.
-            result = resultOf(isIncrement ? mc.asyncIncr(key, delta) : mc.asyncDecr(key, delta));
+            result = resultOf(isIncrement ? enqueue(() -> mc.asyncIncr(key, delta)) : enqueue(() -> mc.asyncDecr(key, delta)));
         }
 
         return result;
@@ -2086,7 +2091,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public void flushAll() throws IllegalStateException, RuntimeException {
         assertNotShutdown();
-        if (!Boolean.TRUE.equals(resultOf(mc.flush()))) {
+        if (!Boolean.TRUE.equals(resultOf(enqueue(() -> mc.flush())))) {
             throw new IllegalStateException("The Memcached flush was not reported successful");
         }
     }
@@ -2135,7 +2140,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
     @Override
     public ContinuableFuture<Boolean> asyncFlushAll() throws IllegalStateException {
         assertNotShutdown();
-        return ContinuableFuture.wrap(mc.flush());
+        return ContinuableFuture.wrap(enqueue(() -> mc.flush()));
     }
 
     /**
@@ -2190,7 +2195,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         // ABSOLUTE Unix timestamps, not relative seconds. Sending a raw 40-day delay (3456000s)
         // would be read as an epoch time in Feb 1970 - i.e., flush (nearly) immediately instead
         // of in 40 days. toMemcachedExpiration() converts >30-day delays to now+delay timestamps.
-        return Boolean.TRUE.equals(resultOf(mc.flush(toMemcachedExpiration(delay))));
+        return Boolean.TRUE.equals(resultOf(enqueue(() -> mc.flush(toMemcachedExpiration(delay)))));
     }
 
     /**
@@ -2241,7 +2246,7 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
         assertNotShutdown();
         // See flushAll(long): flush_all's delay is subject to the server's 30-day absolute-vs-
         // relative rule, so it must be converted exactly like storage expirations.
-        return ContinuableFuture.wrap(mc.flush(toMemcachedExpiration(delay)));
+        return ContinuableFuture.wrap(enqueue(() -> mc.flush(toMemcachedExpiration(delay))));
     }
 
     /**
@@ -2513,6 +2518,40 @@ public class SpyMemcached<T> extends AbstractDistributedCacheClient<T> implement
             // failure raised while executing the asynchronous operation on another thread.
             throw ExceptionUtil.toRuntimeException(e);
         }
+    }
+
+    /**
+     * Runs one delegate dispatch call. When the delegate refuses the operation because the calling
+     * thread is interrupted, the refusal gets an {@link InterruptedException} cause; see
+     * {@link #tagInterruptedEnqueue(IllegalStateException)}.
+     */
+    private static <F> F enqueue(final Supplier<F> dispatch) throws IllegalStateException {
+        try {
+            return dispatch.get();
+        } catch (final IllegalStateException e) {
+            throw tagInterruptedEnqueue(e);
+        }
+    }
+
+    /**
+     * spymemcached's {@code TCPMemcachedNodeImpl.addOp} turns an interrupted enqueue wait into an
+     * {@code IllegalStateException("Interrupted while waiting to add ...")} with no cause, which looks
+     * exactly like a backend failure (for example, to {@link DistributedCache}'s circuit breaker).
+     * Attach the missing interrupt evidence. The message prefix separates this refusal from its
+     * sibling {@code "Timed out waiting to add"} and from {@code "Shutting down"}.
+     */
+    static IllegalStateException tagInterruptedEnqueue(final IllegalStateException e) {
+        final String message = e.getMessage();
+
+        if (e.getCause() == null && message != null && message.startsWith(INTERRUPTED_ENQUEUE_MESSAGE_PREFIX) && Thread.currentThread().isInterrupted()) {
+            try {
+                e.initCause(new InterruptedException(message));
+            } catch (final IllegalStateException alreadyInitialized) {
+                // Constructed with an explicit null cause; it cannot be tagged in place.
+            }
+        }
+
+        return e;
     }
 
     /** Preserves the wait failure if cancellation races with delegate shutdown. */

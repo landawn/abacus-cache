@@ -835,6 +835,152 @@ class SpyMemcachedTest {
         assertThrows(IllegalStateException.class, () -> cache.get("after-close"));
     }
 
+    /**
+     * spymemcached's {@code addOp} refuses an operation from an interrupted thread with a cause-less
+     * {@code IllegalStateException}; the wrapper must attach an {@link InterruptedException} cause
+     * (same instance, same message) so callers such as {@link DistributedCache} can recognize it.
+     */
+    @Test
+    void interruptedEnqueueRefusalCarriesInterruptedExceptionCause() throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class);
+        final IllegalStateException getRefusal = new IllegalStateException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " get op");
+        final IllegalStateException putRefusal = new IllegalStateException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " set op");
+        when(delegate.asyncGet("k")).thenThrow(getRefusal);
+        when(delegate.set(eq("k"), anyInt(), any())).thenThrow(putRefusal);
+        final SpyMemcached<Object> client = clientWithDelegate(delegate);
+
+        Thread.currentThread().interrupt();
+
+        try {
+            assertSame(getRefusal, assertThrows(IllegalStateException.class, () -> client.get("k")));
+            assertSame(putRefusal, assertThrows(IllegalStateException.class, () -> client.put("k", "v", 0)));
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+
+        assertTrue(getRefusal.getCause() instanceof InterruptedException);
+        assertTrue(putRefusal.getCause() instanceof InterruptedException);
+    }
+
+    /**
+     * Pins every delegate dispatch site: each one must route through the tagging wrapper, so an
+     * interrupted refusal from any operation (synchronous or asynchronous) carries the cause.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "get", "asyncGet", "getBulkArray", "getBulkCollection", "asyncGetBulkArray", "asyncGetBulkCollection", "put", "asyncPut", "add",
+            "asyncAdd", "replace", "asyncReplace", "remove", "asyncRemove", "incr", "incrDelta", "incrSeedProbe", "decr", "decrDelta", "decrSeedProbe",
+            "flushAll", "asyncFlushAll", "flushAllDelay", "asyncFlushAllDelay" })
+    void everyDispatchTagsTheInterruptedEnqueueRefusal(final String operation) throws Exception {
+        // Every delegate call is refused the way spymemcached's addOp refuses an interrupted thread.
+        final MemcachedClient delegate = mock(MemcachedClient.class, invocation -> {
+            throw new IllegalStateException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " " + invocation.getMethod().getName());
+        });
+        final SpyMemcached<Object> client = clientWithDelegate(delegate);
+        final List<String> keys = List.of("k1", "k2");
+
+        Thread.currentThread().interrupt();
+
+        final IllegalStateException refusal;
+
+        try {
+            refusal = assertThrows(IllegalStateException.class, () -> {
+                switch (operation) {
+                    case "get" -> client.get("k");
+                    case "asyncGet" -> client.asyncGet("k");
+                    case "getBulkArray" -> client.getBulk("k1", "k2");
+                    case "getBulkCollection" -> client.getBulk(keys);
+                    case "asyncGetBulkArray" -> client.asyncGetBulk("k1", "k2");
+                    case "asyncGetBulkCollection" -> client.asyncGetBulk(keys);
+                    case "put" -> client.put("k", "v", 0);
+                    case "asyncPut" -> client.asyncPut("k", "v", 0);
+                    case "add" -> client.add("k", "v", 0);
+                    case "asyncAdd" -> client.asyncAdd("k", "v", 0);
+                    case "replace" -> client.replace("k", "v", 0);
+                    case "asyncReplace" -> client.asyncReplace("k", "v", 0);
+                    case "remove" -> client.remove("k");
+                    case "asyncRemove" -> client.asyncRemove("k");
+                    case "incr" -> client.incr("k");
+                    case "incrDelta" -> client.incr("k", 2);
+                    case "incrSeedProbe" -> client.incr("k", 2, 10);
+                    case "decr" -> client.decr("k");
+                    case "decrDelta" -> client.decr("k", 2);
+                    case "decrSeedProbe" -> client.decr("k", 2, 10);
+                    case "flushAll" -> client.flushAll();
+                    case "asyncFlushAll" -> client.asyncFlushAll();
+                    case "flushAllDelay" -> client.flushAll(1_000L);
+                    case "asyncFlushAllDelay" -> client.asyncFlushAll(1_000L);
+                    default -> throw new IllegalArgumentException(operation);
+                }
+            });
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+
+        assertTrue(refusal.getMessage().startsWith(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX), refusal.getMessage());
+        assertTrue(refusal.getCause() instanceof InterruptedException, operation + " was dispatched without the tagging wrapper");
+    }
+
+    /** The counter-seeding add, reached only after a mutation reports the key absent, is tagged as well. */
+    @ParameterizedTest
+    @ValueSource(booleans = { true, false })
+    @SuppressWarnings("unchecked")
+    void counterSeedAddTagsTheInterruptedEnqueueRefusal(final boolean isIncrement) throws Exception {
+        final MemcachedClient delegate = mock(MemcachedClient.class, invocation -> {
+            throw new IllegalStateException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " " + invocation.getMethod().getName());
+        });
+        final OperationFuture<Long> absent = mock(OperationFuture.class);
+        when(absent.get(anyLong(), any(TimeUnit.class))).thenReturn(-1L);
+        Mockito.doReturn(absent).when(delegate).asyncIncr(anyString(), anyLong());
+        Mockito.doReturn(absent).when(delegate).asyncDecr(anyString(), anyLong());
+        final SpyMemcached<Object> client = clientWithDelegate(delegate);
+
+        Thread.currentThread().interrupt();
+
+        final IllegalStateException refusal;
+
+        try {
+            refusal = assertThrows(IllegalStateException.class, () -> {
+                if (isIncrement) {
+                    client.incr("k", 2, 10);
+                } else {
+                    client.decr("k", 2, 10);
+                }
+            });
+        } finally {
+            Thread.interrupted();
+        }
+
+        assertEquals(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " add", refusal.getMessage());
+        assertTrue(refusal.getCause() instanceof InterruptedException);
+    }
+
+    @Test
+    void onlyTheInterruptedEnqueueRefusalOnAnInterruptedThreadIsTagged() {
+        final IllegalStateException notInterrupted = new IllegalStateException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " op");
+        assertSame(notInterrupted, SpyMemcached.tagInterruptedEnqueue(notInterrupted));
+        assertEquals(null, notInterrupted.getCause());
+
+        final IllegalStateException queueFull = new IllegalStateException("Timed out waiting to add op(max wait=10000ms)");
+        final IllegalStateException shuttingDown = new IllegalStateException("Shutting down");
+        final IllegalStateException explicitNullCause = new IllegalStateException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " op", null);
+
+        Thread.currentThread().interrupt();
+
+        try {
+            assertSame(queueFull, SpyMemcached.tagInterruptedEnqueue(queueFull));
+            assertSame(shuttingDown, SpyMemcached.tagInterruptedEnqueue(shuttingDown));
+            assertSame(explicitNullCause, SpyMemcached.tagInterruptedEnqueue(explicitNullCause));
+        } finally {
+            Thread.interrupted();
+        }
+
+        assertEquals(null, queueFull.getCause());
+        assertEquals(null, shuttingDown.getCause());
+        assertEquals(null, explicitNullCause.getCause());
+    }
+
     @Test
     void shutdownCheckPrecedesInvalidMemcachedKeys() throws Exception {
         final SpyMemcached<Object> cache = clientWithDelegate(mock(MemcachedClient.class));

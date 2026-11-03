@@ -42,7 +42,8 @@ package com.landawn.abacus.cache;
  * Implementation considerations:
  * <ul>
  * <li>Thread safety - implementations must handle concurrent operations safely.</li>
- * <li>Persistence - data should survive JVM restarts if required.</li>
+ * <li>Persistence - durability across JVM restarts is not required by the owning cache, which
+ *     cannot rebuild its entries from store bytes after a restart (see above).</li>
  * <li>Performance - optimize for cache access patterns (frequent reads).</li>
  * <li>Resource management - handle file handles and disk space efficiently.</li>
  * <li>Error handling - {@link #get(Object) get} may return {@code null}, and

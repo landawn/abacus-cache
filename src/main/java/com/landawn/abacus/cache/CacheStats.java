@@ -33,8 +33,10 @@ import com.landawn.abacus.util.N;
  * </ul>
  *
  * <p>Instances are immutable and thread-safe. Once created, the captured values cannot change;
- * to get updated statistics, call the {@code stats()} method on the cache implementation again to obtain a
- * new snapshot.
+ * to get updated statistics, call the implementation's {@code stats()} method again to obtain a
+ * new snapshot. {@code stats()} is not part of the {@link Cache} interface: {@link LocalCache#stats()}
+ * and {@link CaffeineCache#stats()} return this record, the off-heap caches return the separate
+ * {@link OffHeapCacheStats} record, and {@link Ehcache} exposes no snapshot.
  *
  * <p><b>Statistics categories:</b>
  * <ul>
@@ -129,6 +131,7 @@ import com.landawn.abacus.util.N;
  *                 track memory usage. Must be {@code -1} or non-negative.
  * @see Cache
  * @see LocalCache#stats()
+ * @see CaffeineCache#stats()
  */
 public record CacheStats(int capacity, int size, long putCount, long getCount, long hitCount, long missCount, long evictionCount, long maxMemory,
         long dataSize) {

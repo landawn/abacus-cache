@@ -1041,6 +1041,23 @@ class CacheFactoryTest {
             }
         }
 
+        /**
+         * Pins the documented {@code @throws ExceptionInInitializerError}: a validated custom class is
+         * initialized only when instantiated, a failing static initializer escapes unwrapped on the
+         * first attempt, and later attempts see {@link NoClassDefFoundError}. No other test touches
+         * {@link FailingInitializerProviderCache}, so the first call here is the first initialization.
+         */
+        @Test
+        void customClassStaticInitializerFailurePropagatesUnwrapped() {
+            final String spec = FailingInitializerProviderCache.class.getName() + "(localhost:9999)";
+
+            final ExceptionInInitializerError first = assertThrows(ExceptionInInitializerError.class, () -> CacheFactory.createCache(spec));
+            assertTrue(first.getCause() instanceof IllegalStateException, String.valueOf(first.getCause()));
+            assertEquals("static initializer failure", first.getCause().getMessage());
+
+            assertThrows(NoClassDefFoundError.class, () -> CacheFactory.createCache(spec));
+        }
+
         // Validation: null/empty provider string
 
     }
@@ -1069,6 +1086,19 @@ class CacheFactoryTest {
     public static class NestedProviderCache<K, V> extends DummyProviderCache<K, V> {
         public NestedProviderCache(final String serverUrl) {
             super(serverUrl);
+        }
+    }
+
+    /** A concrete custom provider whose static initializer always fails. */
+    public static class FailingInitializerProviderCache<K, V> extends DummyProviderCache<K, V> {
+        private static final Object INITIALIZED = failInitialization();
+
+        public FailingInitializerProviderCache(final String serverUrl) {
+            super(serverUrl);
+        }
+
+        private static Object failInitialization() {
+            throw new IllegalStateException("static initializer failure");
         }
     }
 

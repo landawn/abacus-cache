@@ -805,6 +805,11 @@ public class MemcachedLock<K, V> implements AutoCloseable {
      *     protected String toKey(K target) {
      *         String key = super.toKey(target); // null-check inherited from the base class
      *         if (("lock:" + key).getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 250) {
+     *             // getBytes replaces unpaired surrogates, so reject them before hashing hides them
+     *             // from the lock's key validation and two targets share one lease.
+     *             if (!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(key)) {
+     *                 throw new IllegalArgumentException("Lock key contains an unpaired surrogate");
+     *             }
      *             return "lock:hash:" + java.util.UUID.nameUUIDFromBytes(
      *                     key.getBytes(java.nio.charset.StandardCharsets.UTF_8));
      *         }

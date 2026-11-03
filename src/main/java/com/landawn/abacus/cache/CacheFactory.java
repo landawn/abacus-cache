@@ -586,6 +586,9 @@ public final class CacheFactory {
      * @throws RuntimeException if Redis client-pool setup, RedisCluster seed resolution, or initial
      *         topology discovery fails, or if reflective construction cannot access the custom cache's
      *         matching constructor or that constructor throws
+     * @throws ExceptionInInitializerError if the custom cache class's static initializer, which first runs
+     *         when the validated class is instantiated, throws (later attempts in the same JVM then fail with
+     *         {@link NoClassDefFoundError}); like other {@link LinkageError}s, it propagates unwrapped
      * @see #createDistributedCache(DistributedCacheClient)
      * @see #createDistributedCache(DistributedCacheClient, String)
      * @see #createLocalCache(int, long)

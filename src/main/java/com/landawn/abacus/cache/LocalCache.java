@@ -38,6 +38,14 @@ import com.landawn.abacus.util.N;
  * <li>Comprehensive statistics via {@link #stats()}</li>
  * </ul>
  *
+ * <p><b>Capacity eviction:</b> when the cache is full, storing a <i>new</i> key makes the default
+ * pool evict a batch of entries before admitting it: {@code max(1, 20%)} of the current entries,
+ * choosing those with the oldest last-access time (as updated by {@link #getOrNull(Object)}, not by
+ * {@link #containsKey(Object)}). A single insert into a full cache of 1000 entries therefore leaves
+ * 801 entries (200 evicted plus the new one), and the evicted ones are counted in {@link #stats()}.
+ * Replacing an existing key never evicts other entries. A custom pool supplied via
+ * {@link #LocalCache(long, long, KeyedObjectPool)} applies its own eviction policy.
+ *
  * <p>Example of an application-wide cache:
  * <pre>{@code
  * // Create cache with 1000 max entries, 60 second eviction delay
@@ -97,7 +105,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param capacity the maximum number of entries the cache can hold (must be positive)
-     * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative, 0 for no automatic eviction)
+     * @param evictDelay the delay in milliseconds between background scans for expired entries (must be non-negative;
+     *                   0 disables the scan, while capacity eviction and on-access expiry still apply)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
      * @throws RejectedExecutionException if {@code evictDelay > 0} and the shared eviction executor rejects the periodic task
      * @throws IllegalStateException if the JVM is already shutting down when the underlying pool registers
@@ -139,7 +148,8 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * }</pre>
      *
      * @param capacity the maximum number of entries the cache can hold (must be positive)
-     * @param evictDelay the delay in milliseconds between eviction runs (must be non-negative, 0 for no automatic eviction)
+     * @param evictDelay the delay in milliseconds between background scans for expired entries (must be non-negative;
+     *                   0 disables the scan, while capacity eviction and on-access expiry still apply)
      * @param defaultLiveTime the default time-to-live in milliseconds for entries (0 or negative for no TTL expiration)
      * @param defaultMaxIdleTime the default maximum idle time in milliseconds for entries (0 or negative for no idle timeout)
      * @throws IllegalArgumentException if capacity is not positive or evictDelay is negative
@@ -618,6 +628,12 @@ public class LocalCache<K, V> extends AbstractCache<K, V> {
      * will use it again. It is not per-operation or per-request cleanup. A pool created by
      * {@code PoolFactory}, including the default one, also registers a JVM shutdown hook that closes
      * it during JVM shutdown, so code running in another shutdown hook may find this cache already closed.
+     *
+     * <p><b>&#9888;&#65039; Discarding without closing:</b> that shutdown hook (and, when
+     * {@code evictDelay > 0}, the pool's scheduled eviction task) keeps the pool strongly reachable,
+     * so if a cache is merely dropped, its pool and every cached entry stay in memory until JVM exit.
+     * Close every cache instance created dynamically (for example one per tenant or per
+     * reconfiguration) when it is retired.
      *
      * <p><b>Thread Safety:</b> This method is synchronized on the cache instance, so concurrent
      * invocations of {@code close()} are serialized. Other cache methods are not synchronized on

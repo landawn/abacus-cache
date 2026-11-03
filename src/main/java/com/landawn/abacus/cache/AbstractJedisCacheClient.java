@@ -22,17 +22,20 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import com.esotericsoftware.kryo.KryoException;
 import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
 import com.landawn.abacus.util.Charsets;
+import com.landawn.abacus.util.ExceptionUtil;
 import com.landawn.abacus.util.N;
 
 import redis.clients.jedis.DefaultJedisClientConfig;
 import redis.clients.jedis.JedisClientConfig;
 import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.exceptions.JedisBroadcastException;
 import redis.clients.jedis.exceptions.JedisException;
 import redis.clients.jedis.params.SetParams;
 
@@ -82,6 +85,13 @@ import redis.clients.jedis.params.SetParams;
  * begins fail with {@link IllegalStateException}. An operation that already passed its lifecycle
  * check may still race with shutdown and surface the underlying Jedis close/connection exception;
  * callers should quiesce users before disconnecting when that distinction matters.
+ *
+ * <p><b>Interruption:</b> Jedis waits interruptibly for a pooled connection (when the pool is
+ * exhausted) and for a cluster retry backoff, but it wraps the resulting
+ * {@link InterruptedException} in a {@link JedisException} without restoring the thread's interrupt
+ * status. Every command of this client restores that status before the exception propagates, so
+ * the interrupt is not lost and callers such as {@link DistributedCache} can tell the failure from
+ * a backend failure. A Redis socket read itself is not interruptible.
  *
  * @param <T> the type of objects to be cached
  * @see JRedis
@@ -237,7 +247,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
 
         final byte[] keyBytes = getKeyBytes(key);
 
-        return decode(clientFor(keyBytes).get(keyBytes));
+        return decode(runCommand(() -> clientFor(keyBytes).get(keyBytes)));
     }
 
     /**
@@ -360,7 +370,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
         for (final String key : keys) {
             final byte[] keyBytes = getKeyBytes(key);
 
-            final T value = decode(clientFor(keyBytes).get(keyBytes));
+            final T value = decode(runCommand(() -> clientFor(keyBytes).get(keyBytes)));
 
             if (value != null) {
                 result.put(key, value);
@@ -426,13 +436,13 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
 
         if (liveTime <= 0) {
             // liveTime <= 0 means no expiration, use a plain SET.
-            return "OK".equals(jedis.set(keyBytes, valueBytes));
+            return "OK".equals(runCommand(() -> jedis.set(keyBytes, valueBytes)));
         }
 
         // SET ... PX atomically sets the value and a millisecond-precision expiration, honoring the
         // requested liveTime exactly. The previous SET ... EX (seconds) silently rounded sub-second
         // TTLs up to a full second - 10x or more longer than requested for short-lived entries.
-        return "OK".equals(jedis.set(keyBytes, valueBytes, SetParams.setParams().px(liveTime)));
+        return "OK".equals(runCommand(() -> jedis.set(keyBytes, valueBytes, SetParams.setParams().px(liveTime))));
     }
 
     /**
@@ -471,7 +481,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
 
         final byte[] keyBytes = getKeyBytes(key);
 
-        return clientFor(keyBytes).del(keyBytes) > 0L;
+        return runCommand(() -> clientFor(keyBytes).del(keyBytes)) > 0L;
     }
 
     /**
@@ -514,7 +524,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
 
         final byte[] keyBytes = getKeyBytes(key);
 
-        return clientFor(keyBytes).incr(keyBytes);
+        return runCommand(() -> clientFor(keyBytes).incr(keyBytes));
     }
 
     /**
@@ -558,7 +568,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
 
         final byte[] keyBytes = getKeyBytes(key);
 
-        return clientFor(keyBytes).incrBy(keyBytes, delta);
+        return runCommand(() -> clientFor(keyBytes).incrBy(keyBytes, delta));
     }
 
     /**
@@ -596,7 +606,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
 
         final byte[] keyBytes = getKeyBytes(key);
 
-        return clientFor(keyBytes).decr(keyBytes);
+        return runCommand(() -> clientFor(keyBytes).decr(keyBytes));
     }
 
     /**
@@ -642,7 +652,7 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
 
         final byte[] keyBytes = getKeyBytes(key);
 
-        return clientFor(keyBytes).decrBy(keyBytes, delta);
+        return runCommand(() -> clientFor(keyBytes).decrBy(keyBytes, delta));
     }
 
     /**
@@ -709,6 +719,50 @@ abstract class AbstractJedisCacheClient<T> extends AbstractDistributedCacheClien
         if (isShutdown) {
             throw new IllegalStateException("This Redis cache client has been disconnected");
         }
+    }
+
+    /**
+     * Runs one Jedis command, restoring the calling thread's interrupt status if Jedis consumed it
+     * (see {@link #restoreInterruptIfConsumed(RuntimeException)}). Concrete topology-specific
+     * operations such as {@code flushAll()} route their commands through this hook as well.
+     *
+     * @param <R> the command's result type
+     * @param command the command to run on the calling thread
+     * @return the command's result
+     * @throws RuntimeException whatever the command throws, unchanged
+     */
+    protected static <R> R runCommand(final Supplier<R> command) throws RuntimeException {
+        try {
+            return command.get();
+        } catch (final RuntimeException e) {
+            restoreInterruptIfConsumed(e);
+            throw e;
+        }
+    }
+
+    /**
+     * Fix: Jedis turns an interrupted wait into a {@link JedisException} without restoring the
+     * interrupt status ({@code Pool.getResource} for an exhausted connection pool,
+     * {@code ClusterCommandExecutor.sleep} for a cluster retry backoff). Because the
+     * {@link InterruptedException} was thrown, and its status cleared, on the calling thread itself,
+     * re-assert it here; otherwise a cancelled task keeps running, and {@link DistributedCache}'s
+     * circuit breaker counts the caller's interrupt as a backend failure. A cluster broadcast
+     * ({@code FLUSHALL}) reports per-node failures as {@link JedisBroadcastException} replies rather
+     * than causes, so those are inspected too.
+     *
+     * @param e a failure thrown by a Jedis command on the calling thread
+     */
+    static void restoreInterruptIfConsumed(final RuntimeException e) {
+        if (carriesInterrupt(e)) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static boolean carriesInterrupt(final Throwable e) {
+        return ExceptionUtil
+                .findCause(e, t -> t instanceof InterruptedException || (t instanceof final JedisBroadcastException broadcast
+                        && broadcast.getReplies().values().stream().anyMatch(reply -> reply instanceof final Throwable failure && carriesInterrupt(failure))))
+                .isPresent();
     }
 
     /**

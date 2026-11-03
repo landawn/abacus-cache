@@ -38,13 +38,13 @@
  * <ul>
  * <li>{@link com.landawn.abacus.cache.LocalCache} — thread-safe on-heap cache backed by a keyed
  *     object pool, with capacity-based eviction plus per-entry TTL and idle timeout.</li>
- * <li>{@link com.landawn.abacus.cache.ChronicleMap} — name-compatibility adapter that delegates to
- *     {@code LocalCache}; it is not a Chronicle-Map integration.</li>
+ * <li>{@link com.landawn.abacus.cache.ChronicleMap} — deprecated (for removal) name-compatibility
+ *     subclass of {@code LocalCache}; it is not a Chronicle-Map integration.</li>
  * </ul>
  *
  * <p><b>Off-heap</b>
  * <ul>
- * <li>{@link com.landawn.abacus.cache.AbstractOffHeapCache} — shared machinery for caches that
+ * <li>{@link com.landawn.abacus.cache.AbstractOffHeapCache} — package-private shared machinery for caches that
  *     serialize values into native memory divided into 1 MB segments of equally sized slots,
  *     keeping large data sets out of reach of the garbage collector.</li>
  * <li>{@link com.landawn.abacus.cache.OffHeapCache} — {@code sun.misc.Unsafe}-based implementation.</li>
@@ -72,15 +72,16 @@
  *     {@link com.landawn.abacus.cache.KryoTranscoder} for compact Kryo payloads.</li>
  * <li>{@link com.landawn.abacus.cache.JRedis} (client-side sharding across standalone servers) and
  *     {@link com.landawn.abacus.cache.JRedisCluster} (Redis Cluster), sharing command and
- *     serialization logic through {@link com.landawn.abacus.cache.AbstractJedisCacheClient}.</li>
+ *     serialization logic through the package-private {@link com.landawn.abacus.cache.AbstractJedisCacheClient}.</li>
  * </ul>
  *
  * <p><b>Statistics</b>
  * <ul>
  * <li>{@link com.landawn.abacus.cache.CacheStats} — immutable snapshot of hits, misses, evictions,
- *     and memory use.</li>
- * <li>{@link com.landawn.abacus.cache.OffHeapCacheStats} — adds off-heap specifics such as segment
- *     allocation and disk I/O timings.</li>
+ *     and memory use, returned by {@code LocalCache.stats()} and {@code CaffeineCache.stats()}.</li>
+ * <li>{@link com.landawn.abacus.cache.OffHeapCacheStats} — the off-heap caches' separate snapshot
+ *     record (not a {@code CacheStats} subtype), with off-heap specifics such as segment allocation
+ *     and disk I/O timings.</li>
  * </ul>
  *
  * <h2>Example</h2>

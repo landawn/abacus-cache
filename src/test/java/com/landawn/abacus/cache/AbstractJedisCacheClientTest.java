@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -56,7 +57,12 @@ import com.landawn.abacus.parser.KryoParser;
 import com.landawn.abacus.parser.ParserFactory;
 import com.landawn.abacus.util.AddrUtil;
 
+import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.UnifiedJedis;
+import redis.clients.jedis.exceptions.JedisBroadcastException;
+import redis.clients.jedis.exceptions.JedisClusterOperationException;
+import redis.clients.jedis.exceptions.JedisConnectionException;
+import redis.clients.jedis.exceptions.JedisException;
 import redis.clients.jedis.params.SetParams;
 
 /** Shared Redis wire-format, validation, and bulk contracts inherited by both client implementations. */
@@ -541,6 +547,96 @@ class AbstractJedisCacheClientTest {
         }
 
         assertTrue(allocated < 256_000L, "A bulk request containing one distinct key allocated " + allocated + " bytes");
+    }
+
+    // Interruption
+
+    /**
+     * Jedis wraps an interrupted connection-pool wait in a JedisException and leaves the interrupt
+     * status cleared. Every command must re-assert it, and rethrow the same exception unchanged.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "get", "getBulk", "put", "putWithTtl", "remove", "incr", "incrBy", "decr", "decrBy" })
+    void commandRestoresTheInterruptStatusThatThePoolWaitConsumed(final String operation) {
+        final JedisException failure = new JedisException("Could not get a resource from the pool", new InterruptedException());
+        stubCommandFailure(operation, failure);
+        Thread.interrupted();
+
+        try {
+            assertSame(failure, assertThrows(JedisException.class, () -> invokeCommand(operation)));
+            assertTrue(Thread.currentThread().isInterrupted(), "the consumed interrupt must be restored by " + operation);
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    /** A backend failure that carries no interrupt evidence must never set the interrupt status. */
+    @ParameterizedTest
+    @ValueSource(strings = { "get", "getBulk", "put", "putWithTtl", "remove", "incr", "incrBy", "decr", "decrBy" })
+    void commandFailureWithoutInterruptLeavesTheStatusClear(final String operation) {
+        final JedisException failure = new JedisConnectionException("connection refused", new java.net.ConnectException("refused"));
+        stubCommandFailure(operation, failure);
+        Thread.interrupted();
+
+        try {
+            assertSame(failure, assertThrows(JedisException.class, () -> invokeCommand(operation)));
+            assertFalse(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    /** A cluster broadcast reports per-node failures as replies, not causes; those are inspected too. */
+    @Test
+    void interruptInABroadcastReplyIsRestored() {
+        final JedisBroadcastException interrupted = new JedisBroadcastException();
+        interrupted.addReply(new HostAndPort("10.0.0.1", 7000), "OK");
+        interrupted.addReply(new HostAndPort("10.0.0.2", 7000),
+                new JedisClusterOperationException(new JedisException("Could not get a resource from the pool", new InterruptedException())));
+
+        final JedisBroadcastException failed = new JedisBroadcastException();
+        failed.addReply(new HostAndPort("10.0.0.1", 7000), new JedisConnectionException("connection refused"));
+
+        Thread.interrupted();
+
+        try {
+            AbstractJedisCacheClient.restoreInterruptIfConsumed(failed);
+            assertFalse(Thread.currentThread().isInterrupted());
+
+            AbstractJedisCacheClient.restoreInterruptIfConsumed(interrupted);
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    private void stubCommandFailure(final String operation, final RuntimeException failure) {
+        switch (operation) {
+            case "get", "getBulk" -> when(mockJedis.get(any(byte[].class))).thenThrow(failure);
+            case "put" -> when(mockJedis.set(any(byte[].class), any(byte[].class))).thenThrow(failure);
+            case "putWithTtl" -> when(mockJedis.set(any(byte[].class), any(byte[].class), any(SetParams.class))).thenThrow(failure);
+            case "remove" -> when(mockJedis.del(any(byte[].class))).thenThrow(failure);
+            case "incr" -> when(mockJedis.incr(any(byte[].class))).thenThrow(failure);
+            case "incrBy" -> when(mockJedis.incrBy(any(byte[].class), anyLong())).thenThrow(failure);
+            case "decr" -> when(mockJedis.decr(any(byte[].class))).thenThrow(failure);
+            case "decrBy" -> when(mockJedis.decrBy(any(byte[].class), anyLong())).thenThrow(failure);
+            default -> throw new IllegalArgumentException(operation);
+        }
+    }
+
+    private Object invokeCommand(final String operation) {
+        return switch (operation) {
+            case "get" -> cache.get("key");
+            case "getBulk" -> cache.getBulk("key", "other");
+            case "put" -> cache.put("key", "value", 0);
+            case "putWithTtl" -> cache.put("key", "value", 60_000L);
+            case "remove" -> cache.remove("key");
+            case "incr" -> cache.incr("key");
+            case "incrBy" -> cache.incr("key", 2);
+            case "decr" -> cache.decr("key");
+            case "decrBy" -> cache.decr("key", 2);
+            default -> throw new IllegalArgumentException(operation);
+        };
     }
 
     private static Map<String, String> bulkGet(final RecordingClient cache, final Collection<String> collection, final String[] array) {

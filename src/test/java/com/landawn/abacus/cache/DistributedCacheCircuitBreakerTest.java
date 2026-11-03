@@ -19,7 +19,11 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.InterruptedIOException;
+import java.io.UncheckedIOException;
 import java.lang.reflect.Field;
+import java.net.SocketTimeoutException;
+import java.nio.channels.ClosedByInterruptException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -403,6 +407,121 @@ class DistributedCacheCircuitBreakerTest {
             final Object before = breakerState(cache);
             assertSame(failure, assertThrows(IllegalArgumentException.class, () -> cache.getOrNull("key")));
             assertSame(before, breakerState(cache));
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * A read that fails because the calling thread is interrupted carries no backend-availability
+     * information (SpyMemcached refuses every operation from such a thread before contacting the
+     * server). Counting it would let one thread that keeps its interrupt flag set open the circuit
+     * for every thread; here a zero threshold would open it on the first such read.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "tagged-enqueue-refusal", "wrapped-interrupted-exception", "closed-by-interrupt", "interrupted-io" })
+    void readFailingFromTheCallersInterruptIsAMissThatDoesNotChangeBreakerState(final String failureKind) throws Exception {
+        final RuntimeException failure = switch (failureKind) {
+            // The shape SpyMemcached.tagInterruptedEnqueue produces (tagging itself needs the flag set;
+            // see spyMemcachedInterruptedEnqueueRefusalDoesNotChangeBreakerState for the real path).
+            case "tagged-enqueue-refusal" -> new IllegalStateException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " op",
+                    new InterruptedException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " op"));
+            case "wrapped-interrupted-exception" -> new RuntimeException(new InterruptedException("response wait"));
+            case "closed-by-interrupt" -> new UncheckedIOException(new ClosedByInterruptException());
+            default -> new UncheckedIOException(new InterruptedIOException("interrupted read"));
+        };
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get("a2V5")).thenAnswer(invocation -> {
+            if (Thread.currentThread().isInterrupted()) {
+                throw failure;
+            }
+
+            return "value";
+        });
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 0, 60_000L);
+
+        try {
+            final Object closedState = breakerState(cache);
+            Thread.currentThread().interrupt();
+
+            try {
+                assertNull(cache.getOrNull("key"));
+                assertNull(cache.getOrNull("key"));
+                assertTrue(Thread.currentThread().isInterrupted(), "the caller's interrupt status must be preserved");
+            } finally {
+                Thread.interrupted();
+            }
+
+            assertSame(closedState, breakerState(cache));
+            assertEquals("value", cache.getOrNull("key"), "the circuit must still be closed for an uninterrupted reader");
+            verify(client, times(3)).get("a2V5");
+        } finally {
+            cache.close();
+        }
+    }
+
+    /**
+     * The interrupt flag alone is not evidence: a genuine backend failure that happens to occur on an
+     * interrupted thread (a Redis connection error, a socket timeout, which extends
+     * InterruptedIOException, or an ISE with no interrupt cause) must still count toward the breaker.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "untagged-state", "connection-error", "socket-timeout" })
+    void backendFailureOnAnInterruptedThreadIsStillCounted(final String failureKind) throws Exception {
+        final RuntimeException failure = switch (failureKind) {
+            case "untagged-state" -> new IllegalStateException("backend unavailable");
+            case "connection-error" -> new RuntimeException("connection refused", new java.net.ConnectException("refused"));
+            default -> new UncheckedIOException(new SocketTimeoutException("read timed out"));
+        };
+        @SuppressWarnings("unchecked")
+        final DistributedCacheClient<String> client = mock(DistributedCacheClient.class);
+        when(client.get("a2V5")).thenThrow(failure);
+        final DistributedCache<String, String> cache = new DistributedCache<>(client, "", 0, 60_000L);
+
+        try {
+            final Object closedState = breakerState(cache);
+            Thread.currentThread().interrupt();
+
+            try {
+                assertNull(cache.getOrNull("key"));
+            } finally {
+                Thread.interrupted();
+            }
+
+            final Object state = breakerState(cache);
+            assertFalse(closedState == state, "the failure must be recorded");
+            assertTrue(booleanField(state, "hasFailure"));
+
+            // The zero threshold opened the circuit: the next read fails fast without the backend.
+            assertNull(cache.getOrNull("key"));
+            verify(client, times(1)).get("a2V5");
+        } finally {
+            cache.close();
+        }
+    }
+
+    /** End to end: spymemcached's real refusal shape, raised through the SpyMemcached wrapper. */
+    @Test
+    void spyMemcachedInterruptedEnqueueRefusalDoesNotChangeBreakerState() throws Exception {
+        final net.spy.memcached.MemcachedClient delegate = mock(net.spy.memcached.MemcachedClient.class);
+        when(delegate.asyncGet("a2V5")).thenAnswer(invocation -> {
+            throw new IllegalStateException(SpyMemcached.INTERRUPTED_ENQUEUE_MESSAGE_PREFIX + " get op");
+        });
+        final DistributedCache<String, Object> cache = new DistributedCache<>(SpyMemcachedTestSupport.clientWithDelegate(delegate), "", 0, 60_000L);
+
+        try {
+            final Object closedState = breakerState(cache);
+            Thread.currentThread().interrupt();
+
+            try {
+                assertNull(cache.getOrNull("key"));
+                assertTrue(Thread.currentThread().isInterrupted());
+            } finally {
+                Thread.interrupted();
+            }
+
+            assertSame(closedState, breakerState(cache));
         } finally {
             cache.close();
         }

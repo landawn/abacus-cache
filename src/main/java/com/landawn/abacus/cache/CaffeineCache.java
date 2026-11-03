@@ -203,7 +203,9 @@ public class CaffeineCache<K, V> extends AbstractCache<K, V> {
      * @param value the cache value to be associated with the specified key (must not be {@code null}; this wrapper rejects {@code null} values with {@code IllegalArgumentException})
      * @param liveTime the time-to-live in milliseconds (ignored; configure expiration via the Caffeine builder)
      * @param maxIdleTime the maximum idle time in milliseconds (ignored; configure expiration via the Caffeine builder)
-     * @return {@code true} (this implementation always succeeds unless an exception is thrown)
+     * @return {@code true} whenever the call returns normally. This reports that Caffeine accepted the
+     *         write, not that the entry is retained: a size- or weight-bounded cache may evict it at once
+     *         (for example, with {@code maximumSize(0)} or an entry heavier than {@code maximumWeight})
      * @throws IllegalStateException if the cache has been closed, including when {@link #close()} runs concurrently
      *         with this put (a late write that is still current is removed before the exception is thrown)
      * @throws IllegalArgumentException if {@code key} or {@code value} is {@code null}, or the configured weigher returns a negative weight
