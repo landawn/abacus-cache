@@ -44,7 +44,7 @@ The minimum dependencies for `LocalCache` are:
     <dependency>
         <groupId>com.landawn.abacus</groupId>
         <artifactId>abacus-cache</artifactId>
-        <version>2.9.1</version>
+        <version>2.9.2</version>
     </dependency>
 </dependencies>
 ```
@@ -53,7 +53,7 @@ The minimum dependencies for `LocalCache` are:
 
 ```groovy
 dependencies {
-    implementation 'com.landawn.abacus:abacus-cache:2.9.1'
+    implementation 'com.landawn.abacus:abacus-cache:2.9.2'
 }
 ```
 
